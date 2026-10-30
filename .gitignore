@@ -6,3 +6,4 @@
 /.kani
 *.profraw
 *.profdata
+/mutants.out

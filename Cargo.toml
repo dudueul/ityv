@@ -1,0 +1,65 @@
+# ityv workspace. Every crate under crates/ is trusted computing base (TCB) and
+# inherits the lint set below without exception (CONSTITUTION.md §1.1).
+[workspace]
+resolver = "3"
+members = ["crates/ityv-encoding"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/dudueul/ityv"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unused_must_use = "deny"
+unreachable_pub = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+# `cfg(kani)` is set by `cargo kani`; declare it so the lint still catches typos.
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(kani)'] }
+
+[workspace.lints.clippy]
+# Groups first (lower priority so the explicit entries below win on conflicts).
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# Restriction lints demanded by CONSTITUTION.md §1.1.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+float_arithmetic = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+cast_lossless = "deny"
+wildcard_enum_match_arm = "deny"
+exit = "deny"
+std_instead_of_core = "deny"
+alloc_instead_of_core = "deny"
+missing_panics_doc = "deny"
+missing_errors_doc = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[profile.dev]
+overflow-checks = true
+debug-assertions = true
+
+[profile.test]
+overflow-checks = true
+debug-assertions = true
+
+[profile.release]
+overflow-checks = true
+debug-assertions = false
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+strip = "none"

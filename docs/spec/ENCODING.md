@@ -94,3 +94,49 @@ offset  size  field
 ## 7. 시험 벡터
 
 `ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다.
+
+## 8. 예시 스키마 필드 정의
+
+`ityv-encoding` 크레이트가 구현하는 세 스키마의 필드 정의다. 필드는 아래 순서대로 본문에 나열되며, 본문 앞에는 §3의 16바이트 헤더가 온다. 시험 벡터는 `crates/ityv-encoding/vectors/`에 있다.
+
+### 8.1 `LedgerFrame` (`schema_id` 0x0001, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `seq` | `u64` | `>= 1`. 0이면 `ValueOutOfRange`(필드 오프셋) |
+| 3 | `prev_hash` | `Hash512` | 첫 프레임은 전부 0 |
+| 4 | `event_schema_id` | `u32` | 수록된 이벤트의 스키마 ID |
+| 5 | `event_hash` | `Hash512` | 이벤트 객체의 §4 해시 |
+
+### 8.2 `LegalAuthorization` 본문 (`schema_id` 0x0003, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `scopes` | `Array<u8, 16>` | 정렬·중복 없음. 코드: 1 `PUBLIC_BOARD`, 2 `TRUSTEE_BODY`, 3 `BALLOT_MARK`, 4 `CRYPTO_TALLY_AID`, 5 `RLA`, 6 `OBSERVER_ACCESS`, 7 `DEPLOY_AUTH`, 8 `STAGE_GATE`, 9 `VOTER_CODE`. 그 외 코드는 `InvalidScopeCode`, 순서 위반은 `NotSorted`, 중복은 `Duplicate` |
+| 3 | `statute_refs_hash` | `Hash512` | 조문 참조 목록의 정규 해시 |
+| 4 | `effective_from_day` | `u64` | 유닉스 기원 기준 일수 |
+| 5 | `effective_until_day` | `u64` | `>= effective_from_day`. 위반 시 `ValueOutOfRange`(이 필드 오프셋) |
+
+선관위와 독립검증위원회의 서명은 이 본문에 포함되지 않는다. 서명은 이 본문을 감싸는 genesis 객체가 운반하고 암호 크레이트가 검증한다.
+
+### 8.3 `CheckpointBody` (`schema_id` 0x0004, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `ledger_id` | `Ident<64>` | |
+| 3 | `keyset_id` | `Ident<64>` | 서명이 기대되는 증인 키 집합 |
+| 4 | `checkpoint_seq` | `u64` | `>= 1` |
+| 5 | `tree_size` | `u64` | 포함된 장부 잎 수 |
+| 6 | `root_hash` | `Hash512` | Merkle root |
+| 7 | `previous_checkpoint_hash` | `Hash512` | `checkpoint_seq == 1`일 때만 전부 0, 그 외에는 0이 아님. 위반 시 `InvalidPreviousHash`(이 필드 오프셋) |
+| 8 | `box_close_root` | `Hash512` | 서명된 투표함 마감 봉투 집합의 root |
+| 9 | `dispute_root` | `Hash512` | 미결 분쟁 이벤트 집합의 root |
+| 10 | `genesis_hash` | `Hash512` | 결속된 genesis의 §4 해시 |
+| 11 | `time_bucket` | `u64` | 체크포인트 제안의 시간 구간 |
+
+### 8.4 오류 보고 규칙
+
+디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.

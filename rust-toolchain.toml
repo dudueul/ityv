@@ -1,0 +1,5 @@
+# Pinned toolchain. Reproducible builds require the exact version; CI installs the same.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

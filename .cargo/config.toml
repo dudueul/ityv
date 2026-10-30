@@ -1,0 +1,7 @@
+# Warnings are errors for workspace crates. Dependencies are built with
+# --cap-lints allow by cargo, so this only affects our own code.
+[build]
+rustflags = ["-D", "warnings"]
+
+[net]
+retry = 2
