@@ -68,10 +68,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.2.2
-      - uses: EmbarkStudios/cargo-deny-action@v2.0.12
+      - uses: dtolnay/rust-toolchain@master
         with:
-          command: check
-          arguments: --locked
+          toolchain: 1.97.0
+      # The cargo-deny-action docker image bundles an older cargo-deny that
+      # cannot parse CVSS 4.0 entries in the current RustSec advisory database
+      # ("unsupported CVSS version: 4.0"). Pin the same version used locally.
+      - run: cargo install --locked cargo-deny@0.20.2
+      - run: cargo deny --locked check
 
   vet:
     name: cargo-vet (supply-chain audits)
