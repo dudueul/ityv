@@ -31,7 +31,7 @@ TCB 밖(UI, 대시보드, 미러, 전송 계층, 시뮬레이터)에서는 무�
 - rust: `unsafe_code = forbid`, `missing_docs`, `unused_must_use`, `unreachable_pub`, `trivial_casts`, `trivial_numeric_casts`.
 - clippy: `all`, `pedantic`, `unwrap_used`, `expect_used`, `panic`, `unreachable`, `todo`, `unimplemented`, `indexing_slicing`, `arithmetic_side_effects`, `float_arithmetic`, `cast_possible_truncation`, `cast_possible_wrap`, `cast_sign_loss`, `cast_lossless`, `wildcard_enum_match_arm`, `exit`, `std_instead_of_core`, `alloc_instead_of_core`, `missing_panics_doc`, `missing_errors_doc`, `undocumented_unsafe_blocks`.
 
-예외는 항목 단위 `#[allow]`에 사유 주석을 붙이고 리뷰어 둘이 승인한 경우에만 허용한다. 크레이트 단위 `allow`는 금지한다.
+예외는 항목 단위 `#[allow]`에 사유 주석을 붙이고 리뷰어 둘이 승인한 경우에만 허용한다. 크레이트 단위 `allow`는 금지한다. 단, TCB 밖인 통합 테스트(`tests/`)와 Kani 하네스는 파일 머리에 사유 주석을 붙인 `#![allow]`로 unwrap·expect·panic·인덱싱·산술 lint를 완화할 수 있다. `src/` 아래에는 어떤 완화도 없다.
 
 ## 2. 검증 사다리
 

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 640" width="420" height="640" font-family="sans-serif" font-size="11">
+  <title>선거일 투표지 형식 (가정 치수 100 x 260 mm)</title>
+  <desc>Election-day ballot: serial tab (torn at issuance), header, candidate rows, fold marks, cast-id imprint zone at the bottom margin. Dimensions are assumptions.</desc>
+  <!-- paper 100mm x 260mm scaled x2.4 -->
+  <g transform="translate(90,20)">
+    <rect x="0" y="0" width="240" height="600" fill="#fbfbf8" stroke="#333" stroke-width="1.5"/>
+    <!-- serial tab -->
+    <rect x="0" y="0" width="240" height="48" fill="#f0efe8" stroke="none"/>
+    <line x1="0" y1="48" x2="240" y2="48" stroke="#333" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="120" y="20" text-anchor="middle" fill="#111">일련번호지 (교부 시 절취)</text>
+    <text x="120" y="38" text-anchor="middle" fill="#111" font-size="10">일련번호 0001234 · 어떤 전자 기록에도 들어가지 않음</text>
+    <!-- header -->
+    <text x="12" y="70" fill="#111" font-weight="bold">제00대 ○○선거 투표용지</text>
+    <text x="12" y="86" fill="#111" font-size="10">○○시 ○○구 (선거구명)</text>
+    <rect x="170" y="56" width="60" height="36" fill="none" stroke="#333" stroke-width="1"/>
+    <text x="200" y="78" text-anchor="middle" fill="#111" font-size="9">투표관리관 도장</text>
+    <!-- candidate rows -->
+    <g stroke="#333" stroke-width="1" fill="none">
+      <rect x="12" y="100" width="216" height="380"/>
+      <line x1="12" y1="138" x2="228" y2="138"/>
+      <line x1="12" y1="176" x2="228" y2="176"/>
+      <line x1="12" y1="214" x2="228" y2="214"/>
+      <line x1="12" y1="252" x2="228" y2="252"/>
+      <line x1="12" y1="290" x2="228" y2="290"/>
+      <line x1="40" y1="100" x2="40" y2="480"/>
+      <line x1="110" y1="100" x2="110" y2="480"/>
+      <line x1="180" y1="100" x2="180" y2="480"/>
+    </g>
+    <g fill="#111" font-size="10">
+      <text x="26" y="123" text-anchor="middle">1</text><text x="75" y="123" text-anchor="middle">○○당</text><text x="145" y="123" text-anchor="middle">홍길동</text>
+      <text x="26" y="161" text-anchor="middle">2</text><text x="75" y="161" text-anchor="middle">△△당</text><text x="145" y="161" text-anchor="middle">김철수</text>
+      <text x="26" y="199" text-anchor="middle">3</text><text x="75" y="199" text-anchor="middle">□□당</text><text x="145" y="199" text-anchor="middle">이영희</text>
+      <text x="26" y="237" text-anchor="middle">4</text><text x="75" y="237" text-anchor="middle">무소속</text><text x="145" y="237" text-anchor="middle">박민수</text>
+      <text x="204" y="123" text-anchor="middle" font-size="9">기표란</text>
+      <text x="120" y="400" text-anchor="middle" font-size="10">… (후보 수에 따라 길이 가변, 제150조 순서 고정)</text>
+    </g>
+    <!-- fold marks -->
+    <g stroke="#333" stroke-width="1">
+      <line x1="0" y1="200" x2="8" y2="200"/><line x1="232" y1="200" x2="240" y2="200"/>
+      <line x1="0" y1="400" x2="8" y2="400"/><line x1="232" y1="400" x2="240" y2="400"/>
+    </g>
+    <text x="246" y="204" fill="currentColor" font-size="9">접는 선 눈금</text>
+    <text x="246" y="404" fill="currentColor" font-size="9">접는 선 눈금</text>
+    <!-- blank band -->
+    <text x="120" y="530" text-anchor="middle" fill="#777" font-size="9">빈 띠 8 mm 이상 (잉크 번짐 완충)</text>
+    <!-- imprint zone -->
+    <rect x="0" y="557" width="240" height="43" fill="#eef3ff" stroke="none"/>
+    <text x="8" y="572" fill="#111" font-size="9">투함 ID</text>
+    <text x="8" y="590" fill="#111" font-size="10" font-family="monospace">3F9A1C 0B77E2 9D4410 A1C0F3 77E29D 4410A1 C0F33F 9A1C0B</text>
+    <rect x="200" y="562" width="30" height="30" fill="#111"/>
+    <rect x="204" y="566" width="22" height="22" fill="#fff"/>
+    <rect x="206" y="568" width="6" height="6" fill="#111"/><rect x="216" y="568" width="4" height="4" fill="#111"/>
+    <rect x="208" y="578" width="4" height="4" fill="#111"/><rect x="216" y="578" width="6" height="6" fill="#111"/>
+  </g>
+  <!-- annotations -->
+  <g fill="currentColor" font-size="10">
+    <text x="10" y="40">100 mm</text>
+    <text x="340" y="590">각인 구역 18 mm</text>
+    <text x="340" y="604">(투함 시점에만 인쇄)</text>
+    <text x="340" y="80">도장 칸 25x15 mm</text>
+    <text x="10" y="632">뒷면: 인쇄 없음. 추적코드·가명·시간·순번·봉투 라벨은 투표지에 없다.</text>
+  </g>
+</svg>

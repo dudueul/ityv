@@ -58,10 +58,14 @@ fn reader_reports_unexpected_end_at_current_offset() {
 fn writer_reports_buffer_too_small_at_current_offset() {
     let mut buf = [0u8; 5];
     let mut w = Writer::new(&mut buf);
+    assert_eq!(w.remaining(), 5);
     w.write_u32(7).unwrap();
     assert_eq!(kind_at(w.write_u16(1)), (ErrorKind::BufferTooSmall, 4));
     assert_eq!(w.position(), 4, "a failed write must not advance");
     assert_eq!(w.remaining(), 1);
+    w.write_u8(1).unwrap();
+    assert_eq!(w.remaining(), 0);
+    assert_eq!(w.finish(), 5);
 }
 
 #[test]
@@ -93,6 +97,13 @@ fn presence_tag_is_strict() {
     r.read_u8().unwrap();
     assert!(r.read_presence().unwrap());
     assert!(!r.read_presence().unwrap());
+}
+
+#[test]
+fn bool_encoded_len_is_one() {
+    assert_eq!(true.encoded_len(), 1);
+    assert_eq!(false.encoded_len(), 1);
+    assert_eq!(Some(true).encoded_len(), 2);
 }
 
 #[test]
@@ -162,7 +173,10 @@ fn bytes_have_u32_length_prefix_and_schema_max() {
 
     assert!(Bytes::new(b"", 0).is_some());
     assert!(Bytes::new(b"x", 0).is_none());
-    assert_eq!(Bytes::new(b"xy", 2).unwrap().len(), 2);
+    let xy = Bytes::new(b"xy", 2).unwrap();
+    assert_eq!(xy.len(), 2);
+    assert!(!xy.is_empty());
+    assert_eq!(xy.as_bytes(), b"xy");
     assert!(Bytes::new(b"", 2).unwrap().is_empty());
 }
 
@@ -182,7 +196,7 @@ fn ident_alphabet_and_length_rules() {
         Ident::new(&[b'a'; 65], 64).is_none(),
         "schema max is enforced"
     );
-    assert_eq!(Ident::new(b"KR-2030:x.y_z", 64).unwrap().len(), 13);
+    assert_eq!(Ident::new(b"KR-2030:x.y_z", 64).unwrap().byte_len(), 13);
     assert!(
         Ident::new("한".as_bytes(), 64).is_none(),
         "non-ASCII is rejected"

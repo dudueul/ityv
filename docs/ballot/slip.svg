@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 760" width="300" height="760" font-family="sans-serif" font-size="10">
+  <title>추적코드 슬립 (3단계 전용, 80 mm 감열지)</title>
+  <desc>Tracking-code slip printed only when VOTER_CODE is authorized: title, election, station, time bucket, the 128-hex tracking code in 16 groups, QR-A (code + Ed25519 signature), QR-B and QR-C (ML-DSA-87 signature split by structured append), fixed sentences. No cast id, no candidate, no sequence.</desc>
+  <g transform="translate(30,20)">
+    <rect x="0" y="0" width="240" height="720" fill="#fbfbf8" stroke="#333" stroke-width="1.5"/>
+    <text x="120" y="24" text-anchor="middle" fill="#111" font-weight="bold" font-size="13">투표 확인 슬립</text>
+    <text x="120" y="38" text-anchor="middle" fill="#777" font-size="8">연구용 형식 · 실선거 사용 불가</text>
+    <text x="12" y="60" fill="#111">선거: 제00대 ○○선거</text>
+    <text x="12" y="74" fill="#111">투표소: STN-11-0421 · 구간 57 (14:00–14:15)</text>
+    <text x="12" y="98" fill="#111" font-weight="bold">추적코드</text>
+    <g fill="#111" font-family="monospace" font-size="9">
+      <text x="12" y="112">A3F19C02 7B4E88D1 0C55AA71 9E02B3F4</text>
+      <text x="12" y="124">5D11C8E9 72AF0B36 C4D9E1F0 1B7A2C93</text>
+      <text x="12" y="136">8E60D4A5 F3C21B07 6A9D0E58 D2B4C7F1</text>
+      <text x="12" y="148">07E3A96B 4F8C1D20 B5E7A3C9 1C0D6F82</text>
+    </g>
+    <!-- QR-A -->
+    <rect x="12" y="164" width="75" height="75" fill="#111"/>
+    <rect x="16" y="168" width="67" height="67" fill="#fff"/>
+    <rect x="20" y="172" width="16" height="16" fill="#111"/><rect x="63" y="172" width="16" height="16" fill="#111"/><rect x="20" y="215" width="16" height="16" fill="#111"/>
+    <rect x="42" y="190" width="6" height="6" fill="#111"/><rect x="52" y="196" width="6" height="6" fill="#111"/><rect x="46" y="206" width="8" height="8" fill="#111"/><rect x="60" y="212" width="6" height="6" fill="#111"/>
+    <text x="96" y="180" fill="#111" font-size="9">QR-A (25 mm)</text>
+    <text x="96" y="194" fill="#111" font-size="8">추적코드 · 투표소 · 구간</text>
+    <text x="96" y="206" fill="#111" font-size="8">Ed25519 서명 64 B</text>
+    <text x="96" y="220" fill="#111" font-size="8">휴대전화로 읽어 조회</text>
+    <!-- QR-B / QR-C -->
+    <rect x="12" y="252" width="105" height="105" fill="#111"/>
+    <rect x="16" y="256" width="97" height="97" fill="#fff"/>
+    <rect x="20" y="260" width="20" height="20" fill="#111"/><rect x="89" y="260" width="20" height="20" fill="#111"/><rect x="20" y="329" width="20" height="20" fill="#111"/>
+    <rect x="50" y="285" width="8" height="8" fill="#111"/><rect x="64" y="295" width="10" height="10" fill="#111"/><rect x="48" y="310" width="12" height="12" fill="#111"/><rect x="74" y="320" width="8" height="8" fill="#111"/>
+    <rect x="123" y="252" width="105" height="105" fill="#111"/>
+    <rect x="127" y="256" width="97" height="97" fill="#fff"/>
+    <rect x="131" y="260" width="20" height="20" fill="#111"/><rect x="200" y="260" width="20" height="20" fill="#111"/><rect x="131" y="329" width="20" height="20" fill="#111"/>
+    <rect x="165" y="285" width="8" height="8" fill="#111"/><rect x="180" y="300" width="10" height="10" fill="#111"/><rect x="160" y="315" width="12" height="12" fill="#111"/><rect x="190" y="325" width="8" height="8" fill="#111"/>
+    <text x="120" y="372" text-anchor="middle" fill="#111" font-size="8">QR-B · QR-C (구조적 연결, 각 44 mm): ML-DSA-87 서명 4,627 B</text>
+    <text x="120" y="384" text-anchor="middle" fill="#111" font-size="8">분쟁 접수 시 두 서명 모두 검증 (§13)</text>
+    <line x1="12" y1="398" x2="228" y2="398" stroke="#333" stroke-width="1"/>
+    <g fill="#111" font-size="8.5">
+      <text x="12" y="416">이 코드는 당신의 선택을 드러내지 않습니다.</text>
+      <text x="12" y="428">누구도 이 코드로 당신이 누구에게 투표했는지</text>
+      <text x="12" y="440">알 수 없습니다.</text>
+      <text x="12" y="460">이 코드를 누구에게도 보여줄 의무가 없습니다.</text>
+      <text x="12" y="472">코드를 요구하거나 모으거나 사는 행위는</text>
+      <text x="12" y="484">법으로 금지됩니다.</text>
+      <text x="12" y="504">확인 방법: 투표 종료 후 지정 검증 사이트 또는</text>
+      <text x="12" y="516">오프라인 검증기에 코드를 입력하면</text>
+      <text x="12" y="528">'포함됨' 또는 '아직 없음'만 표시됩니다.</text>
+      <text x="12" y="548">코드가 24시간이 지나도 없으면 이 슬립을</text>
+      <text x="12" y="560">가지고 분쟁을 접수할 수 있습니다.</text>
+    </g>
+    <line x1="12" y1="580" x2="228" y2="580" stroke="#333" stroke-width="1"/>
+    <text x="12" y="598" fill="#777" font-size="8">인쇄되지 않는 것: 투함 ID, 후보, 순번, 유권자 정보</text>
+    <text x="12" y="612" fill="#777" font-size="8">서명 주체: 커밋먼트 유닛 장치 키 (genesis 등록)</text>
+    <text x="120" y="700" text-anchor="middle" fill="#777" font-size="8">— 절취 —</text>
+  </g>
+  <text x="10" y="750" fill="currentColor" font-size="9">80 mm 폭 · 길이 약 220 mm</text>
+</svg>

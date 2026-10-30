@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 640" width="420" height="640" font-family="sans-serif" font-size="11">
+  <title>사전투표지 형식 (발급기 열전사, 가정 폭 100 mm)</title>
+  <desc>Early-voting ballot printed on demand: legal barcode strip with four items (not detached), header, candidate rows, and the empty cast-id imprint zone that only the casting scanner fills.</desc>
+  <g transform="translate(90,20)">
+    <rect x="0" y="0" width="240" height="600" fill="#fbfbf8" stroke="#333" stroke-width="1.5"/>
+    <!-- barcode strip -->
+    <rect x="0" y="0" width="240" height="34" fill="#f0efe8" stroke="none"/>
+    <g fill="#111">
+      <rect x="10" y="6" width="22" height="22"/><rect x="13" y="9" width="16" height="16" fill="#fff"/>
+      <rect x="15" y="11" width="4" height="4"/><rect x="23" y="11" width="3" height="3"/><rect x="15" y="19" width="3" height="3"/><rect x="21" y="19" width="5" height="5"/>
+    </g>
+    <text x="40" y="16" fill="#111" font-size="9">선거명 · 선거구명 · 관할위원회명 · 일련번호 (4항목, 제151조⑥)</text>
+    <text x="40" y="28" fill="#111" font-size="9">일련번호 미절취 (제158조③) · 발급기는 각인 구역을 쓰지 않음</text>
+    <!-- header -->
+    <text x="12" y="56" fill="#111" font-weight="bold">제00대 ○○선거 사전투표용지</text>
+    <text x="12" y="72" fill="#111" font-size="10">○○시 ○○구 (유권자 주소지 선거구)</text>
+    <rect x="170" y="44" width="60" height="34" fill="none" stroke="#333" stroke-width="1"/>
+    <text x="200" y="64" text-anchor="middle" fill="#111" font-size="9">사전투표관리관</text>
+    <g stroke="#333" stroke-width="1" fill="none">
+      <rect x="12" y="90" width="216" height="390"/>
+      <line x1="12" y1="128" x2="228" y2="128"/>
+      <line x1="12" y1="166" x2="228" y2="166"/>
+      <line x1="12" y1="204" x2="228" y2="204"/>
+      <line x1="40" y1="90" x2="40" y2="480"/>
+      <line x1="110" y1="90" x2="110" y2="480"/>
+      <line x1="180" y1="90" x2="180" y2="480"/>
+    </g>
+    <g fill="#111" font-size="10">
+      <text x="26" y="113" text-anchor="middle">1</text><text x="75" y="113" text-anchor="middle">○○당</text><text x="145" y="113" text-anchor="middle">홍길동</text>
+      <text x="26" y="151" text-anchor="middle">2</text><text x="75" y="151" text-anchor="middle">△△당</text><text x="145" y="151" text-anchor="middle">김철수</text>
+      <text x="26" y="189" text-anchor="middle">3</text><text x="75" y="189" text-anchor="middle">□□당</text><text x="145" y="189" text-anchor="middle">이영희</text>
+      <text x="204" y="113" text-anchor="middle" font-size="9">기표란</text>
+      <text x="120" y="340" text-anchor="middle" font-size="10">… (해당 선거구 투표양식)</text>
+    </g>
+    <text x="120" y="530" text-anchor="middle" fill="#777" font-size="9">빈 띠 8 mm 이상</text>
+    <rect x="0" y="557" width="240" height="43" fill="#eef3ff" stroke="#9db" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="120" y="575" text-anchor="middle" fill="#557" font-size="10">각인 구역 (교부 시 비어 있음)</text>
+    <text x="120" y="590" text-anchor="middle" fill="#557" font-size="9">투함 스캐너만 cast_id 48자 + Data Matrix 각인</text>
+  </g>
+  <g fill="currentColor" font-size="10">
+    <text x="10" y="40">100 mm</text>
+    <text x="340" y="30">바코드 띠 14 mm</text>
+    <text x="340" y="590">각인 구역 18 mm</text>
+    <text x="10" y="632">발급기는 cast_id를 모른다. 투함 ID는 투함 시점에만 생긴다 (ADR-0005).</text>
+  </g>
+</svg>

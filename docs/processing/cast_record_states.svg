@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 420" width="860" height="420" font-family="sans-serif" font-size="11">
+  <title>투함 기록 상태기계와 상태 어휘 사다리</title>
+  <desc>Cast record states (CAST_COMMITTED, RECEIVED, CAST_NOT_RECEIVED, CHALLENGED_SPOILED, QUARANTINED, SHARE_MISSING) with the events that cause each transition, and the verifier status ladder.</desc>
+  <defs>
+    <marker id="c" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.3">
+    <rect x="30" y="150" width="150" height="44" rx="8"/>
+    <rect x="260" y="40" width="160" height="44" rx="8"/>
+    <rect x="260" y="110" width="160" height="44" rx="8"/>
+    <rect x="260" y="180" width="160" height="44" rx="8"/>
+    <rect x="260" y="250" width="160" height="44" rx="8"/>
+    <rect x="260" y="320" width="160" height="44" rx="8"/>
+    <rect x="500" y="110" width="120" height="44" rx="8"/>
+    <rect x="500" y="250" width="120" height="44" rx="8"/>
+    <rect x="660" y="30" width="180" height="340"/>
+  </g>
+  <g fill="currentColor">
+    <text x="105" y="170" text-anchor="middle" font-weight="bold" font-size="10">CAST_COMMITTED</text>
+    <text x="105" y="184" text-anchor="middle" font-size="8">CastRecord 수록</text>
+    <text x="340" y="60" text-anchor="middle" font-weight="bold" font-size="10">RECEIVED</text>
+    <text x="340" y="74" text-anchor="middle" font-size="8">ReceiptResolution (관외·재외)</text>
+    <text x="340" y="130" text-anchor="middle" font-weight="bold" font-size="10">CAST_NOT_RECEIVED</text>
+    <text x="340" y="144" text-anchor="middle" font-size="8">ReceiptResolution · 분실 봉투</text>
+    <text x="340" y="200" text-anchor="middle" font-weight="bold" font-size="10">CHALLENGED_SPOILED</text>
+    <text x="340" y="214" text-anchor="middle" font-size="8">ChallengeOpening (§8)</text>
+    <text x="340" y="270" text-anchor="middle" font-weight="bold" font-size="10">QUARANTINED</text>
+    <text x="340" y="284" text-anchor="middle" font-size="8">각인 실패 (§7.3 6항)</text>
+    <text x="340" y="340" text-anchor="middle" font-weight="bold" font-size="10">SHARE_MISSING</text>
+    <text x="340" y="354" text-anchor="middle" font-size="8">ShareReceipt 누락·재전송 실패</text>
+    <text x="560" y="130" text-anchor="middle" font-weight="bold" font-size="10">집계 포함</text>
+    <text x="560" y="144" text-anchor="middle" font-size="8">TallyScope (§11.1)</text>
+    <text x="560" y="270" text-anchor="middle" font-weight="bold" font-size="10">집계 제외</text>
+    <text x="560" y="284" text-anchor="middle" font-size="8">해시·사유 공개 (VC-042)</text>
+    <text x="750" y="52" text-anchor="middle" font-weight="bold">상태 어휘 사다리 (§14)</text>
+    <text x="680" y="82" font-size="10">UNVERIFIED</text>
+    <text x="680" y="112" font-size="10">↓ LOG_CONSISTENT</text>
+    <text x="680" y="142" font-size="10">↓ SOURCE_COMPLETENESS_CHECKED</text>
+    <text x="680" y="172" font-size="10">↓ CRYPTO_TALLY_VERIFIED</text>
+    <text x="680" y="202" font-size="10">↓ PAPER_AUDITED</text>
+    <text x="680" y="232" font-size="10">↓ LEGAL_CERTIFIED (참조 표시만)</text>
+    <text x="680" y="272" font-size="10">실패·미해결 분쟁 → HOLD_REVIEW</text>
+    <text x="680" y="302" font-size="9">상태 혼용·자동 전환 금지 (VC-050)</text>
+    <text x="680" y="332" font-size="9">RECEIPT_SCAN 범위는 별도 표기 (§17)</text>
+    <text x="430" y="400" text-anchor="middle" font-size="10">상태는 되돌아가지 않는다. 선거일·관내·RECEIPT_SCAN 기록은 CAST_COMMITTED에서 바로 집계 포함으로 간다.</text>
+  </g>
+  <g fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#c)">
+    <path d="M180,160 L258,65"/>
+    <path d="M180,166 L258,132"/>
+    <path d="M180,174 L258,200"/>
+    <path d="M180,180 L258,270"/>
+    <path d="M180,186 L258,340"/>
+    <path d="M420,62 L498,125"/>
+    <path d="M180,172 L498,132" stroke-dasharray="4 3"/>
+    <path d="M420,132 L498,265"/>
+    <path d="M420,202 L498,270"/>
+    <path d="M420,272 L498,274"/>
+    <path d="M420,342 L498,280"/>
+  </g>
+</svg>

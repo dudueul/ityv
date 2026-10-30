@@ -216,16 +216,12 @@ impl<'a> Ident<'a> {
         self.bytes
     }
 
-    /// Returns the length in bytes, always `>= 1`.
+    /// Returns the length in bytes, always `>= 1`. Named `byte_len` rather
+    /// than `len` because an identifier can never be empty, so there is no
+    /// meaningful `is_empty` to pair it with.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub const fn byte_len(&self) -> usize {
         self.bytes.len()
-    }
-
-    /// Always `false`: identifiers cannot be empty. Provided for API symmetry.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
     }
 }
 
@@ -261,7 +257,7 @@ macro_rules! ident_newtype {
             /// longer than [`Self::MAX_LEN`].
             #[must_use]
             pub const fn from_ident(ident: Ident<'a>) -> Option<Self> {
-                if ident.len() > Self::MAX_LEN {
+                if ident.byte_len() > Self::MAX_LEN {
                     None
                 } else {
                     Some(Self(ident))
