@@ -121,7 +121,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 확인 장치는 신원 확인 유닛(불신), 카운터·가명 유닛(검증), 챔버 모듈 X·Y로 구성된다. 신원 확인 유닛은 신분증을 확인하고 `voter_id`(주민등록번호 등 법정 식별자)를 카운터·가명 유닛에 넘긴다. 카운터·가명 유닛은 가명을 만들고(§6.4) `CheckinCounter` 이벤트를 서명한 뒤 `voter_id`를 소거한다(VC-015).
 
 ### 6.3 확인 카운터 이벤트
-`CheckinCounter`(스키마 0x0009): `election_id`, `station_id`, `seq`(투표소별 1부터), `pseudonym: Hash512`, `time_bucket`, `ballot_style_id`, 카운터·가명 유닛 서명, 모듈 X·Y 서명(각각 `(station_id, seq)`에 대한 서명). 50건마다(또는 마감 시) `ObserverCountAttest` 이벤트: 누적 수와 서로 다른 조직의 참관인 토큰 서명 2개 이상(VC-016).
+`CheckinCounter`(스키마 0x0009): `election_id`, `station_id`, `seq`(투표소별 1부터), `pseudonym: Hash512`, `time_bucket`, `ballot_style_id`, 카운터·가명 유닛 서명, 모듈 X·Y 서명(각각 `(station_id, seq)`에 대한 서명). 50건마다 또는 2시간마다(먼저 오는 쪽), 그리고 마감 시 `ObserverCountAttest` 이벤트: 누적 수와 서로 다른 조직의 참관인 토큰 서명 2개 이상(VC-016).
 
 ### 6.4 가명
 `pseudonym = SHA3-512("ityv:pseudonym:v1" ‖ 0x00 ‖ PRF_X(voter_id) ‖ PRF_Y(voter_id))`. `PRF_c(voter_id) = SHA3-512("ityv:prf:v1" ‖ 0x00 ‖ key_c ‖ voter_id)`를 챔버 모듈 c 안에서 계산한다. `key_c`는 선거별이며 챔버 c가 보유하고 파기 의식에서 파기한다. 어느 한 챔버도 혼자서는 가명을 계산할 수 없다(VC-017). 모듈은 `voter_id`를 계산 후 즉시 소거한다.
@@ -191,6 +191,8 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 ### 7.8 봉인 저널과 투표함 집합
 커밋먼트 유닛은 기록 해시와 share 패키지를 순서대로 담은 해시 체인 저널을 fsync하며 유지한다. 저널은 `sealed` 등급이며 투함 순서를 드러내므로 공개하지 않는다. 투표함 마감 시 공개되는 것은 기록 해시를 바이트 사전순으로 정렬한 **집합**과 그 Merkle root뿐이다(VC-027). 저널은 모든 구성원의 `ShareReceipt`가 확인된 뒤 파기 의식까지 보관한다.
+
+업로드 전 저널 되감기를 막기 위해 50건마다 또는 2시간마다(먼저 오는 쪽) 서로 다른 조직의 참관인 둘이 토큰으로 `ScanCountAttest` 이벤트(`box_id`, 누적 기록 수, 검증 수, 격리 수, 저널 head)를 공동 서명한다. 마감 시 `BoxClose`의 수량과 저널 head는 마지막 `ScanCountAttest`와 단조 연속이어야 한다(VC-052).
 
 ## 8. 투입 전 검증
 
@@ -389,6 +391,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | `RollFreeze`, `RollAmendment` | — | 선관위, 위원회 | public | §6.1 |
 | `CheckinCounter` | 0x0009 | 카운터·가명 유닛, 모듈 X·Y | public | §6.3 |
 | `ObserverCountAttest` | — | 참관인 2(다른 조직) | public | §6.3 |
+| `ScanCountAttest` | — | 참관인 2(다른 조직) | public | §7.8 |
 | `ModuleProvisioned` | — | 위원회, 챔버, 참관인 | public | §9.4.2 |
 | `BoxOpened` | — | 장치, 사무원 2, 참관인 2 | public | §10.1 |
 | `CastRecord` | 0x0005 | 커밋먼트 유닛, 모듈들 | public | §7.6 |
@@ -413,8 +416,8 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 ## 부록 B. 서명 purpose
 
-`genesis`, `legal-auth`, `appointment`, `checkpoint`, `checkpoint-archive`(SLH-DSA 포함), `checkin`, `observer-count`, `module-issue`, `cast-record`, `share-package`, `slip`, `challenge`, `box-open`, `box-close`, `handoff`, `seal-change`, `video-anchor`, `postal-batch`, `receipt-mark`, `receipt-resolution`, `tally-scope`, `aggregate-opening`, `audit-freeze`, `audit-seed`, `sample-opening`, `sample-comparison`, `dispute`, `legal-decision`, `destruction`, `share-receipt`, `module-provisioned`, `scanner-quarantine`, `publication-breach`.
+`genesis`, `legal-auth`, `appointment`, `checkpoint`, `checkpoint-archive`(SLH-DSA 포함), `checkin`, `observer-count`, `module-issue`, `cast-record`, `share-package`, `slip`, `challenge`, `box-open`, `box-close`, `handoff`, `seal-change`, `video-anchor`, `postal-batch`, `receipt-mark`, `receipt-resolution`, `tally-scope`, `aggregate-opening`, `audit-freeze`, `audit-seed`, `sample-opening`, `sample-comparison`, `dispute`, `legal-decision`, `destruction`, `share-receipt`, `module-provisioned`, `scanner-quarantine`, `publication-breach`, `scan-count`.
 
 ## 부록 C. 검증 조건 목록
 
-VC-001 투함 기록에 시간·순번·유권자 정보 없음 · VC-002 하이브리드 서명 둘 다 검증 · VC-003 알고리즘 협상 없음 · VC-004 미등록 키 무효 · VC-005 genesis 핀 일치 · VC-006 법적 승인 두 서명 · VC-007 승인 범위 없이 해당 객체 생성 불가 · VC-008 범위 전제 조건 · VC-009 임명 이벤트 참조 · VC-010 찢어진 꼬리 격리 · VC-011 Merkle 증명 알고리즘 · VC-012 증인 서명 전 확인 사항 · VC-013 같은 seq 이중 서명 금지 · VC-014 정족수·다양성 · VC-015 `voter_id` 소거 · VC-016 참관인 공동 서명 · VC-017 가명은 두 챔버 필요 · VC-018 참여 장부 공개 검증 · VC-019 가명·신원과 투함 ID·추적코드 분리 · VC-020 커밋먼트 유닛 소거 · VC-021 카운터 틈 공개 · VC-022 모듈 태그 검사 · VC-023 각인 실패 격리 · VC-024 자릿수 상한 · VC-025 OR 증명 검증 · VC-026 canonical 스칼라·점 · VC-027 투표함 기록은 정렬 집합으로만 공개 · VC-028 검증 공개값 재구성 · VC-029 폐기 봉투 수 일치 · VC-030 검증 실패 장치 격리·전수 대조 · VC-031 접근구조 밖 집합은 정보 없음 · VC-032 패키지 해시 결속 · VC-033 패드·해시 미게시 · VC-034 패드 구간 1회 사용·소거 · VC-035 선관위 부품에 패드 없음 · VC-036 share 수신 대조 · VC-037 미등록 장치 개시 불가 · VC-038 마감 불변식 · VC-039 마감 후 기록 금지 · VC-040 인계 조직 상이·경로 준수 · VC-041 라벨 복원 소거 · VC-042 제외 근거 · VC-043 합계 열기 등식 · VC-044 불일치 국소화 · VC-045 시드 구성 · VC-046 표본 재계산 · VC-047 표본 열기 재구성 · VC-048 포함 분쟁 절차 · VC-049 `LEGAL_CERTIFIED` 기계 생성 금지 · VC-050 상태 혼용 금지 · VC-051 파기 증명.
+VC-001 투함 기록에 시간·순번·유권자 정보 없음 · VC-002 하이브리드 서명 둘 다 검증 · VC-003 알고리즘 협상 없음 · VC-004 미등록 키 무효 · VC-005 genesis 핀 일치 · VC-006 법적 승인 두 서명 · VC-007 승인 범위 없이 해당 객체 생성 불가 · VC-008 범위 전제 조건 · VC-009 임명 이벤트 참조 · VC-010 찢어진 꼬리 격리 · VC-011 Merkle 증명 알고리즘 · VC-012 증인 서명 전 확인 사항 · VC-013 같은 seq 이중 서명 금지 · VC-014 정족수·다양성 · VC-015 `voter_id` 소거 · VC-016 참관인 공동 서명 · VC-017 가명은 두 챔버 필요 · VC-018 참여 장부 공개 검증 · VC-019 가명·신원과 투함 ID·추적코드 분리 · VC-020 커밋먼트 유닛 소거 · VC-021 카운터 틈 공개 · VC-022 모듈 태그 검사 · VC-023 각인 실패 격리 · VC-024 자릿수 상한 · VC-025 OR 증명 검증 · VC-026 canonical 스칼라·점 · VC-027 투표함 기록은 정렬 집합으로만 공개 · VC-028 검증 공개값 재구성 · VC-029 폐기 봉투 수 일치 · VC-030 검증 실패 장치 격리·전수 대조 · VC-031 접근구조 밖 집합은 정보 없음 · VC-032 패키지 해시 결속 · VC-033 패드·해시 미게시 · VC-034 패드 구간 1회 사용·소거 · VC-035 선관위 부품에 패드 없음 · VC-036 share 수신 대조 · VC-037 미등록 장치 개시 불가 · VC-038 마감 불변식 · VC-039 마감 후 기록 금지 · VC-040 인계 조직 상이·경로 준수 · VC-041 라벨 복원 소거 · VC-042 제외 근거 · VC-043 합계 열기 등식 · VC-044 불일치 국소화 · VC-045 시드 구성 · VC-046 표본 재계산 · VC-047 표본 열기 재구성 · VC-048 포함 분쟁 절차 · VC-049 `LEGAL_CERTIFIED` 기계 생성 금지 · VC-050 상태 혼용 금지 · VC-051 파기 증명 · VC-052 스캔 카운터 참관 앵커와 마감의 단조 연속.
