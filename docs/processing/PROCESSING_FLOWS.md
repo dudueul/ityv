@@ -51,7 +51,7 @@ sequenceDiagram
 
 핵심 규칙:
 - 해석 유닛 → 커밋먼트 유닛 링크는 물리적으로 단방향이며 메시지는 `Interpretation` 하나뿐이다(§7.1). 이미지는 커밋먼트 유닛에 도달하지 않는다.
-- 모듈 응답의 공개부(`counter`)는 `CastRecord`에, 비공개부(`r_c`, `cid_c`, `lab_c`, 태그)는 패드 암호화된 `SharePackage`에만 들어간다(§7.2). 모듈과 장치의 서명은 기록마다가 아니라 64건 배치의 `BatchAttest`에 붙으며, 모듈은 자기 카운터 구간이 틈 없이 일치할 때만 서명한다(§7.2.1, VC-021, VC-053).
+- 기록 본문 해시에 장치와 각 모듈이 Ed25519로 즉시 서명하고(§7.2.1), 모듈 응답의 공개부(`counter`)는 `CastRecord`에, 비공개부(`r_c`, `cid_c`, `lab_c`, 태그)는 패드 암호화된 `SharePackage`에만 들어간다(§7.2). 모듈과 장치의 서명은 기록마다가 아니라 64건 배치의 `BatchAttest`에 붙으며, 모듈은 자기 카운터 구간이 틈 없이 일치할 때만 서명한다(§7.2.1, VC-021, VC-053).
 - 패드 XOR는 모듈 안에서 한다. 커밋먼트 유닛과 선관위 부품에는 패드가 없다(VC-035).
 - `SharePackage`의 해시가 먼저 확정되고 `CastRecord`가 그것을 참조한다(§7.3 5항). 패키지를 바꿔치기하면 공개 기록과 어긋난다(VC-032).
 - 각인은 "투입" 결정 뒤 대기 구역을 지나며 이루어진다. 검증 시에는 각인이 없다(§8).
@@ -191,6 +191,9 @@ stateDiagram-v2
     CAST_COMMITTED --> RECEIVED: ReceiptResolution (관외·재외)
     CAST_COMMITTED --> CAST_NOT_RECEIVED: ReceiptResolution (관외·재외)
     CAST_COMMITTED --> SHARE_MISSING: ShareReceipt 누락 후 재전송 실패
+    CAST_COMMITTED --> UNATTESTED: 배치 미마감 (장치 정지)
+    UNATTESTED --> CAST_COMMITTED: LateBatchClose (기한 내)
+    UNATTESTED --> 집계제외: 기한 경과
     CAST_COMMITTED --> 집계포함: TallyScope (선거일·관내·RECEIPT_SCAN)
     RECEIVED --> 집계포함: TallyScope
     CHALLENGED_SPOILED --> 집계제외
@@ -198,7 +201,7 @@ stateDiagram-v2
     CAST_NOT_RECEIVED --> 집계제외
     SHARE_MISSING --> 집계제외
 ```
-제외는 모두 기록 해시와 사유로 공개된다(VC-042). 상태는 되돌아가지 않는다. `SHARE_MISSING`은 종이는 있으나 전자 기록을 열 수 없는 경우이며 종이 계수에는 포함된다.
+제외는 모두 기록 해시와 사유로 공개된다(VC-042). `UNATTESTED`에서 `CAST_COMMITTED`로의 복귀(늦은 마감)만 예외이고 다른 상태는 되돌아가지 않는다. 경우별 상세는 `docs/spec/FAILURE_CASES.md`. `SHARE_MISSING`은 종이는 있으나 전자 기록을 열 수 없는 경우이며 종이 계수에는 포함된다.
 
 ### 8.2 투표함
 ```mermaid
@@ -243,12 +246,13 @@ UNVERIFIED
 | 헤더·ID·플래그 | ≈ 230 | `election_id`, `box_id`, `ballot_style_id`, 해시 64 |
 | 커밋먼트 k=2 | 64 | |
 | 정형성 증명 (m+2)(k+2) 스칼라 | 2,048 | 16 × 4 × 32 |
-| 모듈 카운터 3개 | ≈ 60 | ID·카운터만. 서명은 배치에 |
-| **기록 합계** | **≈ 2.4 KB** | |
+| 모듈 카운터 3개 | ≈ 60 | ID·카운터만 |
+| 기록 서명 (장치 + 모듈 3) Ed25519 | 256 | 즉시 공개, 고전 공격자에 대한 출처 증명 |
+| **기록 합계** | **≈ 2.7 KB** | |
 | `BatchAttest` 분담분 | ≈ 300 | (모듈 3 + 장치 1) × 4,691B ÷ 64건, 본문 포함 |
-| **표당 합계** | **≈ 2.7 KB** | 모듈 5개면 ≈ 2.9 KB |
+| **표당 합계** | **≈ 3.0 KB** | 모듈 5개면 ≈ 3.3 KB |
 
-전국: 44M × 2.7KB ≈ **120 GB**. 정형성 증명이 75%를 차지한다. 국회의원 지역구(후보 6, k=1)는 증명 768B로 표당 ≈ 1.4KB, 비례대표(정당 35, k=5)는 증명 8,288B로 표당 ≈ 8.9KB. PROTOCOL v0.1 §7.2.1이 배치 증명을 규범으로 채택했다. 표마다 하이브리드 서명을 붙이는 설계는 표당 ≈ 21KB, 전국 ≈ 930GB가 되어 기각했다.
+전국: 44M × 3.0KB ≈ **130 GB**. 정형성 증명이 75%를 차지한다. 국회의원 지역구(후보 6, k=1)는 증명 768B로 표당 ≈ 1.4KB, 비례대표(정당 35, k=5)는 증명 8,288B로 표당 ≈ 8.9KB. PROTOCOL v0.1 §7.2.1이 기록마다 Ed25519, 배치마다 하이브리드 서명 구조를 규범으로 채택했다(ADR-0014). 표마다 하이브리드 서명을 붙이는 설계는 표당 ≈ 21KB, 전국 ≈ 930GB가 되어 기각했다.
 
 ### 9.2 봉인 패키지와 패드
 | 항목 | 바이트/기록/구성원 | 비고 |

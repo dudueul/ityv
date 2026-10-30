@@ -23,7 +23,7 @@
 | 해석 유닛 | interpretation unit | `interp` | 투표지 이미지를 해석해 선택 인덱스 몇 바이트를 커밋먼트 유닛에 넘긴다. 불신 대상. 단방향 링크로만 연결. |
 | 커밋먼트 유닛 | commitment unit | `cunit` | `no_std` Rust 수백 줄. 커밋먼트, 정형성 증명, share, 장치 서명, 추적코드, 투함 ID 각인 명령을 만든다. 검증 사다리의 최상위 대상. |
 | 챔버 모듈(봉인 모듈) | chamber module | `cmod` | 챔버가 공급하고 봉인한 물리 모듈. X·Y 모듈은 필수이고, J·A·C는 자체 모듈 또는 독립검증위원회의 중립 모듈에 위임할 수 있으며, N(선관위)은 모듈이 없다. 기능: 난수 기여, 투함 ID·봉투 라벨 기여, 자기 챔버 구성원의 일회용 패드 보관과 XOR, 일회성 MAC 키 공급, 확인 장치용 가명 PRF, 카운터 서명. 발급 값을 보관하지 않는다. |
-| 투함 기록 | cast record | `CastRecord` | 표 하나의 공개 기록. 선거·투표함·투표양식·커밋먼트·정형성 증명·챔버 모듈 카운터 서명·share 패키지 해시·장치 서명. 선택과 투함 ID는 커밋먼트 안에만 존재하며 시간과 순번은 없다. |
+| 투함 기록 | cast record | `CastRecord` | 표 하나의 공개 기록. 본문(선거·투표함·투표양식·커밋먼트·정형성 증명·모듈 카운터·share 패키지 해시)과 기록 서명(장치·모듈의 Ed25519). 양자내성 서명은 64건 배치의 `BatchAttest`가 제공한다. 선택과 투함 ID는 커밋먼트 안에만 존재하며 시간과 순번은 없다. |
 | 커밋먼트 | commitment | `commitment` | Ristretto255 위의 일반화 Pedersen 커밋먼트. 숨김은 무조건적, 결속은 계산적. |
 | 투함 ID | cast id | `cast_id` | 투함 시 챔버 모듈들의 난수 기여를 해시해 만드는 192비트 값. 투표지에 각인되며 커밋먼트 안에만 존재하고 공개 기록에 노출하지 않는다. |
 | 봉투 라벨 | envelope label | `env_label` | 관외·재외 전용. 챔버 모듈들의 기여를 해시해 만든 독립 무작위 24바이트 토큰을 봉투에 부착한다. 투함 ID나 추적코드에서 유도하지 않으므로 봉투와 투표지를 (라벨, 각인)으로 연결할 수 없다. 공개 기록에 노출하지 않고 share로만 전달하며, 수령 대조 의식에서 정족수가 라벨만 복원해 대조한다. |
@@ -37,10 +37,13 @@
 | 참여 장부 | participation ledger | `participation` | 확인마다 서명된 카운터 이벤트와 가명. 교차 중복과 수량 검증용. 투표지 또는 투함 ID와 절대 연결하지 않는다. |
 | 가명 | pseudonym | `pseudonym` | 챔버 모듈 X·Y의 PRF 출력을 결합해 만든 유권자 식별 대체값. 어느 한 챔버도 혼자 계산할 수 없다. 선거 후 순서 없는 다중집합으로만 공개한다. |
 | 상태 어휘 | status vocabulary | — | `UNVERIFIED`, `LOG_CONSISTENT`, `SOURCE_COMPLETENESS_CHECKED`, `CRYPTO_TALLY_VERIFIED`, `PAPER_AUDITED`, `HOLD_REVIEW`, `LEGAL_CERTIFIED`. 자동 상호 전환을 금지한다. |
-| 투함 기록 상태 | cast record status | — | `CAST_COMMITTED`, `RECEIVED`, `CAST_NOT_RECEIVED`, `CHALLENGED_SPOILED`, `QUARANTINED`. |
+| 투함 기록 상태 | cast record status | — | `CAST_COMMITTED`, `RECEIVED`, `CAST_NOT_RECEIVED`, `CHALLENGED_SPOILED`, `QUARANTINED`, `UNATTESTED`(기록 서명은 유효하나 배치 증명 없음), `SHARE_MISSING`. |
 | 수집 프로필 | capture profile | `IN_PERSON_SCAN`, `RECEIPT_SCAN` | 전자는 선거일·관내·관외·재외(투표 시점 커밋먼트), 후자는 거소·선상(수령 시점 스캔, 보장 수준이 낮음을 명시). |
 | 보관 경로 | custody route | `route` | genesis에 고정된 인계 순서. 우편 회송(P1)과 현지 개표(P4)를 같은 코드로 표현한다. |
 | 기록 우선 표본 | record-first sampling | — | 비교 감사에서 공개 기록을 먼저 뽑아 열고 종이를 찾는 순서. 공개 태그가 필요 없어 강요 통로를 만들지 않는다. |
 | 신뢰 기반 | trusted computing base | `TCB` | 정규 인코딩, 암호 래퍼, 커밋먼트·증명, 장부·Merkle, 상태기계, 공개 검증기, 커밋먼트 유닛, 카운터·가명 유닛, 신뢰기관 집계. |
+| 일괄 증명 | batch attestation | `BatchAttest` | 기록 64건(또는 15분, 또는 마감)마다 기록 해시 Merkle root와 모듈 카운터 구간에 장치와 모듈이 하이브리드 서명한 공개 이벤트. 모듈은 카운터 연속성을 확인한 뒤에만 서명한다. |
+| 늦은 마감 | late close | `LateBatchClose`, `LateBoxClose` | 멈췄던 장치를 입회 아래 되살려 저널에서 미결 배치·마감을 닫는 절차. |
+| 비상 투입 | fallback deposit | `FallbackDeclared` | 스캐너와 예비 장치가 모두 없을 때 봉인된 비상 투입구로 기록 없이 받는 투표지. 마감의 `no_record_count`로 센다. |
 | 검증 사다리 | verification ladder | `V1`..`V5` | V1 속성·퍼징·변이, V2 Kani, V3 Verus 또는 Creusot, V4 TLA+·Tamarin, V5 독립 2차 구현. |
 | 정규 인코딩 | canonical encoding | `ityv-encoding` | 재귀 없는 고정폭 이진 형식. 모든 서명·해시 대상 객체의 유일한 바이트 표현. |
