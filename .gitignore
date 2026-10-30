@@ -1,0 +1,8 @@
+/target
+/crates/*/target
+/tools/*/target
+**/*.rs.bk
+/vendor
+/.kani
+*.profraw
+*.profdata
