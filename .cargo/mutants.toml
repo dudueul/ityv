@@ -1,0 +1,5 @@
+# cargo-mutants configuration. Kani harnesses are compiled only under
+# `cargo kani`, so mutating them cannot be observed by `cargo test`; they are
+# verified by the Kani job instead.
+exclude_globs = ["src/proofs.rs"]
+timeout_multiplier = 3.0
