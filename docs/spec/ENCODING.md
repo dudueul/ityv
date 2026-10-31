@@ -186,9 +186,9 @@ offset  size  field
 | 2 | `box_id` | `Ident<64>` | |
 | 3 | `ballot_style_id` | `Ident<64>` | |
 | 4 | `proof_system_id` | `u16` | 1(`or-rep:v1`). 그 외는 `ValueOutOfRange` |
-| 5 | `commitments` | `Array<Point, 8>` | 개수 = k ≥ 1 |
-| 6 | `proof` | `Bytes<20483>` | PROTOCOL.md §7.5 증명 인코딩. 머리부의 `chunk_count`가 5의 개수와 다르면 `InvariantViolation`(이 필드 오프셋) |
-| 7 | `module_counters` | `Array<{module_id: Ident<64>, counter: u64}, 6>` | `module_id` 오름차순, 중복 없음, 1개 이상 |
+| 5 | `commitments` | `Array<Point, 8>` | 개수 = k ≥ 1. 0이면 `ValueOutOfRange`(개수 접두사 오프셋) |
+| 6 | `proof` | `Bytes<20483>` | PROTOCOL.md §7.5 증명 인코딩. 머리부 규칙을 디코더가 검사한다: `option_count ∈ 2..=64`, `chunk_count = ⌈option_count/9⌉`, 길이 = `3 + option_count·(chunk_count+2)·32`, `chunk_count` = 5의 개수. 위반은 `InvariantViolation`(이 필드 오프셋). 스칼라의 canonical 여부는 암호 크레이트가 검사한다 |
+| 7 | `module_counters` | `Array<{module_id: Ident<64>, counter: u64}, 6>` | `module_id` 오름차순, 중복 없음, 1개 이상(0이면 `ValueOutOfRange`) |
 | 8 | `share_package_hash` | `Hash512` | §8.10 객체의 §4 해시 |
 | 9 | `transport_flags` | `u8` | 비트0 KEM 대체 사용, 비트1 중립 모듈 위임. 다른 비트가 서 있으면 `ValueOutOfRange` |
 
@@ -208,9 +208,9 @@ offset  size  field
 | 2 | `box_id` | `Ident<64>` | |
 | 3 | `ballot_style_id` | `Ident<64>` | |
 | 4 | `record_hash` | `Hash512` | 폐기되는 표의 추적코드 |
-| 5 | `option_index` | `u16` | `0..=m+1` |
+| 5 | `option_index` | `u16` | `0..=m+1`. 인코딩 수준에서는 `<= 63`(선택지 상한)만 검사하며 초과는 `ValueOutOfRange`; m은 genesis가 정한다 |
 | 6 | `cast_id` | `Token192` | |
-| 7 | `rand` | `Array<Scalar, 8>` | 합산 난수 `r_0..r_{k−1}`, 개수 = k |
+| 7 | `rand` | `Array<Scalar, 8>` | 합산 난수 `r_0..r_{k−1}`, 개수 = k ≥ 1(0이면 `ValueOutOfRange`) |
 | 8 | `modules` | `Array<{module_id: Ident<64>, counter: u64, rand: Array<Scalar, 8>, cid: Token192}, 6>` | `module_id` 오름차순, 중복 없음, 각 `rand` 개수 = k |
 
 ### 8.9 `ChallengeOpening` (`schema_id` 0x0018, `schema_version` 1)
@@ -226,7 +226,7 @@ offset  size  field
 |---|---|---|---|
 | 1 | `election_id` | `Ident<64>` | |
 | 2 | `box_id` | `Ident<64>` | |
-| 3 | `commitments` | `Array<Point, 8>` | 대응 기록의 커밋먼트(기록 해시는 이 객체의 해시에 의존하므로 넣을 수 없다) |
+| 3 | `commitments` | `Array<Point, 8>` | 대응 기록의 커밋먼트(기록 해시는 이 객체의 해시에 의존하므로 넣을 수 없다). 개수 ≥ 1(0이면 `ValueOutOfRange`) |
 | 4 | `entries` | `Array<{trustee_id: Ident<64>, chamber: u8, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<4096>, tag: [u8; 16]}, 64>` | `trustee_id` 오름차순, 중복 없음. `chamber` 1 X, 2 Y, 3 J, 4 A, 5 C, 6 N. `transport` 0 패드(`ciphertext` = `MemberShare` ⊕ 패드, `tag` = Poly1305), 1 KEM(§9.6 배치, `pad_id = pad_index = 0`). 그 외 값은 `ValueOutOfRange` |
 
 서명은 없다. 패키지는 서명된 투함 기록의 `share_package_hash`로 결속된다(PROTOCOL.md §9.3, ADR-0017 §2).
@@ -237,7 +237,7 @@ offset  size  field
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `shares` | `Array<Scalar, 50>` | 비밀 순서: 존재 모듈을 `module_id` 오름차순으로, 모듈마다 `r_{c,0..k−1}`; 그 뒤 `cast_id`; 관외·재외면 그 뒤 `env_label`. 개수 = 모듈 수 × k + 1(+1) |
+| 1 | `shares` | `Array<Scalar, 50>` | 비밀 순서: 존재 모듈을 `module_id` 오름차순으로, 모듈마다 `r_{c,0..k−1}`; 그 뒤 `cast_id`; 관외·재외면 그 뒤 `env_label`. 개수 = 모듈 수 × k + 1(+1) ≥ 1(0이면 `ValueOutOfRange`) |
 | 2 | `has_module` | `bool` | 구성원 챔버에 모듈이 있으면 1 |
 | 3 | `cid` | `Token192` | `has_module`이면 그 모듈의 `cid_c`, 아니면 전부 0 |
 | 4 | `lab` | `Option<Token192>` | 관외·재외이고 `has_module`이면 `lab_c`, 아니면 없음 |
@@ -255,7 +255,7 @@ offset  size  field
 | 4 | `record_count` | `u16` | `1..=64` |
 | 5 | `records_root` | `Hash512` | 기록 해시의 정렬 집합 root(PROTOCOL.md §5.3) |
 | 6 | `module_ranges` | `Array<{module_id: Ident<64>, counter_first: u64, counter_last: u64}, 6>` | `module_id` 오름차순, `counter_first <= counter_last` |
-| 7 | `module_refusals` | `Array<Ident<64>, 6>` | 오름차순, 중복 없음 |
+| 7 | `module_refusals` | `Array<Ident<64>, 6>` | 오름차순, 중복 없음. 6의 `module_ranges`에 있는 ID만 허용(`InvariantViolation`) |
 | 8 | `journal_head` | `Hash512` | 배치를 닫을 때의 저널 head |
 | 9 | `time_bucket` | `u64` | |
 
@@ -328,5 +328,7 @@ offset  size  field
 `JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 6>` ‖ `time_bucket: u64`. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
 
 ### 8.20 오류 보고 규칙
+
+개수에 하한이 있는 배열은 하한 미달을 `ValueOutOfRange`(개수 접두사 오프셋)로 보고한다. 집합 수준 불변식(ID 집합 일치, 역할·조직 수, 중복 없는 정렬 뒤의 교차 검사)은 배열 전체를 읽은 뒤 그 배열의 개수 접두사 오프셋으로 보고하며, 배열 안의 위반(`NotSorted`, `Duplicate`, 범위)이 먼저 발견되면 그것이 우선한다. 디코더는 필드를 읽는 즉시 그 필드의 규칙을 검사한다(뒤 필드를 읽기 전에).
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.
