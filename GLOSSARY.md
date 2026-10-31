@@ -44,6 +44,7 @@
 | 기록 우선 표본 | record-first sampling | — | 비교 감사에서 공개 기록을 먼저 뽑아 열고 종이를 찾는 순서. 공개 태그가 필요 없어 강요 통로를 만들지 않는다. |
 | 신뢰 기반 | trusted computing base | `TCB` | 정규 인코딩, 암호 래퍼, 커밋먼트·증명, 장부·Merkle, 상태기계, 공개 검증기, 커밋먼트 유닛, 카운터·가명 유닛, 신뢰기관 집계. |
 | 일괄 증명 | batch attestation | `BatchAttest` | 기록 64건(또는 15분, 또는 마감)마다 기록 해시 Merkle root와 모듈 카운터 구간에 장치와 모듈이 하이브리드 서명한 공개 이벤트. 모듈은 카운터 연속성을 확인한 뒤에만 서명한다. |
+| 봉인 저널 | sealed journal | `journal` | 커밋먼트 유닛이 기록 해시·share 패키지·검증·격리·마감을 순서대로 담아 fsync하는 해시 체인(`JournalEntry` 0x0014). `sealed` 등급이며 투함 순서를 드러내므로 공개하지 않는다. |
 | 늦은 마감 | late close | `LateBatchClose`, `LateBoxClose` | 멈췄던 장치를 입회 아래 되살려 저널에서 미결 배치·마감을 닫는 절차. |
 | 비상 투입 | fallback deposit | `FallbackDeclared` | 스캐너와 예비 장치가 모두 없을 때 봉인된 비상 투입구로 기록 없이 받는 투표지. 마감의 `no_record_count`로 센다. |
 | 검증 사다리 | verification ladder | `V1`..`V5` | V1 속성·퍼징·변이, V2 Kani, V3 Verus 또는 Creusot, V4 TLA+·Tamarin, V5 독립 2차 구현. |

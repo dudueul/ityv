@@ -81,21 +81,33 @@ offset  size  field
 | 0x0002 | `Genesis` | 2 | 명부·키·경로·법적 승인 |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
-| 0x0005 | `CastRecord` | 1 | 커밋먼트 벡터, 증명, 서명 |
-| 0x0006 | `ChallengeOpening` | 1 | 투입 전 검증 공개값 |
-| 0x0007 | `BoxClose` | 1 | 수량, 봉인 해시, 장부 head |
+| 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
+| 0x0006 | `ChallengeOpeningBody` | 1 | 투입 전 검증 공개값 본문(§8.8) |
+| 0x0007 | `BoxCloseBody` | 1 | 마감 본문: 수량, 봉인 해시, 저널 head(§8.16) |
 | 0x0008 | `CustodyHandoff` | 1 | 인계·인수, 봉인, 이전 인계 해시 |
 | 0x0009 | `CheckinCounter` | 1 | 확인 카운터 이벤트 |
-| 0x000A | `Slip` | 1 | 추적코드 슬립 |
-| 0x000B | `SharePackage` | 1 | 신뢰기관별 암호화 share 묶음(공개하지 않음) |
+| 0x000A | `Slip` | 1 | 슬립 본문 바이트 + 장치 하이브리드 서명(§8.18) |
+| 0x000B | `SharePackage` | 1 | 신뢰기관별 암호화 share 묶음(§8.10, 공개하지 않음) |
 | 0x000C | `ReceiptMark` | 1 | 관외 수령 라벨 목록 |
 | 0x000D | `AuditSeed` | 1 | 표본 추출 시드 의식 |
 | 0x000E | `DisputeEvent` | 1 | 분쟁 접수·처리 |
 | 0x000F | `LegalDecisionRef` | 1 | 법정 결정 참조 |
 | 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
 | 0x0011 | `WitnessMemory` | 1 | 증인 도구가 영속화하는 마지막 서명 기억(§8.5, ADR-0016 §4). 장부 이벤트가 아니다 |
+| 0x0012 | `BatchAttestBody` | 1 | 배치 증명 본문(§8.12) |
+| 0x0013 | `ScanCountAttestBody` | 1 | 스캔 카운터 참관 앵커 본문(§8.14) |
+| 0x0014 | `JournalEntry` | 1 | 커밋먼트 유닛 봉인 저널 항목(§8.19, 장치 내부, `ityv-cunit` 구현) |
+| 0x0015 | `MemberShare` | 1 | 신뢰기관 구성원 한 명의 share 평문(§8.11, 암호문 안에만 존재) |
+| 0x0016 | `CastRecord` | 1 | 투함 기록 본문 바이트 + 기록 서명(§8.7) |
+| 0x0017 | `BatchAttest` | 1 | 배치 증명 본문 바이트 + 모듈·장치 하이브리드 서명(§8.13) |
+| 0x0018 | `ChallengeOpening` | 1 | 검증 공개 본문 바이트 + 장치 서명(§8.9) |
+| 0x0019 | `SlipBody` | 1 | 슬립 본문(§8.18) |
+| 0x001A | `BoxClose` | 1 | 마감 본문 바이트 + 장치·사무원·참관인 서명(§8.17) |
+| 0x001B | `ScanCountAttest` | 1 | 스캔 카운터 본문 바이트 + 참관인 서명(§8.15) |
+| 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
+| 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 
-필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 `ityv-encoding` 크레이트의 스키마 모듈이 함께 가진다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다.
+필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 §8이 가지며, 구현은 조직 경계를 넘는 객체는 `ityv-encoding`, 크레이트 내부 객체는 그 크레이트(비고에 표기; 0x0010·0x0011은 `ityv-ledger`)다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다. 0x0100–0x01FF는 장치 링크 객체 범위다.
 
 ## 7. 시험 벡터
 
@@ -103,7 +115,7 @@ offset  size  field
 
 ## 8. 예시 스키마 필드 정의
 
-`ityv-encoding` 크레이트가 구현하는 세 스키마의 필드 정의다. 필드는 아래 순서대로 본문에 나열되며, 본문 앞에는 §3의 16바이트 헤더가 온다. 시험 벡터는 `crates/ityv-encoding/vectors/`에 있다.
+등록된 스키마의 필드 정의다. 필드는 아래 순서대로 본문에 나열되며, 본문 앞에는 §3의 16바이트 헤더가 온다. 시험 벡터는 각 구현 크레이트의 `vectors/`에 있다. 자기 서명을 담는 이벤트는 "본문 객체 + 서명 묶음"의 두 객체로 나뉘고 서명 메시지는 본문 객체 바이트 전체다(ADR-0017 §2).
 
 ### 8.1 `LedgerFrame` (`schema_id` 0x0001, `schema_version` 1)
 
@@ -166,6 +178,155 @@ offset  size  field
 
 `last_seq == 0`이면 2–5는 전부 0이어야 하며 그 외는 `InvariantViolation`(`last_seq` 필드 오프셋 16). 객체 전체 길이는 헤더 포함 224바이트로 고정이다.
 
-### 8.6 오류 보고 규칙
+### 8.6 `CastRecordBody` (`schema_id` 0x0005, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `ballot_style_id` | `Ident<64>` | |
+| 4 | `proof_system_id` | `u16` | 1(`or-rep:v1`). 그 외는 `ValueOutOfRange` |
+| 5 | `commitments` | `Array<Point, 8>` | 개수 = k ≥ 1 |
+| 6 | `proof` | `Bytes<20483>` | PROTOCOL.md §7.5 증명 인코딩. 머리부의 `chunk_count`가 5의 개수와 다르면 `InvariantViolation`(이 필드 오프셋) |
+| 7 | `module_counters` | `Array<{module_id: Ident<64>, counter: u64}, 6>` | `module_id` 오름차순, 중복 없음, 1개 이상 |
+| 8 | `share_package_hash` | `Hash512` | §8.10 객체의 §4 해시 |
+| 9 | `transport_flags` | `u8` | 비트0 KEM 대체 사용, 비트1 중립 모듈 위임. 다른 비트가 서 있으면 `ValueOutOfRange` |
+
+### 8.7 `CastRecord` (`schema_id` 0x0016, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<22528>` | 인코딩된 `CastRecordBody` 객체 전체. §8.6 규칙으로 다시 디코딩한다. 추적코드 = 이 바이트의 §4 해시 |
+| 2 | `device_sig_ed25519` | `[u8; 64]` | 본문 바이트에 대한 기록 서명(purpose `cast-record`) |
+| 3 | `module_sigs` | `Array<{module_id: Ident<64>, ed25519: [u8; 64]}, 6>` | `module_id` 오름차순, 중복 없음, 본문의 `module_counters`와 같은 ID 집합이어야 한다(`InvariantViolation`). 메시지는 `body_hash ‖ module_id ‖ counter`(PROTOCOL.md §7.2.1) |
+
+### 8.8 `ChallengeOpeningBody` (`schema_id` 0x0006, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `ballot_style_id` | `Ident<64>` | |
+| 4 | `record_hash` | `Hash512` | 폐기되는 표의 추적코드 |
+| 5 | `option_index` | `u16` | `0..=m+1` |
+| 6 | `cast_id` | `Token192` | |
+| 7 | `rand` | `Array<Scalar, 8>` | 합산 난수 `r_0..r_{k−1}`, 개수 = k |
+| 8 | `modules` | `Array<{module_id: Ident<64>, counter: u64, rand: Array<Scalar, 8>, cid: Token192}, 6>` | `module_id` 오름차순, 중복 없음, 각 `rand` 개수 = k |
+
+### 8.9 `ChallengeOpening` (`schema_id` 0x0018, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<4096>` | 인코딩된 `ChallengeOpeningBody` 객체 전체 |
+| 2 | `device_sig` | `[u8; 4691]` | 본문 바이트에 대한 하이브리드 서명(purpose `challenge`) |
+
+### 8.10 `SharePackage` (`schema_id` 0x000B, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `commitments` | `Array<Point, 8>` | 대응 기록의 커밋먼트(기록 해시는 이 객체의 해시에 의존하므로 넣을 수 없다) |
+| 4 | `entries` | `Array<{trustee_id: Ident<64>, chamber: u8, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<4096>, tag: [u8; 16]}, 64>` | `trustee_id` 오름차순, 중복 없음. `chamber` 1 X, 2 Y, 3 J, 4 A, 5 C, 6 N. `transport` 0 패드(`ciphertext` = `MemberShare` ⊕ 패드, `tag` = Poly1305), 1 KEM(§9.6 배치, `pad_id = pad_index = 0`). 그 외 값은 `ValueOutOfRange` |
+
+서명은 없다. 패키지는 서명된 투함 기록의 `share_package_hash`로 결속된다(PROTOCOL.md §9.3, ADR-0017 §2).
+
+### 8.11 `MemberShare` (`schema_id` 0x0015, `schema_version` 1)
+
+구성원 한 명의 평문이다. `SharePackage` 항목의 암호문 안에만 존재한다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `shares` | `Array<Scalar, 50>` | 비밀 순서: 존재 모듈을 `module_id` 오름차순으로, 모듈마다 `r_{c,0..k−1}`; 그 뒤 `cast_id`; 관외·재외면 그 뒤 `env_label`. 개수 = 모듈 수 × k + 1(+1) |
+| 2 | `has_module` | `bool` | 구성원 챔버에 모듈이 있으면 1 |
+| 3 | `cid` | `Token192` | `has_module`이면 그 모듈의 `cid_c`, 아니면 전부 0 |
+| 4 | `lab` | `Option<Token192>` | 관외·재외이고 `has_module`이면 `lab_c`, 아니면 없음 |
+| 5 | `tag` | `[u8; 16]` | `has_module`이면 모듈의 `tag_{c,i}`, 아니면 전부 0 |
+
+객체 길이는 선거 구성(모듈 수, k, 프로필)으로 고정되고, 패드 소비 바이트 `b = 길이 + 32 + 32`다(PROTOCOL.md §9.4.3).
+
+### 8.12 `BatchAttestBody` (`schema_id` 0x0012, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `batch_index` | `u32` | 투표함별 0부터 1씩 |
+| 4 | `record_count` | `u16` | `1..=64` |
+| 5 | `records_root` | `Hash512` | 기록 해시의 정렬 집합 root(PROTOCOL.md §5.3) |
+| 6 | `module_ranges` | `Array<{module_id: Ident<64>, counter_first: u64, counter_last: u64}, 6>` | `module_id` 오름차순, `counter_first <= counter_last` |
+| 7 | `module_refusals` | `Array<Ident<64>, 6>` | 오름차순, 중복 없음 |
+| 8 | `journal_head` | `Hash512` | 배치를 닫을 때의 저널 head |
+| 9 | `time_bucket` | `u64` | |
+
+### 8.13 `BatchAttest` (`schema_id` 0x0017, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<2048>` | 인코딩된 `BatchAttestBody` 객체 전체 |
+| 2 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 6>` | 오름차순, 중복 없음. 본문의 `module_ranges` ID 중 `module_refusals`에 없는 것과 같은 집합 |
+| 3 | `device_sig` | `[u8; 4691]` | 하이브리드 서명(purpose `batch-attest`) |
+
+### 8.14 `ScanCountAttestBody` (`schema_id` 0x0013, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `record_count` | `u64` | 누적 |
+| 4 | `challenge_count` | `u64` | 누적 |
+| 5 | `quarantine_count` | `u64` | 누적 |
+| 6 | `journal_head` | `Hash512` | |
+| 7 | `time_bucket` | `u64` | |
+
+### 8.15 `ScanCountAttest` (`schema_id` 0x001B, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<512>` | 인코딩된 `ScanCountAttestBody` 객체 전체 |
+| 2 | `observer_sigs` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, sig: [u8; 4691]}, 4>` | 2개 이상, `observer_id` 오름차순. 서로 다른 `org_id`가 2 이상이어야 한다(`InvariantViolation`). purpose `scan-count` |
+
+### 8.16 `BoxCloseBody` (`schema_id` 0x0007, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `paper_count` | `u64` | |
+| 4 | `record_count` | `u64` | |
+| 5 | `attested_count` | `u64` | |
+| 6 | `no_record_count` | `u64` | |
+| 7 | `challenge_count` | `u64` | |
+| 8 | `quarantine_count` | `u64` | |
+| 9 | `record_set_root` | `Hash512` | 기록 해시 정렬 집합의 root |
+| 10 | `journal_head` | `Hash512` | |
+| 11 | `seal_digest` | `Hash512` | |
+| 12 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 6>` | 오름차순, 중복 없음 |
+| 13 | `open_batches` | `u8` | |
+| 14 | `time_bucket` | `u64` | |
+
+### 8.17 `BoxClose` (`schema_id` 0x001A, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<1024>` | 인코딩된 `BoxCloseBody` 객체 전체 |
+| 2 | `device_sig` | `Option<[u8; 4691]>` | 장치가 살아 있을 때의 하이브리드 서명(purpose `box-close`). 없으면 `BoxCloseManual`이다 |
+| 3 | `attestations` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 오름차순. `role` 1 사무원, 2 참관인. 사무원 2 이상, 서로 다른 `org_id`의 참관인 2 이상(`InvariantViolation`). purpose `box-close` |
+
+### 8.18 `SlipBody` (`schema_id` 0x0019) and `Slip` (`schema_id` 0x000A), `schema_version` 1
+
+`SlipBody`: `election_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `time_bucket: u64` ‖ `tracking_code: Hash512`.
+
+`Slip`: `body: Bytes<256>`(인코딩된 `SlipBody` 객체 전체) ‖ `device_sig: [u8; 4691]`(purpose `slip`).
+
+### 8.19 장치 링크 객체 (`ityv-cunit` 구현)
+
+`Interpretation` (`schema_id` 0x0101): `election_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `option_index: u16`. 커밋먼트 유닛은 이 객체 외의 어떤 바이트도 해석 유닛에서 받지 않는다. `option_index > m+1`은 거부한다(m은 genesis의 투표양식에서).
+
+`ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 X, 2 Y, 3 J, 4 A, 5 C) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
+
+`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 6>` ‖ `time_bucket: u64`. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
+
+### 8.20 오류 보고 규칙
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.
