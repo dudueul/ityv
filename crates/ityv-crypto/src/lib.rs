@@ -80,7 +80,7 @@ pub use commit::{
     verify_opening,
 };
 pub use error::Error;
-pub use hash::{Purpose, fiat_shamir_challenge, object_hash, signing_digest};
+pub use hash::{Hasher as Sha3Hasher, Purpose, fiat_shamir_challenge, object_hash, signing_digest};
 pub use kem::{
     AeadTag, HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey, OpenKey, SealKey,
     decapsulate, encapsulate, open, seal,
@@ -99,7 +99,7 @@ pub use shares::{
 };
 pub use sig::{
     ArchiveSignature, ArchiveSigned, ArchiveSigningKey, ArchiveVerifyingKey, HybridSignature,
-    HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_CAST_RECORD,
+    HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT,
     PURPOSE_CHECKPOINT_ARCHIVE, PURPOSE_MODULE_RECORD, RecordPurpose, RecordSignature,
     RecordSigned, RecordSigningKey, RecordVerifyingKey, sign_archive, sign_hybrid, sign_record,
     verify_archive, verify_hybrid, verify_record,

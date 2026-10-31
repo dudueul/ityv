@@ -99,24 +99,47 @@ impl SigningPrefix {
     }
 }
 
-/// Incremental SHA3-512.
-pub(crate) struct Hasher {
+/// Incremental raw SHA3-512 with **no** domain label.
+///
+/// Every hash this crate defines prepends its own label; the raw hasher is
+/// public for the one place the protocol prescribes its own prefix bytes
+/// instead: the ledger Merkle tree (PROTOCOL.md §5.3, leaf prefix `0x00`,
+/// node prefix `0x01`, empty tree `SHA3-512("")`). Callers must not hash
+/// unprefixed application data with it.
+pub struct Hasher {
     state: <Active as Sha3Backend>::State,
 }
 
 impl Hasher {
-    pub(crate) fn new() -> Self {
+    /// Starts a fresh SHA3-512 computation.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             state: <Active as Sha3Backend>::begin(),
         }
     }
 
-    pub(crate) fn absorb(&mut self, data: &[u8]) {
+    /// Absorbs `data`.
+    pub fn absorb(&mut self, data: &[u8]) {
         <Active as Sha3Backend>::absorb(&mut self.state, data);
     }
 
-    pub(crate) fn finish(self) -> [u8; 64] {
+    /// Finishes the computation and returns the 64-byte digest.
+    #[must_use]
+    pub fn finish(self) -> [u8; 64] {
         <Active as Sha3Backend>::finish(self.state)
+    }
+}
+
+impl Default for Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl core::fmt::Debug for Hasher {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Hasher(..)")
     }
 }
 
@@ -258,6 +281,7 @@ mod tests {
             crate::sig::PURPOSE_CAST_RECORD,
             crate::sig::PURPOSE_MODULE_RECORD,
             crate::sig::PURPOSE_CHECKPOINT_ARCHIVE,
+            crate::sig::PURPOSE_CHECKPOINT,
         ] {
             assert!(Purpose::new(purpose.as_bytes()).is_some());
         }

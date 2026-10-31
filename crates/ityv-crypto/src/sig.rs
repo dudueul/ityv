@@ -71,6 +71,9 @@ pub const PURPOSE_MODULE_RECORD: Purpose<'static> = Purpose::from_literal(b"modu
 /// Purpose of the SLH-DSA co-signature on an archival checkpoint.
 pub const PURPOSE_CHECKPOINT_ARCHIVE: Purpose<'static> =
     Purpose::from_literal(b"checkpoint-archive");
+/// Purpose of a witness's hybrid signature on a checkpoint body
+/// (PROTOCOL.md §5.4, Appendix B).
+pub const PURPOSE_CHECKPOINT: Purpose<'static> = Purpose::from_literal(b"checkpoint");
 
 fn fill<R: CryptoRng + ?Sized>(rng: &mut R) -> [u8; SEED_LEN] {
     let mut seed = [0u8; SEED_LEN];
