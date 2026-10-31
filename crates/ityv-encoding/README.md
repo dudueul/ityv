@@ -79,11 +79,11 @@ assert_eq!(decoded, frame);
 ```bash
 cargo test --locked -p ityv-encoding                  # V1: 단위·속성·골든 벡터 테스트
 ITYV_UPDATE_VECTORS=1 cargo test --locked -p ityv-encoding --test vectors --test m3_vectors   # 벡터 재생성
-cargo kani -p ityv-encoding                           # V2: Kani 하네스 24개
+cargo kani -p ityv-encoding                           # V2: Kani 하네스 20개
 cargo mutants -p ityv-encoding                        # V1: 변이 테스트
 ```
 
-속성 테스트는 모든 스키마에 대해 왕복, 모든 단일 바이트 변이가 거부되거나 다른 값으로 디코딩되고 그 재인코딩이 변이 바이트열과 같음(정규성), 모든 진접두사의 거부, 임의 바이트에 대한 모든 디코더의 무패닉을 검사한다. Kani 하네스는 정수 왕복, 불리언·존재 태그 엄격성, 식별자 알파벳의 정확성, 헤더 거부, 임의 입력에 대한 리더·라이터의 무패닉, `LedgerFrame`·`SlipBody`·`ScanCountAttestBody`·`BoxCloseBody`·`MemberShare`·`BatchAttestBody` 왕복, 투함 기록 증명 머리부 검사의 정확성(PROTOCOL §7.5 공식을 독립적으로 적은 식과 대조), 유한 영역 교차 필드 검사의 정확성(`transport_flags` 마스크, 칸·운반·역할 코드, `record_count` 범위, KEM 항목의 0 패드 필드), 그리고 실제 디코더를 통과한 `SharePackage` 항목의 코드·패드 필드 검사와 첫 위반 오프셋을 유계 모델 검사로 증명한다.
+속성 테스트는 모든 스키마에 대해 왕복, 모든 단일 바이트 변이가 거부되거나 다른 값으로 디코딩되고 그 재인코딩이 변이 바이트열과 같음(정규성), 모든 진접두사의 거부, 임의 바이트에 대한 모든 디코더의 무패닉을 검사한다. Kani 하네스는 정수 왕복, 불리언·존재 태그 엄격성, 식별자 알파벳의 정확성, 헤더 거부, 임의 입력에 대한 리더·라이터의 무패닉, `LedgerFrame`·`SlipBody`·`ScanCountAttestBody` 왕복, 투함 기록 증명 머리부 검사의 정확성(PROTOCOL §7.5 공식을 독립적으로 적은 식과 대조), 유한 영역 교차 필드 검사의 정확성(`transport_flags` 마스크, 칸·운반·역할 코드, `record_count` 범위, KEM 항목의 0 패드 필드)을 유계 모델 검사로 증명한다. 배열 필드를 가진 본문(`BoxCloseBody`·`BatchAttestBody`·`MemberShare`·`SharePackage`)의 객체 수준 왕복은 Kani 하네스로 두지 않는다: 이 도구 조합(Kani 0.68, CBMC 6.11)은 버퍼에 기호 바이트가 하나라도 들어가면 상수 전파를 멈추어 식별자·배열 길이로 도는 모든 루프가 하네스 한계까지 펼쳐지므로, 기호 값이 전혀 없는 `BoxCloseBody` 왕복조차 5분 안에 끝나지 않았다. 이 본문들의 왕복·정규성은 V1(속성 테스트 `check_canonical!`, 공개 벡터, 변이 테스트)이 담당한다.
 
 변이 테스트에서 이 크레이트에 이름으로 제외한 변이는 없다. `proof_system_id`는 값이 항상 1이므로 저장하지도 접근자를 두지도 않는다(상수 `PROOF_SYSTEM_OR_REP_V1`만 있다). 상수를 돌려주는 접근자는 그 자체가 동치 변이(상수 1로 치환)를 낳으므로 두지 않았다.
 
