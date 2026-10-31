@@ -2,8 +2,12 @@
 //! combined by SHA3-512, with `ChaCha20-Poly1305` sealing.
 //!
 //! The derived key is
-//! `SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519)[0..32]`,
-//! so an attacker must break both ML-KEM-1024 and X25519 to recover it.
+//! `SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519 ‖ pk_x25519)[0..32]`,
+//! so an attacker must break both ML-KEM-1024 and X25519 to recover it. The
+//! X25519 ciphertext and recipient public key are absorbed because the raw
+//! X25519 shared secret binds neither (the X-Wing combiner argument); the
+//! ML-KEM shared secret already binds its own ciphertext and encapsulation
+//! key by FIPS 203 construction.
 //!
 //! # Single use and the fixed nonce
 //!
@@ -241,6 +245,7 @@ fn derive_key(
     ss_x25519: &[u8; 32],
     ct_mlkem: &[u8; MLKEM1024_CT_LEN],
     ct_x25519: &[u8; X25519_LEN],
+    pk_x25519: &[u8; X25519_LEN],
 ) -> Zeroizing<[u8; 32]> {
     let mut hasher = Hasher::new();
     hasher.absorb(KEM_LABEL);
@@ -249,6 +254,7 @@ fn derive_key(
     hasher.absorb(ss_x25519);
     hasher.absorb(ct_mlkem);
     hasher.absorb(ct_x25519);
+    hasher.absorb(pk_x25519);
     let digest = Zeroizing::new(hasher.finish());
     let mut key = Zeroizing::new([0u8; 32]);
     if let Some((head, _)) = digest.split_first_chunk::<32>() {
@@ -342,7 +348,13 @@ pub fn encapsulate<R: CryptoRng + ?Sized>(
     let (ct_mlkem, ss_mlkem) =
         <Active as MlKem1024Backend>::encapsulate(&public_key.mlkem1024, rng)?;
     let ss_mlkem = Zeroizing::new(ss_mlkem);
-    let bytes = derive_key(&ss_mlkem, &ss_x25519, &ct_mlkem, &ct_x25519);
+    let bytes = derive_key(
+        &ss_mlkem,
+        &ss_x25519,
+        &ct_mlkem,
+        &ct_x25519,
+        &public_key.x25519,
+    );
     Ok((
         HybridCiphertext {
             mlkem1024: ct_mlkem,
@@ -371,11 +383,13 @@ pub fn decapsulate(
         &secret_key.mlkem_seed,
         &ciphertext.mlkem1024,
     ));
+    let pk_x25519 = <Active as X25519Backend>::public_key(&secret_key.x25519);
     let bytes = derive_key(
         &ss_mlkem,
         &ss_x25519,
         &ciphertext.mlkem1024,
         &ciphertext.x25519,
+        &pk_x25519,
     );
     Ok(OpenKey { bytes })
 }
@@ -477,29 +491,25 @@ mod tests {
         assert!(<Active as X25519Backend>::shared_secret(&counting32(), &[0u8; 32]).is_none());
     }
 
-    /// The derived key binds both shared secrets and both ciphertexts.
+    /// The derived key binds both shared secrets, both ciphertexts and the
+    /// recipient X25519 public key.
     #[test]
     fn derived_key_depends_on_every_input() {
-        let base = derive_key(&[1; 32], &[2; 32], &[3; MLKEM1024_CT_LEN], &[4; X25519_LEN]);
-        assert_ne!(
-            *base,
-            *derive_key(&[9; 32], &[2; 32], &[3; MLKEM1024_CT_LEN], &[4; X25519_LEN])
-        );
-        assert_ne!(
-            *base,
-            *derive_key(&[1; 32], &[9; 32], &[3; MLKEM1024_CT_LEN], &[4; X25519_LEN])
-        );
-        assert_ne!(
-            *base,
-            *derive_key(&[1; 32], &[2; 32], &[9; MLKEM1024_CT_LEN], &[4; X25519_LEN])
-        );
-        assert_ne!(
-            *base,
-            *derive_key(&[1; 32], &[2; 32], &[3; MLKEM1024_CT_LEN], &[9; X25519_LEN])
-        );
-        assert_eq!(
-            *base,
-            *derive_key(&[1; 32], &[2; 32], &[3; MLKEM1024_CT_LEN], &[4; X25519_LEN])
-        );
+        let k = |a: u8, b: u8, c: u8, d: u8, e: u8| {
+            derive_key(
+                &[a; 32],
+                &[b; 32],
+                &[c; MLKEM1024_CT_LEN],
+                &[d; X25519_LEN],
+                &[e; X25519_LEN],
+            )
+        };
+        let base = k(1, 2, 3, 4, 5);
+        assert_ne!(*base, *k(9, 2, 3, 4, 5));
+        assert_ne!(*base, *k(1, 9, 3, 4, 5));
+        assert_ne!(*base, *k(1, 2, 9, 4, 5));
+        assert_ne!(*base, *k(1, 2, 3, 9, 5));
+        assert_ne!(*base, *k(1, 2, 3, 4, 9));
+        assert_eq!(*base, *k(1, 2, 3, 4, 5));
     }
 }

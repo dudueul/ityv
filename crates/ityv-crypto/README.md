@@ -40,7 +40,7 @@ ityv의 다른 모든 크레이트는 암호를 이 크레이트를 통해서만
 | 서명 다이제스트 | `SHA3-512("ityv:sig:v1:" ‖ purpose ‖ 0x00 ‖ u64_be(len) ‖ obj)`; 모든 서명 알고리즘은 이 64바이트를 서명한다. ML-DSA-87과 SLH-DSA에는 `purpose`를 FIPS 204/205 컨텍스트로도 넘긴다(`SigningPrefix`가 접두 바이트를 만들고 Kani가 그 배치를 검사한다) |
 | Fiat-Shamir | `SHA3-512("ityv:fs:v1:" ‖ proof_system ‖ 0x00 ‖ u64_be(len) ‖ transcript)`를 스칼라로 균등 축소 |
 | 해시-투-그룹 | `from_uniform_bytes(SHA3-512(label ‖ 0x00))`, 라벨은 `ityv:base:val:v1`, `ityv:base:id:v1`, `ityv:base:rand:v1` |
-| KEM 키 유도 | `SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519)[0..32]` |
+| KEM 키 유도 | `SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519 ‖ pk_x25519)[0..32]` (수신자 X25519 공개키까지 결속; X-Wing 결합기 논증) |
 
 OR 증명의 대본 바이트 배치는 `src/orproof.rs`의 모듈 문서에 있다: `election_id`, `box_id`, `ballot_style_id`(각 u32 길이 접두), `proof_system_id: u16`, `option_count: u16`, `chunk_count: u8`, 커밋먼트 배열(u32 개수 접두), 공표값 `a_{t,j}` 배열(u32 개수 접두, t 외측·j 내측). 모든 정수는 big-endian이다.
 
