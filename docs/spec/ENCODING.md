@@ -23,6 +23,7 @@
 | `Scalar` | 32 | Ristretto255 스칼라, little-endian canonical(곡선 라이브러리의 canonical 검사 통과 필수). 인코딩 크레이트는 길이만 검사하고 canonical 여부는 암호 크레이트가 검사한다 |
 | `Point` | 32 | Ristretto255 압축 점. 위와 같은 책임 분리 |
 | `Token192` | 24 | 192비트 무작위 토큰(투함 ID, 봉투 라벨) |
+| `[u8; N]` | N | 고정폭 바이트열. 길이 접두사가 없고 스키마가 `N`을 정한다(서명, 키, 암호문처럼 길이가 알고리즘으로 고정된 값) |
 | `Bytes<N>` | 4 + 길이 | `u32` 길이 접두사 뒤 바이트. 스키마가 정한 최대 길이 `N`을 넘으면 거부 |
 | `Ident<N>` | 4 + 길이 | `Bytes<N>`과 같되 알파벳이 `[A-Za-z0-9._:-]`로 제한되고 길이 1 이상. 그 외 바이트는 거부 |
 | `Option<T>` | 1 + 0 또는 T | 존재 태그 `0x00`(없음) 또는 `0x01`(있음). 그 외 거부 |
@@ -52,6 +53,9 @@ offset  size  field
 - 해시: `SHA3-512( "ityv:hash:v1" ‖ 0x00 ‖ u64_be(len(obj)) ‖ obj )`
 - 서명 메시지: `"ityv:sig:v1:" ‖ purpose ‖ 0x00 ‖ u64_be(len(obj)) ‖ obj`. `purpose`는 `Ident<32>` 알파벳의 ASCII이며 용도마다 다르다(예: `checkpoint`, `cast-record`, `genesis`, `slip`, `handoff`). 서명 알고리즘에 실제로 넘기는 입력은 이 메시지의 **SHA3-512 다이제스트 64바이트**이며(해시 후 서명, ADR-0015), ML-DSA-87에는 `purpose`를 FIPS 204 컨텍스트 문자열로도 넘긴다.
 - Fiat-Shamir 챌린지: `SHA3-512( "ityv:fs:v1:" ‖ proof_system_id ‖ 0x00 ‖ u64_be(len(transcript)) ‖ transcript )`, 64바이트 출력을 스칼라로 균등 축소.
+- 해시-투-그룹: `from_uniform_bytes( SHA3-512( label ‖ 0x00 ) )`. `label`은 `ityv:base:val:v1`, `ityv:base:id:v1`, `ityv:base:rand:v1`(PROTOCOL.md §7.4). 라벨 뒤의 `0x00`은 다른 해시 규칙과 같은 구분자다.
+- 보존 서명(SLH-DSA-SHAKE-256s)도 같은 64바이트 다이제스트를 서명하며 `purpose`를 FIPS 205 컨텍스트 문자열로 넘긴다. Ed25519는 다이제스트만 서명한다(컨텍스트 없음).
+- 서명·키·암호문의 인코딩은 길이 접두사 없는 고정폭 `[u8; N]`이다(§2). 서명 묶음 `HybridSig`는 `mldsa87: [u8; 4627] ‖ ed25519: [u8; 64]`(4,691바이트), 보존 서명은 `[u8; 29792]`다.
 
 서로 다른 용도의 서명을 재사용할 수 없도록 `purpose`가 다르면 메시지가 다르다. 같은 객체를 다른 선거에 재생할 수 없도록 모든 객체 본문은 `election_id: Ident<64>`를 첫 필드로 가진다.
 

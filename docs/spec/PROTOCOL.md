@@ -43,9 +43,9 @@
 ## 3. 키와 서명
 
 ### 3.1 하이브리드 서명
-서명 묶음 `HybridSig = { mldsa87: Bytes<4627>, ed25519: Bytes<64> }`. 검증자는 두 서명을 **모두** 같은 입력(`ENCODING.md` §4의 서명 메시지의 SHA3-512 다이제스트, ML-DSA-87은 `purpose`를 컨텍스트로 추가)에 대해 검증해야 하며, 하나라도 실패하면 전체 실패다(VC-002). 구현은 `ityv-crypto` 크레이트만을 통한다(ADR-0015). 알고리즘 식별자는 메시지의 purpose와 genesis의 키 등록에 고정되어 있으므로 다운그레이드 협상이 존재하지 않는다(VC-003).
+서명 묶음 `HybridSig = mldsa87: [u8; 4627] ‖ ed25519: [u8; 64]`(고정폭 4,691바이트, 길이 접두사 없음). 검증자는 두 서명을 **모두** 같은 입력(`ENCODING.md` §4의 서명 메시지의 SHA3-512 다이제스트 64바이트, ML-DSA-87은 `purpose`를 FIPS 204 컨텍스트로 추가, Ed25519는 컨텍스트 없음)에 대해 검증해야 하며, 하나라도 실패하면 전체 실패다(VC-002). 구현은 `ityv-crypto` 크레이트만을 통한다(ADR-0015). 알고리즘 식별자는 메시지의 purpose와 genesis의 키 등록에 고정되어 있으므로 다운그레이드 협상이 존재하지 않는다(VC-003).
 
-장기 보존 체크포인트(§5.6)에는 `slhdsa: Bytes<29792>`(SLH-DSA-SHAKE-256s)를 추가로 붙인다.
+장기 보존 체크포인트(§5.6)에는 `slhdsa: [u8; 29792]`(SLH-DSA-SHAKE-256s, 같은 다이제스트를 서명하고 `purpose`를 FIPS 205 컨텍스트로 넘긴다)를 추가로 붙인다. 검증 결과는 `bool`이 아니라 검증된 입력(키, purpose, 객체, 서명)을 참조하는 `Verified` 토큰이며, 토큰 없이 서명된 객체를 소비하는 경로는 타입상 존재하지 않는다(ADR-0015 §2).
 
 ### 3.2 키 역할
 | 키 | 보유자 | 생성 | 수명 |
@@ -183,7 +183,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 참관인이 요구하는 검증에는 실제 투표지가 아니라 **시험용 투표양식**(`ballot_style_id`가 `TEST-`로 시작)의 투표지를 쓴다. 시험용 기록은 `TallyScope`에서 `TEST_BALLOT` 사유로 제외되고 참여 장부와도 대조하지 않는다(VC-055).
 
 ### 7.4 커밋먼트 인코딩
-- 군: Ristretto255, 위수 ℓ. 베이스 `G_val = HashToGroup("ityv:base:val:v1")`, `G_id = HashToGroup("ityv:base:id:v1")`, `H = HashToGroup("ityv:base:rand:v1")`. `HashToGroup`은 SHA3-512 출력 64바이트를 Ristretto255의 균등 사상(Elligator 2 기반 `from_uniform_bytes`)으로 보낸다. 세 베이스 사이의 이산대수 관계는 누구도 모른다.
+- 군: Ristretto255, 위수 ℓ. 베이스 `G_val = HashToGroup("ityv:base:val:v1")`, `G_id = HashToGroup("ityv:base:id:v1")`, `H = HashToGroup("ityv:base:rand:v1")`. `HashToGroup(label) = from_uniform_bytes(SHA3-512(label ‖ 0x00))`: 라벨 뒤 `0x00` 구분자를 붙인 SHA3-512 출력 64바이트를 Ristretto255의 균등 사상(Elligator 2 기반 `from_uniform_bytes`)으로 보낸다(`ENCODING.md` §4). 세 베이스의 32바이트 인코딩은 `ityv-crypto`의 상호운용 벡터에 고정한다. 세 베이스 사이의 이산대수 관계는 누구도 모른다.
 - `M = 2^26`. 청크 `j = 0..k-1`은 인덱스 `t ∈ [9j, 9j+8]`을 담당한다. `val_j(t) = 2^{26·(t−9j)}` if `t ∈ chunk j`, else `0`.
 - `C_j = val_j(t)·G_val + cast_id·G_id + r_j·H`. `cast_id`는 24바이트 little-endian 정수로 스칼라에 사상한다(`< 2^192 < ℓ`).
 - 집계 시 자릿수 `d_t = ⌊T_j / 2^{26·(t−9j)}⌋ mod 2^26`는 인덱스 t의 표 수다. 전국 유권자 수가 `2^26`보다 작으므로 자리올림이 없다(VC-024: 각 자릿수가 해당 투표양식의 교부 수를 넘지 않음을 검증기가 확인한다).
@@ -194,18 +194,18 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 증명자(참 가지 `t*`, 증인 `x = cast_id`, `y_j = r_j`):
 1. `t ≠ t*`에 대해 무작위 `c_t, z_{t,x}, z_{t,0..k−1}`를 뽑고 `a_{t,j} = z_{t,x}·G_id + z_{t,j}·H − c_t·D_{t,j}`.
 2. `t*`에 대해 무작위 `α, β_0..β_{k−1}`를 뽑고 `a_{t*,j} = α·G_id + β_j·H`.
-3. `c = FS("ityv:proof:or-rep:v1", 대본)`. 대본 = `election_id ‖ box_id ‖ ballot_style_id ‖ proof_system_id ‖ C_0..C_{k−1} ‖ a_{0,0}..a_{m+1,k−1}`(이 순서의 정규 인코딩).
+3. `c = FS("ityv:proof:or-rep:v1", 대본)`. 대본 = 다음 순서의 정규 인코딩(`ENCODING.md` §2): `election_id: Ident<64>` ‖ `box_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `proof_system_id: u16` ‖ `option_count: u16`(= m+2) ‖ `chunk_count: u8`(= k) ‖ `commitments: Array<Point, 8>`(`u32` 개수 k 뒤 `C_0..C_{k−1}`) ‖ `announcements: Array<Point, 512>`(`u32` 개수 (m+2)·k 뒤 `a_{t,j}`, t 외측·j 내측). 두 개수 필드와 배열 접두사가 커밋먼트와 공표값의 경계를 유일하게 정한다.
 4. `c_{t*} = c − Σ_{t≠t*} c_t`, `z_{t*,x} = α + c_{t*}·x`, `z_{t*,j} = β_j + c_{t*}·y_j`.
-5. 증명 `π = { c_0..c_{m+1}, z_{t,x}, z_{t,j} }`. `a` 값은 전송하지 않는다.
+5. 증명 `π = { c_0..c_{m+1}, z_{t,x}, z_{t,j} }`. `a` 값은 전송하지 않는다. 정규 인코딩: `option_count: u16` ‖ `chunk_count: u8` ‖ t = 0..m+1 순서로 `c_t ‖ z_{t,x} ‖ z_{t,0}..z_{t,k−1}`(모든 스칼라 32바이트 little-endian canonical). 길이 = `3 + (m+2)·(k+2)·32`바이트. 디코더는 `k ≠ ⌈(m+2)/9⌉`, 비정규 스칼라, 범위 밖 개수를 거부한다.
 
 검증자: 모든 `t, j`에 대해 `a_{t,j} = z_{t,x}·G_id + z_{t,j}·H − c_t·D_{t,j}`를 재계산하고, `c`를 같은 대본으로 재계산한 뒤 `Σ_t c_t ≡ c (mod ℓ)`을 확인한다(VC-025). 모든 스칼라는 canonical이어야 하고 모든 점은 유효한 Ristretto 인코딩이어야 한다(VC-026).
 
-성질: 특수 건전성(두 다른 챌린지에서 증인 추출), 완전 증인 구별불가성(가지 간 분포 동일). 후자가 §16의 영구 비밀성 논증에 필요하다. 크기: `(m+2)·(k+2)` 스칼라. 대통령 선거(m=14, k=2)에서 약 2KB.
+성질: 특수 건전성(두 다른 챌린지에서 증인 추출), 완전 증인 구별불가성(가지 간 분포 동일). 후자가 §16의 영구 비밀성 논증에 필요하다. 크기: `(m+2)·(k+2)` 스칼라에 3바이트 머리부. 대통령 선거(m=14, k=2)에서 2,051바이트, 상한(m+2=64, k=8)에서 20,483바이트.
 
 ### 7.6 투함 기록
-`CastRecordBody`(스키마 0x0005), 공개: `election_id`, `box_id`, `ballot_style_id`, `proof_system_id: u16`, `commitments: Array<Point32, 8>`, `proof: Bytes<65536>`(§7.5 정규 인코딩), `module_counters: Array<{module_id, counter: u64}, 6>`, `share_package_hash: Hash512`, `transport_flags: u8`(비트0: 한 구성원 이상 KEM 대체 사용, 비트1: 중립 모듈 위임 사용).
+`CastRecordBody`(스키마 0x0005), 공개: `election_id`, `box_id`, `ballot_style_id`, `proof_system_id: u16`, `commitments: Array<Point, 8>`, `proof: Bytes<20483>`(§7.5 증명 인코딩을 그대로 담는다; 상한은 m+2=64, k=8일 때의 길이), `module_counters: Array<{module_id, counter: u64}, 6>`, `share_package_hash: Hash512`, `transport_flags: u8`(비트0: 한 구성원 이상 KEM 대체 사용, 비트1: 중립 모듈 위임 사용).
 
-`CastRecord` = 본문 + `device_sig_ed25519: Bytes<64>` + `module_sigs: Array<{module_id, ed25519: Bytes<64>}, 6>`. 추적코드 = **본문**의 `ENCODING.md` §4 해시. 양자내성 서명은 §7.2.1의 `BatchAttest`가 기록 해시 집합에 대해 제공하며, 검증기는 배치 포함이 없는 기록을 `UNATTESTED`로 분류한다(VC-053, VC-057). 기록에는 시간, 순번, 유권자 정보, 투함 ID, 봉투 라벨, 선택이 없다(VC-001, VC-019). 크기는 선택지 14개·청크 2개 기준 본문 약 2.4KB에 기록 서명 약 0.26KB, 배치 증명 분담 약 0.3KB를 더해 표당 약 3KB다.
+`CastRecord` = 본문 + `device_sig_ed25519: [u8; 64]` + `module_sigs: Array<{module_id, ed25519: [u8; 64]}, 6>`. 추적코드 = **본문**의 `ENCODING.md` §4 해시. 양자내성 서명은 §7.2.1의 `BatchAttest`가 기록 해시 집합에 대해 제공하며, 검증기는 배치 포함이 없는 기록을 `UNATTESTED`로 분류한다(VC-053, VC-057). 기록에는 시간, 순번, 유권자 정보, 투함 ID, 봉투 라벨, 선택이 없다(VC-001, VC-019). 크기는 선택지 14개·청크 2개 기준 본문 약 2.4KB에 기록 서명 약 0.26KB, 배치 증명 분담 약 0.3KB를 더해 표당 약 3KB다.
 
 ### 7.7 슬립
 `Slip`(스키마 0x000A): `election_id`, `station_id`, `time_bucket`, `tracking_code: Hash512`, `device_sig`(purpose `slip`, 하이브리드). Ed25519 부분은 추적코드와 함께 첫 QR에, ML-DSA-87 부분(4,627바이트)은 이어지는 QR 둘에 나눠 인쇄한다. 인쇄 형식은 `docs/ballot/`에 있다. 분쟁 접수 시 두 서명을 모두 검증한다. 슬립은 선택에 관한 정보를 담지 않으며, 같은 추적코드를 가진 기록이 게시판에 있는지만 확인할 수 있다.
@@ -239,7 +239,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 이 체계는 선형이므로 기록들의 구성원 share를 더하면 비밀의 합에 대한 구성원 share가 된다. 접근구조 Γ(ADR-0012)에 속하는 집합만 복원할 수 있고 그 밖의 어떤 집합도 정보이론적으로 아무것도 얻지 못한다(VC-031). v0.1은 검증 가능 비밀분산(VSS)을 쓰지 않으며 불일치는 §11.3에서 탐지·국소화한다.
 
 ### 9.3 share 패키지
-`SharePackage`(스키마 0x000B), `sealed`: `election_id`, `box_id`, `record_hash`, 구성원 항목 `Array<{trustee_id, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<8192>, tag: Bytes<16>}, 64>`, `device_sig`(purpose `share-package`).
+`SharePackage`(스키마 0x000B), `sealed`: `election_id`, `box_id`, `record_hash`, 구성원 항목 `Array<{trustee_id, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<8192>, tag: [u8; 16]}, 64>`, `device_sig`(purpose `share-package`).
 
 구성원 i(챔버 c)의 평문 = `(share of each secret) ‖ cid_c ‖ lab_c ‖ 모듈 c의 tag_{c,i}` (고정 길이, 스키마로 정함). `transport = 0`이면 ciphertext는 평문 ⊕ 패드 조각, `tag`는 평문 전체에 대한 Poly1305 태그(키는 패드에서 §9.4.3 규칙으로 추가로 꺼낸 32바이트). `transport = 1`이면 KEM 대체 경로(§9.6).
 
@@ -286,7 +286,11 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 표본 기록(§12의 RLA 표본과 장치당 공개 난수 2% 표본)에 대해 정족수는 `r_{c,j}`와 `cid_c`, `lab_c`만 복원하고(`cast_id`와 선택은 복원하지 않음), 챔버 c의 구성원이 보관한 모듈 태그 `tag_{c,i}`를 자기 패드 키로 검증한다. 태그가 맞지 않으면 커밋먼트 유닛이 모듈 난수를 쓰지 않은 것이므로 그 장치의 전 기록을 전수 대조한다(VC-022). `r_c`만 복원하면 `cast_id`가 숨겨진 채 남으므로 선택은 계산적으로 드러나지 않는다(§16).
 
 ### 9.6 KEM 대체 경로
-`transport = 1`: ciphertext = HPKE 방식 봉인. KEM은 ML-KEM-1024와 X25519의 결합(두 공유 비밀을 연접해 SHA3-512로 키 유도), AEAD는 ChaCha20-Poly1305, 수신자 공개키는 genesis의 구성원 키. 이 경로는 전송 녹취 후 두 KEM이 모두 깨지고 임계치 share가 복원되는 경우에만 노출되며, 사용 사실은 공개 기록에 남는다.
+`transport = 1`: ciphertext = HPKE 방식 봉인. KEM은 ML-KEM-1024와 X25519의 결합, AEAD는 ChaCha20-Poly1305(RFC 8439), 수신자 공개키는 genesis의 구성원 키(`mlkem1024_ek: [u8; 1568] ‖ x25519: [u8; 32]`).
+- 키 유도: `key = SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519)[0..32]`. 두 공유 비밀과 두 암호문을 모두 넣으므로 한 KEM이 깨져도 키가 드러나지 않고, 암호문 바꿔치기는 다른 키를 만든다. X25519는 비기여(저위수) 결과를, ML-KEM은 모듈러스 범위를 벗어난 캡슐화 키를 거부한다.
+- 봉인: 캡슐화 한 번에 메시지 하나. 유도된 키는 정확히 한 메시지만 봉인하므로 논스는 96비트 0으로 고정한다(새 메시지는 새 캡슐화). 연관 데이터 `aad` = `election_id ‖ box_id ‖ record_hash ‖ trustee_id ‖ transport ‖ pad_id ‖ pad_index`의 정규 인코딩(§9.3 항목의 공개 필드). `transport = 1`이면 `pad_id = 0`, `pad_index = 0`.
+- 항목의 `ciphertext` = `ct_mlkem: [u8; 1568] ‖ ct_x25519: [u8; 32] ‖ AEAD 암호문(평문과 같은 길이)`, `tag` = Poly1305 태그 16바이트.
+이 경로는 전송 녹취 후 두 KEM이 모두 깨지고 임계치 share가 복원되는 경우에만 노출되며, 사용 사실은 공개 기록에 남는다.
 
 ## 10. 투표함 마감과 보관
 
