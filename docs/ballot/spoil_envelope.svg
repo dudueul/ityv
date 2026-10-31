@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" width="560" height="300" font-family="sans-serif" font-size="11">
+  <title>검증 폐기 봉투와 격리 봉투</title>
+  <desc>Two spoil envelopes with the same layout and different stripe colour: challenge-spoil (orange) and quarantine (grey). Fields: station, box id, date, tally marks, seal number, four signatures. No ballot content, no cast id.</desc>
+  <g transform="translate(20,30)">
+    <rect x="0" y="0" width="250" height="240" fill="#fbfbf8" stroke="#333" stroke-width="1.5"/>
+    <rect x="0" y="0" width="250" height="18" fill="#e8923a"/>
+    <text x="125" y="13" text-anchor="middle" fill="#111" font-size="10" font-weight="bold">검증 폐기 봉투 (투입 전 검증)</text>
+    <g fill="#111" font-size="9">
+      <text x="12" y="40">투표소: STN-11-0421</text>
+      <text x="12" y="56">box_id: BOX-11-0421-A</text>
+      <text x="12" y="72">날짜: 2026-__-__</text>
+      <text x="12" y="96">수량 집계 (바를 정):</text>
+      <rect x="12" y="104" width="226" height="40" fill="none" stroke="#333" stroke-width="1"/>
+      <text x="12" y="166">봉인 번호: ____________</text>
+      <text x="12" y="190">사무원 1 ______  사무원 2 ______</text>
+      <text x="12" y="208">참관인(조직 A) ______  참관인(조직 B) ______</text>
+      <text x="12" y="230" fill="#777" font-size="8">각인 없음 · 투표지 내용·cast_id 기입란 없음</text>
+    </g>
+  </g>
+  <g transform="translate(290,30)">
+    <rect x="0" y="0" width="250" height="240" fill="#fbfbf8" stroke="#333" stroke-width="1.5"/>
+    <rect x="0" y="0" width="250" height="18" fill="#9a9a9a"/>
+    <text x="125" y="13" text-anchor="middle" fill="#111" font-size="10" font-weight="bold">격리 봉투 (각인 실패 등)</text>
+    <g fill="#111" font-size="9">
+      <text x="12" y="40">투표소: STN-11-0421</text>
+      <text x="12" y="56">box_id: BOX-11-0421-A</text>
+      <text x="12" y="72">날짜: 2026-__-__</text>
+      <text x="12" y="96">수량 집계 (바를 정):</text>
+      <rect x="12" y="104" width="226" height="40" fill="none" stroke="#333" stroke-width="1"/>
+      <text x="12" y="166">봉인 번호: ____________</text>
+      <text x="12" y="190">사무원 1 ______  사무원 2 ______</text>
+      <text x="12" y="208">참관인(조직 A) ______  참관인(조직 B) ______</text>
+      <text x="12" y="230" fill="#777" font-size="8">마감 시 실물 수 = quarantine_count (§10.2)</text>
+    </g>
+  </g>
+  <text x="20" y="290" fill="currentColor" font-size="9">마감 시 검증 폐기 봉투 실물 수 = challenge_count, 격리 봉투 실물 수 = quarantine_count. 둘 다 투표지 내용을 적지 않는다.</text>
+</svg>

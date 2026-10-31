@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" width="900" height="460" font-family="sans-serif" font-size="11">
+  <title>장부·게시판·체크포인트·증인·공개 검증자 흐름</title>
+  <desc>Devices and institutions append events through the ledger operator; public-class events form the board; witnesses verify and sign checkpoints; checkpoints reach mandated public verifiers within an hour; anyone verifies with out-of-band pins and publishes a status-vocabulary result.</desc>
+  <defs>
+    <marker id="b" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker>
+  </defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.3">
+    <rect x="20" y="30" width="170" height="60"/>
+    <rect x="20" y="110" width="170" height="60"/>
+    <rect x="250" y="60" width="170" height="70"/>
+    <rect x="250" y="170" width="170" height="60"/>
+    <rect x="250" y="260" width="170" height="60" stroke-dasharray="5 3"/>
+    <rect x="480" y="30" width="150" height="50"/>
+    <rect x="480" y="95" width="150" height="50"/>
+    <rect x="480" y="160" width="150" height="50"/>
+    <rect x="480" y="250" width="150" height="60"/>
+    <rect x="690" y="60" width="180" height="90"/>
+    <rect x="690" y="200" width="180" height="70"/>
+    <rect x="690" y="310" width="180" height="60"/>
+    <rect x="250" y="360" width="170" height="60"/>
+  </g>
+  <g fill="currentColor">
+    <text x="105" y="52" text-anchor="middle" font-weight="bold">현장 장치</text>
+    <text x="105" y="70" text-anchor="middle" font-size="9">스캐너·확인 장치·사무원 단말</text>
+    <text x="105" y="132" text-anchor="middle" font-weight="bold">기관</text>
+    <text x="105" y="150" text-anchor="middle" font-size="9">신뢰기관·위원회·법원·감사인</text>
+    <text x="335" y="82" text-anchor="middle" font-weight="bold">장부 운영자 (선관위)</text>
+    <text x="335" y="100" text-anchor="middle" font-size="9">LedgerFrame append (§5.1)</text>
+    <text x="335" y="116" text-anchor="middle" font-size="9">응답은 증거가 아님 (ADR-0003)</text>
+    <text x="335" y="192" text-anchor="middle" font-weight="bold">증거 장부 (추가 전용)</text>
+    <text x="335" y="210" text-anchor="middle" font-size="9">프레임 해시 사슬 · UPDATE/DELETE 없음</text>
+    <text x="335" y="282" text-anchor="middle" font-weight="bold">제한·봉인 저장소</text>
+    <text x="335" y="300" text-anchor="middle" font-size="9">restricted / sealed 등급 이벤트</text>
+    <text x="335" y="382" text-anchor="middle" font-weight="bold">공개 게시판</text>
+    <text x="335" y="400" text-anchor="middle" font-size="9">public 등급 · Merkle 트리 SHA3-512 (§5.3)</text>
+    <text x="555" y="50" text-anchor="middle" font-weight="bold">증인 1</text>
+    <text x="555" y="66" text-anchor="middle" font-size="9">§5.4 확인 후 서명</text>
+    <text x="555" y="115" text-anchor="middle" font-weight="bold">증인 2 …</text>
+    <text x="555" y="131" text-anchor="middle" font-size="9">이전 head 기억 · 일관성 증명</text>
+    <text x="555" y="180" text-anchor="middle" font-weight="bold">증인 13+</text>
+    <text x="555" y="196" text-anchor="middle" font-size="9">같은 seq 이중 서명 금지</text>
+    <text x="555" y="272" text-anchor="middle" font-weight="bold">체크포인트</text>
+    <text x="555" y="288" text-anchor="middle" font-size="9">정족수 9 · 조직 7 · 공급자 4 · 지역 3</text>
+    <text x="555" y="302" text-anchor="middle" font-size="9">최종본 SLH-DSA 추가</text>
+    <text x="780" y="82" text-anchor="middle" font-weight="bold">지정 공개 검증자 3곳+</text>
+    <text x="780" y="100" text-anchor="middle" font-size="9">1시간 내 수신 게시 (§5.5)</text>
+    <text x="780" y="116" text-anchor="middle" font-size="9">기한 내 전수 검증 결과 공표 의무</text>
+    <text x="780" y="132" text-anchor="middle" font-size="9">위반 → PublicationBreach</text>
+    <text x="780" y="222" text-anchor="middle" font-weight="bold">누구나: 검증기</text>
+    <text x="780" y="240" text-anchor="middle" font-size="9">대역 외 핀(genesis·증인 명부) 필수</text>
+    <text x="780" y="256" text-anchor="middle" font-size="9">§14 순서 1–9</text>
+    <text x="780" y="332" text-anchor="middle" font-weight="bold">검증 결과 공표</text>
+    <text x="780" y="350" text-anchor="middle" font-size="9">상태 어휘만 · LEGAL_CERTIFIED 판정 불가</text>
+    <text x="450" y="445" text-anchor="middle" font-size="10">미러는 신뢰 대상이 아니다. 근거는 핀과 서명뿐이다 (§4.2).</text>
+  </g>
+  <g fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#b)">
+    <path d="M190,60 L248,85"/>
+    <path d="M190,140 L248,110"/>
+    <path d="M335,130 L335,168"/>
+    <path d="M335,230 L335,258"/>
+    <path d="M335,230 L300,230 L300,358"/>
+    <path d="M420,95 L478,55"/>
+    <path d="M420,100 L478,118"/>
+    <path d="M420,105 L478,180"/>
+    <path d="M555,80 L555,93"/>
+    <path d="M555,145 L555,158"/>
+    <path d="M555,210 L555,248"/>
+    <path d="M630,280 L688,120"/>
+    <path d="M630,290 L688,230"/>
+    <path d="M420,390 L688,245"/>
+    <path d="M780,270 L780,308"/>
+    <path d="M555,310 L555,340 L420,375"/>
+  </g>
+</svg>

@@ -1,0 +1,110 @@
+# ityv CI. Every job is a constitution gate (CONSTITUTION.md). A red job blocks
+# merge; no job may be skipped to get green.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 2
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy (constitution lint set)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: clippy
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    name: build, test, docs (V1)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - run: cargo build --locked --workspace
+      - run: cargo test --locked --workspace
+      - name: docs must be complete
+        run: cargo doc --locked --no-deps --workspace
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  no-std:
+    name: no_std build (embedded target)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          targets: thumbv7em-none-eabihf
+      - run: cargo build --locked -p ityv-encoding --target thumbv7em-none-eabihf
+
+  deny:
+    name: cargo-deny (licenses, advisories, sources)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      # The cargo-deny-action docker image bundles an older cargo-deny that
+      # cannot parse CVSS 4.0 entries in the current RustSec advisory database
+      # ("unsupported CVSS version: 4.0"). Pin the same version used locally.
+      - run: cargo install --locked cargo-deny@0.20.2
+      - run: cargo deny --locked check
+
+  vet:
+    name: cargo-vet (supply-chain audits)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - run: cargo install --locked cargo-vet@0.10.3
+      - run: cargo vet --locked
+
+  kani:
+    name: Kani bounded model checking (V2)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: model-checking/kani-github-action@v1.1
+        with:
+          args: -p ityv-encoding
+
+  mutants:
+    name: cargo-mutants (V1, advisory until the suite is complete)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - run: cargo install --locked cargo-mutants@27.1.0
+      - run: cargo mutants -p ityv-encoding --timeout 300

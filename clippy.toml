@@ -1,0 +1,9 @@
+# Clippy configuration for the ityv workspace.
+# TCB crates may not relax any lint. The only relaxations are for code inside
+# #[test] functions, where unwrap/expect/panic/indexing are the idiomatic way
+# to express "this must hold" and the code is not part of the TCB.
+avoid-breaking-exported-api = false
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
