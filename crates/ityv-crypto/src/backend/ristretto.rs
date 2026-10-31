@@ -10,6 +10,11 @@ use curve25519_dalek::traits::Identity;
 
 use crate::scalar::Scalar;
 
+/// The backend scalar type, wrapped by [`crate::scalar::Scalar`]. This
+/// re-export is the only path through which the scalar module reaches the
+/// algorithm crate.
+pub(crate) use curve25519_dalek::scalar::Scalar as InnerScalar;
+
 /// A group element.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Point(RistrettoPoint);

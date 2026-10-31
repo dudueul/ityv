@@ -35,6 +35,48 @@ pub const LABEL_BASE_ID: &[u8] = b"ityv:base:id:v1";
 /// Label of the randomness base `H`.
 pub const LABEL_BASE_RAND: &[u8] = b"ityv:base:rand:v1";
 
+/// The number of options `m + 2` of a ballot style, `1..=MAX_OPTIONS`. It
+/// fixes the chunk count `k = ⌈(m+2) / 9⌉`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OptionCount(u16);
+
+impl OptionCount {
+    /// Returns `Some` if `1 <= raw <= MAX_OPTIONS`.
+    #[must_use]
+    pub fn new(raw: u16) -> Option<Self> {
+        if raw >= 1 && usize::from(raw) <= MAX_OPTIONS {
+            Some(Self(raw))
+        } else {
+            None
+        }
+    }
+
+    /// The raw count.
+    #[must_use]
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+
+    /// The chunk count `⌈count / 9⌉`, always `1..=MAX_CHUNKS`.
+    #[must_use]
+    pub fn chunk_count(self) -> u8 {
+        let chunks = self
+            .0
+            .saturating_add(DIGITS_PER_CHUNK)
+            .saturating_sub(1)
+            .checked_div(DIGITS_PER_CHUNK)
+            .unwrap_or(0);
+        // At most ⌈64 / 9⌉ = 8, so the conversion cannot fail.
+        u8::try_from(chunks).unwrap_or(u8::MAX)
+    }
+
+    /// `true` if `option` is one of the options, that is `option < count`.
+    #[must_use]
+    pub const fn contains(self, option: OptionIndex) -> bool {
+        option.0 < self.0
+    }
+}
+
 /// An option index `t ∈ [0, MAX_OPTIONS)`. `0` is BLANK, `1..=m` are the
 /// candidates, `m + 1` is UNREADABLE.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -357,24 +399,60 @@ impl core::fmt::Debug for Opening {
     }
 }
 
+/// What [`verify_opening`] verified: the commitments and the opening that
+/// opens them, for the given option set.
+#[derive(Debug, Clone, Copy)]
+pub struct OpenedCommitments<'a> {
+    option_count: OptionCount,
+    commitments: &'a [Commitment],
+    opening: &'a Opening,
+}
+
+impl<'a> OpenedCommitments<'a> {
+    /// The option set.
+    #[must_use]
+    pub const fn option_count(&self) -> OptionCount {
+        self.option_count
+    }
+
+    /// The commitments `C_0..C_{k−1}`.
+    #[must_use]
+    pub const fn commitments(&self) -> &'a [Commitment] {
+        self.commitments
+    }
+
+    /// The opening.
+    #[must_use]
+    pub const fn opening(&self) -> &'a Opening {
+        self.opening
+    }
+
+    /// The opened option.
+    #[must_use]
+    pub const fn option(&self) -> OptionIndex {
+        self.opening.option
+    }
+}
+
 /// Checks that `opening` opens every commitment of `commitments` (chunk `j`
-/// at index `j`).
+/// at index `j`) to an option of the option set (PROTOCOL.md §7.3:
+/// `t ∈ {0..m+1}`).
 ///
 /// # Errors
-/// [`Error::CapacityExceeded`] if there are no commitments or more than
-/// `MAX_CHUNKS`; [`Error::OptionOutOfRange`] if the option is beyond the
-/// last chunk; [`Error::OpeningInvalid`] if any commitment does not match.
-pub fn verify_opening(
+/// [`Error::InvalidStatement`] if the number of commitments is not the
+/// chunk count of `option_count`; [`Error::OptionOutOfRange`] if the
+/// option is not below `option_count`; [`Error::OpeningInvalid`] if any
+/// commitment does not match.
+pub fn verify_opening<'a>(
     bases: &Bases,
-    commitments: &[Commitment],
-    opening: &Opening,
-) -> Result<Verified<()>, Error> {
-    let chunk_count = commitments.len();
-    if chunk_count == 0 || chunk_count > MAX_CHUNKS {
-        return Err(Error::CapacityExceeded);
+    option_count: OptionCount,
+    commitments: &'a [Commitment],
+    opening: &'a Opening,
+) -> Result<Verified<OpenedCommitments<'a>>, Error> {
+    if commitments.len() != usize::from(option_count.chunk_count()) {
+        return Err(Error::InvalidStatement);
     }
-    let last = chunk_count.saturating_mul(usize::from(DIGITS_PER_CHUNK));
-    if usize::from(opening.option.get()) >= last {
+    if !option_count.contains(opening.option) {
         return Err(Error::OptionOutOfRange);
     }
     let id = opening.cast_id.to_scalar();
@@ -389,7 +467,11 @@ pub fn verify_opening(
         all_match &= matches;
     }
     if all_match {
-        Ok(Verified::new(()))
+        Ok(Verified::new(OpenedCommitments {
+            option_count,
+            commitments,
+            opening,
+        }))
     } else {
         Err(Error::OpeningInvalid)
     }
@@ -409,22 +491,63 @@ pub fn sum_commitments(commitments: &[Commitment]) -> Result<Commitment, Error> 
     Ok(Commitment::from_point(&total))
 }
 
+/// What [`verify_aggregate`] verified: the total commitment and the three
+/// sums that open it.
+#[derive(Debug, Clone, Copy)]
+pub struct AggregateOpening<'a> {
+    total: &'a Commitment,
+    packed_sum: &'a Scalar,
+    id_sum: &'a Scalar,
+    rand_sum: &'a Scalar,
+}
+
+impl<'a> AggregateOpening<'a> {
+    /// The sum of the chunk's commitments.
+    #[must_use]
+    pub const fn total(&self) -> &'a Commitment {
+        self.total
+    }
+
+    /// `T_j`, the packed digit sum.
+    #[must_use]
+    pub const fn packed_sum(&self) -> &'a Scalar {
+        self.packed_sum
+    }
+
+    /// `S`, the sum of cast identifiers.
+    #[must_use]
+    pub const fn id_sum(&self) -> &'a Scalar {
+        self.id_sum
+    }
+
+    /// `R_j`, the sum of randomness.
+    #[must_use]
+    pub const fn rand_sum(&self) -> &'a Scalar {
+        self.rand_sum
+    }
+}
+
 /// Checks `total == T·G_val + S·G_id + R·H`, the aggregate opening of a
 /// chunk: `T` the packed digit sum, `S` the sum of cast identifiers, `R` the
 /// sum of randomness (PROTOCOL.md §11.2).
 ///
 /// # Errors
 /// [`Error::AggregateInvalid`] if the equation does not hold.
-pub fn verify_aggregate(
+pub fn verify_aggregate<'a>(
     bases: &Bases,
-    total: &Commitment,
-    packed_sum: &Scalar,
-    id_sum: &Scalar,
-    rand_sum: &Scalar,
-) -> Result<Verified<()>, Error> {
+    total: &'a Commitment,
+    packed_sum: &'a Scalar,
+    id_sum: &'a Scalar,
+    rand_sum: &'a Scalar,
+) -> Result<Verified<AggregateOpening<'a>>, Error> {
     let expected = bases.pedersen(packed_sum, id_sum, rand_sum);
     if bool::from(expected.compress().ct_eq(&total.bytes)) {
-        Ok(Verified::new(()))
+        Ok(Verified::new(AggregateOpening {
+            total,
+            packed_sum,
+            id_sum,
+            rand_sum,
+        }))
     } else {
         Err(Error::AggregateInvalid)
     }

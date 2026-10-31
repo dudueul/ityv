@@ -24,14 +24,13 @@ use ityv_crypto::{Error, OneTimeKey, OneTimeTag, one_time_tag, verify_one_time_t
 fn poly1305_known_answer() {
     let tag = one_time_tag(OneTimeKey::from_bytes(counting32()), b"share plaintext");
     assert_eq!(hex(tag.as_bytes()), "6a414761212df6ec64e5665410389087");
-    assert!(
-        verify_one_time_tag(
-            OneTimeKey::from_bytes(counting32()),
-            b"share plaintext",
-            &tag
-        )
-        .is_ok()
-    );
+    let authenticated = verify_one_time_tag(
+        OneTimeKey::from_bytes(counting32()),
+        b"share plaintext",
+        &tag,
+    )
+    .unwrap();
+    assert_eq!(authenticated.into_inner(), b"share plaintext");
 }
 
 #[test]

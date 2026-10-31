@@ -19,8 +19,8 @@ mod common;
 use common::{decode_exact, encode_to_vec, rng};
 use ityv_crypto::{
     AccessStructure, Bases, CastId, Chamber, ChunkIndex, DIGIT_BITS, MAX_CHUNKS, MemberId, Opening,
-    OptionIndex, Purpose, Scalar, Threshold, commit, decode_digits, is_qualified, packed_value,
-    reconstruct, signing_digest, split, verify_opening, xor_in_place,
+    OptionCount, OptionIndex, Purpose, Scalar, Threshold, commit, decode_digits, is_qualified,
+    packed_value, reconstruct, signing_digest, split, verify_opening, xor_in_place,
 };
 use ityv_encoding::Token192;
 use proptest::prelude::*;
@@ -130,10 +130,13 @@ proptest! {
             commit(&bases, option, &cast_id, &rand[1], ChunkIndex::new(1).unwrap()),
         ];
         let opening = Opening::new(option, cast_id, rand);
-        prop_assert!(verify_opening(&bases, &commitments, &opening).is_ok());
+        let option_count = OptionCount::new(18).unwrap();
+        let opened = verify_opening(&bases, option_count, &commitments, &opening).unwrap();
+        prop_assert_eq!(opened.get().option(), option);
+        prop_assert_eq!(opened.get().commitments(), &commitments[..]);
         let other = OptionIndex::new((option.get() + 1) % 18).unwrap();
         let wrong = Opening::new(other, cast_id, rand);
-        prop_assert!(verify_opening(&bases, &commitments, &wrong).is_err());
+        prop_assert!(verify_opening(&bases, option_count, &commitments, &wrong).is_err());
         // packed values of distinct options in the same chunk differ.
         for j in 0..2u8 {
             let chunk = ChunkIndex::new(j).unwrap();

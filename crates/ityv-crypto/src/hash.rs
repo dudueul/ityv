@@ -60,6 +60,45 @@ impl<'a> Purpose<'a> {
     }
 }
 
+/// Maximum length of the signing-message prefix: label, purpose, terminator
+/// and length.
+pub(crate) const SIGNING_PREFIX_MAX_LEN: usize = 12 + Purpose::MAX_LEN + 1 + 8;
+
+/// The bytes that precede the object in the signing message:
+/// `"ityv:sig:v1:" ‖ purpose ‖ 0x00 ‖ u64_be(len)`.
+pub(crate) struct SigningPrefix {
+    buffer: [u8; SIGNING_PREFIX_MAX_LEN],
+    used: usize,
+}
+
+impl SigningPrefix {
+    /// Builds the prefix for `purpose` and an object of `len` bytes. The
+    /// result is at most [`SIGNING_PREFIX_MAX_LEN`] bytes because a purpose
+    /// is at most [`Purpose::MAX_LEN`] bytes.
+    pub(crate) fn new(purpose: &Purpose<'_>, len: usize) -> Self {
+        let length = length_prefix(len);
+        let mut buffer = [0u8; SIGNING_PREFIX_MAX_LEN];
+        let mut used = 0usize;
+        let bytes = SIGNING_LABEL_PREFIX
+            .iter()
+            .chain(purpose.as_bytes())
+            .chain(core::iter::once(&0x00))
+            .chain(length.iter());
+        for (slot, byte) in buffer.iter_mut().zip(bytes) {
+            *slot = *byte;
+            used = used.saturating_add(1);
+        }
+        Self { buffer, used }
+    }
+
+    /// The prefix bytes. The slice cannot be shorter than `used`, because
+    /// `used` counts bytes written into `buffer`; the fallback keeps the
+    /// function total.
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.buffer.get(..self.used).unwrap_or(&[])
+    }
+}
+
 /// Incremental SHA3-512.
 pub(crate) struct Hasher {
     state: <Active as Sha3Backend>::State,
@@ -105,10 +144,7 @@ pub fn object_hash(obj: &[u8]) -> Hash512 {
 #[must_use]
 pub fn signing_digest(purpose: &Purpose<'_>, obj: &[u8]) -> Hash512 {
     let mut hasher = Hasher::new();
-    hasher.absorb(SIGNING_LABEL_PREFIX);
-    hasher.absorb(purpose.as_bytes());
-    hasher.absorb(&[0x00]);
-    hasher.absorb(&length_prefix(obj.len()));
+    hasher.absorb(SigningPrefix::new(purpose, obj.len()).as_bytes());
     hasher.absorb(obj);
     Hash512(hasher.finish())
 }

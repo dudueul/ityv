@@ -17,7 +17,7 @@
 use core::fmt;
 
 use rand_core::CryptoRng;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::error::Error;
 use crate::scalar::Scalar;
@@ -343,24 +343,24 @@ pub fn split<R: CryptoRng + ?Sized>(
     structure: &AccessStructure,
     rng: &mut R,
 ) -> MemberShares {
-    let mut share_x = Scalar::random(rng);
-    let mut share_y = Scalar::random(rng);
-    let mut rest_poly = [
+    let share_x = Zeroizing::new(Scalar::random(rng));
+    let share_y = Zeroizing::new(Scalar::random(rng));
+    let rest_poly = Zeroizing::new([
         secret.sub(&share_x).sub(&share_y),
         Scalar::random(rng),
         Scalar::random(rng),
-    ];
-    let mut chamber_secrets = [Scalar::ZERO; CHAMBER_COUNT];
+    ]);
+    let mut chamber_secrets = Zeroizing::new([Scalar::ZERO; CHAMBER_COUNT]);
     for (chamber, slot) in Chamber::ALL.iter().zip(chamber_secrets.iter_mut()) {
         *slot = match chamber.rest_point() {
             None => {
                 if matches!(chamber, Chamber::X) {
-                    share_x
+                    *share_x
                 } else {
-                    share_y
+                    *share_y
                 }
             }
-            Some(point) => eval_poly(&rest_poly, &Scalar::from_u64(u64::from(point))),
+            Some(point) => eval_poly(rest_poly.as_ref(), &Scalar::from_u64(u64::from(point))),
         };
     }
 
@@ -372,7 +372,7 @@ pub fn split<R: CryptoRng + ?Sized>(
         .zip(out.values.iter_mut());
     for ((threshold, chamber_secret), row) in rows {
         let degree_plus_one = usize::from(threshold.k);
-        let mut poly = [Scalar::ZERO; MAX_MEMBERS];
+        let mut poly = Zeroizing::new([Scalar::ZERO; MAX_MEMBERS]);
         for (position, coefficient) in poly.iter_mut().enumerate().take(degree_plus_one) {
             *coefficient = if position == 0 {
                 *chamber_secret
@@ -384,13 +384,7 @@ pub fn split<R: CryptoRng + ?Sized>(
         for (index, cell) in row.iter_mut().enumerate().take(usize::from(threshold.n)) {
             *cell = member_point(index).map_or(Scalar::ZERO, |x| eval_poly(coefficients, &x));
         }
-        poly.zeroize();
     }
-
-    share_x.zeroize();
-    share_y.zeroize();
-    rest_poly.zeroize();
-    chamber_secrets.zeroize();
     out
 }
 
@@ -429,12 +423,14 @@ pub fn is_qualified(structure: &AccessStructure, member_counts: [u8; CHAMBER_COU
     mandatory && rest >= REST_THRESHOLD
 }
 
+/// The `(x, y)` points of one chamber's present members, zeroized when
+/// dropped.
+type ChamberPoints = Zeroizing<[(Scalar, Scalar); MAX_MEMBERS]>;
+
 /// Points of the present members of one chamber, in member order, and how
 /// many there are.
-fn chamber_points(
-    row: &[Option<Scalar>; MAX_MEMBERS],
-) -> Result<([(Scalar, Scalar); MAX_MEMBERS], usize), Error> {
-    let mut points = [(Scalar::ZERO, Scalar::ZERO); MAX_MEMBERS];
+fn chamber_points(row: &[Option<Scalar>; MAX_MEMBERS]) -> Result<(ChamberPoints, usize), Error> {
+    let mut points = Zeroizing::new([(Scalar::ZERO, Scalar::ZERO); MAX_MEMBERS]);
     let mut count = 0usize;
     let present = row
         .iter()
@@ -467,7 +463,9 @@ fn interpolate_checked(
     Ok(secret)
 }
 
-/// Reconstructs the secret from `shares`.
+/// Reconstructs the secret from `shares`. Every intermediate value (the
+/// collected shares, the chamber secrets, the rest points and the two
+/// mandatory shares) is zeroized on every return path.
 ///
 /// # Errors
 /// [`Error::InvalidMember`] if a member index is at or above its chamber's
@@ -476,8 +474,8 @@ fn interpolate_checked(
 /// (checked before any share value is used); [`Error::InconsistentShares`]
 /// if shares beyond a threshold disagree with the interpolated polynomial.
 pub fn reconstruct(structure: &AccessStructure, shares: &[Share]) -> Result<Scalar, Error> {
-    let mut present: [[Option<Scalar>; MAX_MEMBERS]; CHAMBER_COUNT] =
-        [[None; MAX_MEMBERS]; CHAMBER_COUNT];
+    let mut present: Zeroizing<[[Option<Scalar>; MAX_MEMBERS]; CHAMBER_COUNT]> =
+        Zeroizing::new([[None; MAX_MEMBERS]; CHAMBER_COUNT]);
     for share in shares {
         let member = share.member;
         if member.index >= structure.threshold(member.chamber).n {
@@ -502,22 +500,22 @@ pub fn reconstruct(structure: &AccessStructure, shares: &[Share]) -> Result<Scal
         return Err(Error::NotQualified);
     }
 
-    let mut chamber_secrets: [Option<Scalar>; CHAMBER_COUNT] = [None; CHAMBER_COUNT];
+    let mut chamber_secrets: Zeroizing<[Option<Scalar>; CHAMBER_COUNT]> =
+        Zeroizing::new([None; CHAMBER_COUNT]);
     let rows = structure
         .inner
         .iter()
         .zip(present.iter())
         .zip(chamber_secrets.iter_mut());
     for ((threshold, row), secret) in rows {
-        let (mut points, count) = chamber_points(row)?;
+        let (points, count) = chamber_points(row)?;
         let needed = usize::from(threshold.k);
         if count >= needed {
-            *secret = Some(interpolate_checked(&points, count, needed)?);
+            *secret = Some(interpolate_checked(points.as_ref(), count, needed)?);
         }
-        points.zeroize();
     }
 
-    let mut rest_points = [(Scalar::ZERO, Scalar::ZERO); REST_CHAMBERS];
+    let mut rest_points = Zeroizing::new([(Scalar::ZERO, Scalar::ZERO); REST_CHAMBERS]);
     let mut rest_count = 0usize;
     let rest_present = Chamber::ALL
         .iter()
@@ -527,26 +525,25 @@ pub fn reconstruct(structure: &AccessStructure, shares: &[Share]) -> Result<Scal
         *slot = (Scalar::from_u64(u64::from(point)), secret);
         rest_count = rest_count.saturating_add(1);
     }
-    let rest = interpolate_checked(&rest_points, rest_count, REST_THRESHOLD)?;
+    let rest = Zeroizing::new(interpolate_checked(
+        rest_points.as_ref(),
+        rest_count,
+        REST_THRESHOLD,
+    )?);
 
-    let share_x = chamber_secrets
-        .get(Chamber::X.index())
-        .copied()
-        .flatten()
-        .ok_or(Error::NotQualified)?;
-    let share_y = chamber_secrets
-        .get(Chamber::Y.index())
-        .copied()
-        .flatten()
-        .ok_or(Error::NotQualified)?;
-    let secret = share_x.add(&share_y).add(&rest);
-
-    for value in present.iter_mut().flat_map(|row| row.iter_mut()).flatten() {
-        value.zeroize();
-    }
-    for value in chamber_secrets.iter_mut().flatten() {
-        value.zeroize();
-    }
-    rest_points.zeroize();
-    Ok(secret)
+    let share_x = Zeroizing::new(
+        chamber_secrets
+            .get(Chamber::X.index())
+            .copied()
+            .flatten()
+            .ok_or(Error::NotQualified)?,
+    );
+    let share_y = Zeroizing::new(
+        chamber_secrets
+            .get(Chamber::Y.index())
+            .copied()
+            .flatten()
+            .ok_or(Error::NotQualified)?,
+    );
+    Ok(share_x.add(&share_y).add(&rest))
 }

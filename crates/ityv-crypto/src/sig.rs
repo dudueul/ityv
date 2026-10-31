@@ -14,6 +14,27 @@
 //! object (hash-then-sign, ADR-0015 §3). ML-DSA-87 and SLH-DSA additionally
 //! receive the purpose as their FIPS 204/205 context string. Secret keys are
 //! stored as seeds, zeroized on drop, and never printed.
+//!
+//! Every verification returns a token that borrows all of its inputs
+//! ([`HybridSigned`], [`RecordSigned`], [`ArchiveSigned`]): the token proves
+//! that *this* key verified *this* signature over *this* object under
+//! *this* purpose, and only this crate can create one.
+//!
+//! # Byte layouts
+//!
+//! All fields are fixed width and concatenated without prefixes:
+//!
+//! | object | encoding |
+//! |---|---|
+//! | [`HybridVerifyingKey`] | `mldsa87[2592] ‖ ed25519[32]` (2624 bytes) |
+//! | [`HybridSignature`] | `mldsa87[4627] ‖ ed25519[64]` (4691 bytes) |
+//! | [`RecordVerifyingKey`] | `ed25519[32]` |
+//! | [`RecordSignature`] | `ed25519[64]` |
+//! | [`ArchiveVerifyingKey`] | `slhdsa[64]` (`pk_seed[32] ‖ pk_root[32]`) |
+//! | [`ArchiveSignature`] | `slhdsa[29792]` (FIPS 205 signature encoding) |
+//!
+//! The ML-DSA-87 halves use the FIPS 204 `pkEncode`/`sigEncode` byte
+//! strings; the Ed25519 halves use the RFC 8032 encodings.
 
 use core::fmt;
 
@@ -254,6 +275,42 @@ impl<'a> Decode<'a> for HybridSignature {
     }
 }
 
+/// What [`verify_hybrid`] verified: the key, purpose, object and signature,
+/// borrowed for as long as the token lives.
+#[derive(Debug, Clone, Copy)]
+pub struct HybridSigned<'a> {
+    key: &'a HybridVerifyingKey,
+    purpose: &'a Purpose<'a>,
+    object: &'a [u8],
+    signature: &'a HybridSignature,
+}
+
+impl<'a> HybridSigned<'a> {
+    /// The verifying key.
+    #[must_use]
+    pub const fn key(&self) -> &'a HybridVerifyingKey {
+        self.key
+    }
+
+    /// The purpose.
+    #[must_use]
+    pub const fn purpose(&self) -> &'a Purpose<'a> {
+        self.purpose
+    }
+
+    /// The signed object bytes.
+    #[must_use]
+    pub const fn object(&self) -> &'a [u8] {
+        self.object
+    }
+
+    /// The signature.
+    #[must_use]
+    pub const fn signature(&self) -> &'a HybridSignature {
+        self.signature
+    }
+}
+
 /// Signs the digest of `(purpose, obj)` with both algorithms. ML-DSA-87 uses
 /// hedged signing with randomness from `rng` and `purpose` as its context;
 /// Ed25519 is deterministic.
@@ -282,12 +339,12 @@ pub fn sign_hybrid<R: CryptoRng + ?Sized>(
 ///
 /// # Errors
 /// [`Error::SignatureInvalid`] if either half fails.
-pub fn verify_hybrid(
-    verifying_key: &HybridVerifyingKey,
-    purpose: &Purpose<'_>,
-    obj: &[u8],
-    signature: &HybridSignature,
-) -> Result<Verified<()>, Error> {
+pub fn verify_hybrid<'a>(
+    verifying_key: &'a HybridVerifyingKey,
+    purpose: &'a Purpose<'a>,
+    obj: &'a [u8],
+    signature: &'a HybridSignature,
+) -> Result<Verified<HybridSigned<'a>>, Error> {
     let digest = signing_digest(purpose, obj);
     let mldsa87_ok = <Active as MlDsa87Backend>::verify(
         &verifying_key.mldsa87,
@@ -301,7 +358,12 @@ pub fn verify_hybrid(
         &signature.ed25519,
     );
     if mldsa87_ok && ed25519_ok {
-        Ok(Verified::new(()))
+        Ok(Verified::new(HybridSigned {
+            key: verifying_key,
+            purpose,
+            object: obj,
+            signature,
+        }))
     } else {
         Err(Error::SignatureInvalid)
     }
@@ -465,6 +527,41 @@ impl<'a> Decode<'a> for RecordSignature {
     }
 }
 
+/// What [`verify_record`] verified.
+#[derive(Debug, Clone, Copy)]
+pub struct RecordSigned<'a> {
+    key: &'a RecordVerifyingKey,
+    purpose: RecordPurpose,
+    object: &'a [u8],
+    signature: &'a RecordSignature,
+}
+
+impl<'a> RecordSigned<'a> {
+    /// The verifying key.
+    #[must_use]
+    pub const fn key(&self) -> &'a RecordVerifyingKey {
+        self.key
+    }
+
+    /// The purpose.
+    #[must_use]
+    pub const fn purpose(&self) -> RecordPurpose {
+        self.purpose
+    }
+
+    /// The signed object bytes.
+    #[must_use]
+    pub const fn object(&self) -> &'a [u8] {
+        self.object
+    }
+
+    /// The signature.
+    #[must_use]
+    pub const fn signature(&self) -> &'a RecordSignature {
+        self.signature
+    }
+}
+
 /// Deterministically signs the digest of `(purpose, obj)`.
 ///
 /// # Errors
@@ -483,16 +580,21 @@ pub fn sign_record(
 ///
 /// # Errors
 /// [`Error::SignatureInvalid`] if the signature does not verify.
-pub fn verify_record(
-    verifying_key: &RecordVerifyingKey,
+pub fn verify_record<'a>(
+    verifying_key: &'a RecordVerifyingKey,
     purpose: RecordPurpose,
-    obj: &[u8],
-    signature: &RecordSignature,
-) -> Result<Verified<()>, Error> {
+    obj: &'a [u8],
+    signature: &'a RecordSignature,
+) -> Result<Verified<RecordSigned<'a>>, Error> {
     let digest = signing_digest(&purpose.purpose(), obj);
     if <Active as Ed25519Backend>::verify(&verifying_key.bytes, digest.as_bytes(), &signature.bytes)
     {
-        Ok(Verified::new(()))
+        Ok(Verified::new(RecordSigned {
+            key: verifying_key,
+            purpose,
+            object: obj,
+            signature,
+        }))
     } else {
         Err(Error::SignatureInvalid)
     }
@@ -632,6 +734,35 @@ impl<'a> Decode<'a> for ArchiveSignature {
     }
 }
 
+/// What [`verify_archive`] verified. The purpose is always
+/// [`PURPOSE_CHECKPOINT_ARCHIVE`].
+#[derive(Debug, Clone, Copy)]
+pub struct ArchiveSigned<'a> {
+    key: &'a ArchiveVerifyingKey,
+    object: &'a [u8],
+    signature: &'a ArchiveSignature,
+}
+
+impl<'a> ArchiveSigned<'a> {
+    /// The verifying key.
+    #[must_use]
+    pub const fn key(&self) -> &'a ArchiveVerifyingKey {
+        self.key
+    }
+
+    /// The signed object bytes.
+    #[must_use]
+    pub const fn object(&self) -> &'a [u8] {
+        self.object
+    }
+
+    /// The signature.
+    #[must_use]
+    pub const fn signature(&self) -> &'a ArchiveSignature {
+        self.signature
+    }
+}
+
 /// Signs the digest of `(checkpoint-archive, obj)` with SLH-DSA, using the
 /// purpose as the FIPS 205 context and 32 bytes of `rng` output as the
 /// signature randomizer.
@@ -658,11 +789,11 @@ pub fn sign_archive<R: CryptoRng + ?Sized>(
 ///
 /// # Errors
 /// [`Error::SignatureInvalid`] if the signature does not verify.
-pub fn verify_archive(
-    verifying_key: &ArchiveVerifyingKey,
-    obj: &[u8],
-    signature: &ArchiveSignature,
-) -> Result<Verified<()>, Error> {
+pub fn verify_archive<'a>(
+    verifying_key: &'a ArchiveVerifyingKey,
+    obj: &'a [u8],
+    signature: &'a ArchiveSignature,
+) -> Result<Verified<ArchiveSigned<'a>>, Error> {
     let digest = signing_digest(&PURPOSE_CHECKPOINT_ARCHIVE, obj);
     if <Active as SlhDsaBackend>::verify(
         &verifying_key.bytes,
@@ -670,7 +801,11 @@ pub fn verify_archive(
         PURPOSE_CHECKPOINT_ARCHIVE.as_bytes(),
         &signature.bytes,
     ) {
-        Ok(Verified::new(()))
+        Ok(Verified::new(ArchiveSigned {
+            key: verifying_key,
+            object: obj,
+            signature,
+        }))
     } else {
         Err(Error::SignatureInvalid)
     }

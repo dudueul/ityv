@@ -38,7 +38,12 @@ fn hybrid_round_trip_and_negatives() {
     let vk = key.verifying_key();
     let purpose = Purpose::new(b"checkpoint").unwrap();
     let sig = sign_hybrid(&key, &purpose, OBJ, &mut rng).unwrap();
-    assert!(verify_hybrid(&vk, &purpose, OBJ, &sig).is_ok());
+    let signed = verify_hybrid(&vk, &purpose, OBJ, &sig).unwrap();
+    assert_eq!(signed.get().key(), &vk);
+    assert_eq!(signed.get().purpose(), &purpose);
+    assert_eq!(signed.get().object(), OBJ);
+    assert_eq!(signed.get().signature(), &sig);
+    assert_eq!(signed.into_inner().object(), OBJ);
 
     // Wrong object, wrong purpose, wrong key.
     assert_eq!(
@@ -171,7 +176,11 @@ fn record_signature_known_answer() {
         hex(sig2.as_bytes()),
         "66cb95c6f83300900cd7390f9d259d0a2d18844f69a4b1b05bc2038d26e9332dcd3d3b89aedc22dd94054f0022ee7f67729b18a0731e028291a5668d4ea71d0b"
     );
-    assert!(verify_record(&vk, RecordPurpose::CastRecord, b"record body", &sig).is_ok());
+    let signed = verify_record(&vk, RecordPurpose::CastRecord, b"record body", &sig).unwrap();
+    assert_eq!(signed.get().key(), &vk);
+    assert_eq!(signed.get().purpose(), RecordPurpose::CastRecord);
+    assert_eq!(signed.get().object(), b"record body");
+    assert_eq!(signed.get().signature(), &sig);
     assert!(verify_record(&vk, RecordPurpose::ModuleRecord, b"record body", &sig2).is_ok());
     // The two purposes are not interchangeable.
     assert_eq!(
@@ -238,7 +247,10 @@ fn archive_signature_round_trip_negatives_and_encoding() {
     let mut rng = rng(5);
     let (key, vk) = ArchiveSigningKey::generate(&mut rng);
     let sig = sign_archive(&key, OBJ, &mut rng).unwrap();
-    assert!(verify_archive(&vk, OBJ, &sig).is_ok());
+    let signed = verify_archive(&vk, OBJ, &sig).unwrap();
+    assert_eq!(signed.get().key(), &vk);
+    assert_eq!(signed.get().object(), OBJ);
+    assert_eq!(signed.get().signature(), &sig);
     assert_eq!(
         verify_archive(&vk, b"other", &sig).unwrap_err(),
         Error::SignatureInvalid

@@ -5,7 +5,20 @@
 //! and out-of-bounds access on all explored inputs, which is the mechanical
 //! form of the crate's "no panics" promise.
 //!
-//! Run with `cargo kani -p ityv-encoding` from the workspace root.
+//! Run with `cargo kani -p ityv-encoding` from the workspace root. The file
+//! lives outside `src/` and is included as `crate::proofs` by a `#[path]`
+//! attribute in `src/lib.rs`.
+// Harness file: outside the TCB and outside `src/` (CONSTITUTION.md §1.1).
+// A harness states expected values with plain indexing and unchecked
+// arithmetic on bounded symbolic inputs, and Kani itself reports any panic
+// or overflow in them, so these restriction lints are relaxed for this file
+// only.
+#![allow(
+    clippy::unreachable,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::missing_panics_doc
+)]
 
 use crate::codec::{Decode, Encode};
 use crate::envelope::{Header, MAGIC, decode, encode};

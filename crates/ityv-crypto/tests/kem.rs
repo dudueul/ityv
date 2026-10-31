@@ -1,6 +1,7 @@
-//! Hybrid KEM and sealing: round trips, negatives, encoding, and independent
-//! known answers for the X25519, Poly1305-free AEAD and key derivation
-//! inputs (Python `cryptography`).
+//! Hybrid KEM and sealing: round trips through the public API, negatives,
+//! encoding, and an independent X25519 public-key known answer (Python
+//! `cryptography`). The AEAD and X25519 shared-secret known answers need
+//! the private key constructors and live in the crate's unit tests.
 // Integration-test crate: outside the TCB. Test code expresses "this must
 // hold" with unwrap/expect/panic/indexing and does small arithmetic on test
 // sizes, so those restriction lints are relaxed for this file only. No TCB
@@ -17,11 +18,11 @@
 
 mod common;
 
-use common::{counting32, decode_exact, encode_to_vec, hex, rng, unhex, unhex_array};
+use common::{counting32, decode_exact, encode_to_vec, hex, rng};
 use ityv_crypto::kem::{MLKEM1024_CT_LEN, MLKEM1024_EK_LEN, X25519_LEN};
 use ityv_crypto::{
-    AeadTag, Error, HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey, SharedKey,
-    decapsulate, encapsulate, open, seal,
+    AeadTag, Error, HybridCiphertext, HybridKemPublicKey, HybridKemSecretKey, decapsulate,
+    encapsulate, open, seal,
 };
 use ityv_encoding::ErrorKind;
 
@@ -30,15 +31,35 @@ fn encapsulate_decapsulate_seal_open_round_trip() {
     let mut rng = rng(10);
     let sk = HybridKemSecretKey::generate(&mut rng);
     let pk = sk.public_key();
-    let (ct, key_send) = encapsulate(&pk, &mut rng).unwrap();
-    let key_recv = decapsulate(&sk, &ct).unwrap();
-    assert_eq!(key_send, key_recv);
+    let (ct, seal_key) = encapsulate(&pk, &mut rng).unwrap();
+    let open_key = decapsulate(&sk, &ct).unwrap();
 
     let mut buffer = *b"share plaintext for member 3";
-    let tag = seal(key_send, b"aad", &mut buffer).unwrap();
+    let tag = seal(seal_key, b"aad", &mut buffer).unwrap();
     assert_ne!(&buffer, b"share plaintext for member 3");
-    assert!(open(key_recv, b"aad", &mut buffer, &tag).is_ok());
+    let plaintext = open(open_key, b"aad", &mut buffer, &tag).unwrap();
+    assert_eq!(plaintext.into_inner(), b"share plaintext for member 3");
     assert_eq!(&buffer, b"share plaintext for member 3");
+}
+
+#[test]
+fn every_encapsulation_draws_a_fresh_key() {
+    let mut rng = rng(15);
+    let sk = HybridKemSecretKey::generate(&mut rng);
+    let pk = sk.public_key();
+    let (ct1, key1) = encapsulate(&pk, &mut rng).unwrap();
+    let (ct2, key2) = encapsulate(&pk, &mut rng).unwrap();
+    assert_ne!(ct1, ct2);
+    let mut a = *b"same plaintext";
+    let mut b = *b"same plaintext";
+    let tag1 = seal(key1, b"", &mut a).unwrap();
+    let tag2 = seal(key2, b"", &mut b).unwrap();
+    assert_ne!(a, b, "different keys give different ciphertexts");
+    assert_ne!(tag1, tag2);
+    // Each key opens only its own message.
+    let mut attempt = b;
+    assert!(open(decapsulate(&sk, &ct1).unwrap(), b"", &mut attempt, &tag2).is_err());
+    assert!(open(decapsulate(&sk, &ct2).unwrap(), b"", &mut attempt, &tag2).is_ok());
 }
 
 #[test]
@@ -46,9 +67,9 @@ fn wrong_key_ciphertext_or_aad_fails() {
     let mut rng = rng(11);
     let sk = HybridKemSecretKey::generate(&mut rng);
     let pk = sk.public_key();
-    let (ct, key_send) = encapsulate(&pk, &mut rng).unwrap();
+    let (ct, seal_key) = encapsulate(&pk, &mut rng).unwrap();
     let mut buffer = *b"payload";
-    let tag = seal(key_send, b"aad", &mut buffer).unwrap();
+    let tag = seal(seal_key, b"aad", &mut buffer).unwrap();
     let sealed = buffer;
 
     // Another secret key does not recover the key (implicit rejection).
@@ -86,6 +107,14 @@ fn wrong_key_ciphertext_or_aad_fails() {
     bad_tag[15] ^= 0x01;
     let mut attempt = sealed;
     assert!(open(key, b"aad", &mut attempt, &AeadTag::from_bytes(bad_tag)).is_err());
+
+    // The right key still opens the untouched buffer.
+    let key = decapsulate(&sk, &ct).unwrap();
+    let mut attempt = sealed;
+    assert_eq!(
+        open(key, b"aad", &mut attempt, &tag).unwrap().into_inner(),
+        b"payload"
+    );
 }
 
 #[test]
@@ -132,35 +161,42 @@ fn keys_and_ciphertexts_encode_fixed_width() {
     let pk = sk.public_key();
     let bytes = encode_to_vec(&pk);
     assert_eq!(bytes.len(), MLKEM1024_EK_LEN + X25519_LEN);
+    assert_eq!(bytes.len(), HybridKemPublicKey::ENCODED_LEN);
     assert_eq!(decode_exact::<HybridKemPublicKey>(&bytes).unwrap(), pk);
-    let (ct, key) = encapsulate(&pk, &mut rng).unwrap();
+    let (ct, seal_key) = encapsulate(&pk, &mut rng).unwrap();
     let bytes = encode_to_vec(&ct);
     assert_eq!(bytes.len(), MLKEM1024_CT_LEN + X25519_LEN);
+    assert_eq!(bytes.len(), HybridCiphertext::ENCODED_LEN);
     let decoded: HybridCiphertext = decode_exact(&bytes).unwrap();
     assert_eq!(decoded, ct);
-    assert_eq!(decapsulate(&sk, &decoded).unwrap(), key);
-    let mut buffer = [0u8; 4];
-    let tag = seal(key, b"", &mut buffer).unwrap();
+    let mut buffer = *b"abcd";
+    let tag = seal(seal_key, b"", &mut buffer).unwrap();
     let bytes = encode_to_vec(&tag);
-    assert_eq!(bytes.len(), 16);
+    assert_eq!(bytes.len(), AeadTag::ENCODED_LEN);
     assert_eq!(decode_exact::<AeadTag>(&bytes).unwrap(), tag);
+    let open_key = decapsulate(&sk, &decoded).unwrap();
+    assert_eq!(
+        open(open_key, b"", &mut buffer, &tag).unwrap().into_inner(),
+        b"abcd"
+    );
 
     let (seed, x) = sk.expose_parts();
     let restored = HybridKemSecretKey::from_parts(seed, x);
     assert_eq!(restored.public_key(), pk);
     assert_eq!(std::format!("{sk:?}"), "HybridKemSecretKey(..)");
-    assert_eq!(
-        std::format!("{key_debug:?}", key_debug = SharedKey::from_bytes([0; 32])),
-        "SharedKey(..)"
-    );
     assert!(std::format!("{pk:?}").starts_with("HybridKemPublicKey"));
     assert!(std::format!("{ct:?}").starts_with("HybridCiphertext"));
+    let (_, seal_key) = encapsulate(&pk, &mut rng).unwrap();
+    assert_eq!(std::format!("{seal_key:?}"), "SealKey(..)");
+    let open_key = decapsulate(&sk, &ct).unwrap();
+    assert_eq!(std::format!("{open_key:?}"), "OpenKey(..)");
 }
 
 #[test]
-fn x25519_known_answer() {
-    // Secret 0..31 and 32..63; public keys and shared secret from Python
-    // `cryptography`. The ML-KEM seed is irrelevant for the X25519 half.
+fn x25519_public_key_known_answer() {
+    // Secrets 0..31 and 32..63; public keys from Python `cryptography`. The
+    // ML-KEM seed is irrelevant for the X25519 half. The shared secret is
+    // checked in the crate's unit tests, where the backend is reachable.
     let sk = HybridKemSecretKey::from_parts([7u8; 64], counting32());
     assert_eq!(
         hex(sk.public_key().x25519()),
@@ -175,22 +211,4 @@ fn x25519_known_answer() {
         hex(peer.public_key().x25519()),
         "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254"
     );
-}
-
-#[test]
-fn chacha20poly1305_known_answer() {
-    // Key 0..31, zero nonce, aad "aad bytes", plaintext "sealed share
-    // package"; ciphertext and tag from Python `cryptography`.
-    let key = SharedKey::from_bytes(counting32());
-    let mut buffer = *b"sealed share package";
-    let tag = seal(key, b"aad bytes", &mut buffer).unwrap();
-    assert_eq!(hex(&buffer), "6bdd235dc88286a27b002e048f332f4493d09490");
-    assert_eq!(hex(tag.as_bytes()), "801386794f175fed79317066aaf347df");
-    let key = SharedKey::from_bytes(counting32());
-    assert!(open(key, b"aad bytes", &mut buffer, &tag).is_ok());
-    assert_eq!(&buffer, b"sealed share package");
-    let expected_ct = unhex("6bdd235dc88286a27b002e048f332f4493d09490");
-    assert_eq!(expected_ct.len(), 20);
-    let expected_tag: [u8; 16] = unhex_array("801386794f175fed79317066aaf347df");
-    assert_eq!(AeadTag::from_bytes(expected_tag), tag);
 }

@@ -1,6 +1,7 @@
 //! Pedersen commitments and digit packing (PROTOCOL.md §7.4): packed
-//! values against the specification formula, digit decoding, openings,
-//! aggregation over many records, encoding and validation.
+//! values against the specification formula, digit decoding, openings
+//! bounded by the option set, aggregation over many records, encoding and
+//! validation.
 // Integration-test crate: outside the TCB. Test code expresses "this must
 // hold" with unwrap/expect/panic/indexing and does small arithmetic on test
 // sizes, so those restriction lints are relaxed for this file only. No TCB
@@ -21,7 +22,7 @@ use common::{decode_exact, encode_to_vec, rng};
 use ityv_crypto::commit::{extract_bits, has_bits_above_packed_range};
 use ityv_crypto::{
     Bases, CastId, ChunkIndex, Commitment, DIGIT_BITS, DIGITS_PER_CHUNK, Error, MAX_CHUNKS,
-    MAX_OPTIONS, Opening, OptionIndex, Scalar, commit, decode_digits, packed_exponent,
+    MAX_OPTIONS, Opening, OptionCount, OptionIndex, Scalar, commit, decode_digits, packed_exponent,
     packed_value, sum_commitments, verify_aggregate, verify_opening,
 };
 use ityv_encoding::{ErrorKind, Point32, Token192};
@@ -67,6 +68,24 @@ fn packed_exponent_and_value_match_specification() {
 }
 
 #[test]
+fn option_count_bounds_and_chunks() {
+    assert!(OptionCount::new(0).is_none());
+    assert!(OptionCount::new(65).is_none());
+    for raw in 1..=64u16 {
+        let count = OptionCount::new(raw).unwrap();
+        assert_eq!(count.get(), raw);
+        assert_eq!(u16::from(count.chunk_count()), raw.div_ceil(9));
+        assert!(count.contains(OptionIndex::new(raw - 1).unwrap()));
+        if raw < 64 {
+            assert!(!count.contains(OptionIndex::new(raw).unwrap()));
+        }
+    }
+    assert_eq!(OptionCount::new(9).unwrap().chunk_count(), 1);
+    assert_eq!(OptionCount::new(10).unwrap().chunk_count(), 2);
+    assert_eq!(OptionCount::new(64).unwrap().chunk_count(), 8);
+}
+
+#[test]
 fn digits_round_trip_and_overflow_is_rejected() {
     let digits = [1u32, 2, 3, 0, (1 << 26) - 1, 5, 6, 7, 8];
     let mut packed = Scalar::ZERO;
@@ -100,19 +119,54 @@ fn digits_round_trip_and_overflow_is_rejected() {
     assert_eq!(extract_bits(&bytes, u32::MAX, 1), None);
 }
 
+/// Every single-field change to a valid opening must be rejected.
+fn check_opening_negatives(
+    bases: &Bases,
+    option_count: OptionCount,
+    commitments: &[Commitment],
+    opening: &Opening,
+    rng: &mut impl CryptoRng,
+) {
+    let option = opening.option();
+    let cast_id = *opening.cast_id();
+    let rand = *opening.rand();
+    let wrong_option = Opening::new(
+        OptionIndex::new((option.get() + 1) % option_count.get()).unwrap(),
+        cast_id,
+        rand,
+    );
+    assert_eq!(
+        verify_opening(bases, option_count, commitments, &wrong_option).unwrap_err(),
+        Error::OpeningInvalid
+    );
+    let wrong_id = Opening::new(option, random_cast_id(rng), rand);
+    assert_eq!(
+        verify_opening(bases, option_count, commitments, &wrong_id).unwrap_err(),
+        Error::OpeningInvalid
+    );
+    let mut other_rand = rand;
+    other_rand[1] = Scalar::random(rng);
+    let wrong_rand = Opening::new(option, cast_id, other_rand);
+    assert_eq!(
+        verify_opening(bases, option_count, commitments, &wrong_rand).unwrap_err(),
+        Error::OpeningInvalid
+    );
+}
+
 #[test]
 fn commitments_open_and_aggregate_over_many_records() {
     let bases = Bases::derive();
     let mut rng = rng(20);
-    let option_count: u16 = 16;
-    let chunk_count = 2usize;
+    let option_count = OptionCount::new(16).unwrap();
+    let chunk_count = usize::from(option_count.chunk_count());
+    assert_eq!(chunk_count, 2);
     let records = 50u16;
     let mut digit_counts = [0u32; 18];
     let mut id_sum = Scalar::ZERO;
     let mut rand_sums = [Scalar::ZERO; 2];
     let mut per_chunk: Vec<Vec<Commitment>> = std::vec![Vec::new(), Vec::new()];
     for i in 0..records {
-        let t = i % option_count;
+        let t = i % option_count.get();
         let option = OptionIndex::new(t).unwrap();
         let cast_id = random_cast_id(&mut rng);
         let mut rand = [Scalar::ZERO; MAX_CHUNKS];
@@ -131,11 +185,15 @@ fn commitments_open_and_aggregate_over_many_records() {
             })
             .collect();
         let opening = Opening::new(option, cast_id, rand);
-        assert!(verify_opening(&bases, &commitments, &opening).is_ok());
+        let opened = verify_opening(&bases, option_count, &commitments, &opening).unwrap();
+        assert_eq!(opened.get().option(), option);
+        assert_eq!(opened.get().option_count(), option_count);
+        assert_eq!(opened.get().commitments(), &commitments[..]);
+        assert_eq!(opened.get().opening().cast_id(), &cast_id);
         assert_eq!(opening.option(), option);
         assert_eq!(opening.cast_id(), &cast_id);
         assert_eq!(opening.rand(), &rand);
-        check_opening_negatives(&bases, &commitments, &opening, option_count, &mut rng);
+        check_opening_negatives(&bases, option_count, &commitments, &opening, &mut rng);
 
         digit_counts[usize::from(t)] += 1;
         id_sum = id_sum.add(&cast_id.to_scalar());
@@ -150,12 +208,14 @@ fn commitments_open_and_aggregate_over_many_records() {
         let mut packed = Scalar::ZERO;
         for d in 0..9usize {
             let count = digit_counts[9 * j + d];
-            packed = packed.add(
-                &pow2(DIGIT_BITS * u32::try_from(d).unwrap())
-                    .mul(&Scalar::from_u64(u64::from(count))),
-            );
+            let weight = pow2(DIGIT_BITS * u32::try_from(d).unwrap());
+            packed = packed.add(&weight.mul(&Scalar::from_u64(u64::from(count))));
         }
-        assert!(verify_aggregate(&bases, &total, &packed, &id_sum, &rand_sums[j]).is_ok());
+        let aggregate = verify_aggregate(&bases, &total, &packed, &id_sum, &rand_sums[j]).unwrap();
+        assert_eq!(aggregate.get().total(), &total);
+        assert_eq!(aggregate.get().packed_sum(), &packed);
+        assert_eq!(aggregate.get().id_sum(), &id_sum);
+        assert_eq!(aggregate.get().rand_sum(), &rand_sums[j]);
         assert_eq!(
             decode_digits(&packed).unwrap(),
             digit_counts[9 * j..9 * j + 9]
@@ -193,52 +253,14 @@ fn commitments_open_and_aggregate_over_many_records() {
     assert_eq!(digit_counts.iter().sum::<u32>(), u32::from(records));
 }
 
-/// Every single-field change to a valid opening must be rejected.
-fn check_opening_negatives(
-    bases: &Bases,
-    commitments: &[Commitment],
-    opening: &Opening,
-    option_count: u16,
-    rng: &mut impl CryptoRng,
-) {
-    let option = opening.option();
-    let cast_id = *opening.cast_id();
-    let rand = *opening.rand();
-    let wrong_option = Opening::new(
-        OptionIndex::new((option.get() + 1) % option_count).unwrap(),
-        cast_id,
-        rand,
-    );
-    assert_eq!(
-        verify_opening(bases, commitments, &wrong_option).unwrap_err(),
-        Error::OpeningInvalid
-    );
-    let wrong_id = Opening::new(option, random_cast_id(rng), rand);
-    assert_eq!(
-        verify_opening(bases, commitments, &wrong_id).unwrap_err(),
-        Error::OpeningInvalid
-    );
-    let mut other_rand = rand;
-    other_rand[1] = Scalar::random(rng);
-    let wrong_rand = Opening::new(option, cast_id, other_rand);
-    assert_eq!(
-        verify_opening(bases, commitments, &wrong_rand).unwrap_err(),
-        Error::OpeningInvalid
-    );
-}
-
 #[test]
-fn opening_capacity_and_range_errors() {
+fn opening_is_bounded_by_the_option_set_and_chunk_count() {
     let bases = Bases::derive();
     let mut rng = rng(21);
     let cast_id = random_cast_id(&mut rng);
     let rand = [Scalar::ZERO; MAX_CHUNKS];
     let option = OptionIndex::new(9).unwrap();
     let opening = Opening::new(option, cast_id, rand);
-    assert_eq!(
-        verify_opening(&bases, &[], &opening).unwrap_err(),
-        Error::CapacityExceeded
-    );
     let one = commit(
         &bases,
         option,
@@ -246,15 +268,40 @@ fn opening_capacity_and_range_errors() {
         &rand[0],
         ChunkIndex::new(0).unwrap(),
     );
-    // Option 9 lives in chunk 1, which does not exist with one commitment.
+    // Option 9 is outside a 9-option set even though it has a chunk.
     assert_eq!(
-        verify_opening(&bases, &[one], &opening).unwrap_err(),
+        verify_opening(&bases, OptionCount::new(9).unwrap(), &[one], &opening).unwrap_err(),
         Error::OptionOutOfRange
+    );
+    // Option 9 in a 10-option set needs two commitments.
+    assert_eq!(
+        verify_opening(&bases, OptionCount::new(10).unwrap(), &[one], &opening).unwrap_err(),
+        Error::InvalidStatement
+    );
+    assert_eq!(
+        verify_opening(&bases, OptionCount::new(10).unwrap(), &[], &opening).unwrap_err(),
+        Error::InvalidStatement
     );
     let nine = [one; 9];
     assert_eq!(
-        verify_opening(&bases, &nine, &opening).unwrap_err(),
-        Error::CapacityExceeded
+        verify_opening(&bases, OptionCount::new(64).unwrap(), &nine, &opening).unwrap_err(),
+        Error::InvalidStatement
+    );
+    // Option 8 of a 9-option set opens a single commitment.
+    let option8 = OptionIndex::new(8).unwrap();
+    let c8 = commit(
+        &bases,
+        option8,
+        &cast_id,
+        &rand[0],
+        ChunkIndex::new(0).unwrap(),
+    );
+    let opening8 = Opening::new(option8, cast_id, rand);
+    assert!(verify_opening(&bases, OptionCount::new(9).unwrap(), &[c8], &opening8).is_ok());
+    // ... but not an 8-option set (t ∈ {0..m+1} only, PROTOCOL §7.3).
+    assert_eq!(
+        verify_opening(&bases, OptionCount::new(8).unwrap(), &[c8], &opening8).unwrap_err(),
+        Error::OptionOutOfRange
     );
     assert_eq!(std::format!("{opening:?}"), "Opening(..)");
 }
@@ -340,4 +387,5 @@ fn cast_id_maps_little_endian_and_encodes() {
     let mut expected = [0u8; 32];
     expected[..24].copy_from_slice(&[0xff; 24]);
     assert_eq!(cast_id.to_scalar().to_bytes(), expected);
+    assert_eq!(std::format!("{:?}", Scalar::ONE), "Scalar(..)");
 }

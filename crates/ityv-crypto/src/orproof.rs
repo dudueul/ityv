@@ -23,13 +23,23 @@
 //! 8. `announcements`: `u32` count (`(m+2)·k`) ‖ the points `a_{t,j}` for
 //!    `t = 0..m+2`, `j = 0..k` (`t` outer, `j` inner)
 //!
-//! The counts in items 5–8 make the split between commitments and
-//! announcements unambiguous.
+//! All integers are big-endian. The counts in items 5–8 make the split
+//! between commitments and announcements unambiguous.
 //!
 //! # Proof encoding
 //!
-//! `option_count: u16` ‖ `chunk_count: u8` ‖ for each `t`: `c_t` ‖ `z_{t,x}` ‖
-//! `z_{t,0}..z_{t,k−1}`, every scalar 32 bytes little-endian and canonical.
+//! A 3-byte header followed by `(m+2)·(k+2)` scalars:
+//!
+//! | offset | width | field |
+//! |---|---|---|
+//! | 0 | 2 | `option_count` (`m + 2`), big-endian `u16`, `1..=64` |
+//! | 2 | 1 | `chunk_count` (`k`), `u8`, must equal `⌈option_count / 9⌉` |
+//! | 3 | `32·(k+2)` per option | for `t = 0..m+2`: `c_t` ‖ `z_{t,x}` ‖ `z_{t,0}` ‖ … ‖ `z_{t,k−1}` |
+//!
+//! Every scalar is 32 bytes little-endian and must be canonical (below the
+//! group order). The decoder rejects a header whose chunk count does not
+//! match its option count, because no statement could ever verify such a
+//! proof (ENCODING.md §1.2). Total length `3 + (m+2)·(64 + 32k)`.
 
 use core::fmt;
 
@@ -39,11 +49,11 @@ use ityv_encoding::{
 };
 use rand_core::CryptoRng;
 use subtle::ConstantTimeEq;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::backend::ristretto::Point;
 use crate::commit::{
-    Bases, ChunkIndex, Commitment, DIGITS_PER_CHUNK, MAX_CHUNKS, MAX_OPTIONS, Opening, OptionIndex,
+    Bases, ChunkIndex, Commitment, MAX_CHUNKS, MAX_OPTIONS, Opening, OptionCount, OptionIndex,
     packed_value, verify_opening,
 };
 use crate::error::Error;
@@ -72,19 +82,6 @@ fn absorb_ident(transcript: &mut Transcript, ident: &Ident<'_>) -> Result<(), Er
     Ok(())
 }
 
-/// The chunk count `⌈option_count / 9⌉` for an admissible option count,
-/// `None` outside `1..=MAX_OPTIONS`.
-pub(crate) fn chunks_for(option_count: u16) -> Option<u8> {
-    if option_count == 0 || usize::from(option_count) > MAX_OPTIONS {
-        return None;
-    }
-    let chunks = option_count
-        .checked_add(DIGITS_PER_CHUNK)?
-        .checked_sub(1)?
-        .checked_div(DIGITS_PER_CHUNK)?;
-    u8::try_from(chunks).ok()
-}
-
 /// Absorbs a big-endian `u32` count.
 fn absorb_count(transcript: &mut Transcript, count: usize) -> Result<(), Error> {
     let raw = u32::try_from(count).map_err(|_| Error::CapacityExceeded)?;
@@ -99,36 +96,30 @@ pub struct Statement<'a> {
     box_id: Ident<'a>,
     ballot_style_id: Ident<'a>,
     proof_system_id: u16,
-    option_count: u16,
-    chunk_count: u8,
+    option_count: OptionCount,
     commitments: [Commitment; MAX_CHUNKS],
 }
 
 impl<'a> Statement<'a> {
     /// Builds a statement for `commitments` (chunk `j` at index `j`) with
-    /// `option_count = m + 2` options.
+    /// the option set `option_count` (`m + 2` options).
     ///
     /// # Errors
-    /// [`Error::InvalidStatement`] if an identifier is longer than 64 bytes,
-    /// `option_count` is zero or above `MAX_OPTIONS`, there are no
-    /// commitments or more than `MAX_CHUNKS`, or the chunk count is not
-    /// `⌈option_count / 9⌉`.
+    /// [`Error::InvalidStatement`] if an identifier is longer than 64 bytes
+    /// or the number of commitments is not the chunk count of
+    /// `option_count`.
     pub fn new(
         election_id: ElectionId<'a>,
         box_id: Ident<'a>,
         ballot_style_id: Ident<'a>,
-        option_count: u16,
+        option_count: OptionCount,
         commitments: &[Commitment],
     ) -> Result<Self, Error> {
         if box_id.byte_len() > IDENT_MAX_STANDARD || ballot_style_id.byte_len() > IDENT_MAX_STANDARD
         {
             return Err(Error::InvalidStatement);
         }
-        if commitments.is_empty() || commitments.len() > MAX_CHUNKS {
-            return Err(Error::InvalidStatement);
-        }
-        let chunk_count = chunks_for(option_count).ok_or(Error::InvalidStatement)?;
-        if usize::from(chunk_count) != commitments.len() {
+        if commitments.len() != usize::from(option_count.chunk_count()) {
             return Err(Error::InvalidStatement);
         }
         let mut stored = [Commitment::from_point(&Point::identity()); MAX_CHUNKS];
@@ -141,7 +132,6 @@ impl<'a> Statement<'a> {
             ballot_style_id,
             proof_system_id: PROOF_SYSTEM_OR_REP_V1,
             option_count,
-            chunk_count,
             commitments: stored,
         })
     }
@@ -170,28 +160,28 @@ impl<'a> Statement<'a> {
         self.proof_system_id
     }
 
-    /// `m + 2`.
+    /// The option set (`m + 2`).
     #[must_use]
-    pub const fn option_count(&self) -> u16 {
+    pub const fn option_count(&self) -> OptionCount {
         self.option_count
     }
 
     /// `k`.
     #[must_use]
-    pub const fn chunk_count(&self) -> u8 {
-        self.chunk_count
+    pub fn chunk_count(&self) -> u8 {
+        self.option_count.chunk_count()
     }
 
     /// The commitments `C_0..C_{k−1}`.
     #[must_use]
     pub fn commitments(&self) -> &[Commitment] {
         self.commitments
-            .get(..usize::from(self.chunk_count))
+            .get(..usize::from(self.chunk_count()))
             .unwrap_or(&[])
     }
 
     fn announcement_count(&self) -> usize {
-        usize::from(self.option_count).saturating_mul(usize::from(self.chunk_count))
+        usize::from(self.option_count.get()).saturating_mul(usize::from(self.chunk_count()))
     }
 
     /// Total transcript length in bytes (see the module documentation).
@@ -203,7 +193,7 @@ impl<'a> Statement<'a> {
             .saturating_add(2) // option_count
             .saturating_add(1) // chunk_count
             .saturating_add(4) // commitment count
-            .saturating_add(usize::from(self.chunk_count).saturating_mul(32))
+            .saturating_add(usize::from(self.chunk_count()).saturating_mul(32))
             .saturating_add(4) // announcement count
             .saturating_add(self.announcement_count().saturating_mul(32))
     }
@@ -214,9 +204,9 @@ impl<'a> Statement<'a> {
         absorb_ident(transcript, &self.box_id)?;
         absorb_ident(transcript, &self.ballot_style_id)?;
         transcript.absorb(&self.proof_system_id.to_be_bytes());
-        transcript.absorb(&self.option_count.to_be_bytes());
-        transcript.absorb(&[self.chunk_count]);
-        absorb_count(transcript, usize::from(self.chunk_count))?;
+        transcript.absorb(&self.option_count.get().to_be_bytes());
+        transcript.absorb(&[self.chunk_count()]);
+        absorb_count(transcript, usize::from(self.chunk_count()))?;
         for commitment in self.commitments() {
             transcript.absorb(commitment.as_bytes());
         }
@@ -236,34 +226,32 @@ impl<'a> Statement<'a> {
 /// A proof: `(m+2)·(k+2)` scalars. Unused slots are zero.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Proof {
-    option_count: u16,
-    chunk_count: u8,
+    option_count: OptionCount,
     challenges: [Scalar; MAX_OPTIONS],
     resp_id: [Scalar; MAX_OPTIONS],
     resp_rand: [[Scalar; MAX_CHUNKS]; MAX_OPTIONS],
 }
 
 impl Proof {
-    fn empty(option_count: u16, chunk_count: u8) -> Self {
+    fn empty(option_count: OptionCount) -> Self {
         Self {
             option_count,
-            chunk_count,
             challenges: [Scalar::ZERO; MAX_OPTIONS],
             resp_id: [Scalar::ZERO; MAX_OPTIONS],
             resp_rand: core::array::from_fn(|_| [Scalar::ZERO; MAX_CHUNKS]),
         }
     }
 
-    /// `m + 2`.
+    /// The option set (`m + 2`).
     #[must_use]
-    pub const fn option_count(&self) -> u16 {
+    pub const fn option_count(&self) -> OptionCount {
         self.option_count
     }
 
-    /// `k`.
+    /// `k`, derived from the option set.
     #[must_use]
-    pub const fn chunk_count(&self) -> u8 {
-        self.chunk_count
+    pub fn chunk_count(&self) -> u8 {
+        self.option_count.chunk_count()
     }
 
     /// `c_t`.
@@ -286,13 +274,13 @@ impl Proof {
             .and_then(|row| row.get(usize::from(chunk.get())))
     }
 
-    /// Encoded length for the given counts: `3 + (m+2)·(64 + 32k)`.
+    /// Encoded length for an option set: `3 + (m+2)·(64 + 32k)`.
     #[must_use]
-    pub fn encoded_len_for(option_count: u16, chunk_count: u8) -> usize {
-        let per_option = usize::from(chunk_count)
+    pub fn encoded_len_for(option_count: OptionCount) -> usize {
+        let per_option = usize::from(option_count.chunk_count())
             .saturating_mul(Scalar::LEN)
             .saturating_add(Scalar::LEN.saturating_mul(2));
-        usize::from(option_count)
+        usize::from(option_count.get())
             .saturating_mul(per_option)
             .saturating_add(3)
     }
@@ -302,21 +290,20 @@ impl fmt::Debug for Proof {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Proof")
             .field("option_count", &self.option_count)
-            .field("chunk_count", &self.chunk_count)
             .finish_non_exhaustive()
     }
 }
 
 impl Encode for Proof {
     fn encoded_len(&self) -> usize {
-        Self::encoded_len_for(self.option_count, self.chunk_count)
+        Self::encoded_len_for(self.option_count)
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodingError> {
-        w.write_u16(self.option_count)?;
-        w.write_u8(self.chunk_count)?;
-        let options = usize::from(self.option_count);
-        let chunks = usize::from(self.chunk_count);
+        w.write_u16(self.option_count.get())?;
+        w.write_u8(self.chunk_count())?;
+        let options = usize::from(self.option_count.get());
+        let chunks = usize::from(self.chunk_count());
         let rows = self
             .challenges
             .iter()
@@ -337,17 +324,18 @@ impl Encode for Proof {
 impl<'a> Decode<'a> for Proof {
     fn decode(r: &mut Reader<'a>) -> Result<Self, EncodingError> {
         let at = r.position();
-        let option_count = r.read_u16()?;
-        if option_count == 0 || usize::from(option_count) > MAX_OPTIONS {
-            return Err(EncodingError::new(ErrorKind::CountExceedsMax, at));
-        }
+        let option_count = OptionCount::new(r.read_u16()?)
+            .ok_or_else(|| EncodingError::new(ErrorKind::CountExceedsMax, at))?;
         let at = r.position();
         let chunk_count = r.read_u8()?;
         if chunk_count == 0 || usize::from(chunk_count) > MAX_CHUNKS {
             return Err(EncodingError::new(ErrorKind::CountExceedsMax, at));
         }
-        let mut proof = Self::empty(option_count, chunk_count);
-        let options = usize::from(option_count);
+        if chunk_count != option_count.chunk_count() {
+            return Err(EncodingError::new(ErrorKind::InvariantViolation, at));
+        }
+        let mut proof = Self::empty(option_count);
+        let options = usize::from(option_count.get());
         let chunks = usize::from(chunk_count);
         let rows = proof
             .challenges
@@ -399,11 +387,14 @@ fn chunk_at(index: usize) -> Result<ChunkIndex, Error> {
 }
 
 /// Proves that `witness` opens the commitments of `statement` to some
-/// option, without revealing which.
+/// option, without revealing which. The witness is first checked with
+/// [`verify_opening`] against the statement's option set, so an opening
+/// that does not open the commitments, or names an option outside the set,
+/// is rejected before any randomness is drawn.
 ///
 /// # Errors
-/// [`Error::OptionOutOfRange`] if the witness option is not below the
-/// statement's option count; [`Error::OpeningInvalid`] if the witness does
+/// [`Error::OptionOutOfRange`] if the witness option is not in the
+/// statement's option set; [`Error::OpeningInvalid`] if the witness does
 /// not open the commitments; [`Error::LengthMismatch`] on an internal
 /// transcript length error.
 pub fn prove<R: CryptoRng + ?Sized>(
@@ -412,20 +403,22 @@ pub fn prove<R: CryptoRng + ?Sized>(
     witness: &Opening,
     rng: &mut R,
 ) -> Result<Proof, Error> {
-    let options = usize::from(statement.option_count);
-    let chunks = usize::from(statement.chunk_count);
-    let true_option = usize::from(witness.option().get());
-    if true_option >= options {
-        return Err(Error::OptionOutOfRange);
-    }
-    let _opens: Verified<()> = verify_opening(bases, statement.commitments(), witness)?;
+    let opened = verify_opening(
+        bases,
+        statement.option_count,
+        statement.commitments(),
+        witness,
+    )?;
+    let options = usize::from(statement.option_count.get());
+    let chunks = usize::from(statement.chunk_count());
+    let true_option = usize::from(opened.get().option().get());
     let points = statement.points()?;
-    let mut proof = Proof::empty(statement.option_count, statement.chunk_count);
+    let mut proof = Proof::empty(statement.option_count);
     let mut transcript = Transcript::begin(FS_LABEL_OR_REP_V1, statement.transcript_len());
     statement.absorb_header(&mut transcript)?;
 
-    let mut alpha = Scalar::random(rng);
-    let mut beta = [Scalar::ZERO; MAX_CHUNKS];
+    let alpha = Zeroizing::new(Scalar::random(rng));
+    let mut beta = Zeroizing::new([Scalar::ZERO; MAX_CHUNKS]);
     for slot in beta.iter_mut().take(chunks) {
         *slot = Scalar::random(rng);
     }
@@ -470,7 +463,7 @@ pub fn prove<R: CryptoRng + ?Sized>(
         }
     }
     let true_challenge = total.sub(&others);
-    let id = witness.cast_id().to_scalar();
+    let id = Zeroizing::new(witness.cast_id().to_scalar());
     let challenge = proof
         .challenges
         .get_mut(true_option)
@@ -493,27 +486,46 @@ pub fn prove<R: CryptoRng + ?Sized>(
     for ((cell, beta_j), rand_j) in cells {
         *cell = beta_j.add(&true_challenge.mul(rand_j));
     }
-    alpha.zeroize();
-    beta.zeroize();
     Ok(proof)
+}
+
+/// What [`verify`] verified: the statement and the proof that proves it.
+#[derive(Debug, Clone, Copy)]
+pub struct ProvenStatement<'a> {
+    statement: &'a Statement<'a>,
+    proof: &'a Proof,
+}
+
+impl<'a> ProvenStatement<'a> {
+    /// The statement.
+    #[must_use]
+    pub const fn statement(&self) -> &'a Statement<'a> {
+        self.statement
+    }
+
+    /// The proof.
+    #[must_use]
+    pub const fn proof(&self) -> &'a Proof {
+        self.proof
+    }
 }
 
 /// Verifies `proof` against `statement` (VC-025, VC-026).
 ///
 /// # Errors
-/// [`Error::ProofInvalid`] if the proof's counts differ from the statement's
-/// or the challenge equation does not hold; [`Error::LengthMismatch`] on an
-/// internal transcript length error.
-pub fn verify(
+/// [`Error::ProofInvalid`] if the proof's option set differs from the
+/// statement's or the challenge equation does not hold;
+/// [`Error::LengthMismatch`] on an internal transcript length error.
+pub fn verify<'a>(
     bases: &Bases,
-    statement: &Statement<'_>,
-    proof: &Proof,
-) -> Result<Verified<()>, Error> {
-    if proof.option_count != statement.option_count || proof.chunk_count != statement.chunk_count {
+    statement: &'a Statement<'a>,
+    proof: &'a Proof,
+) -> Result<Verified<ProvenStatement<'a>>, Error> {
+    if proof.option_count != statement.option_count {
         return Err(Error::ProofInvalid);
     }
-    let options = usize::from(statement.option_count);
-    let chunks = usize::from(statement.chunk_count);
+    let options = usize::from(statement.option_count.get());
+    let chunks = usize::from(statement.chunk_count());
     let points = statement.points()?;
     let mut transcript = Transcript::begin(FS_LABEL_OR_REP_V1, statement.transcript_len());
     statement.absorb_header(&mut transcript)?;
@@ -538,7 +550,7 @@ pub fn verify(
     }
     let total = transcript.finish()?;
     if bool::from(sum.ct_eq(&total)) {
-        Ok(Verified::new(()))
+        Ok(Verified::new(ProvenStatement { statement, proof }))
     } else {
         Err(Error::ProofInvalid)
     }

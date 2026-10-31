@@ -2,9 +2,12 @@
 //! (PROTOCOL.md §9.3, §9.4.3).
 //!
 //! A [`OneTimeKey`] is 32 bytes taken from the one-time pad and is consumed
-//! by [`tag`] or [`verify_tag`]: the type cannot be cloned, so one key
-//! authenticates exactly one message, which is what makes Poly1305
-//! information-theoretically secure.
+//! by [`tag`] or [`verify_tag`]: the type cannot be cloned, so one key value
+//! authenticates one message per construction. Single use of the *bytes* is
+//! the caller's obligation: the pad position rule of PROTOCOL.md §9.4.3
+//! (each pad range is handed out once and then overwritten) is what
+//! guarantees that no 32-byte key is ever constructed twice, and Poly1305 is
+//! secure only under that guarantee.
 
 use core::fmt;
 
@@ -92,14 +95,19 @@ pub fn tag(key: OneTimeKey, message: &[u8]) -> Tag {
     Tag { bytes }
 }
 
-/// Checks `tag` against `message` under `key` (consumed), in constant time.
+/// Checks `expected` against `message` under `key` (consumed), in constant
+/// time. The token carries the authenticated message.
 ///
 /// # Errors
 /// [`Error::TagMismatch`] if the tag does not match.
-pub fn verify_tag(key: OneTimeKey, message: &[u8], expected: &Tag) -> Result<Verified<()>, Error> {
+pub fn verify_tag<'a>(
+    key: OneTimeKey,
+    message: &'a [u8],
+    expected: &Tag,
+) -> Result<Verified<&'a [u8]>, Error> {
     let computed = tag(key, message);
     if bool::from(computed.bytes.ct_eq(&expected.bytes)) {
-        Ok(Verified::new(()))
+        Ok(Verified::new(message))
     } else {
         Err(Error::TagMismatch)
     }

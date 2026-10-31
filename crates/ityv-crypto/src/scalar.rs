@@ -7,18 +7,22 @@
 //! the workspace rule that binary operators are only used on checked integer
 //! arithmetic (CONSTITUTION.md §1.1).
 
+use core::fmt;
 use core::ops::{Add, Mul, Neg, Sub};
 
-use curve25519_dalek::scalar::Scalar as Inner;
 use ityv_encoding::{Decode, Encode, Error as EncodingError, ErrorKind, Reader, Writer};
 use rand_core::CryptoRng;
 use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroize;
 
+use crate::backend::ristretto::InnerScalar as Inner;
 use crate::error::Error;
 
-/// An element of the scalar field, always in canonical form.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// An element of the scalar field, always in canonical form. There is no
+/// `Default`: a scalar is either computed or [`Scalar::ZERO`] by name
+/// (CONSTITUTION.md §1.6). `Debug` prints nothing, because scalars are
+/// usually secrets (randomness, shares).
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Scalar(pub(crate) Inner);
 
 impl Scalar {
@@ -116,9 +120,9 @@ impl Scalar {
     }
 }
 
-impl Default for Scalar {
-    fn default() -> Self {
-        Self::ZERO
+impl fmt::Debug for Scalar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Scalar(..)")
     }
 }
 

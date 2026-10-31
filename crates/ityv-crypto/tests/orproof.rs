@@ -1,6 +1,6 @@
 //! The OR proof of representation (PROTOCOL.md §7.5): completeness for
-//! every option position, soundness negatives, statement validation and
-//! the proof encoding.
+//! every option position, soundness negatives, statement validation, the
+//! proof encoding and its length formula.
 // Integration-test crate: outside the TCB. Test code expresses "this must
 // hold" with unwrap/expect/panic/indexing and does small arithmetic on test
 // sizes, so those restriction lints are relaxed for this file only. No TCB
@@ -19,7 +19,7 @@ mod common;
 
 use common::{decode_exact, encode_to_vec, rng};
 use ityv_crypto::{
-    Bases, CastId, ChunkIndex, Commitment, Error, MAX_CHUNKS, Opening, OptionIndex,
+    Bases, CastId, ChunkIndex, Commitment, Error, MAX_CHUNKS, Opening, OptionCount, OptionIndex,
     PROOF_SYSTEM_OR_REP_V1, Proof, Scalar, Statement, commit, prove, verify,
 };
 use ityv_encoding::{ElectionId, ErrorKind, Ident, Token192};
@@ -31,19 +31,19 @@ const ELECTION: &[u8] = b"KR-2030-PRES";
 const BOX: &[u8] = b"BOX-0001";
 const STYLE: &[u8] = b"PRES";
 
+fn options(raw: u16) -> OptionCount {
+    OptionCount::new(raw).unwrap()
+}
+
 fn statement(option_count: u16, commitments: &[Commitment]) -> Statement<'static> {
     Statement::new(
         ElectionId::new(ELECTION).unwrap(),
         Ident::new(BOX, 64).unwrap(),
         Ident::new(STYLE, 64).unwrap(),
-        option_count,
+        options(option_count),
         commitments,
     )
     .unwrap()
-}
-
-fn chunk_count(option_count: u16) -> usize {
-    usize::from(option_count.div_ceil(9))
 }
 
 fn record(
@@ -56,7 +56,7 @@ fn record(
     rng.fill_bytes(&mut token);
     let cast_id = CastId::new(Token192(token));
     let mut rand = [Scalar::ZERO; MAX_CHUNKS];
-    let chunks = chunk_count(option_count);
+    let chunks = usize::from(options(option_count).chunk_count());
     for slot in rand.iter_mut().take(chunks) {
         *slot = Scalar::random(rng);
     }
@@ -85,16 +85,13 @@ fn completeness_for_every_option_position() {
         for option in [0, middle, last] {
             let (opening, commitments) = record(&bases, option_count, option, &mut rng);
             let st = statement(option_count, &commitments);
-            assert_eq!(
-                st.chunk_count(),
-                u8::try_from(chunk_count(option_count)).unwrap()
-            );
+            assert_eq!(st.chunk_count(), options(option_count).chunk_count());
             let proof = prove(&bases, &st, &opening, &mut rng).unwrap();
-            assert!(
-                verify(&bases, &st, &proof).is_ok(),
-                "option_count={option_count} option={option}"
-            );
-            assert_eq!(proof.option_count(), option_count);
+            let proven = verify(&bases, &st, &proof)
+                .unwrap_or_else(|e| panic!("option_count={option_count} option={option}: {e}"));
+            assert_eq!(proven.get().statement(), &st);
+            assert_eq!(proven.get().proof(), &proof);
+            assert_eq!(proof.option_count().get(), option_count);
             assert_eq!(proof.chunk_count(), st.chunk_count());
         }
     }
@@ -109,12 +106,31 @@ fn completeness_at_full_capacity() {
     assert_eq!(st.chunk_count(), 8);
     let proof = prove(&bases, &st, &opening, &mut rng).unwrap();
     assert!(verify(&bases, &st, &proof).is_ok());
-    assert_eq!(encode_to_vec(&proof).len(), Proof::encoded_len_for(64, 8));
-    assert_eq!(Proof::encoded_len_for(64, 8), 3 + 64 * (64 + 32 * 8));
+    assert_eq!(
+        encode_to_vec(&proof).len(),
+        Proof::encoded_len_for(options(64))
+    );
+    assert_eq!(Proof::encoded_len_for(options(64)), 3 + 64 * (64 + 32 * 8));
 }
 
 #[test]
-fn soundness_negatives() {
+fn encoded_length_matches_the_formula_for_every_option_count() {
+    let bases = Bases::derive();
+    let mut rng = rng(37);
+    for option_count in 1..=64u16 {
+        let (opening, commitments) = record(&bases, option_count, option_count - 1, &mut rng);
+        let st = statement(option_count, &commitments);
+        let proof = prove(&bases, &st, &opening, &mut rng).unwrap();
+        let bytes = encode_to_vec(&proof);
+        let k = usize::from(option_count.div_ceil(9));
+        assert_eq!(bytes.len(), 3 + usize::from(option_count) * (64 + 32 * k));
+        assert_eq!(bytes.len(), Proof::encoded_len_for(options(option_count)));
+        assert_eq!(decode_exact::<Proof>(&bytes).unwrap(), proof);
+    }
+}
+
+#[test]
+fn soundness_negatives_for_tampered_proofs() {
     let bases = Bases::derive();
     let mut rng = rng(32);
     let option_count = 16u16;
@@ -139,6 +155,19 @@ fn soundness_negatives() {
             Err(err) => assert_eq!(err.kind(), ErrorKind::ValueOutOfRange),
         }
     }
+
+    // Count mismatch between statement and proof.
+    let (opening18, commitments18) = record(&bases, 18, 2, &mut rng);
+    let st18 = statement(18, &commitments18);
+    let proof18 = prove(&bases, &st18, &opening18, &mut rng).unwrap();
+    assert_eq!(
+        verify(&bases, &st, &proof18).unwrap_err(),
+        Error::ProofInvalid
+    );
+    assert_eq!(
+        verify(&bases, &st18, &proof).unwrap_err(),
+        Error::ProofInvalid
+    );
 }
 
 #[test]
@@ -155,7 +184,7 @@ fn soundness_negatives_for_statement_and_witness() {
         ElectionId::new(b"KR-2034-PRES").unwrap(),
         Ident::new(BOX, 64).unwrap(),
         Ident::new(STYLE, 64).unwrap(),
-        option_count,
+        options(option_count),
         &commitments,
     )
     .unwrap();
@@ -167,7 +196,7 @@ fn soundness_negatives_for_statement_and_witness() {
         ElectionId::new(ELECTION).unwrap(),
         Ident::new(b"BOX-0002", 64).unwrap(),
         Ident::new(STYLE, 64).unwrap(),
-        option_count,
+        options(option_count),
         &commitments,
     )
     .unwrap();
@@ -179,7 +208,7 @@ fn soundness_negatives_for_statement_and_witness() {
         ElectionId::new(ELECTION).unwrap(),
         Ident::new(BOX, 64).unwrap(),
         Ident::new(b"PRES2", 64).unwrap(),
-        option_count,
+        options(option_count),
         &commitments,
     )
     .unwrap();
@@ -199,20 +228,8 @@ fn soundness_negatives_for_statement_and_witness() {
         Error::ProofInvalid
     );
 
-    // Count mismatch between statement and proof.
-    let (opening18, commitments18) = record(&bases, 18, 2, &mut rng);
-    let st18 = statement(18, &commitments18);
-    let proof18 = prove(&bases, &st18, &opening18, &mut rng).unwrap();
-    assert_eq!(
-        verify(&bases, &st, &proof18).unwrap_err(),
-        Error::ProofInvalid
-    );
-    assert_eq!(
-        verify(&bases, &st18, &proof).unwrap_err(),
-        Error::ProofInvalid
-    );
-
-    // A witness that does not open the commitments, or is out of range.
+    // A witness that does not open the commitments, or is out of the option
+    // set (PROTOCOL §7.3), is rejected by `prove` through `verify_opening`.
     let (other_opening, _) = record(&bases, option_count, 2, &mut rng);
     assert_eq!(
         prove(&bases, &st, &other_opening, &mut rng).unwrap_err(),
@@ -271,7 +288,7 @@ fn proofs_are_randomized_and_option_is_hidden() {
     assert_eq!(st.election_id().as_bytes(), ELECTION);
     assert_eq!(st.box_id().as_bytes(), BOX);
     assert_eq!(st.ballot_style_id().as_bytes(), STYLE);
-    assert_eq!(st.option_count(), 4);
+    assert_eq!(st.option_count().get(), 4);
     assert_eq!(st.commitments(), &commitments[..]);
 }
 
@@ -298,7 +315,7 @@ fn proof_encoding_round_trip_and_rejections() {
     let err = decode_exact::<Proof>(&bad).unwrap_err();
     assert_eq!((err.kind(), err.offset()), (ErrorKind::ValueOutOfRange, 3));
 
-    // Bad counts.
+    // Option counts outside 1..=64 and chunk counts outside 1..=8.
     for (option_count, chunk_count) in [(0u16, 2u8), (65, 8), (10, 0), (10, 9)] {
         let mut bad = bytes.clone();
         bad[0..2].copy_from_slice(&option_count.to_be_bytes());
@@ -312,6 +329,17 @@ fn proof_encoding_round_trip_and_rejections() {
             } else {
                 2
             }
+        );
+    }
+    // A chunk count that does not match the option count can never verify
+    // and is rejected at decode time.
+    for chunk_count in [1u8, 3, 8] {
+        let mut bad = bytes.clone();
+        bad[2] = chunk_count;
+        let err = decode_exact::<Proof>(&bad).unwrap_err();
+        assert_eq!(
+            (err.kind(), err.offset()),
+            (ErrorKind::InvariantViolation, 2)
         );
     }
 
@@ -338,40 +366,34 @@ fn statement_validation() {
     let election = ElectionId::new(ELECTION).unwrap();
     let box_id = Ident::new(BOX, 64).unwrap();
     let style = Ident::new(STYLE, 64).unwrap();
+    assert!(OptionCount::new(0).is_none());
+    assert!(OptionCount::new(65).is_none());
     assert_eq!(
-        Statement::new(election, box_id, style, 0, &commitments).unwrap_err(),
+        Statement::new(election, box_id, style, options(16), &[]).unwrap_err(),
         Error::InvalidStatement
     );
     assert_eq!(
-        Statement::new(election, box_id, style, 65, &commitments).unwrap_err(),
+        Statement::new(election, box_id, style, options(16), &commitments[..1]).unwrap_err(),
         Error::InvalidStatement
     );
     assert_eq!(
-        Statement::new(election, box_id, style, 16, &[]).unwrap_err(),
-        Error::InvalidStatement
-    );
-    assert_eq!(
-        Statement::new(election, box_id, style, 16, &commitments[..1]).unwrap_err(),
-        Error::InvalidStatement
-    );
-    assert_eq!(
-        Statement::new(election, box_id, style, 9, &commitments).unwrap_err(),
+        Statement::new(election, box_id, style, options(9), &commitments).unwrap_err(),
         Error::InvalidStatement
     );
     let nine = [commitments[0]; 9];
     assert_eq!(
-        Statement::new(election, box_id, style, 64, &nine).unwrap_err(),
+        Statement::new(election, box_id, style, options(64), &nine).unwrap_err(),
         Error::InvalidStatement
     );
     let long = [b'a'; 65];
     let long_ident = Ident::new(&long, 128).unwrap();
     assert_eq!(
-        Statement::new(election, long_ident, style, 16, &commitments).unwrap_err(),
+        Statement::new(election, long_ident, style, options(16), &commitments).unwrap_err(),
         Error::InvalidStatement
     );
     assert_eq!(
-        Statement::new(election, box_id, long_ident, 16, &commitments).unwrap_err(),
+        Statement::new(election, box_id, long_ident, options(16), &commitments).unwrap_err(),
         Error::InvalidStatement
     );
-    assert!(Statement::new(election, box_id, style, 16, &commitments).is_ok());
+    assert!(Statement::new(election, box_id, style, options(16), &commitments).is_ok());
 }
