@@ -220,6 +220,17 @@ pub(crate) fn hash_to_group(label: &[u8]) -> Point {
 mod tests {
     use super::*;
 
+    /// The prefix capacity is exactly label, purpose, terminator and length;
+    /// a larger buffer would only hide a wrong capacity computation.
+    #[test]
+    fn signing_prefix_capacity_is_exact() {
+        assert_eq!(SIGNING_PREFIX_MAX_LEN, 53);
+        assert_eq!(
+            SIGNING_PREFIX_MAX_LEN,
+            SIGNING_LABEL_PREFIX.len() + Purpose::MAX_LEN + 1 + 8
+        );
+    }
+
     /// NIST FIPS 202 known answer: SHA3-512 of the empty string and of
     /// `"abc"`, checked against the raw hasher that every domain hash uses.
     #[test]

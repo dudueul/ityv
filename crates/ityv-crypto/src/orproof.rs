@@ -66,6 +66,10 @@ pub const FS_LABEL_OR_REP_V1: &[u8] = b"ityv:proof:or-rep:v1";
 /// Numeric identifier of this proof system in cast records.
 pub const PROOF_SYSTEM_OR_REP_V1: u16 = 1;
 
+/// Capacity of one identifier field in the transcript: `u32` prefix plus
+/// the standard maximum identifier length.
+const IDENT_FIELD_MAX_LEN: usize = IDENT_MAX_STANDARD + 4;
+
 /// Length of an identifier field in the transcript: `u32` prefix plus bytes.
 fn ident_field_len(ident: &Ident<'_>) -> usize {
     ident.byte_len().saturating_add(4)
@@ -73,7 +77,7 @@ fn ident_field_len(ident: &Ident<'_>) -> usize {
 
 /// Absorbs an identifier as its canonical length-prefixed encoding.
 fn absorb_ident(transcript: &mut Transcript, ident: &Ident<'_>) -> Result<(), Error> {
-    let mut buffer = [0u8; IDENT_MAX_STANDARD + 4];
+    let mut buffer = [0u8; IDENT_FIELD_MAX_LEN];
     let mut writer = Writer::new(&mut buffer);
     writer.write_ident(ident, IDENT_MAX_STANDARD)?;
     let written = writer.finish();
@@ -553,5 +557,18 @@ pub fn verify<'a>(
         Ok(Verified::new(ProvenStatement { statement, proof }))
     } else {
         Err(Error::ProofInvalid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The identifier field capacity is exactly the prefix plus the standard
+    /// maximum; a larger buffer would only hide a wrong capacity computation.
+    #[test]
+    fn ident_field_capacity_is_exact() {
+        assert_eq!(IDENT_FIELD_MAX_LEN, 68);
+        assert_eq!(IDENT_FIELD_MAX_LEN, IDENT_MAX_STANDARD + 4);
     }
 }
