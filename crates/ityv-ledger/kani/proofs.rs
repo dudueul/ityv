@@ -77,7 +77,12 @@ impl NodeHasher for MockNodes {
     }
 
     fn node(&self, left: &Hash512, right: &Hash512) -> Hash512 {
-        from_lane(lane(left).rotate_left(5) ^ lane(right).rotate_left(13) ^ 0x5A5A_5A5A_5A5A_5A5A)
+        // Asymmetric in its two inputs (rotations 5 and 17 differ by a
+        // non-multiple of 8, and the left lane is added once more), so the
+        // order of children is visible in the result.
+        let l = lane(left);
+        let r = lane(right);
+        from_lane((l.rotate_left(5) ^ r.rotate_left(17)).wrapping_add(l ^ 0x5A5A_5A5A_5A5A_5A5A))
     }
 }
 
@@ -143,11 +148,13 @@ fn inclusion_proof_round_trips_for_small_trees() {
 #[kani::proof]
 #[kani::unwind(70)]
 fn inclusion_proof_refuses_a_wrong_index() {
+    // Non-periodic lanes: a byte-repeated lane is invariant under rotation
+    // by multiples of 8, which would hide the order of children.
     let leaves = [
-        Hash512([0x10; 64]),
-        Hash512([0x21; 64]),
-        Hash512([0x32; 64]),
-        Hash512([0x43; 64]),
+        from_lane(0x0123_4567_89ab_cdef),
+        from_lane(0xfedc_ba98_7654_3210),
+        from_lane(0x0f1e_2d3c_4b5a_6978),
+        from_lane(0x8796_a5b4_c3d2_e1f0),
     ];
     for size in 2..=4u64 {
         let slice: &[Hash512] = &leaves[..size as usize];
