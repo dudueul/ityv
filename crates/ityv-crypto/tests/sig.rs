@@ -287,6 +287,13 @@ fn secret_keys_do_not_print_and_vectors_parse() {
     let text = std::format!("{vk:?}");
     assert!(text.starts_with("HybridVerifyingKey"));
     assert!(!text.contains("mldsa87"));
+    let purpose = Purpose::new(b"slip").unwrap();
+    let sig = sign_hybrid(&key, &purpose, OBJ, &mut rng).unwrap();
+    let text = std::format!("{sig:?}");
+    assert!(text.starts_with("HybridSignature"));
+    assert!(text.contains("ed25519"));
+    assert!(!text.contains("mldsa87"));
+    assert!(std::format!("{:?}", RecordPurpose::CastRecord).starts_with("CastRecord"));
     let expected: [u8; 32] =
         unhex_array("03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8");
     assert_eq!(expected.len(), 32);
