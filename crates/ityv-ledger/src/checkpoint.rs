@@ -412,16 +412,34 @@ pub fn validate_successor<'a>(
     }))
 }
 
+/// The canonical identifier triple of a checkpoint body (`election_id`,
+/// `ledger_id`, `keyset_id`, each as `Ident<64>`), hashed with the object
+/// hash so that a witness memory can carry the continuity check in one
+/// field.
+fn ids_hash(body: &CheckpointBody<'_>) -> Result<Hash512, Error> {
+    let p = body.parts();
+    let mut buffer = [0u8; 3 * (4 + 64)];
+    let mut w = Writer::new(&mut buffer);
+    p.election_id.encode(&mut w)?;
+    p.ledger_id.encode(&mut w)?;
+    p.keyset_id.encode(&mut w)?;
+    let used = w.finish();
+    let bytes = buffer.get(..used).ok_or(Error::Capacity)?;
+    Ok(ityv_crypto::object_hash(bytes))
+}
+
+/// `WitnessMemory` (ENCODING.md §6, `0x0011`): the persisted form of a
+/// witness's memory is a complete object with the standard header.
+pub const SCHEMA_WITNESS_MEMORY: SchemaId = SchemaId::new(0x0011);
+
 /// The last checkpoint a witness signed.
-///
-/// Encoding: `seq: u64` ‖ `tree_size: u64` ‖ `root_hash: Hash512` ‖
-/// `body_hash: Hash512`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LastSigned {
     seq: Seq,
     tree_size: TreeSize,
     root_hash: Hash512,
     body_hash: Hash512,
+    ids_hash: Hash512,
 }
 
 impl LastSigned {
@@ -445,47 +463,44 @@ impl LastSigned {
     pub const fn body_hash(&self) -> &Hash512 {
         &self.body_hash
     }
-}
-
-impl Encode for LastSigned {
-    fn encoded_len(&self) -> usize {
-        8 + 8 + 64 + 64
-    }
-    fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodingError> {
-        self.seq.encode(w)?;
-        self.tree_size.encode(w)?;
-        self.root_hash.encode(w)?;
-        self.body_hash.encode(w)
-    }
-}
-
-impl<'a> Decode<'a> for LastSigned {
-    fn decode(r: &mut Reader<'a>) -> Result<Self, EncodingError> {
-        Ok(Self {
-            seq: Seq::decode(r)?,
-            tree_size: TreeSize::decode(r)?,
-            root_hash: Hash512::decode(r)?,
-            body_hash: Hash512::decode(r)?,
-        })
+    /// The object hash of the body's identifier triple.
+    #[must_use]
+    pub const fn ids_hash(&self) -> &Hash512 {
+        &self.ids_hash
     }
 }
 
 /// A witness's persistent memory of what it last signed (ADR-0016 §4).
 ///
-/// Encoding: `Option<LastSigned>`. The host must persist the memory before
-/// releasing a signature; a witness that signs and then loses its memory
-/// could be induced to sign a fork at the same sequence number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+/// The memory is consumed by [`WitnessMemory::may_sign`], which returns the
+/// advanced memory together with the signing token, so a witness holds at
+/// most one memory value at a time and two bodies at one sequence number
+/// can never both obtain tokens. The host's ordering is: persist the
+/// returned memory, then sign the token's bytes, then release the
+/// signature. A crash between persisting and signing loses at most one
+/// signature; it never allows a second body at the same sequence number.
+///
+/// Persisted form (schema `0x0011`, version 1, with the ENCODING.md §3
+/// header): `last_seq: u64` (0 = nothing signed yet) ‖ `tree_size: u64` ‖
+/// `root_hash: Hash512` ‖ `body_hash: Hash512` ‖ `ids_hash: Hash512`. When
+/// `last_seq` is 0 every other field must be zero; `tree_size` must not
+/// exceed 2^40.
+#[derive(Debug, PartialEq, Eq)]
 pub struct WitnessMemory {
     last: Option<LastSigned>,
 }
 
-/// What [`WitnessMemory::may_sign`] verified: a body this witness may sign.
-#[derive(Debug, Clone, Copy)]
+/// What [`WitnessMemory::may_sign`] verified: a body this witness may sign,
+/// with every input the decision examined.
+#[derive(Debug)]
 pub struct Signable<'a> {
     body: CheckpointBody<'a>,
     body_bytes: &'a [u8],
     body_hash: Hash512,
+    consistency: &'a ConsistencyProof,
+    box_close_hashes: &'a [Hash512],
+    dispute_hashes: &'a [Hash512],
+    genesis_hash: &'a Hash512,
 }
 
 impl<'a> Signable<'a> {
@@ -504,12 +519,32 @@ impl<'a> Signable<'a> {
     pub const fn body_hash(&self) -> &Hash512 {
         &self.body_hash
     }
+    /// The consistency proof that was verified.
+    #[must_use]
+    pub const fn consistency(&self) -> &'a ConsistencyProof {
+        self.consistency
+    }
+    /// The box-close hashes whose sorted-set root was recomputed.
+    #[must_use]
+    pub const fn box_close_hashes(&self) -> &'a [Hash512] {
+        self.box_close_hashes
+    }
+    /// The dispute hashes whose sorted-set root was recomputed.
+    #[must_use]
+    pub const fn dispute_hashes(&self) -> &'a [Hash512] {
+        self.dispute_hashes
+    }
+    /// The genesis hash the body was checked against.
+    #[must_use]
+    pub const fn genesis_hash(&self) -> &'a Hash512 {
+        self.genesis_hash
+    }
 }
 
 impl WitnessMemory {
     /// A witness that has signed nothing yet.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn fresh() -> Self {
         Self { last: None }
     }
 
@@ -525,35 +560,100 @@ impl WitnessMemory {
         self.last.as_ref()
     }
 
+    /// Encodes the memory as a complete `0x0011` object into `out`.
+    ///
+    /// # Errors
+    /// [`Error::Encoding`] if `out` is too small.
+    pub fn to_object(&self, out: &mut [u8]) -> Result<usize, Error> {
+        Ok(ityv_encoding::encode_object(
+            SCHEMA_WITNESS_MEMORY,
+            SCHEMA_VERSION_1,
+            self,
+            out,
+        )?)
+    }
+
+    /// Decodes a complete `0x0011` object.
+    ///
+    /// # Errors
+    /// [`Error::Encoding`] for any header, length or field violation.
+    pub fn from_object(bytes: &[u8]) -> Result<Self, Error> {
+        Ok(decode_object(
+            SCHEMA_WITNESS_MEMORY,
+            SCHEMA_VERSION_1,
+            bytes,
+        )?)
+    }
+
     /// Decides whether this witness may sign the checkpoint body in
-    /// `body_bytes` (VC-012, VC-013; `HonestSign` in the TLA+ model):
+    /// `body_bytes` and, if so, advances the memory (VC-012, VC-013;
+    /// `HonestSign` in the TLA+ model):
     ///
     /// 1. `checkpoint_seq` is the last signed sequence plus one (1 if none);
     /// 2. `previous_checkpoint_hash` is the hash of the last signed body
     ///    (all zeros if none);
-    /// 3. `tree_size` does not decrease and `consistency` proves that the
+    /// 3. the election, ledger and key-set identifiers are unchanged;
+    /// 4. `tree_size` does not decrease and `consistency` proves that the
     ///    body's tree extends the last signed tree (from the empty tree if
     ///    none, which requires an empty proof);
-    /// 4. `genesis_hash` equals `genesis_hash`;
-    /// 5. `box_close_root` and `dispute_root` equal the sorted-set roots of
+    /// 5. `genesis_hash` equals `genesis_hash`;
+    /// 6. `box_close_root` and `dispute_root` equal the sorted-set roots of
     ///    `box_close_hashes` and `dispute_hashes`.
+    ///
+    /// The memory always comes back as the second element: advanced on
+    /// success (persist it before signing), unchanged on failure.
     ///
     /// # Errors
     /// [`Error::Encoding`], [`Error::SequenceGap`],
-    /// [`Error::PreviousHashMismatch`], [`Error::TreeShrank`],
-    /// [`Error::ProofInvalid`], [`Error::GenesisMismatch`],
-    /// [`Error::RootMismatch`], [`Error::NotSorted`], [`Error::Duplicate`].
+    /// [`Error::PreviousHashMismatch`], [`Error::LedgerMismatch`],
+    /// [`Error::TreeShrank`], [`Error::ProofInvalid`],
+    /// [`Error::GenesisMismatch`], [`Error::RootMismatch`],
+    /// [`Error::NotSorted`], [`Error::Duplicate`].
+    #[must_use = "the returned memory must be persisted; dropping it loses the state"]
     pub fn may_sign<'a>(
+        self,
+        body_bytes: &'a [u8],
+        consistency: &'a ConsistencyProof,
+        box_close_hashes: &'a [Hash512],
+        dispute_hashes: &'a [Hash512],
+        genesis_hash: &'a Hash512,
+    ) -> (Result<Verified<Signable<'a>>, Error>, Self) {
+        match self.check(
+            body_bytes,
+            consistency,
+            box_close_hashes,
+            dispute_hashes,
+            genesis_hash,
+        ) {
+            Ok((signable, ids)) => {
+                let parts = signable.body.parts();
+                let advanced = Self {
+                    last: Some(LastSigned {
+                        seq: parts.checkpoint_seq,
+                        tree_size: parts.tree_size,
+                        root_hash: parts.root_hash,
+                        body_hash: signable.body_hash,
+                        ids_hash: ids,
+                    }),
+                };
+                (Ok(Verified::new(signable)), advanced)
+            }
+            Err(err) => (Err(err), self),
+        }
+    }
+
+    fn check<'a>(
         &self,
         body_bytes: &'a [u8],
-        consistency: &ConsistencyProof,
-        box_close_hashes: &[Hash512],
-        dispute_hashes: &[Hash512],
-        genesis_hash: &Hash512,
-    ) -> Result<Verified<Signable<'a>>, Error> {
+        consistency: &'a ConsistencyProof,
+        box_close_hashes: &'a [Hash512],
+        dispute_hashes: &'a [Hash512],
+        genesis_hash: &'a Hash512,
+    ) -> Result<(Signable<'a>, Hash512), Error> {
         let body: CheckpointBody<'a> =
             decode_object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, body_bytes)?;
         let parts = body.parts();
+        let ids = ids_hash(&body)?;
         let (expected_seq, expected_prev, old_size, old_root) = match &self.last {
             None => (1u64, Hash512::ZERO, 0u64, crate::merkle::EMPTY_ROOT),
             Some(last) => (
@@ -568,6 +668,11 @@ impl WitnessMemory {
         }
         if parts.previous_checkpoint_hash != expected_prev {
             return Err(Error::PreviousHashMismatch);
+        }
+        if let Some(last) = &self.last
+            && last.ids_hash != ids
+        {
+            return Err(Error::LedgerMismatch);
         }
         if parts.tree_size.get() < old_size {
             return Err(Error::TreeShrank);
@@ -588,40 +693,78 @@ impl WitnessMemory {
         if sorted_set_root(dispute_hashes)? != parts.dispute_root {
             return Err(Error::RootMismatch(Root::Dispute));
         }
-        Ok(Verified::new(Signable {
-            body,
-            body_bytes,
-            body_hash: ityv_crypto::object_hash(body_bytes),
-        }))
-    }
-
-    /// Records that the witness signed the body in `token`. The result must
-    /// be persisted before the signature leaves the witness.
-    pub fn advance(&mut self, token: &Verified<Signable<'_>>) {
-        let signable = token.get();
-        let parts = signable.body.parts();
-        self.last = Some(LastSigned {
-            seq: parts.checkpoint_seq,
-            tree_size: parts.tree_size,
-            root_hash: parts.root_hash,
-            body_hash: signable.body_hash,
-        });
+        Ok((
+            Signable {
+                body,
+                body_bytes,
+                body_hash: ityv_crypto::object_hash(body_bytes),
+                consistency,
+                box_close_hashes,
+                dispute_hashes,
+                genesis_hash,
+            },
+            ids,
+        ))
     }
 }
 
 impl Encode for WitnessMemory {
     fn encoded_len(&self) -> usize {
-        self.last.encoded_len()
+        8 + 8 + 64 + 64 + 64
     }
+
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodingError> {
-        self.last.encode(w)
+        match &self.last {
+            None => {
+                w.write_u64(0)?;
+                w.write_u64(0)?;
+                Hash512::ZERO.encode(w)?;
+                Hash512::ZERO.encode(w)?;
+                Hash512::ZERO.encode(w)
+            }
+            Some(last) => {
+                last.seq.encode(w)?;
+                last.tree_size.encode(w)?;
+                last.root_hash.encode(w)?;
+                last.body_hash.encode(w)?;
+                last.ids_hash.encode(w)
+            }
+        }
     }
 }
 
 impl<'a> Decode<'a> for WitnessMemory {
     fn decode(r: &mut Reader<'a>) -> Result<Self, EncodingError> {
-        Ok(Self {
-            last: Option::decode(r)?,
-        })
+        let seq_at = r.position();
+        let last_seq = r.read_u64()?;
+        let size_at = r.position();
+        let tree_size = r.read_u64()?;
+        if tree_size > crate::merkle::MAX_TREE_SIZE {
+            return Err(EncodingError::new(ErrorKind::ValueOutOfRange, size_at));
+        }
+        let root_hash = Hash512::decode(r)?;
+        let body_hash = Hash512::decode(r)?;
+        let ids_hash = Hash512::decode(r)?;
+        match Seq::new(last_seq) {
+            None => {
+                if tree_size != 0
+                    || !root_hash.is_zero()
+                    || !body_hash.is_zero()
+                    || !ids_hash.is_zero()
+                {
+                    return Err(EncodingError::new(ErrorKind::InvariantViolation, seq_at));
+                }
+                Ok(Self { last: None })
+            }
+            Some(seq) => Ok(Self {
+                last: Some(LastSigned {
+                    seq,
+                    tree_size: TreeSize::new(tree_size),
+                    root_hash,
+                    body_hash,
+                    ids_hash,
+                }),
+            }),
+        }
     }
 }

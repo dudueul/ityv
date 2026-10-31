@@ -68,7 +68,7 @@ fn hashes_use_the_rfc_prefixes_and_differ_by_role() {
 #[test]
 fn accumulator_matches_full_recomputation_for_every_prefix() {
     let ls = leaves(70);
-    let mut acc = Accumulator::new();
+    let mut acc = Accumulator::empty();
     assert_eq!(acc.root(), EMPTY_ROOT);
     for n in 1..=ls.len() {
         acc.push(&ls[n - 1]).unwrap();
@@ -100,7 +100,7 @@ fn accumulator_refuses_to_exceed_the_capacity() {
 #[test]
 fn accumulator_round_trips_and_rejects_bad_peak_counts() {
     let ls = leaves(11);
-    let mut acc = Accumulator::new();
+    let mut acc = Accumulator::empty();
     for l in &ls {
         acc.push(l).unwrap();
     }
@@ -415,7 +415,6 @@ fn errors_display_distinctly() {
         Error::SizeMismatch,
         Error::IndexOutOfRange,
         Error::LeafUnavailable,
-        Error::ProofLength,
         Error::ProofInvalid,
         Error::NotSorted,
         Error::Duplicate,
@@ -425,7 +424,7 @@ fn errors_display_distinctly() {
         Error::LedgerMismatch,
         Error::TreeShrank,
         Error::GenesisMismatch,
-        Error::RootMismatch(ityv_ledger::Root::Ledger),
+        Error::RootMismatch(ityv_ledger::Root::Dispute),
         Error::RootMismatch(ityv_ledger::Root::BoxClose),
         Error::TornTail { offset: 3 },
         Error::CorruptRecord { offset: 3 },

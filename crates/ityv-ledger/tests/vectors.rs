@@ -48,7 +48,7 @@ fn independent_roots() {
         let ls = leaves(n);
         let by_fn = root_of_leaves(&ls.as_slice(), n as u64).unwrap();
         assert_eq!(by_fn, expected, "root_of_leaves n={n}");
-        let mut acc = Accumulator::new();
+        let mut acc = Accumulator::empty();
         for l in &ls {
             acc.push(l).unwrap();
         }
@@ -109,7 +109,7 @@ const REGRESSION_HEADER: &str = "\
 fn regression() -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let ls = leaves(5);
-    let mut acc = Accumulator::new();
+    let mut acc = Accumulator::empty();
     for l in &ls {
         acc.push(l).unwrap();
     }
@@ -129,7 +129,7 @@ fn regression() -> BTreeMap<String, String> {
         hex(&encode_to_vec(&ConsistencyProof::EMPTY)),
     );
     let chain = frame_chain(3);
-    let mut state = ChainState::new();
+    let mut state = ChainState::empty();
     let mut stream = std::vec![0u8; 3 * 300];
     let mut w = Writer::new(&mut stream);
     for f in &chain {
@@ -152,20 +152,26 @@ fn regression() -> BTreeMap<String, String> {
     );
     let body_bytes = body_object(&body);
     out.insert("checkpoint_body_seq1".to_string(), hex(&body_bytes));
-    let mut memory = WitnessMemory::new();
-    let token = memory
-        .may_sign(
-            &body_bytes,
-            &ConsistencyProof::EMPTY,
-            &[],
-            &[],
-            &Hash512([7; 64]),
-        )
-        .unwrap();
-    memory.advance(&token);
+    let (token, memory) = WitnessMemory::fresh().may_sign(
+        &body_bytes,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &Hash512([7; 64]),
+    );
+    let token = token.unwrap();
+    assert_eq!(token.get().body_bytes(), body_bytes.as_slice());
+    let mut persisted = [0u8; 16 + 208];
+    let used = memory.to_object(&mut persisted).unwrap();
     out.insert(
-        "witness_memory_after_seq1".to_string(),
-        hex(&encode_to_vec(&memory)),
+        "witness_memory_object_after_seq1".to_string(),
+        hex(&persisted[..used]),
+    );
+    let mut fresh = [0u8; 16 + 208];
+    let used = WitnessMemory::fresh().to_object(&mut fresh).unwrap();
+    out.insert(
+        "witness_memory_object_fresh".to_string(),
+        hex(&fresh[..used]),
     );
     out.insert("election_id_bytes".to_string(), hex(ELECTION));
     let _ = InclusionProof::from_hashes(&[]).unwrap();

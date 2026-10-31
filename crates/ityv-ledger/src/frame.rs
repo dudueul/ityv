@@ -234,19 +234,13 @@ pub struct ChainState<'a> {
     accumulator: Accumulator,
 }
 
-impl Default for ChainState<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<'a> ChainState<'a> {
     /// The empty ledger.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn empty() -> Self {
         Self {
             head: None,
-            accumulator: Accumulator::new(),
+            accumulator: Accumulator::empty(),
         }
     }
 

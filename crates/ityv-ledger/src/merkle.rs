@@ -198,16 +198,10 @@ pub struct Accumulator {
     size: u64,
 }
 
-impl Default for Accumulator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Accumulator {
     /// The empty tree.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn empty() -> Self {
         Self {
             peaks: [Hash512::ZERO; MAX_DEPTH],
             len: 0,
@@ -222,7 +216,7 @@ impl Accumulator {
         if size > MAX_TREE_SIZE || peaks.len() != popcount(size) {
             return None;
         }
-        let mut out = Self::new();
+        let mut out = Self::empty();
         for (slot, peak) in out.peaks.iter_mut().zip(peaks) {
             *slot = *peak;
         }
@@ -295,7 +289,8 @@ impl Accumulator {
 }
 
 const fn popcount(n: u64) -> usize {
-    // `count_ones` is at most 64, which fits every `usize`.
+    // `usize::from(u32)` is not available (and trait calls are not const);
+    // `count_ones` is at most 64, so the cast is lossless on every target.
     n.count_ones() as usize
 }
 
@@ -322,7 +317,7 @@ impl<'a> Decode<'a> for Accumulator {
         if count != popcount(size) {
             return Err(EncodingError::new(ErrorKind::InvariantViolation, count_at));
         }
-        let mut out = Self::new();
+        let mut out = Self::empty();
         for slot in out.peaks.iter_mut().take(count) {
             *slot = Hash512::decode(r)?;
         }
@@ -351,7 +346,7 @@ pub(crate) fn range_root<H: NodeHasher>(
     if hi.checked_sub(lo).is_none_or(|n| n > MAX_TREE_SIZE) {
         return Err(Error::Capacity);
     }
-    let mut acc = Accumulator::new();
+    let mut acc = Accumulator::empty();
     let mut i = lo;
     while i < hi {
         let input = leaves.leaf(i).ok_or(Error::LeafUnavailable)?;

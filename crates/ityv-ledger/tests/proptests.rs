@@ -78,7 +78,7 @@ proptest! {
     #[test]
     fn accumulator_equals_recomputation(seed in any::<u64>(), n in 0usize..=300) {
         let ls = random_leaves(seed, n);
-        let mut acc = Accumulator::new();
+        let mut acc = Accumulator::empty();
         for (i, l) in ls.iter().enumerate() {
             acc.push(l).unwrap();
             prop_assert_eq!(acc.root(), root_of_leaves(&ls.as_slice(), i as u64 + 1).unwrap());
@@ -115,7 +115,7 @@ proptest! {
         }
         let used = w.finish();
         stream.truncate(used);
-        let mut state = ChainState::new();
+        let mut state = ChainState::empty();
         for r in FrameStream::new(&stream) {
             let r = r.unwrap();
             state.append(r.bytes()).unwrap();

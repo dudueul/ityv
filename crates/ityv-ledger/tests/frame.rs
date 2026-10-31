@@ -22,7 +22,7 @@ use ityv_ledger::{
 #[test]
 fn frames_link_into_a_chain_and_the_state_tracks_the_tree() {
     let chain = frame_chain(5);
-    let mut state = ChainState::new();
+    let mut state = ChainState::empty();
     assert!(state.head().is_none());
     let mut hashes = std::vec::Vec::new();
     for (i, bytes) in chain.iter().enumerate() {
@@ -44,7 +44,7 @@ fn frames_link_into_a_chain_and_the_state_tracks_the_tree() {
     assert_eq!(back, state);
     assert!(ChainState::from_parts(None, state.accumulator()).is_none());
     assert!(
-        ChainState::from_parts(state.head().copied(), &ityv_ledger::Accumulator::new()).is_none()
+        ChainState::from_parts(state.head().copied(), &ityv_ledger::Accumulator::empty()).is_none()
     );
 }
 
@@ -88,7 +88,7 @@ fn link_rejects_gaps_wrong_hashes_and_other_elections() {
         link(None, b"not a frame"),
         Err(Error::Encoding(_))
     ));
-    let mut state = ChainState::new();
+    let mut state = ChainState::empty();
     state.append(&chain[0]).unwrap();
     let before = state;
     assert_eq!(state.append(&chain[2]).unwrap_err(), Error::SequenceGap);

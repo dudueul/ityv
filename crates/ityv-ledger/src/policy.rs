@@ -67,6 +67,8 @@ impl QuorumProfile {
     /// The validity rule, on raw values.
     #[must_use]
     pub const fn is_valid(witnesses: u8, quorum: u8, byzantine_max: u8) -> bool {
+        // `From` is not callable in a const fn, so the widenings below are
+        // `as` casts; u8 → usize and u8 → u16 are lossless on every target.
         if quorum > witnesses || quorum == 0 || (witnesses as usize) > MAX_WITNESSES {
             return false;
         }

@@ -45,7 +45,8 @@ use crate::merkle::{
 };
 use crate::policy::{MAX_WITNESSES, QuorumProfile};
 use crate::publication::{
-    ANCHOR_WINDOW, BOARD_WINDOW, Status, anchor_deadline, board_deadline, check_anchor,
+    ANCHOR_WINDOW, BOARD_WINDOW, REQUIRED_ANCHORS, Status, anchor_deadline, board_deadline,
+    check_anchor,
 };
 
 /// A cheap node function for the tree algorithms. Only the first eight
@@ -117,7 +118,7 @@ fn depth_is_bounded_by_the_capacity() {
 /// For every tree of at most four symbolic leaves and every index, the
 /// generated inclusion proof verifies against the tree root.
 #[kani::proof]
-#[kani::unwind(12)]
+#[kani::unwind(70)]
 fn inclusion_proof_round_trips_for_small_trees() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
     let size: u64 = kani::any();
@@ -130,13 +131,14 @@ fn inclusion_proof_round_trips_for_small_trees() {
     let leaf = leaves[index as usize];
     let included = verify_inclusion_with(&MockNodes, &root, size, index, &leaf, &proof).unwrap();
     assert_eq!(included.get().index(), index);
-    assert_eq!(proof.hashes().len() as u32, depth_for_size(size));
+    // RFC 9162 paths are at most the depth (PATH(2, D[3]) has one element).
+    assert!(proof.hashes().len() as u32 <= depth_for_size(size));
 }
 
 /// With concrete distinct leaves, a proof for one index never verifies
 /// for another index of the same tree.
 #[kani::proof]
-#[kani::unwind(12)]
+#[kani::unwind(70)]
 fn inclusion_proof_refuses_a_wrong_index() {
     let leaves = [
         Hash512([0x10; 64]),
@@ -161,7 +163,7 @@ fn inclusion_proof_refuses_a_wrong_index() {
 /// For all `old <= new <= 4` over symbolic leaves, the generated
 /// consistency proof verifies between the two roots.
 #[kani::proof]
-#[kani::unwind(12)]
+#[kani::unwind(70)]
 fn consistency_proof_round_trips_for_small_trees() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
     let new: u64 = kani::any();
@@ -182,12 +184,12 @@ fn consistency_proof_round_trips_for_small_trees() {
 /// Pushing leaves one by one yields the same root as the full
 /// recomputation, for every prefix of at most four symbolic leaves.
 #[kani::proof]
-#[kani::unwind(12)]
+#[kani::unwind(70)]
 fn accumulator_matches_full_recomputation() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
     let n: u64 = kani::any();
     kani::assume(n <= 4);
-    let mut acc = Accumulator::new();
+    let mut acc = Accumulator::empty();
     let mut i = 0u64;
     while i < n {
         acc.push_with(&MockNodes, &leaves[i as usize]).unwrap();
@@ -205,7 +207,7 @@ fn accumulator_matches_full_recomputation() {
 /// `check_sorted` accepts exactly the strictly ascending triples, and the
 /// sorted-set root of an accepted triple equals the range root.
 #[kani::proof]
-#[kani::unwind(12)]
+#[kani::unwind(70)]
 fn sorted_set_check_is_strict_ascending() {
     let a = any_hash();
     let b = any_hash();
@@ -245,7 +247,7 @@ fn quorum_profile_rule_matches_its_definition() {
 /// Deadline arithmetic never panics and overflows exactly at the top of
 /// the bucket range; the anchor check counts receipts correctly.
 #[kani::proof]
-#[kani::unwind(6)]
+#[kani::unwind(8)]
 fn deadlines_are_total_and_exact() {
     let bucket: u64 = kani::any();
     let anchor = anchor_deadline(TimeBucket::new(bucket));
@@ -257,20 +259,18 @@ fn deadlines_are_total_and_exact() {
     assert_eq!(board.is_ok(), bucket.checked_add(BOARD_WINDOW).is_some());
     let r1: u64 = kani::any();
     let r2: u64 = kani::any();
+    let r3: u64 = kani::any();
     let now: u64 = kani::any();
-    let required: usize = kani::any();
-    kani::assume(required <= 3);
     kani::assume(bucket <= u64::MAX - ANCHOR_WINDOW);
-    let receipts = [TimeBucket::new(r1), TimeBucket::new(r2)];
+    let receipts = [
+        TimeBucket::new(r1),
+        TimeBucket::new(r2),
+        TimeBucket::new(r3),
+    ];
     let deadline = bucket + ANCHOR_WINDOW;
-    let timely = (r1 <= deadline) as usize + (r2 <= deadline) as usize;
-    let result = check_anchor(
-        TimeBucket::new(bucket),
-        &receipts,
-        required,
-        TimeBucket::new(now),
-    );
-    if timely >= required {
+    let timely = (r1 <= deadline) as usize + (r2 <= deadline) as usize + (r3 <= deadline) as usize;
+    let result = check_anchor(TimeBucket::new(bucket), &receipts, TimeBucket::new(now));
+    if timely >= REQUIRED_ANCHORS {
         assert_eq!(result.unwrap(), Status::Satisfied);
     } else if now > deadline {
         assert!(result.is_err());

@@ -93,26 +93,26 @@ pub fn board_deadline(close: TimeBucket) -> Result<TimeBucket, Error> {
 }
 
 /// Checks the anchor rule for a checkpoint proposed in `checkpoint`, given
-/// the buckets of the receipts received so far and the current bucket.
-/// Receipts after the deadline do not count.
+/// the buckets of the receipts received so far and the current bucket:
+/// [`REQUIRED_ANCHORS`] receipts no later than the deadline. Receipts after
+/// the deadline do not count.
 ///
 /// # Errors
 /// [`Error::Breach`] with [`Breach::AnchorsShort`] once the deadline has
-/// passed with fewer than `required` timely receipts, [`Error::Overflow`].
+/// passed with fewer timely receipts than required, [`Error::Overflow`].
 pub fn check_anchor(
     checkpoint: TimeBucket,
     receipts: &[TimeBucket],
-    required: usize,
     now: TimeBucket,
 ) -> Result<Status, Error> {
     let deadline = anchor_deadline(checkpoint)?;
     let have = receipts.iter().filter(|r| **r <= deadline).count();
-    if have >= required {
+    if have >= REQUIRED_ANCHORS {
         Ok(Status::Satisfied)
     } else if now > deadline {
         Err(Error::Breach(Breach::AnchorsShort {
             have,
-            need: required,
+            need: REQUIRED_ANCHORS,
         }))
     } else {
         Ok(Status::Pending)

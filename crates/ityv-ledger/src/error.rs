@@ -16,11 +16,11 @@ pub enum Dimension {
     Regions,
 }
 
-/// Which root of a checkpoint body did not match its recomputation.
+/// Which set root of a checkpoint body did not match its recomputation.
+/// (The ledger root is checked by the consistency proof, whose failure is
+/// [`Error::ProofInvalid`].)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Root {
-    /// `root_hash`, the ledger Merkle root.
-    Ledger,
     /// `box_close_root`, the sorted-set root of box-close event hashes.
     BoxClose,
     /// `dispute_root`, the sorted-set root of open dispute event hashes.
@@ -44,8 +44,6 @@ pub enum Error {
     IndexOutOfRange,
     /// A leaf the accessor could not supply.
     LeafUnavailable,
-    /// A proof's length does not fit its claimed sizes.
-    ProofLength,
     /// A proof did not verify against the roots and sizes given.
     ProofInvalid,
     /// A sorted set has an element smaller than its predecessor.
@@ -58,7 +56,8 @@ pub enum Error {
     PreviousHashMismatch,
     /// An election identifier differs from the chain's.
     ElectionMismatch,
-    /// A ledger or key-set identifier differs from the previous checkpoint's.
+    /// The election, ledger or key-set identifier differs from the previous
+    /// checkpoint's.
     LedgerMismatch,
     /// A checkpoint claims fewer leaves than its predecessor.
     TreeShrank,
@@ -143,14 +142,13 @@ impl core::fmt::Display for Error {
             Self::SizeMismatch => f.write_str("tree sizes are inconsistent"),
             Self::IndexOutOfRange => f.write_str("leaf index is not below the tree size"),
             Self::LeafUnavailable => f.write_str("leaf accessor returned no leaf"),
-            Self::ProofLength => f.write_str("proof length does not fit the tree sizes"),
             Self::ProofInvalid => f.write_str("proof verification failed"),
             Self::NotSorted => f.write_str("set is not in ascending order"),
             Self::Duplicate => f.write_str("set contains a duplicate"),
             Self::SequenceGap => f.write_str("sequence number is not the predecessor plus one"),
             Self::PreviousHashMismatch => f.write_str("previous hash does not match"),
             Self::ElectionMismatch => f.write_str("election identifier differs"),
-            Self::LedgerMismatch => f.write_str("ledger or key-set identifier differs"),
+            Self::LedgerMismatch => f.write_str("election, ledger or key-set identifier differs"),
             Self::TreeShrank => f.write_str("tree size decreased"),
             Self::GenesisMismatch => f.write_str("genesis hash differs"),
             Self::RootMismatch(root) => write!(f, "{root:?} root does not match"),

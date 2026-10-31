@@ -31,7 +31,7 @@ fn deadlines_are_bucket_sums_and_never_overflow() {
     );
     assert_eq!(board_deadline(b(u64::MAX)).unwrap_err(), Error::Overflow);
     assert_eq!(
-        check_anchor(b(u64::MAX), &[], 3, b(u64::MAX)).unwrap_err(),
+        check_anchor(b(u64::MAX), &[], b(u64::MAX)).unwrap_err(),
         Error::Overflow
     );
     assert_eq!(
@@ -45,26 +45,29 @@ fn anchor_rule_counts_timely_receipts_only() {
     let cp = b(100);
     // Three receipts within the window: satisfied even before the deadline.
     assert_eq!(
-        check_anchor(cp, &[b(100), b(101), b(104)], 3, b(102)).unwrap(),
+        check_anchor(cp, &[b(100), b(101), b(104)], b(102)).unwrap(),
         Status::Satisfied
     );
     // Two receipts and the deadline not yet passed: pending.
     assert_eq!(
-        check_anchor(cp, &[b(100), b(101)], 3, b(104)).unwrap(),
+        check_anchor(cp, &[b(100), b(101)], b(104)).unwrap(),
         Status::Pending
     );
     // Deadline passed with two timely receipts and one late one: breach.
     assert_eq!(
-        check_anchor(cp, &[b(100), b(101), b(105)], 3, b(105)).unwrap_err(),
+        check_anchor(cp, &[b(100), b(101), b(105)], b(105)).unwrap_err(),
         Error::Breach(Breach::AnchorsShort { have: 2, need: 3 })
     );
     // A receipt exactly at the deadline counts.
     assert_eq!(
-        check_anchor(cp, &[b(104), b(104), b(104)], 3, b(200)).unwrap(),
+        check_anchor(cp, &[b(104), b(104), b(104)], b(200)).unwrap(),
         Status::Satisfied
     );
-    // Zero required is always satisfied.
-    assert_eq!(check_anchor(cp, &[], 0, b(200)).unwrap(), Status::Satisfied);
+    // Four receipts, one late: still satisfied by the three timely ones.
+    assert_eq!(
+        check_anchor(cp, &[b(100), b(101), b(102), b(105)], b(200)).unwrap(),
+        Status::Satisfied
+    );
 }
 
 #[test]
