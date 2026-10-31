@@ -51,6 +51,18 @@ fn signing_digest_known_answers() {
 }
 
 #[test]
+fn signing_digest_with_maximum_length_purpose() {
+    // A 32-byte purpose fills the signing prefix buffer completely; the
+    // expected value was computed with Python hashlib over the documented
+    // layout, so a truncated prefix would be detected here.
+    let purpose = Purpose::new(&[b'a'; 32]).unwrap();
+    assert_eq!(
+        hex(signing_digest(&purpose, b"max-length purpose object").as_bytes()),
+        "04deb3566c51efd45e51414fb944835e3f5726bb110dd0c9e90049c1d02d8b003eddab21dc720890e1d34672d6f7ca2d304befd3bf7a68f8aa14136aeb5115b5"
+    );
+}
+
+#[test]
 fn fiat_shamir_known_answer() {
     let challenge = fiat_shamir_challenge(b"ityv:proof:or-rep:v1", b"transcript");
     let expected = Scalar::from_canonical_bytes(unhex_array::<32>(

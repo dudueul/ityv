@@ -135,6 +135,9 @@ fn thresholds_and_members_validate() {
     assert_eq!((t.k(), t.n()), (1, 1));
     let full = Threshold::new(8, 8).unwrap();
     assert_eq!(full.n(), u8::try_from(MAX_MEMBERS).unwrap());
+    assert_eq!(full.k(), 8);
+    let partial = Threshold::new(3, 5).unwrap();
+    assert_eq!((partial.k(), partial.n()), (3, 5));
     assert!(MemberId::new(Chamber::X, 8).is_none());
     let member = MemberId::new(Chamber::N, 7).unwrap();
     assert_eq!(member.chamber(), Chamber::N);

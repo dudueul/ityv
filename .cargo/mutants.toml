@@ -2,4 +2,13 @@
 # `cargo kani`, so mutating them cannot be observed by `cargo test`; they are
 # verified by the Kani job instead.
 exclude_globs = ["**/proofs.rs"]
+# `Drop` implementations only zeroize secrets; a `Drop` body replaced with
+# `()` is unobservable after the value is gone. Zeroize-on-drop is covered by
+# the explicit `Zeroize` tests (tests/commit.rs `zeroize_clears_secret_types`)
+# and by the `Zeroizing` guards, whose own `Drop` belongs to the zeroize crate.
+exclude_re = ["impl Drop"]
+# The workspace builds with `-D warnings`; a mutated body usually leaves a
+# parameter unused, which would make most mutants unviable (fail to build)
+# instead of testing whether the suite catches them. Cap lints for mutants.
+cap_lints = true
 timeout_multiplier = 3.0

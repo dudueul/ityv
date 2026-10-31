@@ -28,6 +28,7 @@ use ityv_crypto::{
 use ityv_encoding::{ErrorKind, Point32, Token192};
 use rand_core::CryptoRng;
 use std::vec::Vec;
+use zeroize::Zeroize;
 
 /// `2^e` by repeated doubling, independent of the bit-setting code under test.
 fn pow2(exponent: u32) -> Scalar {
@@ -352,6 +353,77 @@ fn commitment_encoding_and_point_validation() {
     let packed = pow2(26 * 3).add(&pow2(26 * 3));
     let id_sum = cast_id.to_scalar().add(&cast_id.to_scalar());
     assert!(verify_aggregate(&bases, &total, &packed, &id_sum, &Scalar::ZERO).is_ok());
+}
+
+#[test]
+fn zeroize_clears_secret_types() {
+    let mut cast_id = CastId::new(Token192([0xab; 24]));
+    cast_id.zeroize();
+    assert_eq!(cast_id.token(), Token192([0u8; 24]));
+    let mut scalar = Scalar::from_u64(0x1234_5678);
+    scalar.zeroize();
+    assert_eq!(scalar, Scalar::ZERO);
+    assert!(scalar.is_zero());
+}
+
+#[test]
+fn scalar_basics() {
+    assert!(Scalar::ZERO.is_zero());
+    assert!(!Scalar::ONE.is_zero());
+    assert!(Scalar::ZERO.invert().is_none());
+    assert_eq!(Scalar::ONE.invert().unwrap(), Scalar::ONE);
+    let two = Scalar::from_u64(2);
+    assert_eq!(two.mul(&two.invert().unwrap()), Scalar::ONE);
+    assert_eq!(two.neg().add(&two), Scalar::ZERO);
+    assert_eq!(two.sub(&Scalar::ONE), Scalar::ONE);
+    assert_eq!(Scalar::from_u64(u64::MAX).to_bytes()[..8], [0xff; 8]);
+    // Non-canonical encodings are rejected; the order minus one is accepted.
+    assert_eq!(
+        Scalar::from_canonical_bytes([0xff; 32]).unwrap_err(),
+        Error::NonCanonicalScalar
+    );
+    assert!(Scalar::from_canonical_bytes(Scalar::ONE.neg().to_bytes()).is_ok());
+}
+
+#[test]
+fn every_error_variant_displays_distinctly() {
+    let encoding = ityv_encoding::Error::new(ErrorKind::UnexpectedEnd, 7);
+    let variants = [
+        Error::Encoding(encoding),
+        Error::InvalidPurpose,
+        Error::InvalidPublicKey,
+        Error::InvalidSecretKey,
+        Error::SignatureInvalid,
+        Error::InvalidPoint,
+        Error::NonCanonicalScalar,
+        Error::DigitOverflow,
+        Error::OptionOutOfRange,
+        Error::ChunkOutOfRange,
+        Error::InvalidStatement,
+        Error::CapacityExceeded,
+        Error::LengthMismatch,
+        Error::InvalidAccessStructure,
+        Error::InvalidMember,
+        Error::DuplicateShare,
+        Error::NotQualified,
+        Error::InconsistentShares,
+        Error::ProofInvalid,
+        Error::OpeningInvalid,
+        Error::AggregateInvalid,
+        Error::NonContributoryKey,
+        Error::AeadInvalid,
+        Error::TagMismatch,
+        Error::Backend,
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+    for variant in variants {
+        let text = std::format!("{variant}");
+        assert!(!text.is_empty(), "{variant:?} must display");
+        assert!(seen.insert(text), "{variant:?} must display distinctly");
+    }
+    assert_eq!(Error::from(encoding), Error::Encoding(encoding));
+    assert!(std::format!("{}", Error::Encoding(encoding)).contains("offset 7"));
+    assert!(core::error::Error::source(&Error::Backend).is_none());
 }
 
 #[test]

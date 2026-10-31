@@ -112,6 +112,8 @@ cargo build --locked -p ityv-crypto --target thumbv7em-none-eabihf   # no_std �
 
 Kani 하네스(`kani/proofs.rs`, 21개): 선택지·청크 인덱스 경계, `OptionCount`의 청크 수 올림 나눗셈과 포함 판정, 자릿수 지수(`26·(t−9j)`), 비트 설정·추출, 단위 자릿수와 임의 26비트 자릿수의 묶음·해제 왕복, 묶음 범위 검사, 임계치·구성원 경계, 구성원 평가점, 기호적 챔버의 인덱스·`s_rest` 평가점, 접근구조 Γ 판정, 패드 XOR, purpose 알파벳, 길이 접두, 서명 접두 바이트 배치. 하네스 파일은 `src/` 밖에 있고 파일 머리에 사유를 적은 lint 완화를 가진다(CONSTITUTION §1.1).
 
+알려진 동치 변이(변이 테스트에서 잡히지 않지만 동작이 같은 것): `Statement::proof_system_id`를 상수 1로 바꾸는 변이(값이 항상 1), `Sha3Backend::begin`을 `Default::default()`로 바꾸는 변이(기본 상태가 곧 새 상태), 고정 버퍼 크기 상수(`SIGNING_PREFIX_MAX_LEN`, `absorb_ident`의 `IDENT_MAX_STANDARD + 4`)의 `+`를 `*`로 바꾸어 버퍼만 커지는 변이(쓰는 바이트는 같다; 버퍼가 작아지는 변이는 최대 길이 purpose·식별자 테스트가 잡는다). `impl Drop` 본문을 비우는 변이는 소거 후 관찰할 수 없으므로 `.cargo/mutants.toml`에서 제외하고, 소거는 `Zeroize` 테스트로 직접 검사한다. 워크스페이스의 `-D warnings`가 변이체를 빌드 실패로 만들지 않도록 변이 빌드에는 lint 상한(`cap_lints`)을 둔다.
+
 ## 테스트 코드의 lint 완화
 
 `tests/` 아래 통합 테스트 크레이트는 TCB 밖이다. 각 파일 머리에 사유를 적고 `unwrap`, `expect`, `panic`, 인덱싱, 산술 부작용 lint만 완화한다. TCB 크레이트(`src/`)에는 어떤 완화도 없다.

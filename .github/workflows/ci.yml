@@ -94,9 +94,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.2.2
+      # A per-harness timeout makes a regression fail fast instead of hanging
+      # the job; the local runs record every harness well under a minute.
       - uses: model-checking/kani-github-action@v1.1
         with:
-          args: -p ityv-encoding -p ityv-crypto
+          args: -p ityv-encoding -p ityv-crypto -Z unstable-options --harness-timeout 10m
 
   mutants:
     name: cargo-mutants (V1, advisory until the suite is complete)

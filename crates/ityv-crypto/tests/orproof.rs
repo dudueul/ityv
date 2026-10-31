@@ -256,6 +256,96 @@ fn soundness_negatives_for_statement_and_witness() {
 }
 
 #[test]
+fn maximum_length_identifiers_fit_the_transcript() {
+    // 64-byte identifiers need the full 68-byte identifier field buffer; a
+    // shorter buffer would make proving fail, and the field length enters
+    // the declared transcript length.
+    let bases = Bases::derive();
+    let mut rng = rng(38);
+    let (opening, commitments) = record(&bases, 4, 1, &mut rng);
+    let long_election = [b'E'; 64];
+    let long_box = [b'B'; 64];
+    let long_style = [b'S'; 64];
+    let st = Statement::new(
+        ElectionId::new(&long_election).unwrap(),
+        Ident::new(&long_box, 64).unwrap(),
+        Ident::new(&long_style, 64).unwrap(),
+        options(4),
+        &commitments,
+    )
+    .unwrap();
+    let proof = prove(&bases, &st, &opening, &mut rng).unwrap();
+    assert!(verify(&bases, &st, &proof).is_ok());
+    // The same proof does not verify under identifiers of other lengths.
+    for len in [1usize, 63] {
+        let other = Statement::new(
+            ElectionId::new(&long_election[..len]).unwrap(),
+            Ident::new(&long_box, 64).unwrap(),
+            Ident::new(&long_style, 64).unwrap(),
+            options(4),
+            &commitments,
+        )
+        .unwrap();
+        assert_eq!(
+            verify(&bases, &other, &proof).unwrap_err(),
+            Error::ProofInvalid
+        );
+    }
+    let short = statement(4, &commitments);
+    assert_eq!(
+        verify(&bases, &short, &proof).unwrap_err(),
+        Error::ProofInvalid
+    );
+    let short_proof = prove(&bases, &short, &opening, &mut rng).unwrap();
+    assert_eq!(
+        verify(&bases, &st, &short_proof).unwrap_err(),
+        Error::ProofInvalid
+    );
+}
+
+#[test]
+fn decode_accepts_the_capacity_boundaries_and_rejects_beyond() {
+    let bases = Bases::derive();
+    let mut rng = rng(39);
+    let (opening, commitments) = record(&bases, 64, 0, &mut rng);
+    let st = statement(64, &commitments);
+    let proof = prove(&bases, &st, &opening, &mut rng).unwrap();
+    let bytes = encode_to_vec(&proof);
+    assert_eq!(bytes[0..2], 64u16.to_be_bytes());
+    assert_eq!(bytes[2], 8);
+    let decoded: Proof = decode_exact(&bytes).unwrap();
+    assert_eq!(decoded.option_count().get(), 64);
+    assert_eq!(decoded.chunk_count(), 8);
+    assert!(verify(&bases, &st, &decoded).is_ok());
+    // 65 options: rejected at offset 0; 9 chunks: rejected at offset 2.
+    let mut bad = bytes.clone();
+    bad[0..2].copy_from_slice(&65u16.to_be_bytes());
+    let err = decode_exact::<Proof>(&bad).unwrap_err();
+    assert_eq!((err.kind(), err.offset()), (ErrorKind::CountExceedsMax, 0));
+    let mut bad = bytes.clone();
+    bad[2] = 9;
+    let err = decode_exact::<Proof>(&bad).unwrap_err();
+    assert_eq!((err.kind(), err.offset()), (ErrorKind::CountExceedsMax, 2));
+    // One option with one chunk is the smallest proof.
+    let (opening, commitments) = record(&bases, 1, 0, &mut rng);
+    let st = statement(1, &commitments);
+    let proof = prove(&bases, &st, &opening, &mut rng).unwrap();
+    let bytes = encode_to_vec(&proof);
+    assert_eq!(bytes.len(), 3 + 96);
+    assert!(verify(&bases, &st, &decode_exact::<Proof>(&bytes).unwrap()).is_ok());
+    // A proof for 16 options against a 9-option statement with the same
+    // first commitment fails on the option count alone.
+    let (opening16, commitments16) = record(&bases, 16, 0, &mut rng);
+    let st16 = statement(16, &commitments16);
+    let proof16 = prove(&bases, &st16, &opening16, &mut rng).unwrap();
+    let st9 = statement(9, &commitments16[..1]);
+    assert_eq!(
+        verify(&bases, &st9, &proof16).unwrap_err(),
+        Error::ProofInvalid
+    );
+}
+
+#[test]
 fn proofs_are_randomized_and_option_is_hidden() {
     let bases = Bases::derive();
     let mut rng = rng(33);
