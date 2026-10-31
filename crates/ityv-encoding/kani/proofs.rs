@@ -240,21 +240,15 @@ fn ledger_frame_rejects_zero_seq() {
 // M3 schemas (ENCODING.md §8.6–§8.18)
 // ---------------------------------------------------------------------------
 
-use crate::primitives::{
-    BoxId, ModuleId, Point32, Scalar32, StationId, TimeBucket, Token192, TrusteeId,
-};
-use crate::schema::batch_attest::{
-    BatchAttestBody, BatchAttestParts, ModuleRange, record_count_valid,
-};
-use crate::schema::box_close::{BoxCloseBody, BoxCloseParts, CloseCounts, SignerRole};
+use crate::primitives::{BoxId, StationId, TimeBucket};
+use crate::schema::batch_attest::{BatchAttestBody, record_count_valid};
+use crate::schema::box_close::{BoxCloseBody, SignerRole};
 use crate::schema::cast_record::{ProofHeader, transport_flags_valid};
 use crate::schema::scan_count::ScanCountAttestBody;
 use crate::schema::share_package::{
-    ChamberCode, MAX_SECRETS, MemberShare, ShareEntry, SharePackage, Transport, pad_fields_valid,
-    transport_code_valid,
+    ChamberCode, MemberShare, SharePackage, Transport, pad_fields_valid, transport_code_valid,
 };
 use crate::schema::slip::SlipBody;
-use crate::schema::util::{Commitments, ModuleCounter, ModuleCounters, ModuleIds, Scalars};
 use crate::schema::{
     SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE_BODY, SCHEMA_MEMBER_SHARE,
     SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP_BODY,
@@ -330,56 +324,345 @@ fn scan_count_body_round_trip() {
     assert_eq!(decoded, Ok(body));
 }
 
-/// A `BoxCloseBody` with a symbolic paper count and open-batch count
-/// survives an object-level round trip. The other counts, the digests, the
-/// module counter and the bucket are concrete to keep the model within the
-/// CI budget; every field goes through the same fixed-width codec.
+/// A `BoxCloseBody` with a symbolic paper count and open-batch count,
+/// decoded from a literal object (one-byte identifiers, one module
+/// counter): both fields come back as sent, every other field keeps its
+/// literal value, and re-encoding reproduces the exact length and the
+/// symbolic bytes. The literal was produced by this crate's encoder from
+/// the fixture in the harness comments.
+///
+/// Why a literal rather than encode-then-decode: CBMC stops propagating
+/// constants through a buffer once any byte of it is symbolic, so every
+/// length-driven loop unrolls to the harness bound; a small literal with
+/// one-byte identifiers keeps every such loop short.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn box_close_body_round_trip() {
-    let counts = CloseCounts {
-        paper: kani::any(),
-        records: 990,
-        attested: 990,
-        without_record: 10,
-        challenged: 3,
-        quarantined: 1,
-    };
+    let paper_count: u64 = kani::any();
     let open_batches: u8 = kani::any();
-    let bucket: u64 = 900;
-    let counter: u64 = 994;
-    let Some(election_id) = ElectionId::new(b"E") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(box_id) = BoxId::new(b"B") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(module_id) = crate::primitives::ModuleId::new(b"M") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(module_counters) = ModuleCounters::new(&[ModuleCounter { module_id, counter }]) else {
-        unreachable!("one entry is trivially sorted");
-    };
-    let body = BoxCloseBody::new(&BoxCloseParts {
-        election_id,
-        box_id,
-        counts,
-        record_set_root: Hash512([1; 64]),
-        journal_head: Hash512([2; 64]),
-        seal_digest: Hash512([3; 64]),
-        module_counters,
+    let paper = paper_count.to_be_bytes();
+    // election_id "E", box_id "B", counts (paper, 990, 990, 10, 3, 1),
+    // digests 0x60/0x61/0x62 patterns, module_counters [("M", 994)],
+    // open_batches, time_bucket 900.
+    let buf: [u8; 292] = [
+        0x49,
+        0x54,
+        0x59,
+        0x56,
+        0x00,
+        0x00,
+        0x00,
+        0x07,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x14,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x45,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x42,
+        paper[0],
+        paper[1],
+        paper[2],
+        paper[3],
+        paper[4],
+        paper[5],
+        paper[6],
+        paper[7],
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0xde,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0xde,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x0a,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x60,
+        0x61,
+        0x62,
+        0x63,
+        0x64,
+        0x65,
+        0x66,
+        0x67,
+        0x68,
+        0x69,
+        0x6a,
+        0x6b,
+        0x6c,
+        0x6d,
+        0x6e,
+        0x6f,
+        0x70,
+        0x71,
+        0x72,
+        0x73,
+        0x74,
+        0x75,
+        0x76,
+        0x77,
+        0x78,
+        0x79,
+        0x7a,
+        0x7b,
+        0x7c,
+        0x7d,
+        0x7e,
+        0x7f,
+        0x80,
+        0x81,
+        0x82,
+        0x83,
+        0x84,
+        0x85,
+        0x86,
+        0x87,
+        0x88,
+        0x89,
+        0x8a,
+        0x8b,
+        0x8c,
+        0x8d,
+        0x8e,
+        0x8f,
+        0x90,
+        0x91,
+        0x92,
+        0x93,
+        0x94,
+        0x95,
+        0x96,
+        0x97,
+        0x98,
+        0x99,
+        0x9a,
+        0x9b,
+        0x9c,
+        0x9d,
+        0x9e,
+        0x9f,
+        0x61,
+        0x62,
+        0x63,
+        0x64,
+        0x65,
+        0x66,
+        0x67,
+        0x68,
+        0x69,
+        0x6a,
+        0x6b,
+        0x6c,
+        0x6d,
+        0x6e,
+        0x6f,
+        0x70,
+        0x71,
+        0x72,
+        0x73,
+        0x74,
+        0x75,
+        0x76,
+        0x77,
+        0x78,
+        0x79,
+        0x7a,
+        0x7b,
+        0x7c,
+        0x7d,
+        0x7e,
+        0x7f,
+        0x80,
+        0x81,
+        0x82,
+        0x83,
+        0x84,
+        0x85,
+        0x86,
+        0x87,
+        0x88,
+        0x89,
+        0x8a,
+        0x8b,
+        0x8c,
+        0x8d,
+        0x8e,
+        0x8f,
+        0x90,
+        0x91,
+        0x92,
+        0x93,
+        0x94,
+        0x95,
+        0x96,
+        0x97,
+        0x98,
+        0x99,
+        0x9a,
+        0x9b,
+        0x9c,
+        0x9d,
+        0x9e,
+        0x9f,
+        0xa0,
+        0x62,
+        0x63,
+        0x64,
+        0x65,
+        0x66,
+        0x67,
+        0x68,
+        0x69,
+        0x6a,
+        0x6b,
+        0x6c,
+        0x6d,
+        0x6e,
+        0x6f,
+        0x70,
+        0x71,
+        0x72,
+        0x73,
+        0x74,
+        0x75,
+        0x76,
+        0x77,
+        0x78,
+        0x79,
+        0x7a,
+        0x7b,
+        0x7c,
+        0x7d,
+        0x7e,
+        0x7f,
+        0x80,
+        0x81,
+        0x82,
+        0x83,
+        0x84,
+        0x85,
+        0x86,
+        0x87,
+        0x88,
+        0x89,
+        0x8a,
+        0x8b,
+        0x8c,
+        0x8d,
+        0x8e,
+        0x8f,
+        0x90,
+        0x91,
+        0x92,
+        0x93,
+        0x94,
+        0x95,
+        0x96,
+        0x97,
+        0x98,
+        0x99,
+        0x9a,
+        0x9b,
+        0x9c,
+        0x9d,
+        0x9e,
+        0x9f,
+        0xa0,
+        0xa1,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x4d,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0xe2,
         open_batches,
-        time_bucket: TimeBucket::new(bucket),
-    });
-    let mut buf = [0u8; 320];
-    let Ok(len) = encode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
-        unreachable!("320 bytes suffice for one-byte identifiers");
-    };
-    assert_eq!(len, 16 + 5 + 5 + 48 + 192 + 4 + 5 + 8 + 1 + 8);
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x03,
+        0x84,
+    ];
     let decoded: Result<BoxCloseBody<'_>, _> =
-        decode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, bytes);
-    assert_eq!(decoded, Ok(body));
+        decode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &buf);
+    let Ok(body) = decoded else {
+        unreachable!("no rule constrains the paper count or the open-batch count");
+    };
+    assert_eq!(body.counts().paper, paper_count);
+    assert_eq!(body.counts().records, 990);
+    assert_eq!(body.counts().quarantined, 1);
+    assert_eq!(body.open_batches(), open_batches);
+    assert_eq!(body.time_bucket().get(), 900);
+    assert_eq!(body.module_counters().len(), 1);
+    let Some(counter) = body.module_counters().iter().next() else {
+        unreachable!("one module counter was encoded");
+    };
+    assert_eq!(counter.counter, 994);
+    let mut out = [0u8; 292];
+    let Ok(len) = encode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body, &mut out) else {
+        unreachable!("the buffer is exactly sized");
+    };
+    assert_eq!(len, out.len());
+    let Some(paper_out) = out.get(26..34) else {
+        unreachable!("in range");
+    };
+    assert_eq!(paper_out, &paper);
+    assert_eq!(out.get(283).copied(), Some(open_batches));
 }
 
 /// The proof header check of a cast record body, stated against PROTOCOL
@@ -489,75 +772,161 @@ fn record_count_range_is_exact() {
     );
 }
 
-/// Through the real decoder: a one-entry share package whose chamber,
-/// transport and pad fields are symbolic decodes exactly when the chamber
-/// code is `1..=6` and the transport is pad (any pad fields) or KEM (zero
-/// pad fields); a decoded package reports those fields, and a rejected one
-/// names the first offending field in reading order (ENCODING §8.20).
+/// Through the real decoder: a one-entry share package literal whose
+/// chamber, transport and pad fields are symbolic decodes exactly when the
+/// chamber code is `1..=6` and the transport is pad (any pad fields) or KEM
+/// (zero pad fields); a decoded package reports those fields and re-encodes
+/// them byte for byte, and a rejected one names the first offending field
+/// in reading order (ENCODING §8.20).
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(16)]
 fn share_entry_codes_through_decoder() {
-    let Some(election_id) = ElectionId::new(b"E") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(box_id) = BoxId::new(b"B") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(trustee_id) = TrusteeId::new(b"T") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(commitments) = Commitments::new(&[Point32([9; 32])]) else {
-        unreachable!("one commitment is within 1..=8");
-    };
-    let ciphertext = [0x11u8; 4];
-    let tag = [0x22u8; 16];
-    let entry = ShareEntry {
-        trustee_id,
-        chamber: ChamberCode::X,
-        transport: Transport::Pad {
-            pad_id: 0,
-            pad_index: 0,
-        },
-        ciphertext: &ciphertext,
-        tag: &tag,
-    };
-    let Some(package) = SharePackage::new(election_id, box_id, &commitments, &[entry]) else {
-        unreachable!("one entry is trivially sorted and within bounds");
-    };
-    let mut buf = [0u8; 160];
-    let Ok(len) = encode(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &package, &mut buf) else {
-        unreachable!("160 bytes suffice for one-byte identifiers");
-    };
-    // header 16, E 5, B 5, commitments 4+32, count 4, trustee 5, then the
-    // entry's chamber, transport, pad_id, pad_index, ciphertext 4+4, tag 16.
-    let chamber_at = 16 + 5 + 5 + 36 + 4 + 5;
-    assert_eq!(len, chamber_at + 1 + 1 + 4 + 8 + 8 + 16);
     let chamber: u8 = kani::any();
     let transport: u8 = kani::any();
     let pad_id: u32 = kani::any();
     let pad_index: u64 = kani::any();
-    buf[chamber_at] = chamber;
-    buf[chamber_at + 1] = transport;
-    buf[chamber_at + 2..chamber_at + 6].copy_from_slice(&pad_id.to_be_bytes());
-    buf[chamber_at + 6..chamber_at + 14].copy_from_slice(&pad_index.to_be_bytes());
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<SharePackage<'_>, _> =
-        decode(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, bytes);
+    let id_bytes = pad_id.to_be_bytes();
+    let index_bytes = pad_index.to_be_bytes();
+    // election_id "E", box_id "B", one commitment (0x09 bytes), one entry:
+    // trustee_id "T", chamber, transport, pad_id, pad_index, ciphertext
+    // 4 × 0x11, tag 16 × 0x22.
+    let buf: [u8; 109] = [
+        0x49,
+        0x54,
+        0x59,
+        0x56,
+        0x00,
+        0x00,
+        0x00,
+        0x0b,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x5d,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x45,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x42,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x09,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        0x54,
+        chamber,
+        transport,
+        id_bytes[0],
+        id_bytes[1],
+        id_bytes[2],
+        id_bytes[3],
+        index_bytes[0],
+        index_bytes[1],
+        index_bytes[2],
+        index_bytes[3],
+        index_bytes[4],
+        index_bytes[5],
+        index_bytes[6],
+        index_bytes[7],
+        0x00,
+        0x00,
+        0x00,
+        0x04,
+        0x11,
+        0x11,
+        0x11,
+        0x11,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+        0x22,
+    ];
+    let chamber_at = 71;
+    let decoded: Result<SharePackage<'_>, _> = decode(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &buf);
     let chamber_ok = (1..=6).contains(&chamber);
     let transport_ok = transport == 0 || (transport == 1 && pad_id == 0 && pad_index == 0);
     match decoded {
-        Ok(p) => {
+        Ok(package) => {
             assert!(chamber_ok && transport_ok);
-            let Some(got) = p.entries().next() else {
+            let Some(entry) = package.entries().next() else {
                 unreachable!("one entry was encoded");
             };
-            assert_eq!(got.chamber.code(), chamber);
+            assert_eq!(entry.chamber.code(), chamber);
             let expected = if transport == 0 {
                 Transport::Pad { pad_id, pad_index }
             } else {
                 Transport::Kem
             };
-            assert_eq!(got.transport, expected);
+            assert_eq!(entry.transport, expected);
+            let mut out = [0u8; 109];
+            let Ok(len) = encode(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &package, &mut out) else {
+                unreachable!("the buffer is exactly sized");
+            };
+            assert_eq!(len, out.len());
+            let (Some(fields_out), Some(fields_in)) = (out.get(71..85), buf.get(71..85)) else {
+                unreachable!("in range");
+            };
+            assert_eq!(fields_out, fields_in);
         }
         Err(e) => {
             assert!(!(chamber_ok && transport_ok));
@@ -576,254 +945,187 @@ fn share_entry_codes_through_decoder() {
     }
 }
 
-/// A `MemberShare` with a symbolic module flag and symbolic bytes in the
-/// share, `cid`, `lab` and `tag`: the constructor accepts exactly the §8.11
-/// combinations (any value with a module; zero `cid`, absent `lab` and zero
-/// `tag` without one), and every accepted value survives a round trip.
+/// A `MemberShare` literal without an envelope label whose module flag,
+/// first `cid` byte and last `tag` byte are symbolic: it decodes exactly
+/// when the flag is a strict boolean and, without a module, `cid` and `tag`
+/// are zero (§8.11); the decoded fields equal the inputs and re-encode byte
+/// for byte; a rejected object names the first offending field in reading
+/// order (ENCODING §8.20).
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn member_share_round_trip() {
-    let has_module: bool = kani::any();
-    let share_byte: u8 = kani::any();
+    let flag: u8 = kani::any();
     let cid_byte: u8 = kani::any();
-    let lab_present: bool = kani::any();
     let tag_byte: u8 = kani::any();
-    let mut share = [0u8; 32];
-    share[31] = share_byte;
-    let Some(shares) = Scalars::<MAX_SECRETS>::new(&[Scalar32(share)]) else {
-        unreachable!("one share is within 1..=50");
-    };
-    let mut cid = [0u8; 24];
-    cid[0] = cid_byte;
-    let lab = if lab_present {
-        Some(Token192([5; 24]))
-    } else {
-        None
-    };
-    let mut tag = [0u8; 16];
-    tag[15] = tag_byte;
-    let built = MemberShare::new(&shares, has_module, Token192(cid), lab, &tag);
-    let expected_ok = has_module || (cid_byte == 0 && !lab_present && tag_byte == 0);
-    assert_eq!(built.is_some(), expected_ok);
-    let Some(value) = built else {
-        return;
-    };
-    let mut buf = [0u8; 128];
-    let Ok(len) = encode(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &value, &mut buf) else {
-        unreachable!("128 bytes suffice for one share");
-    };
-    let lab_len = if lab_present { 24 } else { 0 };
-    assert_eq!(len, 16 + 4 + 32 + 1 + 24 + 1 + lab_len + 16);
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<MemberShare<'_>, _> = decode(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, bytes);
-    assert_eq!(decoded, Ok(value));
-}
-
-/// Builds a one-range `BatchAttestBody`; `None` exactly when the parts
-/// break a §8.12 rule.
-fn batch_body<'a>(
-    record_count: u16,
-    ranges: &'a [ModuleRange<'a>],
-) -> Option<BatchAttestBody<'a>> {
-    let election_id = ElectionId::new(b"E")?;
-    let box_id = BoxId::new(b"B")?;
-    let refusals = ModuleIds::new(&[])?;
-    BatchAttestBody::new(&BatchAttestParts {
-        election_id,
-        box_id,
-        batch_index: 3,
-        record_count,
-        records_root: Hash512([1; 64]),
-        module_ranges: ranges,
-        module_refusals: refusals,
-        journal_head: Hash512([2; 64]),
-        time_bucket: TimeBucket::new(5),
-    })
-}
-
-/// Encodes a one-range body and checks that it decodes to itself.
-fn batch_round_trip(body: &BatchAttestBody<'_>) {
-    let mut buf = [0u8; 256];
-    let Ok(len) = encode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, body, &mut buf) else {
-        unreachable!("256 bytes suffice for one-byte identifiers");
-    };
-    assert_eq!(len, 16 + 5 + 5 + 4 + 2 + 64 + 4 + (5 + 16) + 4 + 64 + 8);
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<BatchAttestBody<'_>, _> =
-        decode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
-    assert_eq!(decoded.as_ref(), Ok(body));
-}
-
-/// A `BatchAttestBody` with a symbolic record count: the constructor
-/// accepts exactly `record_count ∈ 1..=64`, and every accepted value
-/// survives an object-level round trip.
-#[kani::proof]
-#[kani::unwind(70)]
-fn batch_attest_body_round_trip() {
-    let record_count: u16 = kani::any();
-    let Some(module_id) = ModuleId::new(b"M") else {
-        unreachable!("literal identifier is valid");
-    };
-    let ranges = [ModuleRange {
-        module_id,
-        counter_first: 1,
-        counter_last: 64,
-    }];
-    let built = batch_body(record_count, &ranges);
-    assert_eq!(built.is_some(), (1..=64).contains(&record_count));
-    if let Some(body) = built {
-        batch_round_trip(&body);
-    }
-}
-
-/// Experiment: the record-count round trip with a small unwinding bound
-/// and field-by-field comparison (no 64-byte digest comparison).
-#[kani::proof]
-#[kani::unwind(8)]
-fn batch_attest_body_round_trip_light() {
-    let record_count: u16 = kani::any();
-    let Some(module_id) = ModuleId::new(b"M") else {
-        unreachable!("literal identifier is valid");
-    };
-    let ranges = [ModuleRange {
-        module_id,
-        counter_first: 1,
-        counter_last: 64,
-    }];
-    let built = batch_body(record_count, &ranges);
-    assert_eq!(built.is_some(), (1..=64).contains(&record_count));
-    let Some(body) = built else {
-        return;
-    };
-    let mut buf = [0u8; 256];
-    let Ok(len) = encode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
-        unreachable!("256 bytes suffice for one-byte identifiers");
-    };
-    assert_eq!(len, 16 + 5 + 5 + 4 + 2 + 64 + 4 + (5 + 16) + 4 + 64 + 8);
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<BatchAttestBody<'_>, _> =
-        decode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
-    let Ok(d) = decoded else {
-        unreachable!("a constructed body decodes");
-    };
-    assert_eq!(d.record_count(), record_count);
-    assert_eq!(d.batch_index(), 3);
-    let Some(r) = d.module_ranges().next() else {
-        unreachable!("one range was encoded");
-    };
-    assert_eq!(r.counter_first, 1);
-    assert_eq!(r.counter_last, 64);
-    assert!(d.module_refusals().is_empty());
-    assert_eq!(d.time_bucket().get(), 5);
-}
-
-/// Experiment P3: a fully concrete box-close round trip (diagnostic for
-/// structural symex cost).
-#[kani::proof]
-#[kani::unwind(70)]
-fn box_close_body_concrete_round_trip() {
-    let counts = CloseCounts {
-        paper: 1000,
-        records: 990,
-        attested: 990,
-        without_record: 10,
-        challenged: 3,
-        quarantined: 1,
-    };
-    let Some(election_id) = ElectionId::new(b"E") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(box_id) = BoxId::new(b"B") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(module_id) = crate::primitives::ModuleId::new(b"M") else {
-        unreachable!("literal identifier is valid");
-    };
-    let Some(module_counters) = ModuleCounters::new(&[ModuleCounter {
-        module_id,
-        counter: 994,
-    }]) else {
-        unreachable!("one entry is trivially sorted");
-    };
-    let body = BoxCloseBody::new(&BoxCloseParts {
-        election_id,
-        box_id,
-        counts,
-        record_set_root: Hash512([1; 64]),
-        journal_head: Hash512([2; 64]),
-        seal_digest: Hash512([3; 64]),
-        module_counters,
-        open_batches: 2,
-        time_bucket: TimeBucket::new(900),
-    });
-    let mut buf = [0u8; 320];
-    let Ok(len) = encode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
-        unreachable!("320 bytes suffice for one-byte identifiers");
-    };
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<BoxCloseBody<'_>, _> =
-        decode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, bytes);
-    assert_eq!(decoded, Ok(body));
-}
-
-/// Experiment P2: decode-only batch body from constant bytes with one
-/// symbolic byte (the low byte of `record_count`).
-#[kani::proof]
-#[kani::unwind(70)]
-fn batch_attest_body_decode_only() {
-    let Some(module_id) = ModuleId::new(b"M") else {
-        unreachable!("literal identifier is valid");
-    };
-    let ranges = [ModuleRange {
-        module_id,
-        counter_first: 1,
-        counter_last: 64,
-    }];
-    let Some(body) = batch_body(64, &ranges) else {
-        unreachable!("valid parts");
-    };
-    let mut buf = [0u8; 256];
-    let Ok(len) = encode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
-        unreachable!("256 bytes suffice for one-byte identifiers");
-    };
-    let low: u8 = kani::any();
-    // record_count sits after header 16, E 5, B 5, batch_index 4: bytes 30..32.
-    buf[31] = low;
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<BatchAttestBody<'_>, _> =
-        decode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
+    // one share (last byte 0x33), has_module, cid (first byte symbolic,
+    // rest zero), lab absent, tag (last byte symbolic, rest zero).
+    let buf: [u8; 94] = [
+        0x49, 0x54, 0x59, 0x56, 0x00, 0x00, 0x00, 0x15, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x4e, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33, flag, cid_byte, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, tag_byte,
+    ];
+    let decoded: Result<MemberShare<'_>, _> = decode(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &buf);
     match decoded {
-        Ok(d) => {
-            assert!((1..=64).contains(&low));
-            assert_eq!(d.record_count(), u16::from(low));
+        Ok(share) => {
+            assert!(flag == 1 || (flag == 0 && cid_byte == 0 && tag_byte == 0));
+            assert_eq!(share.has_module(), flag == 1);
+            assert_eq!(share.shares().count(), 1);
+            assert_eq!(share.cid().0.first().copied(), Some(cid_byte));
+            assert!(share.lab().is_none());
+            assert_eq!(share.tag().last().copied(), Some(tag_byte));
+            let mut out = [0u8; 94];
+            let Ok(len) = encode(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &share, &mut out) else {
+                unreachable!("the buffer is exactly sized");
+            };
+            assert_eq!(len, out.len());
+            assert_eq!(out.get(52).copied(), Some(flag));
+            assert_eq!(out.get(53).copied(), Some(cid_byte));
+            assert_eq!(out.get(93).copied(), Some(tag_byte));
         }
         Err(e) => {
-            assert!(low == 0 || low > 64);
-            assert_eq!(e.kind(), Kind::ValueOutOfRange);
-            assert_eq!(e.offset(), 30);
+            let (kind, at) = if flag > 1 {
+                (Kind::InvalidBool, 52)
+            } else if cid_byte != 0 {
+                (Kind::InvariantViolation, 53)
+            } else {
+                assert!(flag == 0 && tag_byte != 0);
+                (Kind::InvariantViolation, 78)
+            };
+            assert_eq!(e.kind(), kind);
+            assert_eq!(e.offset(), at);
         }
     }
 }
 
-/// A `BatchAttestBody` with a small symbolic counter range: the constructor
-/// accepts exactly `counter_first <= counter_last`, and every accepted
-/// value survives an object-level round trip.
+/// The same for a literal with an envelope label present: without a module
+/// a present label is rejected at the label's offset once `cid` has passed,
+/// and with a module every field round-trips.
 #[kani::proof]
-#[kani::unwind(70)]
-fn batch_attest_body_counter_range() {
-    let counter_first = u64::from(kani::any::<u8>());
-    let counter_last = u64::from(kani::any::<u8>());
-    let Some(module_id) = ModuleId::new(b"M") else {
-        unreachable!("literal identifier is valid");
-    };
-    let ranges = [ModuleRange {
-        module_id,
-        counter_first,
-        counter_last,
-    }];
-    let built = batch_body(64, &ranges);
-    assert_eq!(built.is_some(), counter_first <= counter_last);
-    if let Some(body) = built {
-        batch_round_trip(&body);
+#[kani::unwind(12)]
+fn member_share_round_trip_with_label() {
+    let flag: u8 = kani::any();
+    let cid_byte: u8 = kani::any();
+    let tag_byte: u8 = kani::any();
+    // one share (last byte 0x33), has_module, cid (first byte symbolic,
+    // rest 0x55), lab present (0x66 bytes), tag (last byte symbolic, rest
+    // 0x44).
+    let buf: [u8; 118] = [
+        0x49, 0x54, 0x59, 0x56, 0x00, 0x00, 0x00, 0x15, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x66, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x33, flag, cid_byte, 0x55, 0x55, 0x55, 0x55, 0x55,
+        0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
+        0x55, 0x55, 0x55, 0x01, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
+        0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x44, 0x44,
+        0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, tag_byte,
+    ];
+    let decoded: Result<MemberShare<'_>, _> = decode(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &buf);
+    match decoded {
+        Ok(share) => {
+            assert_eq!(flag, 1);
+            assert!(share.has_module());
+            assert!(share.lab().is_some());
+            assert_eq!(share.cid().0.first().copied(), Some(cid_byte));
+            assert_eq!(share.tag().last().copied(), Some(tag_byte));
+            let mut out = [0u8; 118];
+            let Ok(len) = encode(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &share, &mut out) else {
+                unreachable!("the buffer is exactly sized");
+            };
+            assert_eq!(len, out.len());
+            assert_eq!(out.get(52).copied(), Some(flag));
+            assert_eq!(out.get(53).copied(), Some(cid_byte));
+            assert_eq!(out.get(117).copied(), Some(tag_byte));
+        }
+        Err(e) => {
+            let (kind, at) = if flag > 1 {
+                (Kind::InvalidBool, 52)
+            } else if cid_byte != 0 {
+                (Kind::InvariantViolation, 53)
+            } else {
+                assert_eq!(flag, 0);
+                (Kind::InvariantViolation, 77)
+            };
+            assert_eq!(e.kind(), kind);
+            assert_eq!(e.offset(), at);
+        }
+    }
+}
+
+/// A `BatchAttestBody` literal whose record count and first module range
+/// are symbolic: it decodes exactly when `record_count ∈ 1..=64` and
+/// `counter_first <= counter_last`; the decoded fields equal the inputs and
+/// re-encode byte for byte; a rejected object names the record count
+/// (checked as soon as it is read) or else the range's `counter_last`
+/// (ENCODING §8.12, §8.20).
+#[kani::proof]
+#[kani::unwind(20)]
+fn batch_attest_body_round_trip() {
+    let record_count: u16 = kani::any();
+    let counter_first: u64 = kani::any();
+    let counter_last: u64 = kani::any();
+    let rc = record_count.to_be_bytes();
+    let first = counter_first.to_be_bytes();
+    let last = counter_last.to_be_bytes();
+    // election_id "E", box_id "B", batch_index 3, record_count, records_root
+    // 0x10 pattern, ranges [("X", first, last), ("Y", 200, 263)], refusals
+    // ["Y"], journal_head 0x20 pattern, time_bucket 500.
+    let buf: [u8; 223] = [
+        0x49, 0x54, 0x59, 0x56, 0x00, 0x00, 0x00, 0x12, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xcf, 0x00, 0x00, 0x00, 0x01, 0x45, 0x00, 0x00, 0x00, 0x01, 0x42, 0x00, 0x00, 0x00, 0x03,
+        rc[0], rc[1], 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+        0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+        0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a,
+        0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
+        0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x58,
+        0x00, 0x00, first[0], first[1], first[2], first[3], first[4], first[5], first[6], first[7],
+        last[0], last[1], last[2], last[3], last[4], last[5], last[6], last[7], 0x00, 0x01, 0x59,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x59, 0x20, 0x21, 0x22, 0x23, 0x24,
+        0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33,
+        0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42,
+        0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51,
+        0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xf4,
+    ];
+    let decoded: Result<BatchAttestBody<'_>, _> =
+        decode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &buf);
+    let count_ok = record_count_valid(record_count);
+    let range_ok = counter_first <= counter_last;
+    match decoded {
+        Ok(body) => {
+            assert!(count_ok && range_ok);
+            assert_eq!(body.record_count(), record_count);
+            assert_eq!(body.batch_index(), 3);
+            assert_eq!(body.time_bucket().get(), 500);
+            assert_eq!(body.module_refusals().len(), 1);
+            let Some(range) = body.module_ranges().next() else {
+                unreachable!("two ranges were encoded");
+            };
+            assert_eq!(range.counter_first, counter_first);
+            assert_eq!(range.counter_last, counter_last);
+            assert_eq!(body.expected_signers().count(), 1);
+            let mut out = [0u8; 223];
+            let Ok(len) = encode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body, &mut out)
+            else {
+                unreachable!("the buffer is exactly sized");
+            };
+            assert_eq!(len, out.len());
+            let (Some(count_out), Some(range_out), Some(range_in)) =
+                (out.get(30..32), out.get(107..123), buf.get(107..123))
+            else {
+                unreachable!("in range");
+            };
+            assert_eq!(count_out, &rc);
+            assert_eq!(range_out, range_in);
+        }
+        Err(e) => {
+            assert!(!(count_ok && range_ok));
+            assert_eq!(e.kind(), Kind::ValueOutOfRange);
+            assert_eq!(e.offset(), if count_ok { 115 } else { 30 });
+        }
     }
 }

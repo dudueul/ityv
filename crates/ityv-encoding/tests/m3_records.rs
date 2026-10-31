@@ -28,10 +28,10 @@ use ityv_encoding::{
     ChallengeOpeningBody, ChallengeOpeningParts, ChamberCode, Commitments, ElectionId, Encode as _,
     ErrorKind, HEADER_LEN, Hash512, MAX_CAST_RECORD_BODY_LEN, MAX_CHUNKS, MAX_PROOF_LEN,
     MAX_SECRETS, MemberShare, ModuleCounter, ModuleCounters, ModuleId, ModuleOpening,
-    ModuleRecordSig, Point32, ProofHeader, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY,
-    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_MEMBER_SHARE,
-    SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, Scalar32, Scalars, ShareEntry, SharePackage, Token192,
-    Transport, TrusteeId, decode_object,
+    ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, Point32, ProofHeader, SCHEMA_CAST_RECORD,
+    SCHEMA_CAST_RECORD_BODY, SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY,
+    SCHEMA_MEMBER_SHARE, SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, Scalar32, Scalars, ShareEntry,
+    SharePackage, Token192, Transport, TrusteeId, decode_object,
 };
 use std::vec::Vec;
 
@@ -170,7 +170,7 @@ fn cast_record_body_round_trip_and_length() {
     let decoded: CastRecordBody<'_> =
         decode_object(SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
     assert_eq!(decoded, body);
-    assert_eq!(CastRecordBody::proof_system_id(), 1);
+    assert_eq!(PROOF_SYSTEM_OR_REP_V1, 1);
     assert_eq!(decoded.commitments().chunk_count(), 2);
     assert_eq!(decoded.proof(), &r.proof[..]);
     assert_eq!(decoded.proof_header().option_count, 16);

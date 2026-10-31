@@ -125,9 +125,9 @@ pub const fn transport_flags_valid(flags: u8) -> bool {
     flags & !TRANSPORT_FLAGS_MASK == 0
 }
 
-/// The body of a cast record. The proof system identifier is not stored:
-/// version 1 admits only [`PROOF_SYSTEM_OR_REP_V1`], which the constructor
-/// and the decoder enforce.
+/// The body of a cast record. The proof system identifier is not stored and
+/// has no accessor: version 1 admits only [`PROOF_SYSTEM_OR_REP_V1`], which
+/// the constructor and the decoder enforce and the encoder writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CastRecordBody<'a> {
     election_id: ElectionId<'a>,
@@ -192,13 +192,6 @@ impl<'a> CastRecordBody<'a> {
     #[must_use]
     pub const fn ballot_style_id(&self) -> BallotStyleId<'a> {
         self.ballot_style_id
-    }
-
-    /// The proof system identifier: always [`PROOF_SYSTEM_OR_REP_V1`] in
-    /// version 1, so it is not stored and needs no receiver.
-    #[must_use]
-    pub const fn proof_system_id() -> u16 {
-        PROOF_SYSTEM_OR_REP_V1
     }
 
     /// The commitment vector.
