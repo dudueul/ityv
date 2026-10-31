@@ -33,7 +33,10 @@ pub mod reader;
 pub mod schema;
 pub mod writer;
 
+// Kani harnesses live outside `src/` because they carry a file-level lint
+// relaxation, which CONSTITUTION.md §1.1 forbids under `src/`.
 #[cfg(kani)]
+#[path = "../kani/proofs.rs"]
 mod proofs;
 
 pub use codec::{Decode, Encode, encode_slice, encoded_len_of_slice};

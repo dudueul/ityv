@@ -2,7 +2,7 @@
 # inherits the lint set below without exception (CONSTITUTION.md §1.1).
 [workspace]
 resolver = "3"
-members = ["crates/ityv-encoding"]
+members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger"]
 
 [workspace.package]
 version = "0.1.0"
@@ -52,7 +52,14 @@ undocumented_unsafe_blocks = "deny"
 overflow-checks = true
 debug-assertions = true
 
+# Tests are optimized. The cryptographic backends are generic over their
+# parameter sets, so their code is instantiated inside the workspace crates
+# and inherits this profile's opt-level; at opt-level 0 one SLH-DSA-SHAKE-256s
+# signature takes minutes, which makes the test and mutation suites unusable.
+# Overflow checks and debug assertions stay on: optimization never removes a
+# check, it only removes waiting.
 [profile.test]
+opt-level = 3
 overflow-checks = true
 debug-assertions = true
 

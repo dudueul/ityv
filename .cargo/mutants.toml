@@ -2,4 +2,22 @@
 # `cargo kani`, so mutating them cannot be observed by `cargo test`; they are
 # verified by the Kani job instead.
 exclude_globs = ["**/proofs.rs"]
+# `Drop` implementations only zeroize secrets; a `Drop` body replaced with
+# `()` is unobservable after the value is gone. Zeroize-on-drop is covered by
+# the explicit `Zeroize` tests (tests/commit.rs `zeroize_clears_secret_types`)
+# and by the `Zeroizing` guards, whose own `Drop` belongs to the zeroize crate.
+# Two mutants are equivalent to the original program and stay excluded by
+# name (crates/ityv-crypto/README.md, 검증): `Statement::proof_system_id`
+# replaced by the constant 1 (the only proof system is 1) and
+# `Sha3Backend::begin` replaced by `Default::default()` (a default SHA3
+# state is a fresh state).
+exclude_re = [
+    "impl Drop",
+    "Statement<'a>::proof_system_id",
+    "Sha3Backend for RustCrypto>::begin",
+]
+# The workspace builds with `-D warnings`; a mutated body usually leaves a
+# parameter unused, which would make most mutants unviable (fail to build)
+# instead of testing whether the suite catches them. Cap lints for mutants.
+cap_lints = true
 timeout_multiplier = 3.0

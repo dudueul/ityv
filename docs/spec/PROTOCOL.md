@@ -43,9 +43,9 @@
 ## 3. 키와 서명
 
 ### 3.1 하이브리드 서명
-서명 묶음 `HybridSig = { mldsa87: Bytes<4627>, ed25519: Bytes<64> }`. 검증자는 두 서명을 **모두** 같은 메시지(`ENCODING.md` §4의 서명 메시지)에 대해 검증해야 하며, 하나라도 실패하면 전체 실패다(VC-002). 알고리즘 식별자는 메시지의 purpose와 genesis의 키 등록에 고정되어 있으므로 다운그레이드 협상이 존재하지 않는다(VC-003).
+서명 묶음 `HybridSig = mldsa87: [u8; 4627] ‖ ed25519: [u8; 64]`(고정폭 4,691바이트, 길이 접두사 없음). 검증자는 두 서명을 **모두** 같은 입력(`ENCODING.md` §4의 서명 메시지의 SHA3-512 다이제스트 64바이트, ML-DSA-87은 `purpose`를 FIPS 204 컨텍스트로 추가, Ed25519는 컨텍스트 없음)에 대해 검증해야 하며, 하나라도 실패하면 전체 실패다(VC-002). 구현은 `ityv-crypto` 크레이트만을 통한다(ADR-0015). 알고리즘 식별자는 메시지의 purpose와 genesis의 키 등록에 고정되어 있으므로 다운그레이드 협상이 존재하지 않는다(VC-003).
 
-장기 보존 체크포인트(§5.6)에는 `slhdsa: Bytes<29792>`(SLH-DSA-SHAKE-256s)를 추가로 붙인다.
+장기 보존 체크포인트(§5.6)에는 `slhdsa: [u8; 29792]`(SLH-DSA-SHAKE-256s, 같은 다이제스트를 서명하고 `purpose`를 FIPS 205 컨텍스트로 넘긴다)를 추가로 붙인다. 검증 결과는 `bool`이 아니라 검증된 입력(키, purpose, 객체, 서명)을 참조하는 `Verified` 토큰이며, 토큰 없이 서명된 객체를 소비하는 경로는 타입상 존재하지 않는다(ADR-0015 §2).
 
 ### 3.2 키 역할
 | 키 | 보유자 | 생성 | 수명 |
@@ -99,12 +99,14 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 부록 A에 전체 목록이 있다. 공개 등급: `public`(게시판에 공표), `restricted`(참관인·감사인·법원 열람), `sealed`(신뢰기관 또는 법원만). 투함 기록, 체크포인트, 마감, 인계, 분쟁 처리 결과, 합계 열기, 표본 추출은 `public`이다. share 패키지, 수령 라벨 목록의 원본, 영상 해시의 대응표는 `sealed` 또는 `restricted`다.
 
 ### 5.3 Merkle 트리
-게시판의 Merkle 트리는 RFC 9162의 트리 모양(좌측 완전 이진, 가장 큰 2의 거듭제곱 분할)을 쓰되 해시는 SHA3-512이고 리프 접두 `0x00`, 노드 접두 `0x01`이다. 리프는 프레임 해시다. 포함 증명과 일관성 증명은 RFC 9162 §2.1.3·§2.1.4의 알고리즘을 SHA3-512로 수행한다(VC-011). 트리 크기 상한은 2^40.
+게시판의 Merkle 트리는 RFC 9162의 트리 모양(좌측 완전 이진, 가장 큰 2의 거듭제곱 분할)을 쓰되 해시는 SHA3-512이고 리프 접두 `0x00`, 노드 접두 `0x01`이다. 리프는 프레임 해시다(리프 해시 = `SHA3-512(0x00 ‖ 프레임 해시)`, 노드 = `SHA3-512(0x01 ‖ 왼쪽 ‖ 오른쪽)`, 빈 트리의 root = `SHA3-512("")`). 포함 증명과 일관성 증명은 RFC 9162 §2.1.3·§2.1.4의 알고리즘을 SHA3-512로 수행한다(VC-011). 트리 크기 상한은 2^40이므로 포함 증명은 40개 이하, 일관성 증명은 41개 이하의 해시다(RFC 9162의 일관성 증명은 깊이 + 1개까지 될 수 있다). 체크포인트의 `box_close_root`와 `dispute_root`는 같은 해시 규칙의 **정렬 집합 트리** root다: 리프는 해당 이벤트 해시를 바이트 오름차순으로 정렬한 것이고 중복은 거부하며 빈 집합의 root는 빈 트리의 root다. 구현은 `ityv-ledger`(ADR-0016).
 
 ### 5.4 체크포인트
 `CheckpointBody`(스키마 0x0004): `election_id`, `ledger_id`, `keyset_id`, `checkpoint_seq`, `tree_size`, `root_hash`, `previous_checkpoint_hash`(seq 1이면 0), `box_close_root`(마감 이벤트 해시들의 정렬 Merkle root), `dispute_root`(미해결 분쟁 이벤트 해시들의 root), `genesis_hash`, `time_bucket`.
 
-증인은 다음을 모두 확인한 뒤에만 서명한다(VC-012): 자기 서명한 직전 체크포인트와의 일관성 증명, `tree_size` 단조 증가, `previous_checkpoint_hash` 일치, genesis 해시 일치, `box_close_root`와 `dispute_root`의 재계산 일치. 증인은 같은 `checkpoint_seq`에 서로 다른 본문을 서명하지 않는다(VC-013). 정족수는 9 이상이며 조직 7·공급자 4·지역 3 이상이어야 한다(VC-014).
+증인은 다음을 모두 확인한 뒤에만 서명한다(VC-012): 자기 서명한 직전 체크포인트와의 일관성 증명, `tree_size` 단조 증가, `previous_checkpoint_hash` 일치, genesis 해시 일치, `box_close_root`와 `dispute_root`의 재계산 일치. 증인은 같은 `checkpoint_seq`에 서로 다른 본문을 서명하지 않는다(VC-013). 증인 도구는 마지막으로 서명한 체크포인트를 기억(`WitnessMemory`, 스키마 0x0011)하고 `checkpoint_seq`가 그 다음이며 `election_id`·`ledger_id`·`keyset_id`가 같을 때만 서명한다. 확인과 기억의 전진은 한 동작이며, 도구는 전진한 기억을 영속화한 뒤에 서명한다(`docs/models/LedgerWitness.tla`의 `HonestSign`, ADR-0016 §4). 정족수는 9 이상이며 조직 7·공급자 4·지역 3 이상이어야 한다(VC-014). 정족수 프로필 `(n, q, f)`는 `2q − n > f`를 만족해야 한다(기본 13/9/4).
+
+장부에 수록되는 체크포인트 이벤트는 `SignedCheckpoint`(스키마 0x0010, `ENCODING.md` §8.4) = `body`(인코딩된 `CheckpointBody` 객체 바이트) ‖ `signatures`(`witness_id` 오름차순의 `{witness_id, HybridSig}` 목록, 64 이하)이다. 각 서명은 `body` 바이트에 대한 purpose `checkpoint`의 하이브리드 서명이고, 객체는 모든 서명이 명부 키로 검증되고 명부 밖·중복 ID가 없으며 정족수와 다양성을 만족할 때만 유효하다. 하나라도 틀리면 객체 전체가 무효다.
 
 ### 5.5 외부 앵커와 공표 기한
 체크포인트는 생성 후 1시간 이내에 지정 공개 검증자 3곳 이상에 전달되고, 각 검증자는 자기 서명으로 수신을 게시한다. 투표 종료 후 24시간 이내에 전 기간 게시판이 공표되어야 한다. 기한 위반은 `PublicationBreach` 이벤트(위원회 서명)로 기록된다.
@@ -183,7 +185,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 참관인이 요구하는 검증에는 실제 투표지가 아니라 **시험용 투표양식**(`ballot_style_id`가 `TEST-`로 시작)의 투표지를 쓴다. 시험용 기록은 `TallyScope`에서 `TEST_BALLOT` 사유로 제외되고 참여 장부와도 대조하지 않는다(VC-055).
 
 ### 7.4 커밋먼트 인코딩
-- 군: Ristretto255, 위수 ℓ. 베이스 `G_val = HashToGroup("ityv:base:val:v1")`, `G_id = HashToGroup("ityv:base:id:v1")`, `H = HashToGroup("ityv:base:rand:v1")`. `HashToGroup`은 SHA3-512 출력 64바이트를 Ristretto255의 균등 사상(Elligator 2 기반 `from_uniform_bytes`)으로 보낸다. 세 베이스 사이의 이산대수 관계는 누구도 모른다.
+- 군: Ristretto255, 위수 ℓ. 베이스 `G_val = HashToGroup("ityv:base:val:v1")`, `G_id = HashToGroup("ityv:base:id:v1")`, `H = HashToGroup("ityv:base:rand:v1")`. `HashToGroup(label) = from_uniform_bytes(SHA3-512(label ‖ 0x00))`: 라벨 뒤 `0x00` 구분자를 붙인 SHA3-512 출력 64바이트를 Ristretto255의 균등 사상(Elligator 2 기반 `from_uniform_bytes`)으로 보낸다(`ENCODING.md` §4). 세 베이스의 32바이트 인코딩은 `ityv-crypto`의 상호운용 벡터에 고정한다. 세 베이스 사이의 이산대수 관계는 누구도 모른다.
 - `M = 2^26`. 청크 `j = 0..k-1`은 인덱스 `t ∈ [9j, 9j+8]`을 담당한다. `val_j(t) = 2^{26·(t−9j)}` if `t ∈ chunk j`, else `0`.
 - `C_j = val_j(t)·G_val + cast_id·G_id + r_j·H`. `cast_id`는 24바이트 little-endian 정수로 스칼라에 사상한다(`< 2^192 < ℓ`).
 - 집계 시 자릿수 `d_t = ⌊T_j / 2^{26·(t−9j)}⌋ mod 2^26`는 인덱스 t의 표 수다. 전국 유권자 수가 `2^26`보다 작으므로 자리올림이 없다(VC-024: 각 자릿수가 해당 투표양식의 교부 수를 넘지 않음을 검증기가 확인한다).
@@ -194,18 +196,18 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 증명자(참 가지 `t*`, 증인 `x = cast_id`, `y_j = r_j`):
 1. `t ≠ t*`에 대해 무작위 `c_t, z_{t,x}, z_{t,0..k−1}`를 뽑고 `a_{t,j} = z_{t,x}·G_id + z_{t,j}·H − c_t·D_{t,j}`.
 2. `t*`에 대해 무작위 `α, β_0..β_{k−1}`를 뽑고 `a_{t*,j} = α·G_id + β_j·H`.
-3. `c = FS("ityv:proof:or-rep:v1", 대본)`. 대본 = `election_id ‖ box_id ‖ ballot_style_id ‖ proof_system_id ‖ C_0..C_{k−1} ‖ a_{0,0}..a_{m+1,k−1}`(이 순서의 정규 인코딩).
+3. `c = FS("ityv:proof:or-rep:v1", 대본)`. 대본 = 다음 순서의 정규 인코딩(`ENCODING.md` §2): `election_id: Ident<64>` ‖ `box_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `proof_system_id: u16` ‖ `option_count: u16`(= m+2) ‖ `chunk_count: u8`(= k) ‖ `commitments: Array<Point, 8>`(`u32` 개수 k 뒤 `C_0..C_{k−1}`) ‖ `announcements: Array<Point, 512>`(`u32` 개수 (m+2)·k 뒤 `a_{t,j}`, t 외측·j 내측). 두 개수 필드와 배열 접두사가 커밋먼트와 공표값의 경계를 유일하게 정한다.
 4. `c_{t*} = c − Σ_{t≠t*} c_t`, `z_{t*,x} = α + c_{t*}·x`, `z_{t*,j} = β_j + c_{t*}·y_j`.
-5. 증명 `π = { c_0..c_{m+1}, z_{t,x}, z_{t,j} }`. `a` 값은 전송하지 않는다.
+5. 증명 `π = { c_0..c_{m+1}, z_{t,x}, z_{t,j} }`. `a` 값은 전송하지 않는다. 정규 인코딩: `option_count: u16` ‖ `chunk_count: u8` ‖ t = 0..m+1 순서로 `c_t ‖ z_{t,x} ‖ z_{t,0}..z_{t,k−1}`(모든 스칼라 32바이트 little-endian canonical). 길이 = `3 + (m+2)·(k+2)·32`바이트. 디코더는 `k ≠ ⌈(m+2)/9⌉`, 비정규 스칼라, 범위 밖 개수를 거부한다.
 
 검증자: 모든 `t, j`에 대해 `a_{t,j} = z_{t,x}·G_id + z_{t,j}·H − c_t·D_{t,j}`를 재계산하고, `c`를 같은 대본으로 재계산한 뒤 `Σ_t c_t ≡ c (mod ℓ)`을 확인한다(VC-025). 모든 스칼라는 canonical이어야 하고 모든 점은 유효한 Ristretto 인코딩이어야 한다(VC-026).
 
-성질: 특수 건전성(두 다른 챌린지에서 증인 추출), 완전 증인 구별불가성(가지 간 분포 동일). 후자가 §16의 영구 비밀성 논증에 필요하다. 크기: `(m+2)·(k+2)` 스칼라. 대통령 선거(m=14, k=2)에서 약 2KB.
+성질: 특수 건전성(두 다른 챌린지에서 증인 추출), 완전 증인 구별불가성(가지 간 분포 동일). 후자가 §16의 영구 비밀성 논증에 필요하다. 크기: `(m+2)·(k+2)` 스칼라에 3바이트 머리부. 대통령 선거(m=14, k=2)에서 2,051바이트, 상한(m+2=64, k=8)에서 20,483바이트.
 
 ### 7.6 투함 기록
-`CastRecordBody`(스키마 0x0005), 공개: `election_id`, `box_id`, `ballot_style_id`, `proof_system_id: u16`, `commitments: Array<Point32, 8>`, `proof: Bytes<65536>`(§7.5 정규 인코딩), `module_counters: Array<{module_id, counter: u64}, 6>`, `share_package_hash: Hash512`, `transport_flags: u8`(비트0: 한 구성원 이상 KEM 대체 사용, 비트1: 중립 모듈 위임 사용).
+`CastRecordBody`(스키마 0x0005), 공개: `election_id`, `box_id`, `ballot_style_id`, `proof_system_id: u16`, `commitments: Array<Point, 8>`, `proof: Bytes<20483>`(§7.5 증명 인코딩을 그대로 담는다; 상한은 m+2=64, k=8일 때의 길이), `module_counters: Array<{module_id, counter: u64}, 6>`, `share_package_hash: Hash512`, `transport_flags: u8`(비트0: 한 구성원 이상 KEM 대체 사용, 비트1: 중립 모듈 위임 사용).
 
-`CastRecord` = 본문 + `device_sig_ed25519: Bytes<64>` + `module_sigs: Array<{module_id, ed25519: Bytes<64>}, 6>`. 추적코드 = **본문**의 `ENCODING.md` §4 해시. 양자내성 서명은 §7.2.1의 `BatchAttest`가 기록 해시 집합에 대해 제공하며, 검증기는 배치 포함이 없는 기록을 `UNATTESTED`로 분류한다(VC-053, VC-057). 기록에는 시간, 순번, 유권자 정보, 투함 ID, 봉투 라벨, 선택이 없다(VC-001, VC-019). 크기는 선택지 14개·청크 2개 기준 본문 약 2.4KB에 기록 서명 약 0.26KB, 배치 증명 분담 약 0.3KB를 더해 표당 약 3KB다.
+`CastRecord` = 본문 + `device_sig_ed25519: [u8; 64]` + `module_sigs: Array<{module_id, ed25519: [u8; 64]}, 6>`. 추적코드 = **본문**의 `ENCODING.md` §4 해시. 양자내성 서명은 §7.2.1의 `BatchAttest`가 기록 해시 집합에 대해 제공하며, 검증기는 배치 포함이 없는 기록을 `UNATTESTED`로 분류한다(VC-053, VC-057). 기록에는 시간, 순번, 유권자 정보, 투함 ID, 봉투 라벨, 선택이 없다(VC-001, VC-019). 크기는 선택지 14개·청크 2개 기준 본문 약 2.4KB에 기록 서명 약 0.26KB, 배치 증명 분담 약 0.3KB를 더해 표당 약 3KB다.
 
 ### 7.7 슬립
 `Slip`(스키마 0x000A): `election_id`, `station_id`, `time_bucket`, `tracking_code: Hash512`, `device_sig`(purpose `slip`, 하이브리드). Ed25519 부분은 추적코드와 함께 첫 QR에, ML-DSA-87 부분(4,627바이트)은 이어지는 QR 둘에 나눠 인쇄한다. 인쇄 형식은 `docs/ballot/`에 있다. 분쟁 접수 시 두 서명을 모두 검증한다. 슬립은 선택에 관한 정보를 담지 않으며, 같은 추적코드를 가진 기록이 게시판에 있는지만 확인할 수 있다.
@@ -239,7 +241,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 이 체계는 선형이므로 기록들의 구성원 share를 더하면 비밀의 합에 대한 구성원 share가 된다. 접근구조 Γ(ADR-0012)에 속하는 집합만 복원할 수 있고 그 밖의 어떤 집합도 정보이론적으로 아무것도 얻지 못한다(VC-031). v0.1은 검증 가능 비밀분산(VSS)을 쓰지 않으며 불일치는 §11.3에서 탐지·국소화한다.
 
 ### 9.3 share 패키지
-`SharePackage`(스키마 0x000B), `sealed`: `election_id`, `box_id`, `record_hash`, 구성원 항목 `Array<{trustee_id, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<8192>, tag: Bytes<16>}, 64>`, `device_sig`(purpose `share-package`).
+`SharePackage`(스키마 0x000B), `sealed`: `election_id`, `box_id`, `record_hash`, 구성원 항목 `Array<{trustee_id, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<8192>, tag: [u8; 16]}, 64>`, `device_sig`(purpose `share-package`).
 
 구성원 i(챔버 c)의 평문 = `(share of each secret) ‖ cid_c ‖ lab_c ‖ 모듈 c의 tag_{c,i}` (고정 길이, 스키마로 정함). `transport = 0`이면 ciphertext는 평문 ⊕ 패드 조각, `tag`는 평문 전체에 대한 Poly1305 태그(키는 패드에서 §9.4.3 규칙으로 추가로 꺼낸 32바이트). `transport = 1`이면 KEM 대체 경로(§9.6).
 
@@ -286,7 +288,11 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 표본 기록(§12의 RLA 표본과 장치당 공개 난수 2% 표본)에 대해 정족수는 `r_{c,j}`와 `cid_c`, `lab_c`만 복원하고(`cast_id`와 선택은 복원하지 않음), 챔버 c의 구성원이 보관한 모듈 태그 `tag_{c,i}`를 자기 패드 키로 검증한다. 태그가 맞지 않으면 커밋먼트 유닛이 모듈 난수를 쓰지 않은 것이므로 그 장치의 전 기록을 전수 대조한다(VC-022). `r_c`만 복원하면 `cast_id`가 숨겨진 채 남으므로 선택은 계산적으로 드러나지 않는다(§16).
 
 ### 9.6 KEM 대체 경로
-`transport = 1`: ciphertext = HPKE 방식 봉인. KEM은 ML-KEM-1024와 X25519의 결합(두 공유 비밀을 연접해 SHA3-512로 키 유도), AEAD는 ChaCha20-Poly1305, 수신자 공개키는 genesis의 구성원 키. 이 경로는 전송 녹취 후 두 KEM이 모두 깨지고 임계치 share가 복원되는 경우에만 노출되며, 사용 사실은 공개 기록에 남는다.
+`transport = 1`: ciphertext = HPKE 방식 봉인. KEM은 ML-KEM-1024와 X25519의 결합, AEAD는 ChaCha20-Poly1305(RFC 8439), 수신자 공개키는 genesis의 구성원 키(`mlkem1024_ek: [u8; 1568] ‖ x25519: [u8; 32]`).
+- 키 유도: `key = SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519 ‖ pk_x25519)[0..32]`. 두 공유 비밀과 두 암호문, 수신자의 X25519 공개키를 모두 넣으므로 한 KEM이 깨져도 키가 드러나지 않고, 암호문이나 수신자 키를 바꿔치기하면 다른 키가 나온다(X25519의 날 공유 비밀은 암호문도 공개키도 결속하지 않으므로 X-Wing 결합기와 같이 명시적으로 넣는다; ML-KEM의 공유 비밀은 FIPS 203 구성상 자기 암호문과 캡슐화 키를 이미 결속한다). X25519는 비기여(저위수) 결과를, ML-KEM은 모듈러스 범위를 벗어난 캡슐화 키를 거부한다.
+- 봉인: 캡슐화 한 번에 메시지 하나. 유도된 키는 정확히 한 메시지만 봉인하므로 논스는 96비트 0으로 고정한다(새 메시지는 새 캡슐화). 연관 데이터 `aad` = `election_id ‖ box_id ‖ record_hash ‖ trustee_id ‖ transport ‖ pad_id ‖ pad_index`의 정규 인코딩(§9.3 항목의 공개 필드). `transport = 1`이면 `pad_id = 0`, `pad_index = 0`.
+- 항목의 `ciphertext` = `ct_mlkem: [u8; 1568] ‖ ct_x25519: [u8; 32] ‖ AEAD 암호문(평문과 같은 길이)`, `tag` = Poly1305 태그 16바이트.
+이 경로는 전송 녹취 후 두 KEM이 모두 깨지고 임계치 share가 복원되는 경우에만 노출되며, 사용 사실은 공개 기록에 남는다.
 
 ## 10. 투표함 마감과 보관
 
@@ -412,7 +418,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | `LegalAuthorizationBody` | 0x0003 | 선관위, 위원회 | public | §4.4 |
 | `Appointment` | — | 추천 기관 | public | §4.5 |
 | `LedgerFrame` | 0x0001 | 장부 운영자 | public | §5.1 |
-| `CheckpointBody` | 0x0004 | 증인 정족수 | public | §5.4 |
+| `SignedCheckpoint`(본문 `CheckpointBody` 0x0004 포함) | 0x0010 | 증인 정족수 | public | §5.4 |
 | `PublicationBreach` | — | 위원회 | public | §5.5 |
 | `RollFreeze`, `RollAmendment` | — | 선관위, 위원회 | public | §6.1 |
 | `CheckinCounter` | 0x0009 | 카운터·가명 유닛, 모듈 X·Y | public | §6.3 |

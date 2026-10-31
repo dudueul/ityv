@@ -23,6 +23,7 @@
 | `Scalar` | 32 | Ristretto255 스칼라, little-endian canonical(곡선 라이브러리의 canonical 검사 통과 필수). 인코딩 크레이트는 길이만 검사하고 canonical 여부는 암호 크레이트가 검사한다 |
 | `Point` | 32 | Ristretto255 압축 점. 위와 같은 책임 분리 |
 | `Token192` | 24 | 192비트 무작위 토큰(투함 ID, 봉투 라벨) |
+| `[u8; N]` | N | 고정폭 바이트열. 길이 접두사가 없고 스키마가 `N`을 정한다(서명, 키, 암호문처럼 길이가 알고리즘으로 고정된 값) |
 | `Bytes<N>` | 4 + 길이 | `u32` 길이 접두사 뒤 바이트. 스키마가 정한 최대 길이 `N`을 넘으면 거부 |
 | `Ident<N>` | 4 + 길이 | `Bytes<N>`과 같되 알파벳이 `[A-Za-z0-9._:-]`로 제한되고 길이 1 이상. 그 외 바이트는 거부 |
 | `Option<T>` | 1 + 0 또는 T | 존재 태그 `0x00`(없음) 또는 `0x01`(있음). 그 외 거부 |
@@ -50,8 +51,11 @@ offset  size  field
 객체 바이트열 `obj`(헤더 포함)에 대해:
 
 - 해시: `SHA3-512( "ityv:hash:v1" ‖ 0x00 ‖ u64_be(len(obj)) ‖ obj )`
-- 서명 메시지: `"ityv:sig:v1:" ‖ purpose ‖ 0x00 ‖ u64_be(len(obj)) ‖ obj`. `purpose`는 `Ident<32>` 알파벳의 ASCII이며 용도마다 다르다(예: `checkpoint`, `cast-record`, `genesis`, `slip`, `handoff`).
+- 서명 메시지: `"ityv:sig:v1:" ‖ purpose ‖ 0x00 ‖ u64_be(len(obj)) ‖ obj`. `purpose`는 `Ident<32>` 알파벳의 ASCII이며 용도마다 다르다(예: `checkpoint`, `cast-record`, `genesis`, `slip`, `handoff`). 서명 알고리즘에 실제로 넘기는 입력은 이 메시지의 **SHA3-512 다이제스트 64바이트**이며(해시 후 서명, ADR-0015), ML-DSA-87에는 `purpose`를 FIPS 204 컨텍스트 문자열로도 넘긴다.
 - Fiat-Shamir 챌린지: `SHA3-512( "ityv:fs:v1:" ‖ proof_system_id ‖ 0x00 ‖ u64_be(len(transcript)) ‖ transcript )`, 64바이트 출력을 스칼라로 균등 축소.
+- 해시-투-그룹: `from_uniform_bytes( SHA3-512( label ‖ 0x00 ) )`. `label`은 `ityv:base:val:v1`, `ityv:base:id:v1`, `ityv:base:rand:v1`(PROTOCOL.md §7.4). 라벨 뒤의 `0x00`은 다른 해시 규칙과 같은 구분자다.
+- 보존 서명(SLH-DSA-SHAKE-256s)도 같은 64바이트 다이제스트를 서명하며 `purpose`를 FIPS 205 컨텍스트 문자열로 넘긴다. Ed25519는 다이제스트만 서명한다(컨텍스트 없음).
+- 서명·키·암호문의 인코딩은 길이 접두사 없는 고정폭 `[u8; N]`이다(§2). 서명 묶음 `HybridSig`는 `mldsa87: [u8; 4627] ‖ ed25519: [u8; 64]`(4,691바이트), 보존 서명은 `[u8; 29792]`다.
 
 서로 다른 용도의 서명을 재사용할 수 없도록 `purpose`가 다르면 메시지가 다르다. 같은 객체를 다른 선거에 재생할 수 없도록 모든 객체 본문은 `election_id: Ident<64>`를 첫 필드로 가진다.
 
@@ -88,6 +92,8 @@ offset  size  field
 | 0x000D | `AuditSeed` | 1 | 표본 추출 시드 의식 |
 | 0x000E | `DisputeEvent` | 1 | 분쟁 접수·처리 |
 | 0x000F | `LegalDecisionRef` | 1 | 법정 결정 참조 |
+| 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
+| 0x0011 | `WitnessMemory` | 1 | 증인 도구가 영속화하는 마지막 서명 기억(§8.5, ADR-0016 §4). 장부 이벤트가 아니다 |
 
 필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 `ityv-encoding` 크레이트의 스키마 모듈이 함께 가진다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다.
 
@@ -137,6 +143,29 @@ offset  size  field
 | 10 | `genesis_hash` | `Hash512` | 결속된 genesis의 §4 해시 |
 | 11 | `time_bucket` | `u64` | 체크포인트 제안의 시간 구간 |
 
-### 8.4 오류 보고 규칙
+### 8.4 `SignedCheckpoint` (`schema_id` 0x0010, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<4096>` | 인코딩된 `CheckpointBody` 객체 전체(§3 헤더 포함). 디코더는 이 바이트를 §8.3 규칙으로 다시 디코딩해 거부 규칙을 적용한다 |
+| 2 | `signatures` | `Array<{witness_id: Ident<64>, signature: [u8; 4691]}, 64>` | `witness_id` 바이트 오름차순, 중복 없음. 순서 위반은 `NotSorted`, 중복은 `Duplicate`. 각 `signature`는 `body` 바이트에 대한 purpose `checkpoint`의 하이브리드 서명(PROTOCOL.md §3.1) |
+
+정족수·다양성·명부 검사는 인코딩 규칙이 아니라 `ityv-ledger`의 정책 검사다(ADR-0016 §6).
+
+### 8.5 `WitnessMemory` (`schema_id` 0x0011, `schema_version` 1)
+
+증인 도구의 내부 상태다. 장부에 수록되지 않으며 공개하지 않는다. 헤더의 magic·schema·version·길이 검사로 손상된 파일을 거부한다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `last_seq` | `u64` | 마지막으로 서명한 `checkpoint_seq`. 0이면 아직 서명한 적 없음 |
+| 2 | `tree_size` | `u64` | `<= 2^40`. 위반 시 `ValueOutOfRange` |
+| 3 | `root_hash` | `Hash512` | 마지막 서명 본문의 `root_hash` |
+| 4 | `body_hash` | `Hash512` | 마지막 서명 본문 바이트의 §4 해시 |
+| 5 | `ids_hash` | `Hash512` | `election_id ‖ ledger_id ‖ keyset_id`(세 `Ident<64>` 필드의 정규 인코딩)의 §4 해시 |
+
+`last_seq == 0`이면 2–5는 전부 0이어야 하며 그 외는 `InvariantViolation`(`last_seq` 필드 오프셋 16). 객체 전체 길이는 헤더 포함 224바이트로 고정이다.
+
+### 8.6 오류 보고 규칙
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.
