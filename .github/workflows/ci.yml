@@ -2,9 +2,17 @@
 # merge; no job may be skipped to get green.
 name: ci
 
+# Pull requests are checked on the pull_request event; the push event covers
+# the default branch after a merge. A newer run on the same branch cancels the
+# older in-progress one so superseded commits do not hold runners.
 on:
   push:
+    branches: [next]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

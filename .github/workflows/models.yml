@@ -4,6 +4,7 @@ name: models
 
 on:
   push:
+    branches: [next]
     paths:
       - 'docs/models/**'
       - '.github/workflows/models.yml'
@@ -12,6 +13,10 @@ on:
       - 'docs/models/**'
       - '.github/workflows/models.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
