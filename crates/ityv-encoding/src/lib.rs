@@ -45,16 +45,52 @@ pub use envelope::{
 };
 pub use error::{Error, Kind as ErrorKind};
 pub use primitives::{
-    Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident, KeysetId, LedgerId, Point32,
-    Scalar32, SchemaId, Seq, TimeBucket, Token192, TreeSize,
+    BallotStyleId, BoxId, Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident, KeysetId,
+    LedgerId, ModuleId, ObserverId, OrgId, Point32, Scalar32, SchemaId, Seq, SignerId, StationId,
+    TimeBucket, Token192, TreeSize, TrusteeId,
 };
 pub use reader::Reader;
 pub use schema::authorization::{
     LegalAuthorizationBody, MAX_SCOPES, SCOPE_CODE_MAX, SCOPE_CODE_MIN, Scope, ScopeSet,
 };
+pub use schema::batch_attest::{
+    BatchAttest, BatchAttestBody, BatchAttestParts, MAX_BATCH_BODY_LEN, MAX_BATCH_RECORDS,
+    ModuleBatchSig, ModuleRange,
+};
+pub use schema::box_close::{
+    Attestation, BoxClose, BoxCloseBody, BoxCloseParts, CloseCounts, MAX_ATTESTATIONS,
+    MAX_BOX_CLOSE_BODY_LEN, MIN_CLERKS, MIN_OBSERVERS, SignerRole,
+};
+pub use schema::cast_record::{
+    CastRecord, CastRecordBody, CastRecordParts, MAX_CAST_RECORD_BODY_LEN, MAX_PROOF_LEN,
+    ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, ProofHeader, TRANSPORT_FLAGS_MASK,
+    TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE,
+};
+pub use schema::challenge::{
+    ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_CHALLENGE_BODY_LEN,
+    MAX_OPTION_INDEX, ModuleOpening,
+};
 pub use schema::checkpoint::{CheckpointBody, CheckpointParts};
 pub use schema::ledger_frame::LedgerFrame;
+pub use schema::scan_count::{
+    MAX_OBSERVER_SIGS, MAX_SCAN_COUNT_BODY_LEN, MIN_OBSERVER_SIGS, ObserverSig, ScanCountAttest,
+    ScanCountAttestBody,
+};
+pub use schema::share_package::{
+    ChamberCode, MAX_CIPHERTEXT_LEN, MAX_ENTRIES, MAX_SECRETS, MemberShare, ShareEntry,
+    SharePackage, Transport,
+};
+pub use schema::slip::{MAX_SLIP_BODY_LEN, Slip, SlipBody};
+pub use schema::util::{
+    Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, MAX_CHUNKS, MAX_MODULES, ModuleCounter,
+    ModuleCounters, ModuleIds, Scalars, TAG_LEN,
+};
 pub use schema::{
-    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
+    SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY,
+    SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY, SCHEMA_CHALLENGE_OPENING,
+    SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME,
+    SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_MEMBER_SHARE, SCHEMA_SCAN_COUNT_ATTEST,
+    SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP, SCHEMA_SLIP_BODY,
+    SCHEMA_VERSION_1,
 };
 pub use writer::Writer;

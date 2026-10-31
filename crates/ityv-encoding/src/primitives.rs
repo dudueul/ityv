@@ -237,6 +237,38 @@ pub struct LedgerId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeysetId<'a>(Ident<'a>);
 
+/// Identifier of a ballot box (PROTOCOL.md §7.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BoxId<'a>(Ident<'a>);
+
+/// Identifier of a ballot style (PROTOCOL.md §7.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BallotStyleId<'a>(Ident<'a>);
+
+/// Identifier of a polling station (PROTOCOL.md §7.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StationId<'a>(Ident<'a>);
+
+/// Identifier of a chamber module (PROTOCOL.md §7.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ModuleId<'a>(Ident<'a>);
+
+/// Identifier of a trustee member (PROTOCOL.md §9.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TrusteeId<'a>(Ident<'a>);
+
+/// Identifier of an observer (PROTOCOL.md §7.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObserverId<'a>(Ident<'a>);
+
+/// Identifier of an organization (observer or clerk affiliation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OrgId<'a>(Ident<'a>);
+
+/// Identifier of a human signer of a box-close event (PROTOCOL.md §10.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SignerId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -282,3 +314,11 @@ macro_rules! ident_newtype {
 ident_newtype!(ElectionId);
 ident_newtype!(LedgerId);
 ident_newtype!(KeysetId);
+ident_newtype!(BoxId);
+ident_newtype!(BallotStyleId);
+ident_newtype!(StationId);
+ident_newtype!(ModuleId);
+ident_newtype!(TrusteeId);
+ident_newtype!(ObserverId);
+ident_newtype!(OrgId);
+ident_newtype!(SignerId);

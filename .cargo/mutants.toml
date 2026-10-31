@@ -15,6 +15,10 @@ exclude_re = [
     "impl Drop",
     "Statement<'a>::proof_system_id",
     "Sha3Backend for RustCrypto>::begin",
+    # `CastRecordBody::proof_system_id` is always 1 (the constructor and the
+    # decoder reject every other value), so an accessor returning the
+    # constant 1 is the same program.
+    "CastRecordBody<'a>::proof_system_id",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)

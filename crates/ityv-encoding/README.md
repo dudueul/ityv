@@ -40,23 +40,55 @@ assert_eq!(decoded, frame);
 - `Encode`, `Decode`: 모든 객체가 구현하는 트레이트.
 - `encode_object`, `decode_object`: 16바이트 헤더를 포함한 최상위 진입점.
 - 기본형 newtype: `Hash512`, `Scalar32`, `Point32`, `Token192`, `Ident`, `ElectionId`, `LedgerId`, `KeysetId`, `SchemaId`, `Seq`(1 이상), `TreeSize`, `TimeBucket`, `Day`.
-- 예시 스키마: `LedgerFrame`(0x0001), `LegalAuthorizationBody`(0x0003)와 `Scope`/`ScopeSet`, `CheckpointBody`(0x0004)와 `CheckpointParts`.
+- 식별자 newtype: `ElectionId`, `LedgerId`, `KeysetId`, `BoxId`, `BallotStyleId`, `StationId`, `ModuleId`, `TrusteeId`, `ObserverId`, `OrgId`, `SignerId`(모두 `Ident<64>`).
+- 공유 배열형: `Commitments`(`Array<Point, 8>`, 1개 이상), `Scalars<N>`, `ModuleCounters`·`ModuleIds`(`module_id` 오름차순, 중복 없음, 6 이하).
 
 모든 생성자는 파싱한다. `Seq::new(0)`은 `None`이고, `CheckpointBody::new`는 "첫 체크포인트일 때만 이전 해시가 0"이라는 불변식이 깨지면 `None`이다. 잘못된 객체는 타입으로 존재할 수 없다.
+
+## 스키마
+
+| `schema_id` | 타입 | 명세 | 비고 |
+|---|---|---|---|
+| 0x0001 | `LedgerFrame` | ENCODING §8.1 | |
+| 0x0003 | `LegalAuthorizationBody`, `Scope`, `ScopeSet` | §8.2 | |
+| 0x0004 | `CheckpointBody`, `CheckpointParts` | §8.3 | |
+| 0x0005 | `CastRecordBody`, `CastRecordParts`, `ProofHeader` | §8.6 | 증명 머리부의 `chunk_count`·길이 공식 검사 |
+| 0x0016 | `CastRecord`, `ModuleRecordSig` | §8.7 | 본문 + 장치·모듈 Ed25519 기록 서명 |
+| 0x0006 | `ChallengeOpeningBody`, `ChallengeOpeningParts`, `ModuleOpening` | §8.8 | |
+| 0x0018 | `ChallengeOpening` | §8.9 | 본문 + 장치 하이브리드 서명 |
+| 0x000B | `SharePackage`, `ShareEntry`, `ChamberCode`, `Transport` | §8.10 | 서명 없음(기록의 `share_package_hash`가 결속) |
+| 0x0015 | `MemberShare` | §8.11 | 암호문 안의 구성원 평문 |
+| 0x0012 | `BatchAttestBody`, `BatchAttestParts`, `ModuleRange` | §8.12 | |
+| 0x0017 | `BatchAttest`, `ModuleBatchSig` | §8.13 | 서명자 집합 = 구간 − 거부 |
+| 0x0013 | `ScanCountAttestBody` | §8.14 | |
+| 0x001B | `ScanCountAttest`, `ObserverSig` | §8.15 | 참관인 2 이상, 조직 2 이상 |
+| 0x0007 | `BoxCloseBody`, `BoxCloseParts`, `CloseCounts` | §8.16 | 마감 불변식(VC-038)은 인코딩 규칙이 아니다 |
+| 0x001A | `BoxClose`, `Attestation`, `SignerRole` | §8.17 | 장치 서명 선택, 사무원 2·참관인 2(조직 2) |
+| 0x0019 / 0x000A | `SlipBody` / `Slip` | §8.18 | |
+
+0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103은 `ityv-cunit`가 구현한다(ENCODING §6).
+
+**본문 + 서명 묶음 규칙(ADR-0017 §2).** 자기 서명을 담는 이벤트는 본문 객체와 래퍼 객체로 나뉜다. 래퍼의 `body` 필드는 인코딩된 본문 객체 바이트 전체(헤더 포함)이고 서명 메시지는 정확히 그 바이트다. 래퍼 디코더는 본문을 그 스키마의 규칙으로 다시 디코딩하며, 본문 안의 오류 오프셋은 바깥 객체 기준으로 옮겨 보고한다(헤더 16 + 길이 접두 4 + 안쪽 오프셋). 서명과 본문은 입력에서 빌려 쓰며 복사하지 않으므로 4,691바이트 서명이나 22KB 본문이 스택에 복제되지 않는다.
+
+**교차 필드 규칙의 오류 종류.** 표가 종류를 정하지 않은 규칙은 `InvariantViolation`을 필드 오프셋에서 돌려준다: 커밋먼트·`rand`·`shares`가 비어 있음, `module_counters`가 비어 있음, 증명 머리부 불일치, 서명자 집합 불일치, 참관인·사무원 수와 조직 다양성, `MemberShare`의 모듈 없는 경우 0 아닌 `cid`·`tag`나 존재하는 `lab`, 거부 모듈이 구간에 없음, 모듈별 `rand` 개수 불일치. 숫자 범위(`proof_system_id`, `option_index > 63`, `transport_flags`, `chamber`, `transport`, KEM 항목의 0 아닌 `pad_id`·`pad_index`, `record_count`, `counter_first > counter_last`, `role`)는 `ValueOutOfRange`다.
+
+**최대 길이(헤더 포함).** `CastRecordBody` 21,494 · `CastRecord` 22,374 · `ChallengeOpeningBody` 2,734 · `ChallengeOpening` 7,445 · `SharePackage` 269,088 · `MemberShare` 1,686 · `BatchAttestBody` 1,214 · `BatchAttest` 34,483 · `ScanCountAttestBody` 248 · `ScanCountAttest` 19,580 · `BoxCloseBody` 861 · `BoxClose` 44,201 · `SlipBody` 224 · `Slip` 4,935.
 
 ## 검증
 
 ```bash
 cargo test --locked -p ityv-encoding                  # V1: 단위·속성·골든 벡터 테스트
 ITYV_UPDATE_VECTORS=1 cargo test --locked -p ityv-encoding --test vectors   # 벡터 재생성
-cargo kani -p ityv-encoding                           # V2: Kani 하네스 12개
+cargo kani -p ityv-encoding                           # V2: Kani 하네스 16개
 cargo mutants -p ityv-encoding                        # V1: 변이 테스트
 ```
 
-속성 테스트는 모든 스키마에 대해 왕복, 모든 단일 바이트 변이가 거부되거나 다른 값으로 디코딩되고 그 재인코딩이 변이 바이트열과 같음(정규성), 모든 진접두사의 거부를 검사한다. Kani 하네스는 정수 왕복, 불리언·존재 태그 엄격성, 식별자 알파벳의 정확성, 헤더 거부, 임의 입력에 대한 리더·라이터의 무패닉, `LedgerFrame` 왕복을 유계 모델 검사로 증명한다.
+속성 테스트는 모든 스키마에 대해 왕복, 모든 단일 바이트 변이가 거부되거나 다른 값으로 디코딩되고 그 재인코딩이 변이 바이트열과 같음(정규성), 모든 진접두사의 거부, 임의 바이트에 대한 모든 디코더의 무패닉을 검사한다. Kani 하네스는 정수 왕복, 불리언·존재 태그 엄격성, 식별자 알파벳의 정확성, 헤더 거부, 임의 입력에 대한 리더·라이터의 무패닉, `LedgerFrame`·`SlipBody`·`ScanCountAttestBody`·`BoxCloseBody` 왕복, 투함 기록 증명 머리부 검사의 정확성을 유계 모델 검사로 증명한다.
 
-`vectors/*.txt`는 공개 시험 벡터다. 독립 2차 구현(V5)은 이 파일로 차분 테스트를 한다. 형식은 파일 머리의 주석에 있다.
+변이 테스트의 알려진 동치 변이는 하나다: `CastRecordBody::proof_system_id`를 상수 1로 바꾸는 변이(값이 항상 1). `.cargo/mutants.toml`에서 이름으로 제외하고 사유를 적었다.
+
+`vectors/*.txt`는 공개 시험 벡터다(스키마마다 한 파일, 정상 벡터와 거부 벡터). 독립 2차 구현(V5)은 이 파일로 차분 테스트를 한다. 형식은 파일 머리의 주석에 있다. 래퍼 벡터의 서명은 패턴 바이트이며 실제 서명이 아니다: 인코딩 계층은 서명을 불투명한 고정폭 필드로만 다룬다.
 
 ## 테스트 코드의 lint 완화
 
-`tests/` 아래 통합 테스트 크레이트는 TCB 밖이다. 각 파일 머리에 사유를 적고 `unwrap`, `expect`, `panic`, 인덱싱, 산술 부작용 lint만 완화한다. TCB 크레이트(`src/`)에는 어떤 완화도 없다.
+`tests/` 아래 통합 테스트 크레이트는 TCB 밖이다. 각 파일 머리에 사유를 적고 `unwrap`, `expect`, `panic`, 인덱싱, 산술 부작용 lint를 완화하며, 거부 규칙을 하나씩 순서대로 밟는 `m3_records.rs`·`m3_events.rs`는 함수 길이와 유사 이름 스타일 lint(`too_many_lines`, `similar_names`)도 완화한다. `tests/common/mod.rs`는 모든 테스트 바이너리에 컴파일되므로 `dead_code`도 허용한다. TCB 크레이트(`src/`)에는 어떤 완화도 없다.
