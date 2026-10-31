@@ -18,7 +18,7 @@ mod common;
 
 use ityv_encoding::{
     Bytes, Decode, ElectionId, Encode, ErrorKind, Hash512, Ident, Point32, Reader, Scalar32,
-    SchemaId, Seq, Token192, Writer,
+    SchemaId, Seq, Token192, Writer, encode_slice, encoded_len_of_slice,
 };
 
 fn kind_at(result: Result<impl core::fmt::Debug, ityv_encoding::Error>) -> (ErrorKind, usize) {
@@ -104,6 +104,47 @@ fn bool_encoded_len_is_one() {
     assert_eq!(true.encoded_len(), 1);
     assert_eq!(false.encoded_len(), 1);
     assert_eq!(Some(true).encoded_len(), 2);
+}
+
+#[test]
+fn bool_encode_trait_writes_one_strict_byte() {
+    let mut out = [9u8; 2];
+    let mut w = Writer::new(&mut out);
+    true.encode(&mut w).unwrap();
+    false.encode(&mut w).unwrap();
+    assert_eq!(w.position(), 2);
+    assert_eq!(out, [1, 0]);
+    let mut r = Reader::new(&out);
+    assert!(bool::decode(&mut r).unwrap());
+    assert!(!bool::decode(&mut r).unwrap());
+    assert_eq!(r.position(), 2);
+}
+
+#[test]
+fn slice_helpers_write_count_prefix_then_elements() {
+    let items: [u16; 3] = [0x0102, 0x0304, 0x0506];
+    assert_eq!(encoded_len_of_slice(&items), 4 + 3 * 2);
+    assert_eq!(encoded_len_of_slice::<u16>(&[]), 4);
+    assert_eq!(encoded_len_of_slice(&[Some(true), None]), 4 + 2 + 1);
+
+    let mut out = [0xAAu8; 10];
+    let mut w = Writer::new(&mut out);
+    encode_slice(&mut w, &items, 3).unwrap();
+    assert_eq!(w.position(), encoded_len_of_slice(&items));
+    assert_eq!(out, [0, 0, 0, 3, 1, 2, 3, 4, 5, 6]);
+
+    let mut out = [0xAAu8; 4];
+    let mut w = Writer::new(&mut out);
+    encode_slice::<u16>(&mut w, &[], 0).unwrap();
+    assert_eq!(out, [0, 0, 0, 0]);
+
+    let mut out = [0u8; 10];
+    let mut w = Writer::new(&mut out);
+    assert_eq!(
+        kind_at(encode_slice(&mut w, &items, 2)),
+        (ErrorKind::CountExceedsMax, 0)
+    );
+    assert_eq!(w.position(), 0);
 }
 
 #[test]
