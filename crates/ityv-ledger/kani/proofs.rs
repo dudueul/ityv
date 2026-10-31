@@ -116,27 +116,30 @@ fn depth_is_bounded_by_the_capacity() {
 }
 
 /// For every tree of at most four symbolic leaves and every index, the
-/// generated inclusion proof verifies against the tree root.
+/// generated inclusion proof verifies against the tree root. Sizes and
+/// indices are enumerated concretely (so array indices stay concrete for
+/// the solver); the leaf values are symbolic.
 #[kani::proof]
 #[kani::unwind(70)]
 fn inclusion_proof_round_trips_for_small_trees() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
-    let size: u64 = kani::any();
-    kani::assume(size >= 1 && size <= 4);
-    let index: u64 = kani::any();
-    kani::assume(index < size);
-    let slice: &[Hash512] = &leaves[..size as usize];
-    let proof = inclusion_proof_with(&MockNodes, &slice, size, index).unwrap();
-    let root = range_root(&MockNodes, &slice, 0, size).unwrap();
-    let leaf = leaves[index as usize];
-    let included = verify_inclusion_with(&MockNodes, &root, size, index, &leaf, &proof).unwrap();
-    assert_eq!(included.get().index(), index);
-    // RFC 9162 paths are at most the depth (PATH(2, D[3]) has one element).
-    assert!(proof.hashes().len() as u32 <= depth_for_size(size));
+    for size in 1..=4u64 {
+        let slice: &[Hash512] = &leaves[..size as usize];
+        let root = range_root(&MockNodes, &slice, 0, size).unwrap();
+        for index in 0..size {
+            let proof = inclusion_proof_with(&MockNodes, &slice, size, index).unwrap();
+            let leaf = leaves[index as usize];
+            let included =
+                verify_inclusion_with(&MockNodes, &root, size, index, &leaf, &proof).unwrap();
+            assert_eq!(included.get().index(), index);
+            // RFC 9162 paths are at most the depth (PATH(2, D[3]) has one element).
+            assert!(proof.hashes().len() as u32 <= depth_for_size(size));
+        }
+    }
 }
 
 /// With concrete distinct leaves, a proof for one index never verifies
-/// for another index of the same tree.
+/// for another index of the same tree, nor with another leaf.
 #[kani::proof]
 #[kani::unwind(70)]
 fn inclusion_proof_refuses_a_wrong_index() {
@@ -146,18 +149,26 @@ fn inclusion_proof_refuses_a_wrong_index() {
         Hash512([0x32; 64]),
         Hash512([0x43; 64]),
     ];
-    let size: u64 = kani::any();
-    kani::assume(size >= 2 && size <= 4);
-    let index: u64 = kani::any();
-    let wrong: u64 = kani::any();
-    kani::assume(index < size && wrong < size && wrong != index);
-    let slice: &[Hash512] = &leaves[..size as usize];
-    let proof = inclusion_proof_with(&MockNodes, &slice, size, index).unwrap();
-    let root = range_root(&MockNodes, &slice, 0, size).unwrap();
-    let leaf = leaves[index as usize];
-    assert!(verify_inclusion_with(&MockNodes, &root, size, wrong, &leaf, &proof).is_err());
-    let other = leaves[wrong as usize];
-    assert!(verify_inclusion_with(&MockNodes, &root, size, index, &other, &proof).is_err());
+    for size in 2..=4u64 {
+        let slice: &[Hash512] = &leaves[..size as usize];
+        let root = range_root(&MockNodes, &slice, 0, size).unwrap();
+        for index in 0..size {
+            let proof = inclusion_proof_with(&MockNodes, &slice, size, index).unwrap();
+            let leaf = leaves[index as usize];
+            for wrong in 0..size {
+                if wrong == index {
+                    continue;
+                }
+                assert!(
+                    verify_inclusion_with(&MockNodes, &root, size, wrong, &leaf, &proof).is_err()
+                );
+                let other = leaves[wrong as usize];
+                assert!(
+                    verify_inclusion_with(&MockNodes, &root, size, index, &other, &proof).is_err()
+                );
+            }
+        }
+    }
 }
 
 /// For all `old <= new <= 4` over symbolic leaves, the generated
@@ -166,42 +177,41 @@ fn inclusion_proof_refuses_a_wrong_index() {
 #[kani::unwind(70)]
 fn consistency_proof_round_trips_for_small_trees() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
-    let new: u64 = kani::any();
-    let old: u64 = kani::any();
-    kani::assume(new <= 4 && old <= new);
-    let slice: &[Hash512] = &leaves[..new as usize];
-    let proof = consistency_proof_with(&MockNodes, &slice, old, new).unwrap();
-    let old_root = range_root(&MockNodes, &slice, 0, old).unwrap();
-    let new_root = range_root(&MockNodes, &slice, 0, new).unwrap();
-    let consistent =
-        verify_consistency_with(&MockNodes, old, &old_root, new, &new_root, &proof).unwrap();
-    assert_eq!(consistent.get().new_size(), new);
-    if old == 0 || old == new {
-        assert!(proof.hashes().is_empty());
+    for new in 0..=4u64 {
+        let slice: &[Hash512] = &leaves[..new as usize];
+        let new_root = range_root(&MockNodes, &slice, 0, new).unwrap();
+        for old in 0..=new {
+            let proof = consistency_proof_with(&MockNodes, &slice, old, new).unwrap();
+            let old_root = range_root(&MockNodes, &slice, 0, old).unwrap();
+            let consistent =
+                verify_consistency_with(&MockNodes, old, &old_root, new, &new_root, &proof)
+                    .unwrap();
+            assert_eq!(consistent.get().new_size(), new);
+            if old == 0 || old == new {
+                assert!(proof.hashes().is_empty());
+            }
+        }
     }
 }
 
 /// Pushing leaves one by one yields the same root as the full
-/// recomputation, for every prefix of at most four symbolic leaves.
+/// recomputation, for every prefix of four symbolic leaves.
 #[kani::proof]
 #[kani::unwind(70)]
 fn accumulator_matches_full_recomputation() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
-    let n: u64 = kani::any();
-    kani::assume(n <= 4);
     let mut acc = Accumulator::empty();
-    let mut i = 0u64;
-    while i < n {
-        acc.push_with(&MockNodes, &leaves[i as usize]).unwrap();
-        i += 1;
+    assert_eq!(acc.root_with(&MockNodes), MockNodes.empty());
+    for n in 1..=4u64 {
+        acc.push_with(&MockNodes, &leaves[n as usize - 1]).unwrap();
+        let slice: &[Hash512] = &leaves[..n as usize];
+        assert_eq!(
+            acc.root_with(&MockNodes),
+            range_root(&MockNodes, &slice, 0, n).unwrap()
+        );
+        assert_eq!(acc.size(), n);
+        assert_eq!(acc.peaks().len(), n.count_ones() as usize);
     }
-    let slice: &[Hash512] = &leaves[..n as usize];
-    assert_eq!(
-        acc.root_with(&MockNodes),
-        range_root(&MockNodes, &slice, 0, n).unwrap()
-    );
-    assert_eq!(acc.size(), n);
-    assert_eq!(acc.peaks().len(), n.count_ones() as usize);
 }
 
 /// `check_sorted` accepts exactly the strictly ascending triples, and the

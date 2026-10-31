@@ -540,6 +540,60 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
 }
 
 #[test]
+fn maximum_length_identifiers_pass_through_the_witness_rule() {
+    let long = [b'Z'; 64];
+    let mut parts = body_parts(
+        1,
+        0,
+        EMPTY_ROOT,
+        Hash512::ZERO,
+        EMPTY_ROOT,
+        EMPTY_ROOT,
+        GENESIS,
+        1,
+    );
+    parts.election_id = ityv_encoding::ElectionId::new(&long).unwrap();
+    parts.ledger_id = ityv_encoding::LedgerId::new(&long).unwrap();
+    parts.keyset_id = ityv_encoding::KeysetId::new(&long).unwrap();
+    let body = body_object(&parts);
+    let (token, memory) =
+        WitnessMemory::fresh().may_sign(&body, &ConsistencyProof::EMPTY, &[], &[], &GENESIS);
+    assert_eq!(token.unwrap().get().body_bytes(), body.as_slice());
+    let ids = *memory.last().unwrap().ids_hash();
+    // The same triple hashes the same; a different one does not.
+    let mut other = parts;
+    other.checkpoint_seq = Seq::new(2).unwrap();
+    other.previous_checkpoint_hash = ityv_crypto::object_hash(&body);
+    other.time_bucket = ityv_encoding::TimeBucket::new(2);
+    let body2 = body_object(&other);
+    let (token, memory) = memory.may_sign(&body2, &ConsistencyProof::EMPTY, &[], &[], &GENESIS);
+    assert!(token.is_ok());
+    assert_eq!(*memory.last().unwrap().ids_hash(), ids);
+}
+
+#[test]
+fn witness_memory_object_accepts_the_size_boundary() {
+    // last_seq 1, tree_size exactly 2^40, arbitrary hashes.
+    let mut buf = [0u8; 224];
+    buf[..4].copy_from_slice(b"ITYV");
+    buf[4..8].copy_from_slice(&0x0011u32.to_be_bytes());
+    buf[8..10].copy_from_slice(&1u16.to_be_bytes());
+    buf[12..16].copy_from_slice(&208u32.to_be_bytes());
+    buf[16..24].copy_from_slice(&1u64.to_be_bytes());
+    buf[24..32].copy_from_slice(&(1u64 << 40).to_be_bytes());
+    for b in &mut buf[32..224] {
+        *b = 7;
+    }
+    let memory = WitnessMemory::from_object(&buf).unwrap();
+    assert_eq!(memory.last().unwrap().tree_size().get(), 1 << 40);
+    buf[24..32].copy_from_slice(&((1u64 << 40) + 1).to_be_bytes());
+    assert!(matches!(
+        WitnessMemory::from_object(&buf).unwrap_err(),
+        Error::Encoding(e) if e.kind() == ErrorKind::ValueOutOfRange && e.offset() == 24
+    ));
+}
+
+#[test]
 fn witness_memory_object_rejects_garbage_and_inconsistent_fields() {
     let mut buf = [0u8; 16 + 208];
     let used = WitnessMemory::fresh().to_object(&mut buf).unwrap();
@@ -562,13 +616,19 @@ fn witness_memory_object_rejects_garbage_and_inconsistent_fields() {
         Error::Encoding(e) if e.kind() == ErrorKind::SchemaMismatch
     ));
     assert!(WitnessMemory::from_object(&buf[..223]).is_err());
-    // last_seq 0 with a non-zero field.
-    let mut inconsistent = buf;
-    inconsistent[16 + 16 + 5] = 1;
-    assert!(matches!(
-        WitnessMemory::from_object(&inconsistent).unwrap_err(),
-        Error::Encoding(e) if e.kind() == ErrorKind::InvariantViolation && e.offset() == 16
-    ));
+    // last_seq 0 with any one non-zero field: tree_size, root_hash,
+    // body_hash, ids_hash.
+    for byte in [16 + 15, 16 + 16 + 5, 16 + 16 + 64 + 5, 16 + 16 + 128 + 63] {
+        let mut inconsistent = buf;
+        inconsistent[byte] = 1;
+        assert!(
+            matches!(
+                WitnessMemory::from_object(&inconsistent).unwrap_err(),
+                Error::Encoding(e) if e.kind() == ErrorKind::InvariantViolation && e.offset() == 16
+            ),
+            "byte {byte}"
+        );
+    }
     // tree_size above the capacity.
     let mut huge = buf;
     huge[16 + 7] = 1;

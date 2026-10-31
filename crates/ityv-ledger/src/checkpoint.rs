@@ -416,9 +416,12 @@ pub fn validate_successor<'a>(
 /// `ledger_id`, `keyset_id`, each as `Ident<64>`), hashed with the object
 /// hash so that a witness memory can carry the continuity check in one
 /// field.
+/// Capacity of the identifier-triple buffer: three `Ident<64>` fields.
+const IDS_MAX_LEN: usize = 3 * (4 + ityv_encoding::IDENT_MAX_STANDARD);
+
 fn ids_hash(body: &CheckpointBody<'_>) -> Result<Hash512, Error> {
     let p = body.parts();
-    let mut buffer = [0u8; 3 * (4 + 64)];
+    let mut buffer = [0u8; IDS_MAX_LEN];
     let mut w = Writer::new(&mut buffer);
     p.election_id.encode(&mut w)?;
     p.ledger_id.encode(&mut w)?;
@@ -766,5 +769,18 @@ impl<'a> Decode<'a> for WitnessMemory {
                 }),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IDS_MAX_LEN;
+
+    /// The identifier buffer is exactly three maximal identifier fields; a
+    /// larger buffer would only hide a wrong capacity computation.
+    #[test]
+    fn ids_buffer_capacity_is_exact() {
+        assert_eq!(IDS_MAX_LEN, 204);
+        assert_eq!(IDS_MAX_LEN, 3 * (4 + 64));
     }
 }
