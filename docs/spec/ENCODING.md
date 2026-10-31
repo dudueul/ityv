@@ -92,6 +92,7 @@ offset  size  field
 | 0x000D | `AuditSeed` | 1 | 표본 추출 시드 의식 |
 | 0x000E | `DisputeEvent` | 1 | 분쟁 접수·처리 |
 | 0x000F | `LegalDecisionRef` | 1 | 법정 결정 참조 |
+| 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
 
 필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 `ityv-encoding` 크레이트의 스키마 모듈이 함께 가진다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다.
 
@@ -141,6 +142,15 @@ offset  size  field
 | 10 | `genesis_hash` | `Hash512` | 결속된 genesis의 §4 해시 |
 | 11 | `time_bucket` | `u64` | 체크포인트 제안의 시간 구간 |
 
-### 8.4 오류 보고 규칙
+### 8.4 `SignedCheckpoint` (`schema_id` 0x0010, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<4096>` | 인코딩된 `CheckpointBody` 객체 전체(§3 헤더 포함). 디코더는 이 바이트를 §8.3 규칙으로 다시 디코딩해 거부 규칙을 적용한다 |
+| 2 | `signatures` | `Array<{witness_id: Ident<64>, signature: [u8; 4691]}, 64>` | `witness_id` 바이트 오름차순, 중복 없음. 순서 위반은 `NotSorted`, 중복은 `Duplicate`. 각 `signature`는 `body` 바이트에 대한 purpose `checkpoint`의 하이브리드 서명(PROTOCOL.md §3.1) |
+
+정족수·다양성·명부 검사는 인코딩 규칙이 아니라 `ityv-ledger`의 정책 검사다(ADR-0016 §6).
+
+### 8.5 오류 보고 규칙
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.

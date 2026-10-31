@@ -99,12 +99,14 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 부록 A에 전체 목록이 있다. 공개 등급: `public`(게시판에 공표), `restricted`(참관인·감사인·법원 열람), `sealed`(신뢰기관 또는 법원만). 투함 기록, 체크포인트, 마감, 인계, 분쟁 처리 결과, 합계 열기, 표본 추출은 `public`이다. share 패키지, 수령 라벨 목록의 원본, 영상 해시의 대응표는 `sealed` 또는 `restricted`다.
 
 ### 5.3 Merkle 트리
-게시판의 Merkle 트리는 RFC 9162의 트리 모양(좌측 완전 이진, 가장 큰 2의 거듭제곱 분할)을 쓰되 해시는 SHA3-512이고 리프 접두 `0x00`, 노드 접두 `0x01`이다. 리프는 프레임 해시다. 포함 증명과 일관성 증명은 RFC 9162 §2.1.3·§2.1.4의 알고리즘을 SHA3-512로 수행한다(VC-011). 트리 크기 상한은 2^40.
+게시판의 Merkle 트리는 RFC 9162의 트리 모양(좌측 완전 이진, 가장 큰 2의 거듭제곱 분할)을 쓰되 해시는 SHA3-512이고 리프 접두 `0x00`, 노드 접두 `0x01`이다. 리프는 프레임 해시다(리프 해시 = `SHA3-512(0x00 ‖ 프레임 해시)`, 노드 = `SHA3-512(0x01 ‖ 왼쪽 ‖ 오른쪽)`, 빈 트리의 root = `SHA3-512("")`). 포함 증명과 일관성 증명은 RFC 9162 §2.1.3·§2.1.4의 알고리즘을 SHA3-512로 수행한다(VC-011). 트리 크기 상한은 2^40이므로 증명 길이는 40 이하다. 체크포인트의 `box_close_root`와 `dispute_root`는 같은 해시 규칙의 **정렬 집합 트리** root다: 리프는 해당 이벤트 해시를 바이트 오름차순으로 정렬한 것이고 중복은 거부하며 빈 집합의 root는 빈 트리의 root다. 구현은 `ityv-ledger`(ADR-0016).
 
 ### 5.4 체크포인트
 `CheckpointBody`(스키마 0x0004): `election_id`, `ledger_id`, `keyset_id`, `checkpoint_seq`, `tree_size`, `root_hash`, `previous_checkpoint_hash`(seq 1이면 0), `box_close_root`(마감 이벤트 해시들의 정렬 Merkle root), `dispute_root`(미해결 분쟁 이벤트 해시들의 root), `genesis_hash`, `time_bucket`.
 
-증인은 다음을 모두 확인한 뒤에만 서명한다(VC-012): 자기 서명한 직전 체크포인트와의 일관성 증명, `tree_size` 단조 증가, `previous_checkpoint_hash` 일치, genesis 해시 일치, `box_close_root`와 `dispute_root`의 재계산 일치. 증인은 같은 `checkpoint_seq`에 서로 다른 본문을 서명하지 않는다(VC-013). 정족수는 9 이상이며 조직 7·공급자 4·지역 3 이상이어야 한다(VC-014).
+증인은 다음을 모두 확인한 뒤에만 서명한다(VC-012): 자기 서명한 직전 체크포인트와의 일관성 증명, `tree_size` 단조 증가, `previous_checkpoint_hash` 일치, genesis 해시 일치, `box_close_root`와 `dispute_root`의 재계산 일치. 증인은 같은 `checkpoint_seq`에 서로 다른 본문을 서명하지 않는다(VC-013). 증인 도구는 마지막으로 서명한 체크포인트를 기억하고 `checkpoint_seq`가 그 다음일 때만 서명한다(`docs/models/LedgerWitness.tla`의 `HonestSign`, ADR-0016 §4). 정족수는 9 이상이며 조직 7·공급자 4·지역 3 이상이어야 한다(VC-014). 정족수 프로필 `(n, q, f)`는 `2q − n > f`를 만족해야 한다(기본 13/9/4).
+
+장부에 수록되는 체크포인트 이벤트는 `SignedCheckpoint`(스키마 0x0010, `ENCODING.md` §8.4) = `body`(인코딩된 `CheckpointBody` 객체 바이트) ‖ `signatures`(`witness_id` 오름차순의 `{witness_id, HybridSig}` 목록, 64 이하)이다. 각 서명은 `body` 바이트에 대한 purpose `checkpoint`의 하이브리드 서명이고, 객체는 모든 서명이 명부 키로 검증되고 명부 밖·중복 ID가 없으며 정족수와 다양성을 만족할 때만 유효하다. 하나라도 틀리면 객체 전체가 무효다.
 
 ### 5.5 외부 앵커와 공표 기한
 체크포인트는 생성 후 1시간 이내에 지정 공개 검증자 3곳 이상에 전달되고, 각 검증자는 자기 서명으로 수신을 게시한다. 투표 종료 후 24시간 이내에 전 기간 게시판이 공표되어야 한다. 기한 위반은 `PublicationBreach` 이벤트(위원회 서명)로 기록된다.
@@ -416,7 +418,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | `LegalAuthorizationBody` | 0x0003 | 선관위, 위원회 | public | §4.4 |
 | `Appointment` | — | 추천 기관 | public | §4.5 |
 | `LedgerFrame` | 0x0001 | 장부 운영자 | public | §5.1 |
-| `CheckpointBody` | 0x0004 | 증인 정족수 | public | §5.4 |
+| `SignedCheckpoint`(본문 `CheckpointBody` 0x0004 포함) | 0x0010 | 증인 정족수 | public | §5.4 |
 | `PublicationBreach` | — | 위원회 | public | §5.5 |
 | `RollFreeze`, `RollAmendment` | — | 선관위, 위원회 | public | §6.1 |
 | `CheckinCounter` | 0x0009 | 카운터·가명 유닛, 모듈 X·Y | public | §6.3 |

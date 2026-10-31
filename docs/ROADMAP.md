@@ -10,8 +10,9 @@
 - 검증: V1(단위·속성·독립 KAT·회귀 벡터·변이 테스트), V2(Kani 하네스 21개: 자릿수 지수·비트 묶음·해제, 청크 수와 `OptionCount`, 접근구조 판정, share 인덱스 산술, 패드 XOR, purpose 검증, 길이 접두, 서명 접두 바이트 배치; `kani/proofs.rs`). 2026-10-31 기준 결과: 워크스페이스 테스트 114개 통과(crypto 66, encoding 48, 9초), Kani 33개 하네스 전부 통과(crypto 21, encoding 12, 6분), cargo-mutants(CI) `ityv-crypto` 509개 중 잡힘 269·놓침 0·unviable 236·타임아웃 0(동치 변이 2건은 `.cargo/mutants.toml`에서 이름으로 제외, 사유는 crate README), `ityv-encoding` 203개 중 놓침 0. 독립 리뷰(명세 대조)에서 나온 수정: `Verified<T>`가 검증 입력 전부를 참조, KEM `SealKey`/`OpenKey` 분리와 수신자 공개키 결속, `verify_opening`의 선택지 범위 검사, `Proof::decode`의 청크 수 검사, 오류 경로 소거, 하네스의 `src/` 밖 이동. CI: 빌드·clippy·docs·`no_std` 타깃·deny·vet·Kani(하네스당 10분 상한)·mutants(자문).
 - 남은 것: 백엔드 형식 검증 교체(libcrux ML-KEM·ML-DSA, HACL*, fiat-crypto 백엔드 cfg)와 교차 백엔드 벡터; 곡선 산술·Σ-프로토콜 V3(M2 이후); `slh-dsa` 정식판으로 교체(현재 0.2.0-rc.5); 증인 정족수 정책(ITYV-BEH-110·111·112·283·284)은 암호 연산이 아니므로 M2 `ityv-ledger`로 이관.
 
-## M2 장부 `ityv-ledger`
+## M2 장부 `ityv-ledger` (진행 중, ADR-0016)
 - 프레임 로그, SHA3-512 Merkle(RFC 9162 트리 모양), 포함·일관성 증명, 체크포인트, 외부 앵커. V1·V2·V3(Merkle), TLA+ 안전성(V4).
+- 범위: `merkle`(누산기, 증명 생성·검증, 정렬 집합 root), `frame`(사슬 규칙, 디스크 스트림과 찢어진 꼬리 격리), `checkpoint`(본문 규칙, 증인 상태기계 `may_sign`, `SignedCheckpoint` 0x0010), `policy`(정족수·다양성, 프로필 유효성 `2q − n > f`), `publication`(기한). `no_std`, `alloc` 없음, 저장소·네트워크·시계 없음.
 
 ## M3 커밋먼트 유닛 `ityv-cunit`
 - `no_std`, 힙 없음. 투함 기록 생성, 투입 전 검증 공개, share 패키지, 일회용 패드 소비, 슬립 서명. 소거 성질 V3.
