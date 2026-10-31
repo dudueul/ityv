@@ -93,6 +93,7 @@ offset  size  field
 | 0x000E | `DisputeEvent` | 1 | 분쟁 접수·처리 |
 | 0x000F | `LegalDecisionRef` | 1 | 법정 결정 참조 |
 | 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
+| 0x0011 | `WitnessMemory` | 1 | 증인 도구가 영속화하는 마지막 서명 기억(§8.5, ADR-0016 §4). 장부 이벤트가 아니다 |
 
 필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 `ityv-encoding` 크레이트의 스키마 모듈이 함께 가진다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다.
 
@@ -151,6 +152,20 @@ offset  size  field
 
 정족수·다양성·명부 검사는 인코딩 규칙이 아니라 `ityv-ledger`의 정책 검사다(ADR-0016 §6).
 
-### 8.5 오류 보고 규칙
+### 8.5 `WitnessMemory` (`schema_id` 0x0011, `schema_version` 1)
+
+증인 도구의 내부 상태다. 장부에 수록되지 않으며 공개하지 않는다. 헤더의 magic·schema·version·길이 검사로 손상된 파일을 거부한다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `last_seq` | `u64` | 마지막으로 서명한 `checkpoint_seq`. 0이면 아직 서명한 적 없음 |
+| 2 | `tree_size` | `u64` | `<= 2^40`. 위반 시 `ValueOutOfRange` |
+| 3 | `root_hash` | `Hash512` | 마지막 서명 본문의 `root_hash` |
+| 4 | `body_hash` | `Hash512` | 마지막 서명 본문 바이트의 §4 해시 |
+| 5 | `ids_hash` | `Hash512` | `election_id ‖ ledger_id ‖ keyset_id`(세 `Ident<64>` 필드의 정규 인코딩)의 §4 해시 |
+
+`last_seq == 0`이면 2–5는 전부 0이어야 하며 그 외는 `ValueOutOfRange`(해당 필드 오프셋).
+
+### 8.6 오류 보고 규칙
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.

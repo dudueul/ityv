@@ -83,7 +83,7 @@
 | ITYV-BEH-052 | test_same_event_replay_idempotent | 동일 바이트 재전송은 멱등 | 유지 | `ityv-ledger` | V2 |
 | ITYV-BEH-053 | test_event_id_payload_collision | 같은 ID 다른 본문은 거부 | 유지 | `ityv-ledger` | V2 |
 | ITYV-BEH-054 | test_missing_seq_rejected | 순번 누락 거부 | 유지 | `ityv-ledger` | V2 |
-| ITYV-BEH-055 | test_after_close_rejected | 마감 후 이벤트 거부 | 유지 | `ityv-ledger` | V2 |
+| ITYV-BEH-055 | test_after_close_rejected | 마감 후 이벤트 거부 | 유지: 마감은 상태기계의 전이 | `ityv-state` | V2 |
 | ITYV-BEH-056 | test_missing_box_prevents_certification | 예상 투표함 누락은 완전성 실패 | 유지 | `ityv-verify` | V2 |
 | ITYV-BEH-057 | test_pq_verification_missing_prevents_certification | 서명 미검증은 상태 전이를 막는다 | 유지 | `ityv-verify` | V2 |
 | ITYV-BEH-058 | test_phy_custody_missing_prevents_certification | 보관 증거 누락은 HOLD | 유지 | `ityv-verify` | V2 |
@@ -116,7 +116,7 @@
 | ITYV-BEH-080 | test_incident_on_inbound_seal_swap | 수령 시 봉인 교체는 사건 | 유지 | `ityv-state` | V2 |
 | ITYV-BEH-081 | test_one_signer_forbidden | 단일 서명 불충분 | 유지 | `ityv-state` | V2 |
 | ITYV-BEH-082 | test_same_org_two_people_not_independent | 같은 조직은 독립이 아님 | 유지 | `ityv-state` | V2 |
-| ITYV-BEH-083 | test_reused_eventid_forbidden | 이벤트 ID 재사용 불가 | 유지 | `ityv-ledger` | V2 |
+| ITYV-BEH-083 | test_reused_eventid_forbidden | 이벤트 ID 재사용 불가 | 유지: 이벤트 색인은 상태기계 | `ityv-state` | V2 |
 | ITYV-BEH-084 | test_reopen_after_open_forbidden | 재개봉 불가 | 유지 | `ityv-state` | trybuild |
 | ITYV-BEH-085 | test_baseline_replacement_forbidden | 기준선 교체 불가 | 유지: 투함 기록 불변 | `ityv-ledger` | V2 |
 | ITYV-BEH-086 | test_log_mutation_detect | 로그 변조 탐지 | 유지 | `ityv-ledger` | V2 |
@@ -148,9 +148,9 @@
 | ITYV-BEH-107 | CredentialParsing.test_format_confusion | 형식 혼동 거부 | 수정: 스키마 ID·버전 검사 | `ityv-encoding` | V2 |
 | ITYV-BEH-108 | CredentialParsing.test_unicode_confusables | 동형문자 거부 | 수정: ASCII 알파벳만 | `ityv-encoding` | V2 |
 | ITYV-BEH-109 | CredentialParsing.test_non_text | 비텍스트 입력 거부 | 수정: 길이·헤더 검사 | `ityv-encoding` | V2 |
-| ITYV-BEH-110 | WitnessPolicy.test_proposed_13_9_profile | 13 중 9 정족수 수학 | 유지 | `ityv-crypto`(정족수 정책) | V2 |
-| ITYV-BEH-111 | WitnessPolicy.test_proposed_19_13_profile | 19 중 13 프로필 | 유지 | `ityv-crypto` | V2 |
-| ITYV-BEH-112 | WitnessPolicy.test_bad_quorum_intersection_rejected | 교집합 부족 정족수 거부 | 유지 | `ityv-crypto` | V2 |
+| ITYV-BEH-110 | WitnessPolicy.test_proposed_13_9_profile | 13 중 9 정족수 수학 | 유지 | `ityv-ledger`(`QuorumProfile`) | V2 |
+| ITYV-BEH-111 | WitnessPolicy.test_proposed_19_13_profile | 19 중 13 프로필 | 유지 | `ityv-ledger` | V2 |
+| ITYV-BEH-112 | WitnessPolicy.test_bad_quorum_intersection_rejected | 교집합 부족 정족수 거부 | 유지 | `ityv-ledger` | V2 |
 | ITYV-BEH-113 | WitnessPolicy.test_8_signers_not_enough | 8 서명 불충분 | 유지 | `ityv-verify` | V2 |
 | ITYV-BEH-114 | WitnessPolicy.test_duplicated_signature_not_double_counted | 중복 서명자 미계산 | 유지 | `ityv-verify` | V2 |
 | ITYV-BEH-115 | WitnessPolicy.test_same_provider_risk | 공급자 다양성 부족 거부 | 유지 | `ityv-verify` | V2 |

@@ -99,12 +99,12 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 부록 A에 전체 목록이 있다. 공개 등급: `public`(게시판에 공표), `restricted`(참관인·감사인·법원 열람), `sealed`(신뢰기관 또는 법원만). 투함 기록, 체크포인트, 마감, 인계, 분쟁 처리 결과, 합계 열기, 표본 추출은 `public`이다. share 패키지, 수령 라벨 목록의 원본, 영상 해시의 대응표는 `sealed` 또는 `restricted`다.
 
 ### 5.3 Merkle 트리
-게시판의 Merkle 트리는 RFC 9162의 트리 모양(좌측 완전 이진, 가장 큰 2의 거듭제곱 분할)을 쓰되 해시는 SHA3-512이고 리프 접두 `0x00`, 노드 접두 `0x01`이다. 리프는 프레임 해시다(리프 해시 = `SHA3-512(0x00 ‖ 프레임 해시)`, 노드 = `SHA3-512(0x01 ‖ 왼쪽 ‖ 오른쪽)`, 빈 트리의 root = `SHA3-512("")`). 포함 증명과 일관성 증명은 RFC 9162 §2.1.3·§2.1.4의 알고리즘을 SHA3-512로 수행한다(VC-011). 트리 크기 상한은 2^40이므로 증명 길이는 40 이하다. 체크포인트의 `box_close_root`와 `dispute_root`는 같은 해시 규칙의 **정렬 집합 트리** root다: 리프는 해당 이벤트 해시를 바이트 오름차순으로 정렬한 것이고 중복은 거부하며 빈 집합의 root는 빈 트리의 root다. 구현은 `ityv-ledger`(ADR-0016).
+게시판의 Merkle 트리는 RFC 9162의 트리 모양(좌측 완전 이진, 가장 큰 2의 거듭제곱 분할)을 쓰되 해시는 SHA3-512이고 리프 접두 `0x00`, 노드 접두 `0x01`이다. 리프는 프레임 해시다(리프 해시 = `SHA3-512(0x00 ‖ 프레임 해시)`, 노드 = `SHA3-512(0x01 ‖ 왼쪽 ‖ 오른쪽)`, 빈 트리의 root = `SHA3-512("")`). 포함 증명과 일관성 증명은 RFC 9162 §2.1.3·§2.1.4의 알고리즘을 SHA3-512로 수행한다(VC-011). 트리 크기 상한은 2^40이므로 포함 증명은 40개 이하, 일관성 증명은 41개 이하의 해시다(RFC 9162의 일관성 증명은 깊이 + 1개까지 될 수 있다). 체크포인트의 `box_close_root`와 `dispute_root`는 같은 해시 규칙의 **정렬 집합 트리** root다: 리프는 해당 이벤트 해시를 바이트 오름차순으로 정렬한 것이고 중복은 거부하며 빈 집합의 root는 빈 트리의 root다. 구현은 `ityv-ledger`(ADR-0016).
 
 ### 5.4 체크포인트
 `CheckpointBody`(스키마 0x0004): `election_id`, `ledger_id`, `keyset_id`, `checkpoint_seq`, `tree_size`, `root_hash`, `previous_checkpoint_hash`(seq 1이면 0), `box_close_root`(마감 이벤트 해시들의 정렬 Merkle root), `dispute_root`(미해결 분쟁 이벤트 해시들의 root), `genesis_hash`, `time_bucket`.
 
-증인은 다음을 모두 확인한 뒤에만 서명한다(VC-012): 자기 서명한 직전 체크포인트와의 일관성 증명, `tree_size` 단조 증가, `previous_checkpoint_hash` 일치, genesis 해시 일치, `box_close_root`와 `dispute_root`의 재계산 일치. 증인은 같은 `checkpoint_seq`에 서로 다른 본문을 서명하지 않는다(VC-013). 증인 도구는 마지막으로 서명한 체크포인트를 기억하고 `checkpoint_seq`가 그 다음일 때만 서명한다(`docs/models/LedgerWitness.tla`의 `HonestSign`, ADR-0016 §4). 정족수는 9 이상이며 조직 7·공급자 4·지역 3 이상이어야 한다(VC-014). 정족수 프로필 `(n, q, f)`는 `2q − n > f`를 만족해야 한다(기본 13/9/4).
+증인은 다음을 모두 확인한 뒤에만 서명한다(VC-012): 자기 서명한 직전 체크포인트와의 일관성 증명, `tree_size` 단조 증가, `previous_checkpoint_hash` 일치, genesis 해시 일치, `box_close_root`와 `dispute_root`의 재계산 일치. 증인은 같은 `checkpoint_seq`에 서로 다른 본문을 서명하지 않는다(VC-013). 증인 도구는 마지막으로 서명한 체크포인트를 기억(`WitnessMemory`, 스키마 0x0011)하고 `checkpoint_seq`가 그 다음이며 `election_id`·`ledger_id`·`keyset_id`가 같을 때만 서명한다. 확인과 기억의 전진은 한 동작이며, 도구는 전진한 기억을 영속화한 뒤에 서명한다(`docs/models/LedgerWitness.tla`의 `HonestSign`, ADR-0016 §4). 정족수는 9 이상이며 조직 7·공급자 4·지역 3 이상이어야 한다(VC-014). 정족수 프로필 `(n, q, f)`는 `2q − n > f`를 만족해야 한다(기본 13/9/4).
 
 장부에 수록되는 체크포인트 이벤트는 `SignedCheckpoint`(스키마 0x0010, `ENCODING.md` §8.4) = `body`(인코딩된 `CheckpointBody` 객체 바이트) ‖ `signatures`(`witness_id` 오름차순의 `{witness_id, HybridSig}` 목록, 64 이하)이다. 각 서명은 `body` 바이트에 대한 purpose `checkpoint`의 하이브리드 서명이고, 객체는 모든 서명이 명부 키로 검증되고 명부 밖·중복 ID가 없으며 정족수와 다양성을 만족할 때만 유효하다. 하나라도 틀리면 객체 전체가 무효다.
 
