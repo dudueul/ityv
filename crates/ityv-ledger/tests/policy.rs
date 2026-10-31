@@ -281,7 +281,11 @@ fn each_diversity_dimension_is_enforced() {
     let body = body13();
     let bytes = signed_checkpoint_object(&ws, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &body);
     let signed = decode_signed(&bytes);
-    // Nine signers span 9 orgs, 5 providers, 4 regions.
+    // Nine signers span 9 orgs, 5 providers, 4 regions: a policy at exactly
+    // those numbers is satisfied.
+    let exact = DiversityPolicy::new(9, 5, 4);
+    let published = evaluate(&roster, &QuorumProfile::DEFAULT_13_9_4, &exact, &signed).unwrap();
+    assert_eq!(published.get().regions(), 4);
     let strict_orgs = DiversityPolicy::new(10, 4, 3);
     assert_eq!(
         evaluate(

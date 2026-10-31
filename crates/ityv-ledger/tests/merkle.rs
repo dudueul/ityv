@@ -327,6 +327,87 @@ fn sorted_set_roots_require_strict_order() {
 }
 
 #[test]
+fn closure_accessors_and_capacity_boundaries() {
+    // A closure is a leaf source like a slice.
+    let by_closure = |i: u64| Some(leaf_input(u8::try_from(i).unwrap()));
+    let ls = leaves(5);
+    assert_eq!(
+        root_of_leaves(&by_closure, 5).unwrap(),
+        root_of_leaves(&ls.as_slice(), 5).unwrap()
+    );
+    let none = |_: u64| None;
+    assert_eq!(
+        root_of_leaves(&none, 1).unwrap_err(),
+        Error::LeafUnavailable
+    );
+    // Exactly the capacity is allowed (the accessor is asked for leaf 0);
+    // one more is refused before any leaf is touched.
+    assert_eq!(
+        root_of_leaves(&none, MAX_TREE_SIZE).unwrap_err(),
+        Error::LeafUnavailable
+    );
+    assert_eq!(
+        root_of_leaves(&none, MAX_TREE_SIZE + 1).unwrap_err(),
+        Error::Capacity
+    );
+    assert_eq!(
+        inclusion_proof(&none, MAX_TREE_SIZE, 0).unwrap_err(),
+        Error::LeafUnavailable
+    );
+    assert_eq!(
+        inclusion_proof(&none, MAX_TREE_SIZE + 1, 0).unwrap_err(),
+        Error::Capacity
+    );
+    assert_eq!(
+        consistency_proof(&none, 0, MAX_TREE_SIZE).unwrap(),
+        ConsistencyProof::EMPTY
+    );
+    assert_eq!(
+        consistency_proof(&none, 0, MAX_TREE_SIZE + 1).unwrap_err(),
+        Error::Capacity
+    );
+    let any = Hash512([4; 64]);
+    let ok = verify_consistency(
+        0,
+        &EMPTY_ROOT,
+        MAX_TREE_SIZE,
+        &any,
+        &ConsistencyProof::EMPTY,
+    )
+    .unwrap();
+    assert_eq!(ok.get().new_size(), MAX_TREE_SIZE);
+    assert_eq!(
+        verify_consistency(
+            0,
+            &EMPTY_ROOT,
+            MAX_TREE_SIZE + 1,
+            &any,
+            &ConsistencyProof::EMPTY
+        )
+        .unwrap_err(),
+        Error::Capacity
+    );
+    let empty = InclusionProof::from_hashes(&[]).unwrap();
+    assert_eq!(
+        verify_inclusion(&any, MAX_TREE_SIZE, 0, &any, &empty).unwrap_err(),
+        Error::ProofInvalid
+    );
+    // Proof capacities are exact.
+    assert!(InclusionProof::from_hashes(&[Hash512::ZERO; MAX_INCLUSION_PATH]).is_some());
+    assert!(InclusionProof::from_hashes(&[Hash512::ZERO; MAX_INCLUSION_PATH + 1]).is_none());
+    assert!(ConsistencyProof::from_hashes(&[Hash512::ZERO; MAX_CONSISTENCY_PATH]).is_some());
+    assert!(ConsistencyProof::from_hashes(&[Hash512::ZERO; MAX_CONSISTENCY_PATH + 1]).is_none());
+    assert_eq!(
+        ConsistencyProof::from_hashes(&[any]).unwrap().hashes(),
+        &[any][..]
+    );
+    // An accumulator at exactly the capacity decodes.
+    let full = Accumulator::from_parts(MAX_TREE_SIZE, &[any]).unwrap();
+    let back: Accumulator = decode_exact(&encode_to_vec(&full)).unwrap();
+    assert_eq!(back, full);
+}
+
+#[test]
 fn errors_display_distinctly() {
     let errors = [
         Error::TreeFull,

@@ -48,32 +48,42 @@ use crate::publication::{
     ANCHOR_WINDOW, BOARD_WINDOW, Status, anchor_deadline, board_deadline, check_anchor,
 };
 
-/// A cheap node function for the tree algorithms: byte rotations and XORs.
+/// A cheap node function for the tree algorithms. Only the first eight
+/// bytes of a hash carry information (one `u64` lane); the rest stay zero.
+/// That keeps the symbolic state small while every tree-shape decision is
+/// still exercised.
 struct MockNodes;
+
+fn lane(h: &Hash512) -> u64 {
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&h.0[..8]);
+    u64::from_le_bytes(bytes)
+}
+
+fn from_lane(v: u64) -> Hash512 {
+    let mut out = [0u8; 64];
+    out[..8].copy_from_slice(&v.to_le_bytes());
+    Hash512(out)
+}
 
 impl NodeHasher for MockNodes {
     fn empty(&self) -> Hash512 {
-        Hash512([0xEE; 64])
+        from_lane(0xEEEE_EEEE_EEEE_EEEE)
     }
 
     fn leaf(&self, input: &Hash512) -> Hash512 {
-        let mut out = *input;
-        out.0[0] ^= 0x01;
-        out.0[63] = out.0[63].wrapping_add(1);
-        out
+        from_lane(lane(input).rotate_left(1) ^ 0x0101_0101_0101_0101)
     }
 
     fn node(&self, left: &Hash512, right: &Hash512) -> Hash512 {
-        let mut out = [0u8; 64];
-        for i in 0..64 {
-            out[i] = left.0[i].rotate_left(1) ^ right.0[(i + 7) % 64] ^ 0x5A;
-        }
-        Hash512(out)
+        from_lane(lane(left).rotate_left(5) ^ lane(right).rotate_left(13) ^ 0x5A5A_5A5A_5A5A_5A5A)
     }
 }
 
+/// A hash whose first eight bytes are symbolic and whose other bytes are
+/// zero.
 fn any_hash() -> Hash512 {
-    Hash512(kani::any())
+    from_lane(kani::any())
 }
 
 /// `split_point(n)` is a power of two, below `n`, and at least `n / 2`.
@@ -107,7 +117,7 @@ fn depth_is_bounded_by_the_capacity() {
 /// For every tree of at most four symbolic leaves and every index, the
 /// generated inclusion proof verifies against the tree root.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn inclusion_proof_round_trips_for_small_trees() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
     let size: u64 = kani::any();
@@ -126,7 +136,7 @@ fn inclusion_proof_round_trips_for_small_trees() {
 /// With concrete distinct leaves, a proof for one index never verifies
 /// for another index of the same tree.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn inclusion_proof_refuses_a_wrong_index() {
     let leaves = [
         Hash512([0x10; 64]),
@@ -151,7 +161,7 @@ fn inclusion_proof_refuses_a_wrong_index() {
 /// For all `old <= new <= 4` over symbolic leaves, the generated
 /// consistency proof verifies between the two roots.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn consistency_proof_round_trips_for_small_trees() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
     let new: u64 = kani::any();
@@ -172,7 +182,7 @@ fn consistency_proof_round_trips_for_small_trees() {
 /// Pushing leaves one by one yields the same root as the full
 /// recomputation, for every prefix of at most four symbolic leaves.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn accumulator_matches_full_recomputation() {
     let leaves = [any_hash(), any_hash(), any_hash(), any_hash()];
     let n: u64 = kani::any();
@@ -195,7 +205,7 @@ fn accumulator_matches_full_recomputation() {
 /// `check_sorted` accepts exactly the strictly ascending triples, and the
 /// sorted-set root of an accepted triple equals the range root.
 #[kani::proof]
-#[kani::unwind(70)]
+#[kani::unwind(12)]
 fn sorted_set_check_is_strict_ascending() {
     let a = any_hash();
     let b = any_hash();

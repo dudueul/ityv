@@ -148,6 +148,13 @@ const fn lsb_set(n: u64) -> bool {
     n & 1 == 1
 }
 
+/// How far to right-shift so that the lowest set bit of `n` reaches the
+/// least significant position: zero when `n` is zero or already odd
+/// (RFC 9162 "until LSB(fn) is set or fn is 0"). Always below 64.
+const fn trailing_shift(n: u64) -> u32 {
+    if n == 0 { 0 } else { n.trailing_zeros() }
+}
+
 // ---------------------------------------------------------------------------
 // Leaf access
 // ---------------------------------------------------------------------------
@@ -341,7 +348,7 @@ pub(crate) fn range_root<H: NodeHasher>(
     lo: u64,
     hi: u64,
 ) -> Result<Hash512, Error> {
-    if hi < lo || hi.checked_sub(lo).is_none_or(|n| n > MAX_TREE_SIZE) {
+    if hi.checked_sub(lo).is_none_or(|n| n > MAX_TREE_SIZE) {
         return Err(Error::Capacity);
     }
     let mut acc = Accumulator::new();
@@ -663,12 +670,10 @@ pub(crate) fn verify_inclusion_with<'a, H: NodeHasher>(
         }
         if lsb_set(fnode) || fnode == snode {
             r = h.node(p, &r);
-            if !lsb_set(fnode) {
-                while !lsb_set(fnode) && fnode != 0 {
-                    fnode = fnode.wrapping_shr(1);
-                    snode = snode.wrapping_shr(1);
-                }
-            }
+            // Right-shift both until LSB(fnode) is set or fnode is 0.
+            let shift = trailing_shift(fnode);
+            fnode = fnode.wrapping_shr(shift);
+            snode = snode.wrapping_shr(shift);
         } else {
             r = h.node(&r, p);
         }
@@ -811,10 +816,10 @@ pub(crate) fn verify_consistency_with<'a, H: NodeHasher>(
     };
     let mut fnode = old_size.wrapping_sub(1);
     let mut snode = new_size.wrapping_sub(1);
-    while lsb_set(fnode) {
-        fnode = fnode.wrapping_shr(1);
-        snode = snode.wrapping_shr(1);
-    }
+    // Right-shift both until LSB(fnode) is not set.
+    let shift = fnode.trailing_ones();
+    fnode = fnode.wrapping_shr(shift);
+    snode = snode.wrapping_shr(shift);
     for c in tail {
         if snode == 0 {
             return Err(Error::ProofInvalid);
@@ -822,12 +827,9 @@ pub(crate) fn verify_consistency_with<'a, H: NodeHasher>(
         if lsb_set(fnode) || fnode == snode {
             fr = h.node(c, &fr);
             sr = h.node(c, &sr);
-            if !lsb_set(fnode) {
-                while !lsb_set(fnode) && fnode != 0 {
-                    fnode = fnode.wrapping_shr(1);
-                    snode = snode.wrapping_shr(1);
-                }
-            }
+            let shift = trailing_shift(fnode);
+            fnode = fnode.wrapping_shr(shift);
+            snode = snode.wrapping_shr(shift);
         } else {
             sr = h.node(&sr, c);
         }

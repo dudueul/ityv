@@ -188,6 +188,13 @@ fn successor_validation_checks_every_field() {
     let ok = validate_successor(Some((&first, &first_hash)), &second, &GENESIS).unwrap();
     assert_eq!(ok.get().body().parts().checkpoint_seq.get(), 2);
     assert!(ok.get().prev().is_some());
+    // An equal tree size is allowed (no new frames since the last one).
+    let same_size = body_object(&body_parts(
+        2, 2, r2, first_hash, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 2,
+    ));
+    let same_size = decode_body(&same_size);
+    let ok = validate_successor(Some((&first, &first_hash)), &same_size, &GENESIS).unwrap();
+    assert_eq!(ok.get().body().parts().tree_size.get(), 2);
     // Gap.
     let third_bytes = body_object(&body_parts(
         3, 4, r4, first_hash, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 2,
