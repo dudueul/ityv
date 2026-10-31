@@ -1,0 +1,44 @@
+# Formal model checking (verification ladder V4). Runs TLC on the TLA+
+# models under docs/models. A red job here blocks merge like any other gate.
+name: models
+
+on:
+  push:
+    paths:
+      - 'docs/models/**'
+      - '.github/workflows/models.yml'
+  pull_request:
+    paths:
+      - 'docs/models/**'
+      - '.github/workflows/models.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tlc:
+    name: TLC LedgerWitness
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-java@v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Fetch pinned tla2tools.jar
+        # Official TLA+ tools release v1.8.0. The checksum pins the exact
+        # artifact; cross-check it against the release page before trusting it.
+        run: |
+          curl -sSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+          echo "011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd  tla2tools.jar" | sha256sum -c -
+      - name: Model check LedgerWitness
+        working-directory: docs/models
+        run: |
+          java -XX:+UseParallelGC -Xmx3g -cp ../../tla2tools.jar tlc2.TLC -workers auto -deadlock -config LedgerWitness.cfg LedgerWitness.tla | tee tlc.log
+          grep -q "Model checking completed. No error has been found." tlc.log
+      - uses: actions/upload-artifact@v4.6.2
+        if: always()
+        with:
+          name: tlc-ledgerwitness-log
+          path: docs/models/tlc.log
