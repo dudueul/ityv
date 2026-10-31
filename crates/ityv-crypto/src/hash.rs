@@ -245,6 +245,15 @@ mod tests {
 
     /// The prefix capacity is exactly label, purpose, terminator and length;
     /// a larger buffer would only hide a wrong capacity computation.
+    /// The raw hasher prints an opaque marker and nothing of its state.
+    #[test]
+    fn hasher_debug_is_opaque() {
+        let mut hasher = Hasher::new();
+        hasher.absorb(b"state");
+        assert_eq!(std::format!("{hasher:?}"), "Hasher(..)");
+        assert_eq!(std::format!("{:?}", Hasher::default()), "Hasher(..)");
+    }
+
     #[test]
     fn signing_prefix_capacity_is_exact() {
         assert_eq!(SIGNING_PREFIX_MAX_LEN, 53);
