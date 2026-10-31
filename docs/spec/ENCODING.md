@@ -164,7 +164,7 @@ offset  size  field
 | 4 | `body_hash` | `Hash512` | 마지막 서명 본문 바이트의 §4 해시 |
 | 5 | `ids_hash` | `Hash512` | `election_id ‖ ledger_id ‖ keyset_id`(세 `Ident<64>` 필드의 정규 인코딩)의 §4 해시 |
 
-`last_seq == 0`이면 2–5는 전부 0이어야 하며 그 외는 `ValueOutOfRange`(해당 필드 오프셋).
+`last_seq == 0`이면 2–5는 전부 0이어야 하며 그 외는 `InvariantViolation`(`last_seq` 필드 오프셋 16). 객체 전체 길이는 헤더 포함 224바이트로 고정이다.
 
 ### 8.6 오류 보고 규칙
 
