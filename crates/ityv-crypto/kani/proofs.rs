@@ -207,8 +207,10 @@ fn extract_bits_matches_reference() {
     }
 }
 
-/// `extract_bits` rejects windows wider than 32 bits.
+/// `extract_bits` rejects windows wider than 32 bits. The function returns
+/// before its loop for these widths; the bound keeps the model finite.
 #[kani::proof]
+#[kani::unwind(2)]
 fn extract_bits_rejects_wide_windows() {
     let bytes: [u8; 32] = kani::any();
     let start: u32 = kani::any();
