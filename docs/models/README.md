@@ -22,6 +22,10 @@ java -XX:+UseParallelGC -jar tla2tools.jar -config LedgerWitness.cfg LedgerWitne
 |---|---|---|---|
 | 2026-10-31 | `LedgerWitness` | 증인 4, 정족수 3, 비잔틴 1, 이벤트 2종, 로그 길이 ≤ 2, 체크포인트 ≤ 3 | 오류 없음. 생성 상태 517,441, 서로 다른 상태 175,616, 탐색 깊이 10, 30초. CI 실행 41154609741 |
 
+## 코드와의 대응
+
+`HonestSign`의 전제(다음 seq, 직전 서명 본문의 접두 확장)는 `ityv-ledger`의 `WitnessMemory::may_sign`이 구현한다(ADR-0016 §4). 모델의 접두 관계는 코드에서 일관성 증명 검증으로, `Quorum`은 `QuorumProfile`로 대응하며, 모델의 `ASSUME 2·Quorum − N > Byzantine`는 `QuorumProfile::new`의 유효성 조건이다.
+
 ## 모델이 다루지 않는 것
 
 서명 위조, 이벤트 내용의 진실성, 투표함 마감·분쟁 root, 외부 핀, 가용성(liveness). 이들은 암호 크레이트의 검증과 P0 게이트가 다룬다.
