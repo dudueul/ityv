@@ -152,7 +152,7 @@ fn cast_record_body_vectors() {
     v.push(invalid(
         "no commitments",
         b,
-        "InvariantViolation",
+        "ValueOutOfRange",
         commitments_at,
     ));
     let x_at = counters_at + 4;
@@ -160,6 +160,16 @@ fn cast_record_body_vectors() {
     let mut b = bytes.clone();
     b[y_at + 4 + 4] = b'X';
     v.push(invalid("duplicate module", b, "Duplicate", y_at));
+    let mut b = bytes[..counters_at].to_vec();
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&bytes[flags_at - 64..]);
+    fix_len(&mut b);
+    v.push(invalid(
+        "no module counters",
+        b,
+        "ValueOutOfRange",
+        counters_at,
+    ));
     check!(
         CastRecordBody<'_>,
         "cast_record_body.txt",
@@ -269,6 +279,17 @@ fn challenge_opening_vectors() {
         "InvariantViolation",
         x_rand_at,
     ));
+    let x_at = rand_at + 4 + 64 + 4;
+    let y_at = x_rand_at + 4 + 64 + 24;
+    let mut b = bytes.clone();
+    b[x_at + 4 + 4] = b'Y';
+    b[y_at + 4 + 4] = b'X';
+    v.push(invalid("modules out of order", b, "NotSorted", y_at));
+    let mut b = bytes[..rand_at].to_vec();
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&bytes[rand_at + 4 + 64..]);
+    fix_len(&mut b);
+    v.push(invalid("no rand", b, "ValueOutOfRange", rand_at));
     check!(
         ChallengeOpeningBody<'_>,
         "challenge_opening_body.txt",
@@ -299,7 +320,7 @@ fn challenge_opening_vectors() {
 }
 
 #[test]
-fn share_package_and_member_share_vectors() {
+fn share_package_vectors() {
     let ct_a = std::vec![0x11u8; 300];
     let ct_b = std::vec![0x22u8; 1900];
     let tag_a = patterned::<16>(0x01);
@@ -346,6 +367,32 @@ fn share_package_and_member_share_vectors() {
         "ValueOutOfRange",
         b_chamber + 2,
     ));
+    let mut b = bytes.clone();
+    b[b_chamber + 2 + 4 + 7] = 1;
+    v.push(invalid(
+        "kem entry with pad index",
+        b,
+        "ValueOutOfRange",
+        b_chamber + 2 + 4,
+    ));
+    let mut b = bytes.clone();
+    b[a_chamber + 1] = 2;
+    v.push(invalid("transport 2", b, "ValueOutOfRange", a_chamber + 1));
+    let a_at = a_chamber - ident_len(b"trustee-A");
+    let b_at = b_chamber - ident_len(b"trustee-B");
+    let mut b = bytes.clone();
+    b[a_at + 4 + 8] = b'B';
+    b[b_at + 4 + 8] = b'A';
+    v.push(invalid("trustees out of order", b, "NotSorted", b_at));
+    let commitments_at = HEADER_LEN + ident_len(E) + ident_len(BOX);
+    let mut b = bytes.clone();
+    b[commitments_at..commitments_at + 4].copy_from_slice(&0u32.to_be_bytes());
+    v.push(invalid(
+        "no commitments",
+        b,
+        "ValueOutOfRange",
+        commitments_at,
+    ));
     check!(
         SharePackage<'_>,
         "share_package.txt",
@@ -353,7 +400,10 @@ fn share_package_and_member_share_vectors() {
         SCHEMA_SHARE_PACKAGE,
         &v,
     );
+}
 
+#[test]
+fn member_share_vectors() {
     let tag = patterned::<16>(0x09);
     let with_module = MemberShare::new(
         &Scalars::<MAX_SECRETS>::new(&scalars(5, 0x80)).unwrap(),
@@ -381,6 +431,8 @@ fn share_package_and_member_share_vectors() {
         ),
         valid("chamber without module", wb.clone()),
     ];
+    let lab_at = cid_at + 24;
+    let tag_at = lab_at + 1;
     let mut b = wb.clone();
     b[cid_at] = 1;
     m.push(invalid(
@@ -389,9 +441,28 @@ fn share_package_and_member_share_vectors() {
         "InvariantViolation",
         cid_at,
     ));
+    let mut b = wb[..lab_at].to_vec();
+    b.push(1);
+    b.extend_from_slice(&[0u8; 24]);
+    b.extend_from_slice(&wb[lab_at + 1..]);
+    fix_len(&mut b);
+    m.push(invalid(
+        "no module but label present",
+        b,
+        "InvariantViolation",
+        lab_at,
+    ));
+    let mut b = wb.clone();
+    b[tag_at + 15] = 1;
+    m.push(invalid(
+        "no module but non-zero tag",
+        b,
+        "InvariantViolation",
+        tag_at,
+    ));
     let mut b = wb.clone();
     b[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&0u32.to_be_bytes());
-    m.push(invalid("no shares", b, "InvariantViolation", HEADER_LEN));
+    m.push(invalid("no shares", b, "ValueOutOfRange", HEADER_LEN));
     check!(
         MemberShare<'_>,
         "member_share.txt",
@@ -483,6 +554,22 @@ fn batch_attest_vectors() {
         "InvariantViolation",
         sigs_at,
     ));
+    // mod-Y refused the batch, so its signature must not appear.
+    let sy = patterned::<4691>(0x32);
+    let mut b = eb[..sigs_at].to_vec();
+    b.extend_from_slice(&2u32.to_be_bytes());
+    b.extend_from_slice(&eb[sigs_at + 4..sigs_at + 4 + ident_len(b"mod-X") + 4691]);
+    b.extend_from_slice(&5u32.to_be_bytes());
+    b.extend_from_slice(b"mod-Y");
+    b.extend_from_slice(&sy);
+    b.extend_from_slice(&device);
+    fix_len(&mut b);
+    w.push(invalid(
+        "signature from a refusing module",
+        b,
+        "InvariantViolation",
+        sigs_at,
+    ));
     check!(
         BatchAttest<'_>,
         "batch_attest.txt",
@@ -547,6 +634,16 @@ fn scan_count_attest_vectors() {
         "observers from one organization",
         b,
         "InvariantViolation",
+        sigs_at,
+    ));
+    let mut b = eb[..sigs_at].to_vec();
+    b.extend_from_slice(&1u32.to_be_bytes());
+    b.extend_from_slice(&eb[sigs_at + 4..sigs_at + 4 + one]);
+    fix_len(&mut b);
+    w.push(invalid(
+        "one observer signature",
+        b,
+        "ValueOutOfRange",
         sigs_at,
     ));
     check!(
@@ -622,6 +719,30 @@ fn box_close_vectors() {
     let mut b = mb.clone();
     b[role2_at] = 2;
     w.push(invalid("only one clerk", b, "InvariantViolation", att_at));
+    let mut b = mb.clone();
+    b[role2_at] = 3;
+    w.push(invalid("role 3", b, "ValueOutOfRange", role2_at));
+    let mut b = mb.clone();
+    b[role2_at] = 0;
+    w.push(invalid("role 0", b, "ValueOutOfRange", role2_at));
+    let obs2_org_at = role2_at
+        + 1
+        + ident_len(b"nec")
+        + 4691
+        + ident_len(b"obs-1")
+        + 1
+        + ident_len(b"party-A")
+        + 4691
+        + ident_len(b"obs-2")
+        + 1;
+    let mut b = mb.clone();
+    b[obs2_org_at + 4 + 6] = b'A';
+    w.push(invalid(
+        "observers from one organization",
+        b,
+        "InvariantViolation",
+        att_at,
+    ));
     let mut b = mb.clone();
     b[att_at - 1] = 2;
     w.push(invalid(

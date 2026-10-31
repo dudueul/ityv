@@ -139,7 +139,7 @@ impl<'a> Decode<'a> for Commitments {
         let at = r.position();
         let count = r.read_count(MAX_CHUNKS)?;
         if count == 0 {
-            return Err(Error::new(Kind::InvariantViolation, at));
+            return Err(Error::new(Kind::ValueOutOfRange, at));
         }
         let mut items = [Point32([0; 32]); MAX_CHUNKS];
         for slot in items.iter_mut().take(count) {

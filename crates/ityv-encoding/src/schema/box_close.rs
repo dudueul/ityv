@@ -265,29 +265,32 @@ pub struct Attestation<'a> {
     pub sig: &'a [u8; HYBRID_SIG_LEN],
 }
 
-/// Returns `true` if the attestations include at least two clerks and at
-/// least two observers from distinct organizations.
+/// Returns `true` if the attestations include at least [`MIN_CLERKS`]
+/// clerks and observers from at least [`MIN_OBSERVERS`] distinct
+/// organizations.
 fn roles_satisfied<'a, I>(attestations: I) -> bool
 where
     I: IntoIterator<Item = Attestation<'a>>,
 {
     let mut clerks = 0usize;
-    let mut first_observer_org: Option<&[u8]> = None;
-    let mut observer_orgs = 0usize;
+    let mut orgs: [Option<&[u8]>; MAX_ATTESTATIONS] = [None; MAX_ATTESTATIONS];
+    let mut distinct = 0usize;
     for a in attestations {
         match a.role {
             SignerRole::Clerk => clerks = clerks.saturating_add(1),
-            SignerRole::Observer => match first_observer_org {
-                None => {
-                    first_observer_org = Some(a.org_id.as_bytes());
-                    observer_orgs = 1;
+            SignerRole::Observer => {
+                let org = a.org_id.as_bytes();
+                let seen = orgs.iter().take(distinct).flatten().any(|o| *o == org);
+                if !seen {
+                    if let Some(slot) = orgs.get_mut(distinct) {
+                        *slot = Some(org);
+                    }
+                    distinct = distinct.saturating_add(1);
                 }
-                Some(org) if org != a.org_id.as_bytes() => observer_orgs = 2,
-                Some(_) => {}
-            },
+            }
         }
     }
-    clerks >= MIN_CLERKS && observer_orgs >= MIN_OBSERVERS
+    clerks >= MIN_CLERKS && distinct >= MIN_OBSERVERS
 }
 
 /// A box-close event: the body object bytes, the device's hybrid signature

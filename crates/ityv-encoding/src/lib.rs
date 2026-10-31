@@ -55,16 +55,16 @@ pub use schema::authorization::{
 };
 pub use schema::batch_attest::{
     BatchAttest, BatchAttestBody, BatchAttestParts, MAX_BATCH_BODY_LEN, MAX_BATCH_RECORDS,
-    ModuleBatchSig, ModuleRange,
+    ModuleBatchSig, ModuleRange, record_count_valid,
 };
 pub use schema::box_close::{
     Attestation, BoxClose, BoxCloseBody, BoxCloseParts, CloseCounts, MAX_ATTESTATIONS,
     MAX_BOX_CLOSE_BODY_LEN, MIN_CLERKS, MIN_OBSERVERS, SignerRole,
 };
 pub use schema::cast_record::{
-    CastRecord, CastRecordBody, CastRecordParts, MAX_CAST_RECORD_BODY_LEN, MAX_PROOF_LEN,
-    ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, ProofHeader, TRANSPORT_FLAGS_MASK,
-    TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE,
+    CastRecord, CastRecordBody, CastRecordParts, MAX_CAST_RECORD_BODY_LEN, MAX_OPTION_COUNT,
+    MAX_PROOF_LEN, MIN_OPTION_COUNT, ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, ProofHeader,
+    TRANSPORT_FLAGS_MASK, TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE, transport_flags_valid,
 };
 pub use schema::challenge::{
     ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_CHALLENGE_BODY_LEN,
@@ -78,7 +78,7 @@ pub use schema::scan_count::{
 };
 pub use schema::share_package::{
     ChamberCode, MAX_CIPHERTEXT_LEN, MAX_ENTRIES, MAX_SECRETS, MemberShare, ShareEntry,
-    SharePackage, Transport,
+    SharePackage, Transport, pad_fields_valid, transport_code_valid,
 };
 pub use schema::slip::{MAX_SLIP_BODY_LEN, Slip, SlipBody};
 pub use schema::util::{

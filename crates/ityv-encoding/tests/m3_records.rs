@@ -146,6 +146,10 @@ fn proof_header_parses_the_protocol_formula() {
     assert!(ProofHeader::parse(&proof[..proof.len() - 1]).is_none());
     assert!(ProofHeader::parse(&proof_bytes(16, 3, 0)).is_none());
     assert!(ProofHeader::parse(&proof_bytes(0, 1, 0)).is_none());
+    // PROTOCOL §7.5: at least two options (one candidate plus BLANK is the
+    // smallest ballot the proof system is defined for) and at most 64.
+    assert!(ProofHeader::parse(&proof_bytes(1, 1, 0)).is_none());
+    assert!(ProofHeader::parse(&proof_bytes(2, 1, 0)).is_some());
     assert!(ProofHeader::parse(&proof_bytes(65, 8, 0)).is_none());
     assert!(ProofHeader::parse(&[0, 9]).is_none());
     assert_eq!(proof_bytes(64, 8, 0).len(), MAX_PROOF_LEN);
@@ -166,7 +170,7 @@ fn cast_record_body_round_trip_and_length() {
     let decoded: CastRecordBody<'_> =
         decode_object(SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
     assert_eq!(decoded, body);
-    assert_eq!(decoded.proof_system_id(), 1);
+    assert_eq!(CastRecordBody::proof_system_id(), 1);
     assert_eq!(decoded.commitments().chunk_count(), 2);
     assert_eq!(decoded.proof(), &r.proof[..]);
     assert_eq!(decoded.proof_header().option_count, 16);
@@ -331,16 +335,16 @@ fn cast_record_body_decoder_rejects_each_rule() {
     forged[12..16].copy_from_slice(&body_len.to_be_bytes());
     assert_eq!(
         kind_at(decode_cast_record_body(&forged)),
-        (ErrorKind::InvariantViolation, off.module_counters)
+        (ErrorKind::ValueOutOfRange, off.module_counters)
     );
     assert!(CastRecordBody::new(&empty).is_none());
 
-    // Empty commitments.
+    // Empty commitments: a minimum-count violation (ENCODING §8.20).
     let mut v = bytes.clone();
     v[off.commitments..off.commitments + 4].copy_from_slice(&0u32.to_be_bytes());
     assert_eq!(
         kind_at(decode_cast_record_body(&v)),
-        (ErrorKind::InvariantViolation, off.commitments)
+        (ErrorKind::ValueOutOfRange, off.commitments)
     );
     let mut v = bytes.clone();
     v[off.commitments..off.commitments + 4].copy_from_slice(&9u32.to_be_bytes());
@@ -566,7 +570,7 @@ fn challenge_opening_round_trip_and_rules() {
     v[12..16].copy_from_slice(&body_len.to_be_bytes());
     assert_eq!(
         kind_at(decode_challenge_opening_body(&v)),
-        (ErrorKind::InvariantViolation, rand_at)
+        (ErrorKind::ValueOutOfRange, rand_at)
     );
 
     // Constructor rejections.
@@ -711,6 +715,25 @@ fn share_package_round_trip_and_rules() {
         kind_at(decode_share_package(&v)),
         (ErrorKind::ValueOutOfRange, b_chamber + 2 + 4)
     );
+    // ENCODING §8.20: each field is checked as soon as it is read. A body
+    // that ends right after an invalid transport code, or right after a
+    // non-zero KEM pad id, reports that field rather than UnexpectedEnd.
+    let mut v = bytes[..a_chamber + 2].to_vec();
+    v[a_chamber + 1] = 2;
+    let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+    v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    assert_eq!(
+        kind_at(decode_share_package(&v)),
+        (ErrorKind::ValueOutOfRange, a_chamber + 1)
+    );
+    let mut v = bytes[..b_chamber + 2 + 4].to_vec();
+    v[b_chamber + 2 + 3] = 1;
+    let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+    v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    assert_eq!(
+        kind_at(decode_share_package(&v)),
+        (ErrorKind::ValueOutOfRange, b_chamber + 2)
+    );
     // Unsorted / duplicate trustee ids.
     let mut v = bytes.clone();
     v[a_at + 4 + 8] = b'B';
@@ -740,13 +763,13 @@ fn share_package_round_trip_and_rules() {
         kind_at(decode_share_package(&v)),
         (ErrorKind::CountExceedsMax, entries_at)
     );
-    // Empty commitments.
+    // Empty commitments: a minimum-count violation (ENCODING §8.20).
     let c_at = HEADER_LEN + ident_len(E) + ident_len(BOX);
     let mut v = bytes.clone();
     v[c_at..c_at + 4].copy_from_slice(&0u32.to_be_bytes());
     assert_eq!(
         kind_at(decode_share_package(&v)),
-        (ErrorKind::InvariantViolation, c_at)
+        (ErrorKind::ValueOutOfRange, c_at)
     );
 
     // Constructor rejections.
@@ -914,6 +937,26 @@ fn member_share_round_trip_and_rules() {
         kind_at(decode_member_share(&v)),
         (ErrorKind::InvariantViolation, w_lab_at)
     );
+    // ENCODING §8.20: `cid` is checked as soon as it is read and `lab` as
+    // soon as it is read, so a body that ends right after the offending
+    // field still reports that field rather than UnexpectedEnd.
+    let mut v = wb[..w_cid_at + 24].to_vec();
+    v[w_cid_at + 3] = 1;
+    let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+    v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    assert_eq!(
+        kind_at(decode_member_share(&v)),
+        (ErrorKind::InvariantViolation, w_cid_at)
+    );
+    let mut v = wb[..w_lab_at].to_vec();
+    v.push(1);
+    v.extend_from_slice(&[0u8; 24]);
+    let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+    v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    assert_eq!(
+        kind_at(decode_member_share(&v)),
+        (ErrorKind::InvariantViolation, w_lab_at)
+    );
     // Flag byte that is neither 0 nor 1.
     let mut v = wb.clone();
     v[w_flag_at] = 2;
@@ -921,12 +964,12 @@ fn member_share_round_trip_and_rules() {
         kind_at(decode_member_share(&v)),
         (ErrorKind::InvalidBool, w_flag_at)
     );
-    // Empty shares.
+    // Empty shares: a minimum-count violation (ENCODING §8.20).
     let mut v = bytes.clone();
     v[shares_at..shares_at + 4].copy_from_slice(&0u32.to_be_bytes());
     assert_eq!(
         kind_at(decode_member_share(&v)),
-        (ErrorKind::InvariantViolation, shares_at)
+        (ErrorKind::ValueOutOfRange, shares_at)
     );
     let mut v = bytes.clone();
     v[shares_at..shares_at + 4].copy_from_slice(&51u32.to_be_bytes());

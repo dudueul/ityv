@@ -208,6 +208,106 @@ fn batch_attest_body_round_trip_and_rules() {
     assert!(BatchAttestBody::new(&batch_parts(&seven, ModuleIds::new(&[]).unwrap())).is_none());
 }
 
+/// Two refusals and two signers: the refusal array and the signature
+/// array each hold two elements, so `NotSorted` and `Duplicate` are
+/// exercised at decode time, and a refusing module's signature is a
+/// set-level violation found after the array is read (ENCODING §8.20).
+#[test]
+fn batch_attest_two_refusals_and_two_signers() {
+    let ranges = [
+        range(b"mod-W", 1, 64),
+        range(b"mod-X", 1, 64),
+        range(b"mod-Y", 1, 64),
+        range(b"mod-Z", 1, 64),
+    ];
+    let refusals = ModuleIds::new(&[mid(b"mod-Y"), mid(b"mod-Z")]).unwrap();
+    let body = BatchAttestBody::new(&batch_parts(&ranges, refusals)).unwrap();
+    let body_bytes = encode_to_vec(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body);
+    let ranges_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 4 + 2 + 64;
+    let one_range = ident_len(b"mod-W") + 16;
+    let refusals_at = ranges_at + 4 + 4 * one_range;
+    let y_ref_at = refusals_at + 4;
+    let z_ref_at = y_ref_at + ident_len(b"mod-Y");
+    assert_eq!(body_bytes.len(), z_ref_at + ident_len(b"mod-Z") + 64 + 8);
+    let decoded: BatchAttestBody<'_> =
+        decode_object(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body_bytes).unwrap();
+    assert_eq!(decoded, body);
+    assert_eq!(decoded.module_refusals().len(), 2);
+    let signers: Vec<ModuleId<'_>> = decoded.expected_signers().collect();
+    assert_eq!(signers, [mid(b"mod-W"), mid(b"mod-X")]);
+    // Refusals out of order or duplicated are found while the array is read.
+    let mut v = body_bytes.clone();
+    v[y_ref_at + 4 + 4] = b'Z';
+    v[z_ref_at + 4 + 4] = b'Y';
+    assert_eq!(
+        kind_at(decode_batch_attest_body(&v)),
+        (ErrorKind::NotSorted, z_ref_at)
+    );
+    let mut v = body_bytes.clone();
+    v[z_ref_at + 4 + 4] = b'Y';
+    assert_eq!(
+        kind_at(decode_batch_attest_body(&v)),
+        (ErrorKind::Duplicate, z_ref_at)
+    );
+    assert!(ModuleIds::new(&[mid(b"mod-Z"), mid(b"mod-Y")]).is_none());
+    assert!(ModuleIds::new(&[mid(b"mod-Y"), mid(b"mod-Y")]).is_none());
+
+    let sw = patterned::<4691>(0x34);
+    let sx = patterned::<4691>(0x35);
+    let device = patterned::<4691>(0x33);
+    let sigs = [
+        ModuleBatchSig {
+            module_id: mid(b"mod-W"),
+            sig: &sw,
+        },
+        ModuleBatchSig {
+            module_id: mid(b"mod-X"),
+            sig: &sx,
+        },
+    ];
+    let event = BatchAttest::new(&body_bytes, &sigs, &device).unwrap();
+    let bytes = encode_to_vec(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, &event);
+    let sigs_at = HEADER_LEN + 4 + body_bytes.len();
+    let w_sig_at = sigs_at + 4;
+    let x_sig_at = w_sig_at + ident_len(b"mod-W") + 4691;
+    assert_eq!(bytes.len(), x_sig_at + ident_len(b"mod-X") + 4691 + 4691);
+    let decoded: BatchAttest<'_> =
+        decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(decoded, event);
+    let got: Vec<ModuleBatchSig<'_>> = decoded.module_sigs().collect();
+    assert_eq!(got, sigs);
+    // Signers out of order or duplicated are found while the array is read.
+    let mut v = bytes.clone();
+    v[w_sig_at + 4 + 4] = b'X';
+    v[x_sig_at + 4 + 4] = b'W';
+    assert_eq!(
+        kind_at(decode_batch_attest(&v)),
+        (ErrorKind::NotSorted, x_sig_at)
+    );
+    let mut v = bytes.clone();
+    v[x_sig_at + 4 + 4] = b'W';
+    assert_eq!(
+        kind_at(decode_batch_attest(&v)),
+        (ErrorKind::Duplicate, x_sig_at)
+    );
+    // A sorted, duplicate-free set that names a refusing module (W, Y) is
+    // a set-level violation reported at the count prefix.
+    let mut v = bytes.clone();
+    v[x_sig_at + 4 + 4] = b'Y';
+    assert_eq!(
+        kind_at(decode_batch_attest(&v)),
+        (ErrorKind::InvariantViolation, sigs_at)
+    );
+    assert_eq!(
+        kind_at(BatchAttest::new(&body_bytes, &[sigs[1], sigs[0]], &device)),
+        (ErrorKind::InvariantViolation, 0)
+    );
+    assert_eq!(
+        kind_at(BatchAttest::new(&body_bytes, &[sigs[0], sigs[0]], &device)),
+        (ErrorKind::InvariantViolation, 0)
+    );
+}
+
 #[test]
 fn batch_attest_round_trip_and_signer_set() {
     let ranges = [range(b"mod-X", 100, 163), range(b"mod-Y", 200, 263)];
@@ -401,8 +501,36 @@ fn scan_count_attest_round_trip_and_rules() {
     let back: ScanCountAttest<'_> =
         decode_object(SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_VERSION_1, &four_bytes).unwrap();
     assert_eq!(back, four);
+    // Distinct organizations are counted: A, A, B passes and A, A, A fails.
+    let three_two = [
+        observer(b"obs-1", b"org-A", &s1),
+        observer(b"obs-2", b"org-A", &s2),
+        observer(b"obs-3", b"org-B", &s1),
+    ];
+    let ok3 = ScanCountAttest::new(&body_bytes, &three_two).unwrap();
+    let ok3_bytes = encode_to_vec(SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_VERSION_1, &ok3);
+    let back: ScanCountAttest<'_> =
+        decode_object(SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_VERSION_1, &ok3_bytes).unwrap();
+    assert_eq!(back, ok3);
+    let three_one = [
+        observer(b"obs-1", b"org-A", &s1),
+        observer(b"obs-2", b"org-A", &s2),
+        observer(b"obs-3", b"org-A", &s1),
+    ];
+    assert_eq!(
+        kind_at(ScanCountAttest::new(&body_bytes, &three_one)),
+        (ErrorKind::InvariantViolation, 0)
+    );
+    let org3_at = sigs_at + 4 + 2 * one + ident_len(b"obs-3") + 4;
+    let mut v = ok3_bytes.clone();
+    v[org3_at + 4] = b'A';
+    assert_eq!(
+        kind_at(decode_scan_count_attest(&v)),
+        (ErrorKind::InvariantViolation, sigs_at)
+    );
 
-    // Decoder: one signature.
+    // Decoder: one signature is a minimum-count violation (ENCODING §8.20),
+    // reported as soon as the count is read.
     let mut v = bytes[..sigs_at].to_vec();
     v.extend_from_slice(&1u32.to_be_bytes());
     v.extend_from_slice(&bytes[sigs_at + 4..sigs_at + 4 + one]);
@@ -410,7 +538,15 @@ fn scan_count_attest_round_trip_and_rules() {
     v[12..16].copy_from_slice(&body_len.to_be_bytes());
     assert_eq!(
         kind_at(decode_scan_count_attest(&v)),
-        (ErrorKind::InvariantViolation, sigs_at)
+        (ErrorKind::ValueOutOfRange, sigs_at)
+    );
+    let mut v = bytes[..sigs_at].to_vec();
+    v.extend_from_slice(&0u32.to_be_bytes());
+    let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+    v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    assert_eq!(
+        kind_at(decode_scan_count_attest(&v)),
+        (ErrorKind::ValueOutOfRange, sigs_at)
     );
     // Decoder: both from org-A.
     let org2_at = sigs_at + 4 + one + ident_len(b"obs-2") + 4;
@@ -640,6 +776,38 @@ fn box_close_round_trip_and_rules() {
     assert_eq!(
         kind_at(decode_box_close(&v)),
         (ErrorKind::InvariantViolation, att_at)
+    );
+    // Distinct observer organizations are counted: A, A, B passes and
+    // A, A, A fails, in the constructor and in the decoder.
+    let three_two = [
+        attestations[0],
+        attestations[1],
+        attestation(b"obs-1", SignerRole::Observer, b"party-A", &s),
+        attestation(b"obs-2", SignerRole::Observer, b"party-A", &s),
+        attestation(b"obs-3", SignerRole::Observer, b"party-B", &s),
+    ];
+    let ok3 = BoxClose::new(&body_bytes, None, &three_two).unwrap();
+    let ok3_bytes = encode_to_vec(SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, &ok3);
+    let back: BoxClose<'_> = decode_object(SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, &ok3_bytes).unwrap();
+    assert_eq!(back, ok3);
+    let three_one = [
+        attestations[0],
+        attestations[1],
+        attestation(b"obs-1", SignerRole::Observer, b"party-A", &s),
+        attestation(b"obs-2", SignerRole::Observer, b"party-A", &s),
+        attestation(b"obs-3", SignerRole::Observer, b"party-A", &s),
+    ];
+    assert_eq!(
+        kind_at(BoxClose::new(&body_bytes, None, &three_one)),
+        (ErrorKind::InvariantViolation, 0)
+    );
+    let m_att_at = HEADER_LEN + 4 + body_bytes.len() + 1;
+    let org3_at = m_att_at + 4 + 2 * clerk + 2 * obs + ident_len(b"obs-3") + 1;
+    let mut v = ok3_bytes.clone();
+    v[org3_at + 4 + 6] = b'A';
+    assert_eq!(
+        kind_at(decode_box_close(&v)),
+        (ErrorKind::InvariantViolation, m_att_at)
     );
     // Decoder: unsorted signers.
     let c1_at = att_at + 4;

@@ -24,6 +24,12 @@ pub const MAX_BATCH_RECORDS: u16 = 64;
 /// Maximum length of the embedded `BatchAttestBody` object bytes.
 pub const MAX_BATCH_BODY_LEN: usize = 2048;
 
+/// Returns `true` if `record_count` is within `1..=64`.
+#[must_use]
+pub const fn record_count_valid(record_count: u16) -> bool {
+    record_count >= 1 && record_count <= MAX_BATCH_RECORDS
+}
+
 /// One module's counter range within a batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ModuleRange<'a> {
@@ -81,7 +87,7 @@ impl<'a> BatchAttestBody<'a> {
     #[must_use]
     pub fn new(parts: &BatchAttestParts<'a>) -> Option<Self> {
         let module_ranges = parts.module_ranges;
-        if parts.record_count == 0 || parts.record_count > MAX_BATCH_RECORDS {
+        if !record_count_valid(parts.record_count) {
             return None;
         }
         if module_ranges.len() > MAX_MODULES {
@@ -228,7 +234,7 @@ impl<'a> Decode<'a> for BatchAttestBody<'a> {
         let batch_index = r.read_u32()?;
         let count_at = r.position();
         let record_count = r.read_u16()?;
-        if record_count == 0 || record_count > MAX_BATCH_RECORDS {
+        if !record_count_valid(record_count) {
             return Err(Error::new(Kind::ValueOutOfRange, count_at));
         }
         let records_root = Hash512::decode(r)?;

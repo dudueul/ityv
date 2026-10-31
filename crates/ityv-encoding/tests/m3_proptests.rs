@@ -51,8 +51,8 @@ macro_rules! check_canonical {
                 let outcome: Result<$ty, _> = decode_object($schema, SCHEMA_VERSION_1, &mutated);
                 if let Ok(other) = outcome {
                     prop_assert_ne!(
-                        other,
-                        original,
+                        &other,
+                        &original,
                         "mutation at {} decoded to the same value",
                         i
                     );
@@ -85,10 +85,11 @@ fn token() -> impl Strategy<Value = Token192> {
     any::<[u8; 24]>().prop_map(Token192)
 }
 
-/// A commitment vector of `k` points and a proof whose header matches.
+/// A commitment vector of `k` points and a proof whose header matches:
+/// `option_count` in `2..=9` for one chunk and `10..=18` for two.
 fn record_core() -> impl Strategy<Value = (Vec<Point32>, Vec<u8>)> {
     (1u8..=2).prop_flat_map(|k| {
-        let lo = u16::from(k - 1) * 9 + 1;
+        let lo = (u16::from(k - 1) * 9 + 1).max(2);
         let hi = u16::from(k) * 9;
         (
             prop::collection::vec(point(), usize::from(k)),

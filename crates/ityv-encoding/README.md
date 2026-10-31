@@ -70,7 +70,7 @@ assert_eq!(decoded, frame);
 
 **본문 + 서명 묶음 규칙(ADR-0017 §2).** 자기 서명을 담는 이벤트는 본문 객체와 래퍼 객체로 나뉜다. 래퍼의 `body` 필드는 인코딩된 본문 객체 바이트 전체(헤더 포함)이고 서명 메시지는 정확히 그 바이트다. 래퍼 디코더는 본문을 그 스키마의 규칙으로 다시 디코딩하며, 본문 안의 오류 오프셋은 바깥 객체 기준으로 옮겨 보고한다(헤더 16 + 길이 접두 4 + 안쪽 오프셋). 서명과 본문은 입력에서 빌려 쓰며 복사하지 않으므로 4,691바이트 서명이나 22KB 본문이 스택에 복제되지 않는다.
 
-**교차 필드 규칙의 오류 종류.** 표가 종류를 정하지 않은 규칙은 `InvariantViolation`을 필드 오프셋에서 돌려준다: 커밋먼트·`rand`·`shares`가 비어 있음, `module_counters`가 비어 있음, 증명 머리부 불일치, 서명자 집합 불일치, 참관인·사무원 수와 조직 다양성, `MemberShare`의 모듈 없는 경우 0 아닌 `cid`·`tag`나 존재하는 `lab`, 거부 모듈이 구간에 없음, 모듈별 `rand` 개수 불일치. 숫자 범위(`proof_system_id`, `option_index > 63`, `transport_flags`, `chamber`, `transport`, KEM 항목의 0 아닌 `pad_id`·`pad_index`, `record_count`, `counter_first > counter_last`, `role`)는 `ValueOutOfRange`다.
+**오류 종류와 오프셋(ENCODING §8.20).** 디코더는 필드를 읽는 즉시 그 필드의 규칙을 검사하고 첫 위반에서 멈춘다. 개수에 하한이 있는 배열은 하한 미달을 `ValueOutOfRange`(개수 접두사 오프셋)로 보고한다: `CastRecordBody`·`SharePackage`의 커밋먼트(1 이상), `ChallengeOpeningBody`의 `rand`(1 이상), `MemberShare`의 `shares`(1 이상), `CastRecordBody`의 `module_counters`(1 이상), `ScanCountAttest`의 `observer_sigs`(2 이상). 집합 수준 불변식은 배열 전체를 읽은 뒤 그 배열의 개수 접두사 오프셋에서 `InvariantViolation`으로 보고한다: `CastRecord`·`BatchAttest`의 서명자 집합 불일치(거부 모듈의 서명 포함), `BatchAttestBody`의 구간에 없는 거부 모듈, `ScanCountAttest`의 참관인 조직 다양성, `BoxClose`의 사무원 2·서로 다른 조직의 참관인 2. 배열 안의 위반(`NotSorted`·`Duplicate`·범위)이 먼저 발견되면 그것이 우선한다. 필드 하나의 규칙은 그 필드 오프셋에서 보고한다: 숫자 범위(`proof_system_id`, `option_index > 63`, `transport_flags`, `chamber`, `transport`, KEM 항목의 0 아닌 `pad_id`·`pad_index`, `record_count`, `counter_first > counter_last`, `role`)는 `ValueOutOfRange`, 증명 머리부 불일치(`option_count ∈ 2..=64`, `chunk_count = ⌈option_count/9⌉`, 길이 공식, `chunk_count` = 커밋먼트 수), 모듈별 `rand` 개수 불일치, `MemberShare`의 모듈 없는 경우 0 아닌 `cid`·`tag`나 존재하는 `lab`은 `InvariantViolation`이다. 생성자(`new`)는 같은 규칙을 검사하되 집합 수준 오류와 개수 하한 미달을 오프셋 0의 `InvariantViolation`으로(`Option`을 돌려주는 생성자는 `None`으로) 보고한다.
 
 **최대 길이(헤더 포함).** `CastRecordBody` 21,494 · `CastRecord` 22,374 · `ChallengeOpeningBody` 2,734 · `ChallengeOpening` 7,445 · `SharePackage` 269,088 · `MemberShare` 1,686 · `BatchAttestBody` 1,214 · `BatchAttest` 34,483 · `ScanCountAttestBody` 248 · `ScanCountAttest` 19,580 · `BoxCloseBody` 861 · `BoxClose` 44,201 · `SlipBody` 224 · `Slip` 4,935.
 
@@ -78,14 +78,14 @@ assert_eq!(decoded, frame);
 
 ```bash
 cargo test --locked -p ityv-encoding                  # V1: 단위·속성·골든 벡터 테스트
-ITYV_UPDATE_VECTORS=1 cargo test --locked -p ityv-encoding --test vectors   # 벡터 재생성
-cargo kani -p ityv-encoding                           # V2: Kani 하네스 16개
+ITYV_UPDATE_VECTORS=1 cargo test --locked -p ityv-encoding --test vectors --test m3_vectors   # 벡터 재생성
+cargo kani -p ityv-encoding                           # V2: Kani 하네스 24개
 cargo mutants -p ityv-encoding                        # V1: 변이 테스트
 ```
 
-속성 테스트는 모든 스키마에 대해 왕복, 모든 단일 바이트 변이가 거부되거나 다른 값으로 디코딩되고 그 재인코딩이 변이 바이트열과 같음(정규성), 모든 진접두사의 거부, 임의 바이트에 대한 모든 디코더의 무패닉을 검사한다. Kani 하네스는 정수 왕복, 불리언·존재 태그 엄격성, 식별자 알파벳의 정확성, 헤더 거부, 임의 입력에 대한 리더·라이터의 무패닉, `LedgerFrame`·`SlipBody`·`ScanCountAttestBody`·`BoxCloseBody` 왕복, 투함 기록 증명 머리부 검사의 정확성을 유계 모델 검사로 증명한다.
+속성 테스트는 모든 스키마에 대해 왕복, 모든 단일 바이트 변이가 거부되거나 다른 값으로 디코딩되고 그 재인코딩이 변이 바이트열과 같음(정규성), 모든 진접두사의 거부, 임의 바이트에 대한 모든 디코더의 무패닉을 검사한다. Kani 하네스는 정수 왕복, 불리언·존재 태그 엄격성, 식별자 알파벳의 정확성, 헤더 거부, 임의 입력에 대한 리더·라이터의 무패닉, `LedgerFrame`·`SlipBody`·`ScanCountAttestBody`·`BoxCloseBody`·`MemberShare`·`BatchAttestBody` 왕복, 투함 기록 증명 머리부 검사의 정확성(PROTOCOL §7.5 공식을 독립적으로 적은 식과 대조), 유한 영역 교차 필드 검사의 정확성(`transport_flags` 마스크, 칸·운반·역할 코드, `record_count` 범위, KEM 항목의 0 패드 필드), 그리고 실제 디코더를 통과한 `SharePackage` 항목의 코드·패드 필드 검사와 첫 위반 오프셋을 유계 모델 검사로 증명한다.
 
-변이 테스트의 알려진 동치 변이는 하나다: `CastRecordBody::proof_system_id`를 상수 1로 바꾸는 변이(값이 항상 1). `.cargo/mutants.toml`에서 이름으로 제외하고 사유를 적었다.
+변이 테스트에서 이 크레이트에 이름으로 제외한 변이는 없다. `proof_system_id`는 값이 항상 1이므로 저장하지 않고 상수를 돌려주는 연관 함수로 두어 동치 변이가 생기지 않게 했다.
 
 `vectors/*.txt`는 공개 시험 벡터다(스키마마다 한 파일, 정상 벡터와 거부 벡터). 독립 2차 구현(V5)은 이 파일로 차분 테스트를 한다. 형식은 파일 머리의 주석에 있다. 래퍼 벡터의 서명은 패턴 바이트이며 실제 서명이 아니다: 인코딩 계층은 서명을 불투명한 고정폭 필드로만 다룬다.
 

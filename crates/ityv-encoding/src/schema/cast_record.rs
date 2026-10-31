@@ -36,7 +36,11 @@ pub const MAX_PROOF_LEN: usize = 20_483;
 pub const MAX_CAST_RECORD_BODY_LEN: usize = 22_528;
 
 /// Largest option count the proof system supports (`m + 2`).
-const MAX_OPTION_COUNT: u16 = 64;
+pub const MAX_OPTION_COUNT: u16 = 64;
+
+/// Smallest option count: `option_count = m + 2` for `m >= 0` candidates
+/// (PROTOCOL.md §7.5), so two is the floor even with no candidate.
+pub const MIN_OPTION_COUNT: u16 = 2;
 
 /// Bit 0 of `transport_flags`: at least one member used the KEM fallback.
 pub const TRANSPORT_KEM_FALLBACK: u8 = 0b01;
@@ -71,7 +75,7 @@ impl ProofHeader {
     pub fn parse_with_len(head: [u8; 3], proof_len: usize) -> Option<Self> {
         let [hi, lo, chunk_count] = head;
         let option_count = u16::from_be_bytes([hi, lo]);
-        if option_count == 0 || option_count > MAX_OPTION_COUNT {
+        if !(MIN_OPTION_COUNT..=MAX_OPTION_COUNT).contains(&option_count) {
             return None;
         }
         let expected_chunks = option_count.div_ceil(9);
@@ -115,13 +119,20 @@ pub struct CastRecordParts<'a> {
     pub transport_flags: u8,
 }
 
-/// The body of a cast record.
+/// Returns `true` if `flags` sets no bit outside [`TRANSPORT_FLAGS_MASK`].
+#[must_use]
+pub const fn transport_flags_valid(flags: u8) -> bool {
+    flags & !TRANSPORT_FLAGS_MASK == 0
+}
+
+/// The body of a cast record. The proof system identifier is not stored:
+/// version 1 admits only [`PROOF_SYSTEM_OR_REP_V1`], which the constructor
+/// and the decoder enforce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CastRecordBody<'a> {
     election_id: ElectionId<'a>,
     box_id: BoxId<'a>,
     ballot_style_id: BallotStyleId<'a>,
-    proof_system_id: u16,
     commitments: Commitments,
     proof: &'a [u8],
     module_counters: ModuleCounters<'a>,
@@ -150,14 +161,13 @@ impl<'a> CastRecordBody<'a> {
         if parts.module_counters.is_empty() {
             return None;
         }
-        if parts.transport_flags & !TRANSPORT_FLAGS_MASK != 0 {
+        if !transport_flags_valid(parts.transport_flags) {
             return None;
         }
         Some(Self {
             election_id: parts.election_id,
             box_id: parts.box_id,
             ballot_style_id: parts.ballot_style_id,
-            proof_system_id: parts.proof_system_id,
             commitments: parts.commitments,
             proof: parts.proof,
             module_counters: parts.module_counters,
@@ -184,10 +194,11 @@ impl<'a> CastRecordBody<'a> {
         self.ballot_style_id
     }
 
-    /// The proof system identifier (always 1 in version 1).
+    /// The proof system identifier: always [`PROOF_SYSTEM_OR_REP_V1`] in
+    /// version 1, so it is not stored and needs no receiver.
     #[must_use]
-    pub const fn proof_system_id(&self) -> u16 {
-        self.proof_system_id
+    pub const fn proof_system_id() -> u16 {
+        PROOF_SYSTEM_OR_REP_V1
     }
 
     /// The commitment vector.
@@ -249,7 +260,7 @@ impl Encode for CastRecordBody<'_> {
         self.election_id.encode(w)?;
         self.box_id.encode(w)?;
         self.ballot_style_id.encode(w)?;
-        w.write_u16(self.proof_system_id)?;
+        w.write_u16(PROOF_SYSTEM_OR_REP_V1)?;
         self.commitments.encode(w)?;
         w.write_bytes(self.proof, MAX_PROOF_LEN)?;
         self.module_counters.encode(w)?;
@@ -279,19 +290,18 @@ impl<'a> Decode<'a> for CastRecordBody<'a> {
         let counters_at = r.position();
         let module_counters = ModuleCounters::decode(r)?;
         if module_counters.is_empty() {
-            return Err(Error::new(Kind::InvariantViolation, counters_at));
+            return Err(Error::new(Kind::ValueOutOfRange, counters_at));
         }
         let share_package_hash = Hash512::decode(r)?;
         let flags_at = r.position();
         let transport_flags = r.read_u8()?;
-        if transport_flags & !TRANSPORT_FLAGS_MASK != 0 {
+        if !transport_flags_valid(transport_flags) {
             return Err(Error::new(Kind::ValueOutOfRange, flags_at));
         }
         Ok(Self {
             election_id,
             box_id,
             ballot_style_id,
-            proof_system_id,
             commitments,
             proof,
             module_counters,

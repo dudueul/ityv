@@ -214,7 +214,7 @@ impl<'a> Decode<'a> for ChallengeOpeningBody<'a> {
         let rand_at = r.position();
         let rand = Scalars::<MAX_CHUNKS>::decode(r)?;
         if rand.count() == 0 {
-            return Err(Error::new(Kind::InvariantViolation, rand_at));
+            return Err(Error::new(Kind::ValueOutOfRange, rand_at));
         }
         let modules_at = r.position();
         let count = r.read_count(MAX_MODULES)?;

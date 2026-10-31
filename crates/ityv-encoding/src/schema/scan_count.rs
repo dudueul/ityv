@@ -149,20 +149,25 @@ pub struct ObserverSig<'a> {
     pub sig: &'a [u8; HYBRID_SIG_LEN],
 }
 
-/// Returns `true` if at least two distinct organizations appear.
+/// Returns `true` if at least [`MIN_OBSERVER_SIGS`] distinct organizations
+/// appear.
 fn two_orgs<'a, I>(sigs: I) -> bool
 where
     I: IntoIterator<Item = ObserverSig<'a>>,
 {
-    let mut first: Option<&[u8]> = None;
+    let mut orgs: [Option<&[u8]>; MAX_OBSERVER_SIGS] = [None; MAX_OBSERVER_SIGS];
+    let mut distinct = 0usize;
     for sig in sigs {
-        match first {
-            None => first = Some(sig.org_id.as_bytes()),
-            Some(org) if org != sig.org_id.as_bytes() => return true,
-            Some(_) => {}
+        let org = sig.org_id.as_bytes();
+        let seen = orgs.iter().take(distinct).flatten().any(|o| *o == org);
+        if !seen {
+            if let Some(slot) = orgs.get_mut(distinct) {
+                *slot = Some(org);
+            }
+            distinct = distinct.saturating_add(1);
         }
     }
-    false
+    distinct >= MIN_OBSERVER_SIGS
 }
 
 /// A scan-count attestation: the body object bytes with two or more
@@ -260,7 +265,8 @@ impl<'a> Decode<'a> for ScanCountAttest<'a> {
         let sigs_at = r.position();
         let count = r.read_count(MAX_OBSERVER_SIGS)?;
         if count < MIN_OBSERVER_SIGS {
-            return Err(Error::new(Kind::InvariantViolation, sigs_at));
+            // A minimum count (ENCODING §8.20), checked as soon as read.
+            return Err(Error::new(Kind::ValueOutOfRange, sigs_at));
         }
         let mut sigs = [None; MAX_OBSERVER_SIGS];
         let mut previous: Option<&[u8]> = None;

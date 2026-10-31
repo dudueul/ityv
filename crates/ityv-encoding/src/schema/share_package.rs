@@ -81,6 +81,19 @@ pub enum Transport {
     Kem,
 }
 
+/// Returns `true` if `code` is a defined transport code (0 pad, 1 KEM).
+#[must_use]
+pub const fn transport_code_valid(code: u8) -> bool {
+    code <= 1
+}
+
+/// Returns `true` if the pad fields are admissible for `code`: any value
+/// for pad transport, both zero for KEM transport.
+#[must_use]
+pub const fn pad_fields_valid(code: u8, pad_id: u32, pad_index: u64) -> bool {
+    code == 0 || (pad_id == 0 && pad_index == 0)
+}
+
 impl Transport {
     const fn code(self) -> u8 {
         match self {
@@ -252,22 +265,25 @@ impl<'a> Decode<'a> for SharePackage<'a> {
                 .ok_or_else(|| Error::new(Kind::ValueOutOfRange, chamber_at))?;
             let transport_at = r.position();
             let transport_code = r.read_u8()?;
+            if !transport_code_valid(transport_code) {
+                return Err(Error::new(Kind::ValueOutOfRange, transport_at));
+            }
             let pad_id_at = r.position();
             let pad_id = r.read_u32()?;
+            // Only `pad_id` is known yet (ENCODING §8.20: check each field
+            // as soon as it is read); a zero index is admissible either way.
+            if !pad_fields_valid(transport_code, pad_id, 0) {
+                return Err(Error::new(Kind::ValueOutOfRange, pad_id_at));
+            }
             let pad_index_at = r.position();
             let pad_index = r.read_u64()?;
-            let transport = match transport_code {
-                0 => Transport::Pad { pad_id, pad_index },
-                1 => {
-                    if pad_id != 0 {
-                        return Err(Error::new(Kind::ValueOutOfRange, pad_id_at));
-                    }
-                    if pad_index != 0 {
-                        return Err(Error::new(Kind::ValueOutOfRange, pad_index_at));
-                    }
-                    Transport::Kem
-                }
-                _ => return Err(Error::new(Kind::ValueOutOfRange, transport_at)),
+            if !pad_fields_valid(transport_code, pad_id, pad_index) {
+                return Err(Error::new(Kind::ValueOutOfRange, pad_index_at));
+            }
+            let transport = if transport_code == 0 {
+                Transport::Pad { pad_id, pad_index }
+            } else {
+                Transport::Kem
             };
             let ciphertext = r.read_bytes(MAX_CIPHERTEXT_LEN)?;
             let tag = read_fixed::<TAG_LEN>(r)?;
@@ -290,8 +306,9 @@ impl<'a> Decode<'a> for SharePackage<'a> {
     }
 }
 
-/// One member's share plaintext.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One member's share plaintext. Not `Copy`: it holds up to fifty secret
+/// shares, and implicit copies would work against zeroization.
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MemberShare<'a> {
     shares: Scalars<MAX_SECRETS>,
     has_module: bool,
@@ -381,25 +398,23 @@ impl<'a> Decode<'a> for MemberShare<'a> {
         let shares_at = r.position();
         let shares = Scalars::<MAX_SECRETS>::decode(r)?;
         if shares.count() == 0 {
-            return Err(Error::new(Kind::InvariantViolation, shares_at));
+            return Err(Error::new(Kind::ValueOutOfRange, shares_at));
         }
         let has_module = r.read_bool()?;
         let cid_at = r.position();
         let cid = Token192::decode(r)?;
+        if !has_module && cid.0 != [0; 24] {
+            return Err(Error::new(Kind::InvariantViolation, cid_at));
+        }
         let lab_at = r.position();
         let lab = Option::<Token192>::decode(r)?;
+        if !has_module && lab.is_some() {
+            return Err(Error::new(Kind::InvariantViolation, lab_at));
+        }
         let tag_at = r.position();
         let tag = read_fixed::<TAG_LEN>(r)?;
-        if !has_module {
-            if cid.0 != [0; 24] {
-                return Err(Error::new(Kind::InvariantViolation, cid_at));
-            }
-            if lab.is_some() {
-                return Err(Error::new(Kind::InvariantViolation, lab_at));
-            }
-            if *tag != [0; TAG_LEN] {
-                return Err(Error::new(Kind::InvariantViolation, tag_at));
-            }
+        if !has_module && *tag != [0; TAG_LEN] {
+            return Err(Error::new(Kind::InvariantViolation, tag_at));
         }
         Ok(Self {
             shares,
