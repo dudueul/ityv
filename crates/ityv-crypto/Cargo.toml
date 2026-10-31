@@ -1,0 +1,39 @@
+[package]
+name = "ityv-crypto"
+description = "ityv cryptographic wrapper: domain hashing, hybrid signatures, hybrid KEM, Pedersen commitments, OR proofs, chamber secret sharing; no_std, no alloc, no unsafe, no panics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+categories = ["cryptography", "no-std", "no-std::no-alloc"]
+keywords = ["election", "pedersen", "ml-dsa", "ml-kem", "no_std"]
+
+[lib]
+doctest = true
+
+# Every dependency is pinned to an exact version and documented in README.md
+# (dependency rationale table). Only `backend/` may import an algorithm crate
+# (ADR-0015 §4); the rest of the crate sees newtypes only.
+[dependencies]
+ityv-encoding = { path = "../ityv-encoding", version = "=0.1.0" }
+sha3 = { version = "=0.12.0", default-features = false }
+curve25519-dalek = { version = "=5.0.0", default-features = false, features = ["zeroize"] }
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["zeroize"] }
+x25519-dalek = { version = "=3.0.0", default-features = false, features = ["zeroize", "static_secrets"] }
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["rand_core", "zeroize"] }
+ml-kem = { version = "=0.3.3", default-features = false, features = ["zeroize"] }
+slh-dsa = { version = "=0.2.0-rc.5", default-features = false, features = ["zeroize"] }
+poly1305 = { version = "=0.9.1", default-features = false }
+chacha20poly1305 = { version = "=0.11.0", default-features = false }
+zeroize = { version = "=1.9.1", default-features = false }
+rand_core = { version = "=0.10.1", default-features = false }
+subtle = { version = "=2.6.1", default-features = false }
+
+[dev-dependencies]
+proptest = { version = "1.9", default-features = false, features = ["std"] }
+rand_chacha = { version = "=0.10.0", default-features = false }
+
+[lints]
+workspace = true

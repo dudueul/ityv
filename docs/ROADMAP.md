@@ -5,8 +5,10 @@
 ## M0 (이번 산출물)
 - 헌법, CI 게이트, ADR 13건, 프로토콜 명세 v0.1(일회용 패드 장 포함), 법령 부속서, 거버넌스, 사용례·투표지·처리 흐름, 보증 수확 계획, `ityv-encoding`(V1·V2).
 
-## M1 암호 래퍼 `ityv-crypto` (진행 중, ADR-0015)
-- SHA3-512 도메인 해시, 하이브리드 서명(ML-DSA-87 + Ed25519) 검증 인터페이스, 기록 서명(Ed25519), SLH-DSA 보조 서명, 하이브리드 KEM과 AEAD, Ristretto255 일반화 Pedersen과 자릿수 묶음, 1-of-m OR 증명, 챔버 접근구조 선형 비밀분산, 일회성 MAC과 패드 XOR. 초기 백엔드는 순수 Rust, 형식 검증 백엔드로 교체 가능한 trait 경계. V1·V2; 곡선 산술·Σ-프로토콜 V3는 M2 이후.
+## M1 암호 래퍼 `ityv-crypto` (산출 완료, ADR-0015)
+- 산출: `crates/ityv-crypto`. SHA3-512 도메인 해시(객체·서명 다이제스트·Fiat-Shamir·해시-투-그룹), 하이브리드 서명(ML-DSA-87 **그리고** Ed25519, `Verified` 토큰), 기록 서명(Ed25519, 용도를 타입으로 제한), SLH-DSA-SHAKE-256s 보존 서명, 하이브리드 KEM(ML-KEM-1024 + X25519)과 `ChaCha20-Poly1305` 봉인, Ristretto255 일반화 Pedersen과 26비트 자릿수 묶음·해제·합계 열기, 1-of-(m+2) OR 표현 증명, 챔버 접근구조 Γ의 선형 비밀분산(정족수 판정·일관성 검사·준동형 합산), Poly1305 일회성 MAC, 패드 XOR. 모든 공개 객체는 `ityv-encoding` 고정폭 인코딩을 구현한다. 백엔드는 `backend` 모듈의 trait 뒤에 있으며 초기 구현은 순수 Rust(RustCrypto·dalek)다.
+- 검증: V1(단위·속성·독립 KAT·회귀 벡터·변이 테스트), V2(Kani 하네스 19개: 자릿수 지수·비트 묶음·해제, 청크 수, 접근구조 판정, share 인덱스 산술, 패드 XOR, purpose 검증, 길이 접두). CI: 빌드·clippy·docs·`no_std` 타깃·deny·vet·Kani·mutants.
+- 남은 것: 백엔드 형식 검증 교체(libcrux ML-KEM·ML-DSA, HACL*, fiat-crypto 백엔드 cfg)와 교차 백엔드 벡터; 곡선 산술·Σ-프로토콜 V3(M2 이후); `slh-dsa` 정식판으로 교체(현재 0.2.0-rc.5); 증인 정족수 정책(ITYV-BEH-110·111·112·283·284)은 암호 연산이 아니므로 M2 `ityv-ledger`로 이관.
 
 ## M2 장부 `ityv-ledger`
 - 프레임 로그, SHA3-512 Merkle(RFC 9162 트리 모양), 포함·일관성 증명, 체크포인트, 외부 앵커. V1·V2·V3(Merkle), TLA+ 안전성(V4).

@@ -2,7 +2,7 @@
 # inherits the lint set below without exception (CONSTITUTION.md §1.1).
 [workspace]
 resolver = "3"
-members = ["crates/ityv-encoding"]
+members = ["crates/ityv-encoding", "crates/ityv-crypto"]
 
 [workspace.package]
 version = "0.1.0"
@@ -52,9 +52,19 @@ undocumented_unsafe_blocks = "deny"
 overflow-checks = true
 debug-assertions = true
 
+# Dependencies (the cryptographic backends above all) are optimized even in
+# debug builds: SLH-DSA-SHAKE-256s signing and ML-DSA-87 key expansion are
+# otherwise too slow for the test and mutation suites. Workspace crates keep
+# opt-level 0 with overflow checks and debug assertions.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.test]
 overflow-checks = true
 debug-assertions = true
+
+[profile.test.package."*"]
+opt-level = 3
 
 [profile.release]
 overflow-checks = true
