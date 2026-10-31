@@ -676,6 +676,135 @@ fn batch_attest_body_round_trip() {
     }
 }
 
+/// Experiment: the record-count round trip with a small unwinding bound
+/// and field-by-field comparison (no 64-byte digest comparison).
+#[kani::proof]
+#[kani::unwind(8)]
+fn batch_attest_body_round_trip_light() {
+    let record_count: u16 = kani::any();
+    let Some(module_id) = ModuleId::new(b"M") else {
+        unreachable!("literal identifier is valid");
+    };
+    let ranges = [ModuleRange {
+        module_id,
+        counter_first: 1,
+        counter_last: 64,
+    }];
+    let built = batch_body(record_count, &ranges);
+    assert_eq!(built.is_some(), (1..=64).contains(&record_count));
+    let Some(body) = built else {
+        return;
+    };
+    let mut buf = [0u8; 256];
+    let Ok(len) = encode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
+        unreachable!("256 bytes suffice for one-byte identifiers");
+    };
+    assert_eq!(len, 16 + 5 + 5 + 4 + 2 + 64 + 4 + (5 + 16) + 4 + 64 + 8);
+    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+    let decoded: Result<BatchAttestBody<'_>, _> =
+        decode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
+    let Ok(d) = decoded else {
+        unreachable!("a constructed body decodes");
+    };
+    assert_eq!(d.record_count(), record_count);
+    assert_eq!(d.batch_index(), 3);
+    let Some(r) = d.module_ranges().next() else {
+        unreachable!("one range was encoded");
+    };
+    assert_eq!(r.counter_first, 1);
+    assert_eq!(r.counter_last, 64);
+    assert!(d.module_refusals().is_empty());
+    assert_eq!(d.time_bucket().get(), 5);
+}
+
+/// Experiment P3: a fully concrete box-close round trip (diagnostic for
+/// structural symex cost).
+#[kani::proof]
+#[kani::unwind(70)]
+fn box_close_body_concrete_round_trip() {
+    let counts = CloseCounts {
+        paper: 1000,
+        records: 990,
+        attested: 990,
+        without_record: 10,
+        challenged: 3,
+        quarantined: 1,
+    };
+    let Some(election_id) = ElectionId::new(b"E") else {
+        unreachable!("literal identifier is valid");
+    };
+    let Some(box_id) = BoxId::new(b"B") else {
+        unreachable!("literal identifier is valid");
+    };
+    let Some(module_id) = crate::primitives::ModuleId::new(b"M") else {
+        unreachable!("literal identifier is valid");
+    };
+    let Some(module_counters) = ModuleCounters::new(&[ModuleCounter {
+        module_id,
+        counter: 994,
+    }]) else {
+        unreachable!("one entry is trivially sorted");
+    };
+    let body = BoxCloseBody::new(&BoxCloseParts {
+        election_id,
+        box_id,
+        counts,
+        record_set_root: Hash512([1; 64]),
+        journal_head: Hash512([2; 64]),
+        seal_digest: Hash512([3; 64]),
+        module_counters,
+        open_batches: 2,
+        time_bucket: TimeBucket::new(900),
+    });
+    let mut buf = [0u8; 320];
+    let Ok(len) = encode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
+        unreachable!("320 bytes suffice for one-byte identifiers");
+    };
+    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+    let decoded: Result<BoxCloseBody<'_>, _> =
+        decode(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, bytes);
+    assert_eq!(decoded, Ok(body));
+}
+
+/// Experiment P2: decode-only batch body from constant bytes with one
+/// symbolic byte (the low byte of `record_count`).
+#[kani::proof]
+#[kani::unwind(70)]
+fn batch_attest_body_decode_only() {
+    let Some(module_id) = ModuleId::new(b"M") else {
+        unreachable!("literal identifier is valid");
+    };
+    let ranges = [ModuleRange {
+        module_id,
+        counter_first: 1,
+        counter_last: 64,
+    }];
+    let Some(body) = batch_body(64, &ranges) else {
+        unreachable!("valid parts");
+    };
+    let mut buf = [0u8; 256];
+    let Ok(len) = encode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
+        unreachable!("256 bytes suffice for one-byte identifiers");
+    };
+    let low: u8 = kani::any();
+    // record_count sits after header 16, E 5, B 5, batch_index 4: bytes 30..32.
+    buf[31] = low;
+    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+    let decoded: Result<BatchAttestBody<'_>, _> =
+        decode(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
+    match decoded {
+        Ok(d) => {
+            assert!((1..=64).contains(&low));
+            assert_eq!(d.record_count(), u16::from(low));
+        }
+        Err(e) => {
+            assert!(low == 0 || low > 64);
+            assert_eq!(e.kind(), Kind::ValueOutOfRange);
+            assert_eq!(e.offset(), 30);
+        }
+    }
+}
+
 /// A `BatchAttestBody` with a small symbolic counter range: the constructor
 /// accepts exactly `counter_first <= counter_last`, and every accepted
 /// value survives an object-level round trip.
