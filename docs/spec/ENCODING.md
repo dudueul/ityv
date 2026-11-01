@@ -369,7 +369,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 3 | `slot_minutes` | `u16` | 10이어야 한다 |
 | 4 | `entries` | `Array<{link_id: Ident<64>, device_class: u8, port: Ident<32>, direction: u8, medium: u8, counterpart: Ident<64>, schedule: u8, frames_per_slot: u16, catchup_frames_per_slot: u16, carries: u32, frame_key: [u8; 32]}, 1024>` | 1개 이상, `link_id` 바이트 오름차순, 중복 없음 |
 
-- `device_class`: 1 해석 유닛, 2 커밋먼트 유닛·스캐너 바깥 포트, 3 카운터·가명 유닛, 4 챔버 모듈, 5 선거일 신원 확인 단말, 6 사전투표 신원 확인 단말, 7 투표소 게이트웨이, 8 관찰 탭, 9 장부 수집 서버, 10 게시판 공표 서버, 11 증인, 12 신뢰기관 수신 시스템, 13 수령 라벨 판독기, 14 각인 판독기, 15 프린터류(각인기·슬립·라벨). 그 외 값은 `ValueOutOfRange`.
+- `device_class`: 1 해석 유닛, 2 커밋먼트 유닛·스캐너 바깥 포트, 3 카운터·가명 유닛, 4 챔버 모듈, 5 선거일 신원 확인 단말, 6 사전투표 신원 확인 단말, 7 투표소 게이트웨이, 8 관찰 탭, 9 장부 수집 서버, 10 공개원장 공표 서버, 11 증인, 12 신뢰기관 수신 시스템, 13 수령 라벨 판독기, 14 각인 판독기, 15 프린터류(각인기·슬립·라벨). 그 외 값은 `ValueOutOfRange`.
 - `direction`: 0 없음(봉인 또는 미장착), 1 내보내기만(수신 소자 없음), 2 받기만, 3 양방향.
 - `medium`: 0 없음, 1 광 송신 전용, 2 광커플러(장치 내부), 3 유선 이더넷, 4 광 회선, 5 선거 전용회선(통합선거인명부), 6 입회 절차 현장 직결, 7 무선.
 - `schedule`: 0 사용 안 함, 1 투표함 개시–마감 처리, 2 사전투표 기간, 3 상시, 4 입회 절차 때만.
@@ -494,7 +494,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 4 | `time_bucket` | `u64` | |
 | 5 | `boot_count` | `u32` | |
 | 6 | `bundle_hash` | `Hash512` | |
-| 7 | `body_hash` | `Hash512` | 같은 증명의 `DeviceAttestationBody` 해시(나중에 게시판 이벤트와 대조) |
+| 7 | `body_hash` | `Hash512` | 같은 증명의 `DeviceAttestationBody` 해시(나중에 공개원장 이벤트와 대조) |
 | 8 | `summary_sig` | `[u8; 64]` | 증명 키의 Ed25519 부분 서명, purpose `attest-summary`. 서명 대상은 1–7번 필드의 정규 인코딩을 헤더 없이 이어 붙인 바이트열(§4) |
 
 전체 크기는 약 450바이트로 QR 하나에 들어간다.

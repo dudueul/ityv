@@ -23,7 +23,7 @@
 | `ityv-ledger` | V2 | V3 + V4 | 추가 전용(기존 프레임 불변), 순번 연속·이전 해시 결속, Merkle root 결정성, 포함·일관성 증명 완전성·건전성, 체크포인트 사슬 단조성, 찢긴 프레임 거부·비복구, 외부 앵커 불일치 거부 | `ledger-v1`, `ledger-v2`, `ledger-v3`, `ledger-tla` |
 | `ityv-cunit`(커밋먼트 유닛) | V2 | V3 | 상태기계 전이 유효성(`DURABLE` 전 각인·슬립 불가), 커밋먼트가 해석 입력과 모듈 난수에만 의존, share 분할이 접근구조와 일치하고 합이 여는 값과 같음, 패드 인덱스 단조·재사용 불가·고갈 시 대체 경로 표기, 선택·투함 ID·난수의 무보존(처리 후 소거, 영속 저장 호출 부재), 힙 없음·패닉 없음 | `cunit-v1`, `cunit-v2`, `cunit-v3` |
 | `ityv-state`(typestate) | V2 | V3 | 잘못된 전이 컴파일 불가(trybuild), capability 토큰 없이 L1 객체 생성 불가, 상태 어휘 자동 전환 경로 부재, 투표함·보관·체크포인트·분쟁 상태의 불변식 | `state-trybuild`, `state-v2` |
-| `ityv-verify`(공개 검증기) | V2 | V3 + V5 | 명세 대비 완전성(정상 게시판 수락)과 건전성(ENCODING·PROTOCOL 위반 거부), 체크포인트·정형성 증명·집계 재계산 정확성, 독립 2차 구현과 판정 일치, 표본 검증 모드가 전수 모드의 부분집합 | `verify-v1`, `verify-v2`, `verify-v3`, `verify-diff`(V5) |
+| `ityv-verify`(공개 검증기) | V2 | V3 + V5 | 명세 대비 완전성(정상 공개원장 수락)과 건전성(ENCODING·PROTOCOL 위반 거부), 체크포인트·정형성 증명·집계 재계산 정확성, 독립 2차 구현과 판정 일치, 표본 검증 모드가 전수 모드의 부분집합 | `verify-v1`, `verify-v2`, `verify-v3`, `verify-diff`(V5) |
 | 카운터·가명 유닛 | V2 | V3 | 카운터 단조, 참관인 공동 서명 주기 강제, 가명이 모듈 키에만 의존, 가명과 투함 ID·추적코드의 동시 기록 경로 부재, 15분 구간 외 시각 미기록, 무보존 | `checkin-v1`, `checkin-v2`, `checkin-v3` |
 | 신뢰기관 집계 | V2 | V3 + V4 | share 합산 정확성, 접근구조 밖 복원 불가, 봉인 모듈 난수 해시 대조, 관외 라벨 대조와 `CAST_NOT_RECEIVED` 제외 정확성, 자릿수 넘침 불가, 열기 이벤트 없는 복원 경로 부재 | `trustee-v1`, `trustee-v2`, `trustee-v3` |
 | 프로토콜 모델 | V4(모델 존재) | V4(증명 완료) | TLA+: 장부 추가 전용·체크포인트 단조·증인 1헤드·분기 불가(≤4 비잔틴), 활성(정족수 가용 시 진행). Tamarin: 비밀성(접근구조 미만), 영수증 무증명성(투입 전 검증 포함), 은닉 채널 저항 가정의 명시 | `models-tla`, `models-tamarin` |
@@ -43,7 +43,7 @@
 | `kani` | `cargo kani --workspace` | 하네스 전부 통과 |
 | `verus` | Verus 검사 | 증명 전부 통과 |
 | `models` | Apalache, Tamarin | 성질 전부 증명 |
-| `diff-verify` | 2차 구현과 벡터·게시판 차분 | 판정 불일치 0 |
+| `diff-verify` | 2차 구현과 벡터·공개원장 차분 | 판정 불일치 0 |
 | `repro` | 두 빌드 기반 해시 비교 | 일치 |
 
 ## 4. 단계 판정 규칙

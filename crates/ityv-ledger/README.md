@@ -12,7 +12,7 @@
 | `frame` | 프레임 사슬 규칙(`link`, `next_frame`, `ChainState`), 디스크 스트림 파서(`FrameStream`)와 찢어진 꼬리 격리, 재전송 분류 | PROTOCOL.md §5.1, ADR-0016 §3 |
 | `checkpoint` | `SignedCheckpoint`(0x0010), 후속 체크포인트 검증(`validate_successor`), 증인 기억(`WitnessMemory`, 영속 객체 0x0011)과 서명 전 판정·전진(`may_sign`) | PROTOCOL.md §5.4, ENCODING.md §8.4–§8.5, ADR-0016 §4–5 |
 | `policy` | 정족수 프로필(`2q − n > f`), 명부, 정족수·다양성 판정(`evaluate`) | PROTOCOL.md §5.4 VC-014, ADR-0012, ADR-0016 §6 |
-| `publication` | 앵커 기한(+4 구간, 수신 서명 3건)과 게시판 공표 기한(+96 구간) | PROTOCOL.md §5.5, ADR-0016 §7 |
+| `publication` | 앵커 기한(+4 구간, 수신 서명 3건)과 공개원장 공표 기한(+96 구간) | PROTOCOL.md §5.5, ADR-0016 §7 |
 
 보장하는 것:
 - `no_std`, 힙 없음, `unsafe` 없음, 패닉 없음(워크스페이스 lint 집합, Kani 하네스).
