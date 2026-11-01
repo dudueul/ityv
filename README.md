@@ -37,6 +37,9 @@ Kani 하네스는 `cargo kani -p ityv-encoding`으로 실행한다(Kani 설치 �
 
 K-Ballot V5–V9.1 연구물(NO-GO)의 위협 등록부, 요구사항, 법령 초안, 상태 어휘를 명세로 수확했다(ADR-0008). 코드는 복사하지 않았다.
 
-## 라이선스
+## 라이선스와 방어적 공개
 
-Apache-2.0. `LICENSE` 참조.
+- 코드: **AGPL-3.0-or-later** (`LICENSE`). 이 코드를 고쳐서 장치에 넣거나 네트워크 서비스(공개 검증기, 게시판 미러 등)로 돌리면 고친 소스도 같은 조건으로 공개해야 한다.
+- 문서(`docs/`, `GLOSSARY.md`, `CONSTITUTION.md`, 이 README): **CC BY-SA 4.0** (`LICENSE-DOCS`).
+- 2026-11-01 이전 커밋은 Apache-2.0으로 배포되었으며 그 판에 대한 권리는 그대로다.
+- 이 저장소는 특허를 출원하지 않는 **방어적 공개**다. 공개된 설계는 누구나 쓸 수 있는 선행기술이며, 이를 근거로 남이 특허를 받아 독점하는 것을 막는 것이 목적이다. 공개 내역과 날짜는 `DEFENSIVE_PUBLICATION.md`.
