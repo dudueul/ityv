@@ -86,7 +86,7 @@ use crate::error::Error;
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::{EnvelopeIssuance, IssuanceCount};
 use crate::record::{Profile, RecordState, is_test_style};
-use crate::sig::{Signed, same_signature};
+use crate::sig::{Signed, check_token};
 use crate::tally::LATE_CLOSE_WINDOW;
 
 /// Signature purpose of the box-close signatures (device and people).
@@ -263,16 +263,7 @@ fn device_signed(
         (Some(_), None) => Err(Error::Unverified),
         (None, Some(_)) => Err(Error::SignatureObject),
         (Some(bytes), Some(token)) => {
-            let signed = token.get();
-            if signed.purpose().as_bytes() != purpose
-                || signed.object() != close.body_bytes()
-                || !same_signature(bytes, signed.signature())
-            {
-                return Err(Error::SignatureObject);
-            }
-            if signed.key() != key {
-                return Err(Error::SignatureSigner);
-            }
+            check_token(token, close.body_bytes(), purpose, bytes, key)?;
             Ok(true)
         }
     }

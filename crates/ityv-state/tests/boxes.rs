@@ -623,6 +623,31 @@ fn close_signature_binding() {
         refused_close(&late.close, &late.tokens()),
         Error::SignatureObject
     );
+    // Only the device signed under another purpose; the humans signed
+    // `box-close`, so the device check alone must refuse.
+    let body = close_body(&parts);
+    let (late_sig, late_token) = common::signed_by(device_key(), b"late-box-close", body);
+    let (late_atts, box_humans) = attest(
+        body,
+        b"box-close",
+        &[
+            (b"clerk-1", SignerRole::Clerk),
+            (b"clerk-2", SignerRole::Clerk),
+            (b"obs-a", SignerRole::Observer),
+            (b"obs-b", SignerRole::Observer),
+        ],
+    );
+    let mixed = leak(BoxClose::new(body, Some(late_sig), late_atts).unwrap());
+    assert_eq!(
+        refused_close(
+            mixed,
+            &CloseTokens {
+                device: Some(leak(late_token)),
+                humans: box_humans
+            }
+        ),
+        Error::SignatureObject
+    );
     // A device token from another key.
     let stranger = leak(HybridSigningKey::from_seeds([40; 32], [41; 32]));
     let forged = leak(signed_close_with(&parts, stranger, b"box-close"));
