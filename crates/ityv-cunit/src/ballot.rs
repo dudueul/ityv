@@ -7,9 +7,10 @@
 //! ```
 //!
 //! Each transition consumes the ballot. [`Ballot::bind`] hands the built
-//! record and share package to the host's staging store, keeps their
-//! hashes in the box and the position's small secrets in the caller's
-//! [`VisitWork`]; what happens next (the decision, the journal, the
+//! record and share package to the host's staging store, journals the
+//! position's bound entry (kind 9), keeps the objects' hashes in the box
+//! and the position's small secrets in the caller's [`VisitWork`]; what
+//! happens next (the decision, the journal, the
 //! imprint, the opening of a checked ballot) belongs to the visit
 //! ([`crate::visit`]). A built ballot cannot be imprinted, opened or
 //! journaled on its own:
@@ -41,15 +42,17 @@
 //! ```
 //! # use ityv_cunit::ballot::{Ballot, Built};
 //! # use ityv_cunit::boxstate::OpenBox;
-//! # use ityv_cunit::port::StagingPort;
+//! # use ityv_cunit::port::{JournalSink, StagingPort};
 //! # use ityv_cunit::visit::VisitWork;
+//! # use ityv_encoding::TimeBucket;
 //! fn bind<'c>(
 //!     ballot: Ballot<'c, '_, Built<'_>>,
 //!     open: &mut OpenBox<'c>,
+//!     sink: &mut dyn JournalSink,
 //!     staging: &mut dyn StagingPort,
 //!     visit: &mut VisitWork,
 //! ) {
-//!     let _ = ballot.bind(open, staging, visit);
+//!     let _ = ballot.bind(open, sink, staging, visit, TimeBucket::new(0));
 //! }
 //! ```
 //!
@@ -79,7 +82,7 @@ use ityv_encoding::{
     MemberShare, ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, Point32, SCHEMA_CAST_RECORD,
     SCHEMA_CAST_RECORD_BODY, SCHEMA_MEMBER_SHARE, SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, Scalar32,
     Scalars, ShareEntry, SharePackage, TAG_LEN, TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE,
-    Token192, Transport, Writer, decode_object, encode_object,
+    TimeBucket, Token192, Transport, Writer, decode_object, encode_object,
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -93,7 +96,7 @@ use crate::link::{
     Interpretation, MAX_MODULE_ISSUE_LEN, MAX_TAGS, ModuleIssue, SCHEMA_INTERPRETATION,
     SCHEMA_MODULE_ISSUE,
 };
-use crate::port::{ModulePort, PortError};
+use crate::port::{JournalSink, ModulePort, PortError};
 use crate::port::{Staged, StagingPort};
 use crate::rng::{DeviceRng, LABEL_BALLOT_RNG};
 use crate::rules;
@@ -393,7 +396,8 @@ pub struct Committed {
 }
 
 /// Built: the share package, the record body and the signed record exist
-/// in the host's buffers; nothing is journaled yet.
+/// in the host's buffers; nothing of the ballot is journaled until it is
+/// bound.
 #[derive(Debug, Clone, Copy)]
 pub struct Built<'b> {
     record_hash: Hash512,
@@ -1042,8 +1046,9 @@ impl<'c, 'w> Ballot<'c, 'w, Committed> {
     /// (PROTOCOL.md §7.3 steps 4–5, §9): the member shares of every secret,
     /// sealed through the module pads or the KEM; the `SharePackage`; the
     /// `CastRecordBody` naming the package hash; the device and module
-    /// record signatures; the `CastRecord`. Nothing is journaled yet. The
-    /// share plaintexts are wiped from the work area once sealed.
+    /// record signatures; the `CastRecord`. Nothing is journaled until
+    /// [`Ballot::bind`]. The share plaintexts are wiped from the work area
+    /// once sealed.
     ///
     /// # Errors
     /// [`Error::StaleBallot`], [`Error::PortCount`],
@@ -1164,23 +1169,27 @@ impl<'c, 'b> Ballot<'c, '_, Built<'b>> {
 
     /// Binds the built position to its visit (PROTOCOL.md §7.3 step 5,
     /// VC-068): the `CastRecord` and the `SharePackage` go to the host's
-    /// staging store, the box keeps their hashes (and the record's
-    /// tracking code and counters), and the position's small secrets move
-    /// from the work area into the visit's slot. The work area is wiped.
-    /// The first position of a visit takes `visit` (wiping it); later
-    /// positions must bring the same one. Nothing is journaled: the visit's
-    /// decision does that for every position at once.
+    /// staging store, the bound entry (journal kind 9: the record hash and
+    /// the counters the ballot consumed) is made durable, the box keeps the
+    /// objects' hashes (and the record's tracking code and counters), and
+    /// the position's small secrets move from the work area into the
+    /// visit's slot. The work area is wiped. The first position of a visit
+    /// takes `visit` (wiping it); later positions must bring the same one.
+    /// The record and the decision entries come at the visit's decision.
     ///
     /// # Errors
     /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`],
     /// [`Error::StaleVisit`] if `visit` belongs to another visit, the
-    /// staging port's error. On error the ballot is dropped and the visit
-    /// must be abandoned ([`OpenBox::abandon_visit`]).
+    /// staging port's error, [`Error::TimeRegression`], the journal's
+    /// error. On error the ballot is dropped (still in flight in the box)
+    /// and the visit must be abandoned ([`OpenBox::abandon_visit`]).
     pub fn bind(
         self,
         open_box: &mut OpenBox<'c>,
+        sink: &mut dyn JournalSink,
         staging: &mut dyn StagingPort,
         visit: &mut VisitWork,
+        time_bucket: TimeBucket,
     ) -> Result<Bound, Error> {
         let Ballot {
             style,
@@ -1194,8 +1203,7 @@ impl<'c, 'b> Ballot<'c, '_, Built<'b>> {
         let (slot, module_rand) = visit.slot_for(visit_ticket, position)?;
         staging.stage(position, Staged::Record, state.record)?;
         staging.stage(position, Staged::Package, state.package)?;
-        work.0.move_secrets(slot, module_rand);
-        let bound = open_box.bind_position(
+        open_box.bind_position(
             ticket,
             style,
             &PositionHashes {
@@ -1203,14 +1211,10 @@ impl<'c, 'b> Ballot<'c, '_, Built<'b>> {
                 record_object: object_hash(state.record),
                 package: object_hash(state.package),
             },
-        );
-        if bound.is_err() {
-            slot.zeroize();
-            for row in module_rand {
-                row.zeroize();
-            }
-            return Err(Error::StaleBallot);
-        }
+            sink,
+            time_bucket,
+        )?;
+        work.0.move_secrets(slot, module_rand);
         visit.note_bound();
         drop(work);
         Ok(Bound {

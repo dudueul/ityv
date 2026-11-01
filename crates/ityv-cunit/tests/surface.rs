@@ -591,7 +591,9 @@ fn secret_bearing_values_debug_print_nothing_secret() {
         .unwrap();
     let mut staging = common::MemStaging::default();
     let mut visit = common::visit_work();
-    ballot.bind(&mut b, &mut staging, &mut visit).unwrap();
+    ballot
+        .bind(&mut b, &mut j, &mut staging, &mut visit, tb(1))
+        .unwrap();
     let ready = b
         .end_visit(&common::visit_end(b"E-2026", 1), &mut visit)
         .unwrap();

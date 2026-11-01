@@ -855,10 +855,10 @@ pub(crate) fn build_position(
     w: &World,
     b: &mut OpenBox<'static>,
     m: &mut [MockModule],
+    j: &mut MemJournal,
     staging: &mut MemStaging,
     visit: &mut VisitWork,
-    style: &[u8],
-    option: u16,
+    (style, option): (&[u8], u16),
 ) -> Bound {
     let mut bufs = Buffers::new(w);
     let mut area = work();
@@ -870,7 +870,8 @@ pub(crate) fn build_position(
     let ballot = ballot
         .build(b, &mut ports(m), &w.device_record, bufs.as_build())
         .unwrap();
-    let bound = ballot.bind(b, staging, visit).unwrap();
+    let now = b.last_time_bucket();
+    let bound = ballot.bind(b, j, staging, visit, now).unwrap();
     assert!(area.is_clear(), "the work area is wiped once bound");
     bound
 }
@@ -884,7 +885,10 @@ pub(crate) fn cast_built(
 ) {
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    ballot.bind(box_, &mut staging, &mut visit).unwrap();
+    let now = box_.last_time_bucket();
+    ballot
+        .bind(box_, journal, &mut staging, &mut visit, now)
+        .unwrap();
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
         .unwrap();
@@ -934,7 +938,7 @@ pub(crate) fn run_visit(
     let mut visit = visit_work();
     let mut codes = Vec::new();
     for &(style, option) in ballots {
-        let bound = build_position(w, b, m, &mut staging, &mut visit, style, option);
+        let bound = build_position(w, b, m, j, &mut staging, &mut visit, (style, option));
         codes.push(*bound.tracking_code());
     }
     let ready = b

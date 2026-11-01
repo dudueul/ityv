@@ -22,8 +22,11 @@
 //! (VC-039). Every per-ballot secret lives in one caller-provided
 //! [`ballot::BallotWork`] while the ballot is built, and the few a visit
 //! keeps in one caller-provided [`visit::VisitWork`]; both are wiped on
-//! every exit path. After a power loss, [`boxstate::OpenBox::resume`]
-//! rebuilds the box from the journal.
+//! every exit path. Each bound position is journaled with the counters it
+//! consumed before the next ballot is taken, so after a power loss
+//! [`boxstate::OpenBox::resume`] rebuilds the box from the journal (and a
+//! dry-run question to each module) with every consumed counter
+//! accounted for.
 //!
 //! | module | contents | specification |
 //! |---|---|---|

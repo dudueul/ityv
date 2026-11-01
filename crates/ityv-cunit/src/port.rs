@@ -161,9 +161,10 @@ pub trait JournalSink {
 
     /// Appends like [`Self::append`] without waiting for stable storage; the
     /// next [`Self::append`] makes it durable together with its own entry.
-    /// A visit's position entries use it, so the visit costs one fsync, at
-    /// its decision entry (PROTOCOL.md §7.3 step 7). The default waits
-    /// anyway, which is correct and only slower.
+    /// A visit's position entries use it, so the decision costs one fsync,
+    /// at its decision entry (PROTOCOL.md §7.3 step 7); each bound entry
+    /// before it is durable on its own. The default waits anyway, which is
+    /// correct and only slower.
     ///
     /// # Errors
     /// [`JournalError`] if the write failed.

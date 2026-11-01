@@ -115,15 +115,18 @@ fn journal_entries_chain_and_carry_the_consumed_counters() {
     challenge_one(&w, &mut b, &mut m, &mut j, 2);
     cast_one(&w, &mut b, &mut m, &mut j, 3);
     let mut head = Hash512::ZERO;
-    // per visit: the position entry, the decision entry (no counters),
-    // and for a cast ballot its imprint entry repeating the record's
-    // counters
+    // per visit: the bound entry consuming the counters, the position's
+    // decision entry repeating them, the decision entry (no counters), and
+    // for a cast ballot its imprint entry repeating them
     let consumed = [
         Some(1u64),
+        Some(1),
         None,
         Some(1),
         Some(2),
+        Some(2),
         None,
+        Some(3),
         Some(3),
         None,
         Some(3),
@@ -148,35 +151,40 @@ fn journal_entries_chain_and_carry_the_consumed_counters() {
     assert_eq!(
         kinds(&j),
         [
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::VisitDecision,
             JournalKind::Imprinted,
+            JournalKind::Bound,
             JournalKind::Challenge,
             JournalKind::VisitDecision,
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::VisitDecision,
             JournalKind::Imprinted
         ]
     );
-    // the imprint entry names the record; only the record entry carries a
-    // package
-    assert_eq!(
-        entry(&j.entries[2]).record_hash(),
-        entry(&j.entries[0]).record_hash()
-    );
-    assert_eq!(entry(&j.entries[2]).share_package_hash(), &Hash512::ZERO);
-    assert!(
-        j.packages[1..]
-            .iter()
-            .step_by(1)
-            .enumerate()
-            .all(|(i, p)| { p.is_none() || i + 1 == 5 })
-    );
-    assert!(j.packages[5].is_some());
+    // the bound, record and imprint entries name the same record; only
+    // the record entry carries a package
+    for i in [0, 3] {
+        assert_eq!(
+            entry(&j.entries[i]).record_hash(),
+            entry(&j.entries[1]).record_hash()
+        );
+        assert_eq!(entry(&j.entries[i]).share_package_hash(), &Hash512::ZERO);
+    }
+    let with_package: std::vec::Vec<usize> = j
+        .packages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.is_some())
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(with_package, [1, 8]);
     assert_eq!(b.module_counters(), &[3, 3, 3, 3, 3]);
     assert_eq!(
-        entry(&j.entries[0]).share_package_hash(),
-        &ityv_crypto::object_hash(j.packages[0].as_ref().unwrap())
+        entry(&j.entries[1]).share_package_hash(),
+        &ityv_crypto::object_hash(j.packages[1].as_ref().unwrap())
     );
 }
 
@@ -200,7 +208,7 @@ fn a_backwards_or_replayed_counter_is_refused_and_leaves_the_mark() {
         assert_eq!(b.module_counters(), &[2, 2, 2, 2, 2]);
         // nothing was consumed, so nothing is journaled
         b.abandon_visit(&mut j, tb(1)).unwrap();
-        assert_eq!(j.entries.len(), 6);
+        assert_eq!(j.entries.len(), 8);
     }
     // The mark was not moved back: the module's next counter, 3, is the
     // one accepted (a mark of 1 would have made it a gap).
@@ -361,7 +369,7 @@ fn a_module_that_consents_then_refuses_or_signs_wrongly_leaves_the_batch_open() 
     );
     assert_eq!(
         (b.batch_records(), b.batch_index(), j.entries.len()),
-        (1, 0, 3)
+        (1, 0, 4)
     );
     let mut m = mocks(&w);
     let mut b2 = OpenBox::open(w.config, tb(1));
@@ -376,6 +384,7 @@ fn a_module_that_consents_then_refuses_or_signs_wrongly_leaves_the_batch_open() 
     assert_eq!(
         kinds(&j2),
         [
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::VisitDecision,
             JournalKind::Imprinted
@@ -501,6 +510,7 @@ fn a_journal_mismatch_latches_the_box() {
     assert_eq!(
         kinds(&j),
         [
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::VisitDecision,
             JournalKind::Imprinted
@@ -588,7 +598,15 @@ fn scan_count_is_refused_mid_visit_and_holds_the_time_line() {
     // nothing journaled afterwards may carry an earlier bucket
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    build_position(&w, &mut b, &mut m, &mut staging, &mut visit, STYLE_SMALL, 1);
+    build_position(
+        &w,
+        &mut b,
+        &mut m,
+        &mut j,
+        &mut staging,
+        &mut visit,
+        (STYLE_SMALL, 1),
+    );
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     assert_eq!(
@@ -611,13 +629,15 @@ fn bind_visit(
     w: &World,
     b: &mut OpenBox<'static>,
     m: &mut [MockModule],
+    j: &mut MemJournal,
     staging: &mut MemStaging,
     visit: &mut ityv_cunit::VisitWork,
     n: u8,
 ) -> std::vec::Vec<Hash512> {
     (0..n)
         .map(|i| {
-            *build_position(w, b, m, staging, visit, STYLE_SMALL, u16::from(i % 4)).tracking_code()
+            *build_position(w, b, m, j, staging, visit, (STYLE_SMALL, u16::from(i % 4)))
+                .tracking_code()
         })
         .collect()
 }
@@ -631,7 +651,7 @@ fn imprint_failure_quarantines_and_withdraws_the_record() {
     let first = cast_one(&w, &mut b, &mut m, &mut j, 1);
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 3);
+    let codes = bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 3);
     let ready = b.end_visit(&visit_end(b"E-2026", 3), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     let mut decided = ready
@@ -684,7 +704,7 @@ fn an_imprint_failure_whose_entry_fails_stays_to_be_quarantined() {
     let mut j = MemJournal::default();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let codes = bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     let mut decided = ready
@@ -726,7 +746,7 @@ fn a_dropped_decided_visit_is_quarantined_by_its_record_hashes() {
     let mut j = MemJournal::default();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 3);
+    let codes = bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 3);
     let ready = b.end_visit(&visit_end(b"E-2026", 3), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     let mut decided = ready
@@ -767,7 +787,7 @@ fn a_journal_failure_at_the_decision_leaves_the_visit_to_quarantine() {
     let mut j = MemJournal::default();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     j.fail = true;
@@ -793,14 +813,22 @@ fn a_journal_failure_at_the_decision_leaves_the_visit_to_quarantine() {
     j.fail = false;
     b.abandon_visit(&mut j, tb(1)).unwrap();
     assert_eq!(b.totals().quarantined, 1);
-    assert_eq!(kinds(&j), [JournalKind::Quarantine]);
-    assert_eq!(entry(&j.entries[0]).record_hash(), &Hash512::ZERO);
-    assert_eq!(entry(&j.entries[0]).module_counters().len(), 5);
+    // the bound position is quarantined by its record hash, repeating the
+    // counters its bound entry consumed
+    assert_eq!(kinds(&j), [JournalKind::Bound, JournalKind::Quarantine]);
+    assert_eq!(
+        entry(&j.entries[1]).record_hash(),
+        entry(&j.entries[0]).record_hash()
+    );
+    assert_eq!(
+        entry(&j.entries[1]).module_counters(),
+        entry(&j.entries[0]).module_counters()
+    );
     assert_eq!(b.abandon_visit(&mut j, tb(1)).unwrap_err(), Error::NoVisit);
-    // a failure after the first position entry: that one is quarantined by
-    // its record hash, the second without record
+    // a failure after the first position's decision entry: both bound
+    // positions are quarantined by their record hash
     let mut visit = visit_work();
-    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 2);
+    let codes = bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 2);
     let ready = b.end_visit(&visit_end(b"E-2026", 2), &mut visit).unwrap();
     j.fail_after = Some(1);
     assert!(
@@ -817,17 +845,19 @@ fn a_journal_failure_at_the_decision_leaves_the_visit_to_quarantine() {
     );
     j.fail_after = None;
     b.abandon_visit(&mut j, tb(1)).unwrap();
-    let tail: std::vec::Vec<JournalKind> = kinds(&j)[1..].to_vec();
+    let tail: std::vec::Vec<JournalKind> = kinds(&j)[2..].to_vec();
     assert_eq!(
         tail,
         [
+            JournalKind::Bound,
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::Quarantine,
             JournalKind::Quarantine
         ]
     );
-    assert_eq!(entry(&j.entries[2]).record_hash(), &codes[0]);
-    assert_eq!(entry(&j.entries[3]).record_hash(), &Hash512::ZERO);
+    assert_eq!(entry(&j.entries[5]).record_hash(), &codes[0]);
+    assert_eq!(entry(&j.entries[6]).record_hash(), &codes[1]);
     assert_eq!((b.totals().records, b.totals().quarantined), (0, 3));
     assert_eq!(b.batch_records(), 0);
 }
@@ -840,7 +870,7 @@ fn a_staged_object_that_changed_is_refused() {
     let mut j = MemJournal::default();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 2);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 2);
     let ready = b.end_visit(&visit_end(b"E-2026", 2), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     staging.tamper = Some((1, Staged::Package));
@@ -857,13 +887,17 @@ fn a_staged_object_that_changed_is_refused() {
             .unwrap_err(),
         Error::StagedMismatch
     );
-    // the first position was journaled before the swap was found
-    assert_eq!(kinds(&j), [JournalKind::Record]);
+    // the first position's decision entry was journaled before the swap
+    // was found
+    assert_eq!(
+        kinds(&j),
+        [JournalKind::Bound, JournalKind::Bound, JournalKind::Record]
+    );
     b.abandon_visit(&mut j, tb(1)).unwrap();
     // a swapped record is refused for publication
     staging.tamper = None;
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let decided = ready
         .decide(
@@ -904,7 +938,7 @@ fn a_visit_end_must_match_and_the_visit_takes_eight_positions() {
             .unwrap_err(),
         Error::NoVisit
     );
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 8);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 8);
     let mut area = work();
     assert_eq!(
         b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
@@ -928,19 +962,23 @@ fn a_visit_end_must_match_and_the_visit_takes_eight_positions() {
     );
     assert!(b.end_visit(&[0u8; 8], &mut visit).is_err());
     // the clerks confirm and the visit is quarantined without a decision:
-    // one entry without record per position, with its counters
+    // one entry per bound position naming its record, repeating its
+    // counters
     b.abandon_visit(&mut j, tb(1)).unwrap();
-    assert_eq!(kinds(&j), [JournalKind::Quarantine; 8]);
-    assert!(
-        j.entries
-            .iter()
-            .all(|e| entry(e).record_hash() == &Hash512::ZERO)
-    );
+    assert_eq!(kinds(&j)[..8], [JournalKind::Bound; 8]);
+    assert_eq!(kinds(&j)[8..], [JournalKind::Quarantine; 8]);
+    for (bound, quarantine) in j.entries[..8].iter().zip(&j.entries[8..]) {
+        assert_eq!(entry(quarantine).record_hash(), entry(bound).record_hash());
+        assert_eq!(
+            entry(quarantine).module_counters(),
+            entry(bound).module_counters()
+        );
+    }
     assert_eq!(b.totals().quarantined, 8);
     assert_eq!(b.module_counters(), &[8, 8, 8, 8, 8]);
     // the abandoned visit's work area cannot end the next visit, even one
     // with as many positions
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut other, 8);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut other, 8);
     assert_eq!(
         b.end_visit(&visit_end(b"E-2026", 8), &mut visit)
             .unwrap_err(),
@@ -949,7 +987,7 @@ fn a_visit_end_must_match_and_the_visit_takes_eight_positions() {
     b.abandon_visit(&mut j, tb(1)).unwrap();
     // after the end, no new position and no second end
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     assert_eq!(
         b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
@@ -1017,7 +1055,7 @@ fn a_visit_state_is_bound_to_its_own_visit() {
     let mut j = MemJournal::default();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     let decided = ready
@@ -1040,7 +1078,7 @@ fn a_visit_state_is_bound_to_its_own_visit() {
     // a fresh visit: the old one's ready state no longer exists, and a
     // second box's states cannot act on this one
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let mut other_box = OpenBox::open(w.config, tb(1));
     assert_eq!(ready.positions(&other_box), 0);
@@ -1060,7 +1098,7 @@ fn a_visit_state_is_bound_to_its_own_visit() {
     );
     b.abandon_visit(&mut j, tb(1)).unwrap();
     let mut visit = visit_work();
-    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    bind_visit(&w, &mut b, &mut m, &mut j, &mut staging, &mut visit, 1);
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let decided = ready
         .decide(
@@ -1078,6 +1116,7 @@ fn a_visit_state_is_bound_to_its_own_visit() {
         &w,
         &mut other_box,
         &mut other_modules,
+        &mut MemJournal::default(),
         &mut staging,
         &mut other_visit,
         1,
@@ -1131,7 +1170,26 @@ fn time_buckets_must_not_go_back() {
         .unwrap();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    ballot.bind(&mut b, &mut staging, &mut visit).unwrap();
+    assert_eq!(
+        ballot
+            .bind(&mut b, &mut j, &mut staging, &mut visit, tb(4))
+            .unwrap_err(),
+        Error::TimeRegression
+    );
+    assert!(j.entries.is_empty());
+    b.abandon_visit(&mut j, tb(5)).unwrap();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+        .unwrap();
+    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+    let ballot = ballot.commit(&b).unwrap();
+    let ballot = ballot
+        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let mut visit = visit_work();
+    ballot
+        .bind(&mut b, &mut j, &mut staging, &mut visit, tb(5))
+        .unwrap();
     let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
     let mut package = std::vec![0u8; 300_000];
     assert_eq!(

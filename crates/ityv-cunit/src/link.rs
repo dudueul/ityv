@@ -418,11 +418,16 @@ impl<'a> Decode<'a> for ModuleIssue<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum JournalKind {
-    /// A cast record, followed in the stream by its share package.
+    /// A visit position decided cast: the record, followed in the stream
+    /// by its share package. Its counters repeat the position's bound
+    /// entry (kind 9).
     Record = 1,
-    /// A ballot spoiled by a pre-cast challenge.
+    /// A visit position decided checked (spoiled by a pre-cast
+    /// challenge). Its counters repeat the position's bound entry.
     Challenge = 2,
-    /// A ballot quarantined (imprint failure or abandoned).
+    /// A ballot quarantined: naming a bound record (repeating its
+    /// counters), or without record (hash zero) consuming the counters of
+    /// a ballot stopped before it was bound.
     Quarantine = 3,
     /// A batch closed.
     BatchClose = 4,
@@ -439,6 +444,11 @@ pub enum JournalKind {
     /// holds the visit decision digest; the label value itself is not
     /// journaled; no share package and no counters.
     LabelPrinted = 8,
+    /// A visit position bound before the decision (PROTOCOL.md §7.3 step
+    /// 5): its record hash and the counters it consumed, durable before
+    /// the position counts as bound, so a resume knows every counter the
+    /// visit used. No share package.
+    Bound = 9,
 }
 
 impl JournalKind {
@@ -460,6 +470,7 @@ impl JournalKind {
             6 => Some(Self::Imprinted),
             7 => Some(Self::VisitDecision),
             8 => Some(Self::LabelPrinted),
+            9 => Some(Self::Bound),
             _ => None,
         }
     }

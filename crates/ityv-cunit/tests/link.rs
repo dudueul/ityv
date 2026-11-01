@@ -212,7 +212,7 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
     assert_eq!(parsed.kind(), JournalKind::BatchClose);
     assert_eq!(parsed.time_bucket(), tb(9));
     assert_eq!(parsed.share_package_hash(), &Hash512::ZERO);
-    for code in [0u8, 9, 255] {
+    for code in [0u8, 10, 255] {
         let mut b = out[..len].to_vec();
         b[80] = code;
         let e = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &b)
@@ -228,6 +228,7 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
         JournalKind::Imprinted,
         JournalKind::VisitDecision,
         JournalKind::LabelPrinted,
+        JournalKind::Bound,
     ] {
         assert_eq!(JournalKind::from_code(kind.code()), Some(kind));
         let mut b = out[..len].to_vec();
@@ -241,6 +242,7 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
     assert_eq!(JournalKind::Imprinted.code(), 6);
     assert_eq!(JournalKind::VisitDecision.code(), 7);
     assert_eq!(JournalKind::LabelPrinted.code(), 8);
+    assert_eq!(JournalKind::Bound.code(), 9);
     // the largest entry: seven counters with 64-byte identifiers
     let ids: std::vec::Vec<std::vec::Vec<u8>> = (0..7u8)
         .map(|i| {
@@ -975,11 +977,15 @@ fn area(papers: u8, front_imprinted: bool, sticker_printed: bool) -> rules::Wait
 
 #[test]
 fn the_resume_plan_covers_the_four_cases() {
-    use rules::PaperAction::{Drop, Hold, Quarantine, SpoilChute};
+    use rules::PaperAction::{Drop, Hold, Quarantine, Return, SpoilChute};
     use rules::ResumeCase::{AfterDecision, BeforeDecision, Inconsistent, LabelMissing, Nothing};
     use rules::VisitStage::{Decided, None as NoVisit, Undecided};
     let plan = |stage, spec: &[&str], label, a, absentee| {
-        rules::resume_plan(&visit_state(stage, spec, label), a, absentee)
+        rules::resume_plan(&visit_state(stage, spec, label), a, absentee, false)
+    };
+    // the same with the modules having issued for the ballot in flight
+    let flight = |stage, spec: &[&str], label, a, absentee| {
+        rules::resume_plan(&visit_state(stage, spec, label), a, absentee, true)
     };
     let papers = |p: &rules::ResumePlan| p.papers[..usize::from(p.paper_count)].to_vec();
     let quarantined = |p: &rules::ResumePlan| -> std::vec::Vec<usize> {
@@ -988,27 +994,76 @@ fn the_resume_plan_covers_the_four_cases() {
     // nothing pending
     let p = plan(NoVisit, &[], false, area(0, false, false), false);
     assert_eq!((p.case, p.paper_count, p.incident), (Nothing, 0, false));
-    // (1) papers no entry names: quarantined without record
+    // (1) papers no entry names and that consumed nothing: back to the
+    // voter, nothing journaled
     let p = plan(NoVisit, &[], false, area(2, false, false), false);
     assert_eq!(
         (p.case, p.unjournaled, papers(&p)),
-        (BeforeDecision, 2, [Quarantine; 2].to_vec())
+        (BeforeDecision, 0, [Return; 2].to_vec())
     );
     assert!(!p.incident);
-    let p = plan(NoVisit, &[], false, area(1, true, false), false);
+    // the first of them was in flight and the modules issued for it: it is
+    // quarantined by an entry without record carrying the counters
+    let p = flight(NoVisit, &[], false, area(2, false, false), false);
     assert_eq!(
-        (p.case, p.unjournaled, p.incident),
-        (BeforeDecision, 1, true)
+        (p.case, p.unjournaled, papers(&p), p.incident),
+        (BeforeDecision, 1, [Quarantine, Return].to_vec(), false)
     );
-    // (1) an undecided visit: its positions by record hash, extra papers without
-    let p = plan(Undecided, &["C.", "K"], false, area(3, false, false), false);
+    // issued, but no paper: the entry is still written, the paper is
+    // missing
+    let p = flight(NoVisit, &[], false, area(0, false, false), false);
     assert_eq!(
-        (p.case, quarantined(&p), p.unjournaled),
-        (BeforeDecision, [0, 1].to_vec(), 1)
+        (p.case, p.unjournaled, p.paper_count, p.incident),
+        (BeforeDecision, 1, 0, true)
     );
-    assert_eq!(papers(&p), [Quarantine; 3]);
+    // an imprinted unbound paper fits nothing: every paper quarantined
+    let p = plan(NoVisit, &[], false, area(2, true, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p), p.incident),
+        (BeforeDecision, 2, [Quarantine; 2].to_vec(), true)
+    );
+    let p = flight(NoVisit, &[], false, area(2, false, true), false);
+    assert_eq!(
+        (p.unjournaled, papers(&p), p.incident),
+        (2, [Quarantine; 2].to_vec(), true)
+    );
+    // an imprint with no unbound paper: the counters are still journaled
+    let p = flight(Undecided, &["C."], false, area(1, true, false), false);
+    assert_eq!(
+        (p.unjournaled, papers(&p), p.incident),
+        (1, [Quarantine].to_vec(), true)
+    );
+    // (1) an undecided visit: its bound positions by record hash, the
+    // paper in flight with its counters, the rest back to the voter
+    let p = plan(Undecided, &["C.", "K"], false, area(4, false, false), false);
+    assert_eq!(
+        (p.case, quarantined(&p), p.unjournaled, p.incident),
+        (BeforeDecision, [0, 1].to_vec(), 0, false)
+    );
+    assert_eq!(papers(&p), [Quarantine, Quarantine, Return, Return]);
+    let p = flight(Undecided, &["C.", "K"], false, area(4, false, false), false);
+    assert_eq!((quarantined(&p), p.unjournaled), ([0, 1].to_vec(), 1));
+    assert_eq!(papers(&p), [Quarantine, Quarantine, Quarantine, Return]);
+    // a position quarantined before the stop is not quarantined again
+    let p = plan(
+        Undecided,
+        &["Cq", "C."],
+        false,
+        area(2, false, false),
+        false,
+    );
+    assert_eq!((quarantined(&p), p.incident), ([1].to_vec(), false));
+    // a bound paper missing, or an imprint before any decision: incidents
     let p = plan(Undecided, &["C.", "K"], false, area(1, false, false), false);
-    assert_eq!((quarantined(&p), p.unjournaled), ([0, 1].to_vec(), 0));
+    assert_eq!(
+        (quarantined(&p), p.unjournaled, p.incident),
+        ([0, 1].to_vec(), 0, true)
+    );
+    let p = plan(Undecided, &["C."], false, area(2, true, false), false);
+    assert_eq!(
+        (papers(&p), p.unjournaled, p.incident),
+        ([Quarantine, Quarantine].to_vec(), 1, true)
+    );
     // (2) the front cast paper is imprinted: its entry, then it drops
     let p = plan(
         Decided,
@@ -1071,14 +1126,29 @@ fn the_resume_plan_covers_the_four_cases() {
     assert_eq!((p.case, papers(&p)), (AfterDecision, [SpoilChute].to_vec()));
     let p = plan(Decided, &["Ci", "K"], false, area(2, false, false), false);
     assert_eq!(
-        (p.case, p.unjournaled, p.incident),
-        (BeforeDecision, 2, false)
+        (p.case, p.unjournaled, papers(&p), p.incident),
+        (BeforeDecision, 0, [Return; 2].to_vec(), false)
     );
     let p = plan(Decided, &["Ci", "Ci"], false, area(1, false, false), false);
     assert_eq!(
         (p.case, p.unjournaled, p.incident),
-        (BeforeDecision, 1, false)
+        (BeforeDecision, 0, false)
     );
+    // the modules issued after a settled visit: a new visit's paper in
+    // flight, even where a trailing checked paper would fit
+    let p = flight(Decided, &["Ci", "K"], false, area(1, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p)),
+        (BeforeDecision, 1, [Quarantine].to_vec())
+    );
+    let p = flight(Decided, &["Ci", "Ci"], false, area(0, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.incident),
+        (BeforeDecision, 1, true)
+    );
+    // but not while the decided visit still owes a position
+    let p = flight(Decided, &["Ci", "C."], false, area(1, true, false), false);
+    assert_eq!((p.case, p.unjournaled), (Inconsistent, 0));
     // an imprinted paper or a sticker that fits no position: quarantined
     // without record, and an incident
     for (spec, a) in [
@@ -1139,8 +1209,8 @@ fn the_resume_plan_covers_the_four_cases() {
     assert_eq!(p.case, Nothing);
     let p = plan(Decided, &["Ci", "Ci"], true, area(1, false, false), true);
     assert_eq!(
-        (p.case, p.unjournaled),
-        (BeforeDecision, 1),
+        (p.case, p.unjournaled, papers(&p)),
+        (BeforeDecision, 0, [Return].to_vec()),
         "after the sticker, a new visit"
     );
     let p = plan(Decided, &["Cq", "K"], false, area(0, false, false), true);

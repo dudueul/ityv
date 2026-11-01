@@ -4,12 +4,15 @@
 //! [`OpenBox::resume`] reads the sealed journal from its first entry,
 //! checks every link and rebuilds the box: the high-water marks, the open
 //! batch, the batch index, the totals, the incidents, and the state of
-//! the last visit. The attested waiting area then decides, with that
-//! visit, what happens to the papers left ([`rules::resume_plan`]); the
-//! entries the decision needs are appended and the plan is returned to
-//! the host, which moves the papers accordingly. Cast ids and envelope
-//! labels are never stored durably (CONSTITUTION §4.4), so nothing is
-//! imprinted, printed or opened after a resume.
+//! the last visit. Each module is then asked, without a signature or a
+//! state change, whether it issued one counter beyond the journal (the
+//! ballot being built when the machine stopped, before its bound entry).
+//! The attested waiting area then decides, with that visit, what happens
+//! to the papers left ([`rules::resume_plan`]); the entries the decision
+//! needs are appended and the plan is returned to the host, which moves
+//! the papers accordingly. Cast ids and envelope labels are never stored
+//! durably (CONSTITUTION §4.4), so nothing is imprinted, printed or opened
+//! after a resume.
 
 use ityv_crypto::object_hash;
 use ityv_encoding::{Hash512, SCHEMA_VERSION_1, TimeBucket, decode_object};
@@ -20,7 +23,7 @@ use crate::error::Error;
 use crate::link::{
     JournalEntry, JournalKind, MAX_JOURNAL_ENTRY_LEN, SCHEMA_JOURNAL_ENTRY, visit_digest,
 };
-use crate::port::{JournalSink, JournalSource};
+use crate::port::{JournalSink, JournalSource, ModulePort};
 use crate::rules::{
     self, Choice, CounterCheck, ResumePlan, Settlement, VISIT_POSITIONS, VisitStage, VisitState,
     WaitingArea,
@@ -68,6 +71,9 @@ struct Trail {
     stage: VisitStage,
     count: u8,
     positions: [TrailPosition; VISIT_POSITIONS],
+    /// Undecided: how many positions have their decision entry (kind 1
+    /// or 2) so far.
+    decided: u8,
     digest: Hash512,
     live: u8,
     label_printed: bool,
@@ -78,10 +84,17 @@ impl Trail {
         stage: VisitStage::None,
         count: 0,
         positions: [TrailPosition::EMPTY; VISIT_POSITIONS],
+        decided: 0,
         digest: Hash512::ZERO,
         live: 0,
         label_printed: false,
     };
+
+    /// `true` once a position of the trail is quarantined.
+    fn any_quarantined(&self) -> bool {
+        self.bound()
+            .any(|p| matches!(p.settled, Settlement::Quarantined))
+    }
 
     fn bound(&self) -> impl Iterator<Item = &TrailPosition> {
         self.positions.iter().take(usize::from(self.count))
@@ -131,33 +144,50 @@ impl<'c> OpenBox<'c> {
     /// from zero, non-decreasing time buckets, a share package exactly
     /// after record entries and matching their package hash, consumed
     /// counters that each follow the module's mark, and the visit order of
-    /// VC-069: position entries (kinds 1, 2), then the decision entry
-    /// (kind 7, whose digest must match them), then per cast position an
-    /// imprint (kind 6, in position order) or a quarantine naming it (kind
-    /// 3, with its counters), then out of district the sticker entry (kind
-    /// 8, repeating the digest). Visit entries carry no counters. Batch
-    /// closes must match the replayed batch, nothing may follow a box
-    /// close. A decided visit that still owed something when another visit
-    /// or a batch began lost its papers at an earlier resume and counts as
-    /// one paper incident. Positions of an undecided visit may only be
-    /// followed by more positions, the decision, or quarantines naming
-    /// them.
+    /// VC-069: bound entries (kind 9, each consuming its counters), then
+    /// per bound position in order its decision entry (kind 1 or 2,
+    /// repeating the position's record hash and counters), then the
+    /// decision entry (kind 7, whose digest must match them), then per
+    /// cast position an imprint (kind 6, in position order) or a
+    /// quarantine naming it (kind 3, with its counters), then out of
+    /// district the sticker entry (kind 8, repeating the digest). Visit
+    /// entries carry no counters. Batch closes must match the replayed
+    /// batch, nothing may follow a box close. A decided visit that still
+    /// owed something when another visit or a batch began lost its papers
+    /// at an earlier resume and counts as one paper incident. Bound
+    /// positions of an undecided visit may only be followed by more bound
+    /// entries, their decision entries and the decision, or quarantines
+    /// naming them (all of them before anything else).
     ///
-    /// Then the attested waiting area decides, with the last visit, what
-    /// happens to the papers left ([`rules::resume_plan`]): the imprint and
-    /// quarantine entries it needs are appended (with
-    /// `inputs.time_bucket`), and the plan tells the host where each paper
-    /// goes. No visit is open afterwards and a scan count is due at once.
-    /// `package` must hold the largest share package of the box.
+    /// Then every configured module is asked, with the batch dry run
+    /// ([`ModulePort::check_batch`]: no signature, no state change),
+    /// whether its unattested counters run exactly to one beyond its mark.
+    /// If they do, the ballot in flight consumed that counter before its
+    /// bound entry was written. Otherwise nothing is assumed: a module
+    /// that refused an earlier batch cannot say yes, and should it have
+    /// issued, its next issue reports [`Error::CounterGap`].
+    ///
+    /// Then the attested waiting area decides, with the last visit and
+    /// that answer, what happens to the papers left
+    /// ([`rules::resume_plan`]): the imprint and quarantine entries it
+    /// needs are appended (with `inputs.time_bucket`; the first quarantine
+    /// without record consumes the counters found above), and the plan
+    /// tells the host where each paper goes. No visit is open afterwards
+    /// and a scan count is due at once. `package` must hold the largest
+    /// share package of the box; `modules` are the box's module ports in
+    /// configuration order.
     ///
     /// # Errors
     /// [`Error::JournalCorrupt`] for any broken or inconsistent entry,
-    /// [`Error::BoxClosed`] if the journal ends with a box close, the
-    /// source's and the sink's errors, [`Error::TimeRegression`].
+    /// [`Error::BoxClosed`] if the journal ends with a box close,
+    /// [`Error::PortCount`] if `modules` does not match the configuration,
+    /// the source's, the sink's and the ports' errors,
+    /// [`Error::TimeRegression`].
     pub fn resume(
         config: &'c ElectionConfig<'c>,
         source: &mut dyn JournalSource,
         sink: &mut dyn JournalSink,
+        modules: &mut [&mut dyn ModulePort],
         inputs: &ResumeInputs,
         package: &mut [u8],
     ) -> Result<(Self, ResumePlan), Error> {
@@ -175,20 +205,53 @@ impl<'c> OpenBox<'c> {
                 .map_err(|_| Error::JournalCorrupt)?;
         }
         open_box.usable()?;
+        let lost = open_box.issued_beyond_marks(modules)?;
         let absentee = matches!(config.profile(), Profile::Absentee);
-        let plan = rules::resume_plan(&trail.state(), inputs.waiting_area, absentee);
-        open_box.apply_plan(&mut trail, &plan, sink, inputs.time_bucket)?;
+        let plan = rules::resume_plan(
+            &trail.state(),
+            inputs.waiting_area,
+            absentee,
+            lost.contains(&true),
+        );
+        open_box.apply_plan(&mut trail, &plan, lost, sink, inputs.time_bucket)?;
         open_box.scan.pending = true;
         Ok((open_box, plan))
     }
 
+    /// The modules that issued the counter after their mark: by the batch
+    /// dry run, their unattested counters run exactly from the counter
+    /// after the last attested one to the mark plus one.
+    fn issued_beyond_marks(
+        &self,
+        modules: &mut [&mut dyn ModulePort],
+    ) -> Result<[bool; MAX_MODULES], Error> {
+        let configured = self.config.modules().len();
+        if modules.len() != configured {
+            return Err(Error::PortCount);
+        }
+        let mut lost = [false; MAX_MODULES];
+        for (((port, slot), &mark), &through) in modules
+            .iter_mut()
+            .zip(lost.iter_mut())
+            .zip(&self.marks)
+            .zip(&self.attested_through)
+        {
+            let first = through.checked_add(1).ok_or(Error::Overflow)?;
+            let next = mark.checked_add(1).ok_or(Error::Overflow)?;
+            *slot = port.check_batch(first, next)?;
+        }
+        Ok(lost)
+    }
+
     /// Appends what the resume plan needs: the front paper's imprint entry,
     /// the quarantines naming records (position order), the quarantines
-    /// without record; and counts the incident.
+    /// without record (the first consuming the counters the modules
+    /// issued beyond their marks, `lost`); and counts the incident.
     fn apply_plan(
         &mut self,
         trail: &mut Trail,
         plan: &ResumePlan,
+        lost: [bool; MAX_MODULES],
         sink: &mut dyn JournalSink,
         time_bucket: TimeBucket,
     ) -> Result<(), Error> {
@@ -215,19 +278,33 @@ impl<'c> OpenBox<'c> {
                 VisitStage::Undecided | VisitStage::None => self.count_quarantine()?,
             }
         }
-        for _ in 0..plan.unjournaled {
+        let mut next = NO_COUNTERS;
+        for ((slot, &mark), issued) in next.iter_mut().zip(&self.marks).zip(lost) {
+            if issued {
+                *slot = mark.checked_add(1).ok_or(Error::Overflow)?;
+            }
+        }
+        for index in 0..plan.unjournaled {
+            let include = if index == 0 {
+                lost
+            } else {
+                [false; MAX_MODULES]
+            };
             self.journal(
                 sink,
                 &EntryFields {
                     kind: JournalKind::Quarantine,
                     record_hash: Hash512::ZERO,
                     share_package_hash: Hash512::ZERO,
-                    counters: &NO_COUNTERS,
-                    include: [false; MAX_MODULES],
+                    counters: &next,
+                    include,
                     time_bucket,
                 },
                 None,
             )?;
+            if index == 0 {
+                self.replay_consumed(&next, include)?;
+            }
             self.count_quarantine()?;
         }
         if plan.incident {
@@ -378,12 +455,18 @@ impl<'c> OpenBox<'c> {
         let record = *entry.record_hash();
         let absentee = matches!(self.config.profile(), Profile::Absentee);
         match kind {
-            JournalKind::Record | JournalKind::Challenge => {
+            JournalKind::Bound => {
                 if trail.stage != VisitStage::Undecided {
                     self.close_trail(trail)?;
                 }
+                if !include.contains(&true) {
+                    return Err(Error::JournalCorrupt);
+                }
                 self.replay_consumed(&counters, include)?;
-                replay_position(trail, kind, record, &counters, include)?;
+                replay_bound(trail, record, &counters, include)?;
+            }
+            JournalKind::Record | JournalKind::Challenge => {
+                replay_position(trail, kind, &record, &counters, include)?;
             }
             JournalKind::VisitDecision => {
                 if include.contains(&true) {
@@ -435,10 +518,11 @@ impl<'c> OpenBox<'c> {
         digest: &Hash512,
         time_bucket: TimeBucket,
     ) -> Result<(), Error> {
-        let quarantined = trail
-            .bound()
-            .any(|p| matches!(p.settled, Settlement::Quarantined));
-        if trail.stage != VisitStage::Undecided || trail.count == 0 || quarantined {
+        if trail.stage != VisitStage::Undecided
+            || trail.count == 0
+            || trail.decided != trail.count
+            || trail.any_quarantined()
+        {
             return Err(Error::JournalCorrupt);
         }
         let mut entries = [(0u8, Hash512::ZERO); VISIT_POSITIONS];
@@ -532,18 +616,19 @@ impl<'c> OpenBox<'c> {
     }
 }
 
-/// A position entry: one more position of the undecided trail.
-fn replay_position(
+/// A bound entry: one more position of the undecided trail, before any
+/// of its decision entries or quarantines.
+fn replay_bound(
     trail: &mut Trail,
-    kind: JournalKind,
     record: Hash512,
     counters: &[u64; MAX_MODULES],
     include: [bool; MAX_MODULES],
 ) -> Result<(), Error> {
-    let quarantined = trail
-        .bound()
-        .any(|p| matches!(p.settled, Settlement::Quarantined));
-    if quarantined || trail.bound().any(|p| p.record == record) {
+    if trail.decided != 0
+        || trail.any_quarantined()
+        || record == Hash512::ZERO
+        || trail.bound().any(|p| p.record == record)
+    {
         return Err(Error::JournalCorrupt);
     }
     let slot = trail
@@ -551,11 +636,7 @@ fn replay_position(
         .get_mut(usize::from(trail.count))
         .ok_or(Error::JournalCorrupt)?;
     *slot = TrailPosition {
-        choice: if kind == JournalKind::Record {
-            Choice::Cast
-        } else {
-            Choice::Check
-        },
+        choice: Choice::Cast,
         record,
         counters: *counters,
         include,
@@ -563,6 +644,37 @@ fn replay_position(
     };
     trail.count = trail.count.checked_add(1).ok_or(Error::Overflow)?;
     trail.stage = VisitStage::Undecided;
+    Ok(())
+}
+
+/// A decision entry for a position (kind 1 cast, kind 2 checked): the
+/// next bound position of the undecided trail, its record hash and its
+/// counters repeated.
+fn replay_position(
+    trail: &mut Trail,
+    kind: JournalKind,
+    record: &Hash512,
+    counters: &[u64; MAX_MODULES],
+    include: [bool; MAX_MODULES],
+) -> Result<(), Error> {
+    if trail.stage != VisitStage::Undecided || trail.any_quarantined() {
+        return Err(Error::JournalCorrupt);
+    }
+    let index = usize::from(trail.decided);
+    let position = trail
+        .positions
+        .get_mut(index)
+        .filter(|_| index < usize::from(trail.count))
+        .ok_or(Error::JournalCorrupt)?;
+    if position.record != *record || !position.same_counters(counters, include) {
+        return Err(Error::JournalCorrupt);
+    }
+    position.choice = if kind == JournalKind::Record {
+        Choice::Cast
+    } else {
+        Choice::Check
+    };
+    trail.decided = trail.decided.checked_add(1).ok_or(Error::Overflow)?;
     Ok(())
 }
 

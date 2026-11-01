@@ -129,12 +129,25 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     let package = ballot.package_bytes().to_vec();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    let bound = ballot.bind(&mut box_, &mut staging, &mut visit).unwrap();
+    let bound = ballot
+        .bind(&mut box_, &mut journal, &mut staging, &mut visit, tb(10))
+        .unwrap();
     assert_eq!((bound.position(), bound.tracking_code()), (0, &tracking));
-    assert!(
-        journal.entries.is_empty(),
-        "nothing is journaled before the decision"
+    // binding journals the bound entry, durable: the record hash and the
+    // counters the ballot consumed, no package
+    assert_eq!(kinds(&journal), [JournalKind::Bound]);
+    assert_eq!((journal.deferred, journal.syncs), (0, 1));
+    let bound_bytes = journal.entries[0].clone();
+    let bound_entry: JournalEntry<'_> =
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &bound_bytes).unwrap();
+    assert_eq!(bound_entry.record_hash(), &tracking);
+    assert_eq!(bound_entry.prev_head(), &ityv_encoding::Hash512::ZERO);
+    assert_eq!(
+        bound_entry.share_package_hash(),
+        &ityv_encoding::Hash512::ZERO
     );
+    assert_eq!(bound_entry.module_counters().len(), 5);
+    assert_eq!(journal.packages[0], None);
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
         .unwrap();
@@ -173,17 +186,22 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     }
     assert_eq!(imprint.cast_id()[..], h.finish()[..24]);
 
-    // the record entry, the decision entry (one fsync), the imprint entry
-    assert_eq!(journal.entries.len(), 3);
-    assert_eq!((journal.deferred, journal.syncs), (1, 2));
+    // the bound entry, then the record entry and the decision entry (one
+    // fsync), then the imprint entry
+    assert_eq!(journal.entries.len(), 4);
+    assert_eq!((journal.deferred, journal.syncs), (1, 3));
     let entry: JournalEntry<'_> =
-        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[0]).unwrap();
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[1]).unwrap();
     assert_eq!(entry.kind(), JournalKind::Record);
     assert_eq!(entry.record_hash(), &tracking);
-    assert_eq!(entry.prev_head(), &ityv_encoding::Hash512::ZERO);
-    assert_eq!(journal.packages[0].as_deref(), Some(package.as_slice()));
+    assert_eq!(entry.module_counters(), bound_entry.module_counters());
+    assert_eq!(
+        entry.prev_head(),
+        &ityv_crypto::object_hash(&journal.entries[0])
+    );
+    assert_eq!(journal.packages[1].as_deref(), Some(package.as_slice()));
     let decision: JournalEntry<'_> =
-        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[1]).unwrap();
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[2]).unwrap();
     assert_eq!(decision.kind(), JournalKind::VisitDecision);
     assert_eq!(
         decision.record_hash(),
@@ -193,19 +211,19 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     // the imprint entry names the record, repeats its counters and comes
     // before the paper drops
     let imprint_entry: JournalEntry<'_> =
-        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[2]).unwrap();
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[3]).unwrap();
     assert_eq!(imprint_entry.kind(), JournalKind::Imprinted);
     assert_eq!(imprint_entry.record_hash(), &tracking);
     assert_eq!(imprint_entry.module_counters(), entry.module_counters());
     assert_eq!(imprint_entry.time_bucket(), tb(11));
     assert_eq!(
         imprint_entry.prev_head(),
-        &ityv_crypto::object_hash(&journal.entries[1])
+        &ityv_crypto::object_hash(&journal.entries[2])
     );
-    assert_eq!(journal.packages[2], None);
+    assert_eq!(journal.packages[3], None);
     assert_eq!(
         box_.journal_head(),
-        &ityv_crypto::object_hash(&journal.entries[2])
+        &ityv_crypto::object_hash(&journal.entries[3])
     );
     assert_eq!(box_.totals().records, 1);
     assert_eq!(box_.totals().visits, 1);
@@ -343,7 +361,9 @@ fn run_challenge_in(w: &World, style: &[u8], chunks: usize, option: u16) {
     let package = ballot.package_bytes().to_vec();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
-    ballot.bind(&mut box_, &mut staging, &mut visit).unwrap();
+    ballot
+        .bind(&mut box_, &mut journal, &mut staging, &mut visit, tb(1))
+        .unwrap();
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
         .unwrap();
@@ -383,7 +403,7 @@ fn run_challenge_in(w: &World, style: &[u8], chunks: usize, option: u16) {
     assert_eq!(box_.totals().challenged, 1);
     assert_eq!(box_.totals().records, 0);
     let entry: JournalEntry<'_> =
-        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[0]).unwrap();
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[1]).unwrap();
     assert_eq!(entry.kind(), JournalKind::Challenge);
     assert_eq!(entry.record_hash(), &tracking);
 
@@ -608,10 +628,10 @@ fn a_visit_binds_every_position_before_the_decision() {
             &w,
             &mut box_,
             &mut modules,
+            &mut journal,
             &mut staging,
             &mut visit,
-            style,
-            option,
+            (style, option),
         );
         assert_eq!(usize::from(bound.position()), i);
         codes.push(*bound.tracking_code());
@@ -635,10 +655,12 @@ fn a_visit_binds_every_position_before_the_decision() {
             );
         }
     }
-    assert!(
-        journal.entries.is_empty(),
-        "nothing is journaled before the decision"
-    );
+    // each position's bound entry is durable before the next comes
+    assert_eq!(kinds(&journal), [JournalKind::Bound; 3]);
+    assert_eq!((journal.deferred, journal.syncs), (0, 3));
+    for (i, code) in codes.iter().enumerate() {
+        assert_eq!(entry_at(&journal, i).record_hash(), code);
+    }
     assert!(box_.has_visit_open());
     // a scan count, a batch and the close wait for the visit
     let mut small = std::vec![0u8; 512];
@@ -666,9 +688,10 @@ fn a_visit_binds_every_position_before_the_decision() {
             tb(2),
         )
         .unwrap();
-    // positions in order, then the decision; one fsync
+    // the positions' decision entries in order, then the decision; one
+    // fsync
     assert_eq!(
-        kinds(&journal),
+        kinds(&journal)[3..],
         [
             JournalKind::Record,
             JournalKind::Challenge,
@@ -676,17 +699,23 @@ fn a_visit_binds_every_position_before_the_decision() {
             JournalKind::VisitDecision
         ]
     );
-    assert_eq!((journal.deferred, journal.syncs), (3, 1));
+    assert_eq!((journal.deferred, journal.syncs), (3, 4));
     let digest = visit_digest(&[
         (JournalKind::Record.code(), codes[0]),
         (JournalKind::Challenge.code(), codes[1]),
         (JournalKind::Record.code(), codes[2]),
     ]);
-    assert_eq!(entry_at(&journal, 3).record_hash(), &digest);
-    assert!(entry_at(&journal, 3).module_counters().is_empty());
-    assert_eq!(entry_at(&journal, 1).module_counters().len(), 5);
+    assert_eq!(entry_at(&journal, 6).record_hash(), &digest);
+    assert!(entry_at(&journal, 6).module_counters().is_empty());
+    for i in 0..3 {
+        assert_eq!(
+            entry_at(&journal, 3 + i).module_counters(),
+            entry_at(&journal, i).module_counters(),
+            "a decision entry repeats its bound entry's counters"
+        );
+    }
     assert!(
-        journal.packages[1].is_none(),
+        journal.packages[4].is_none(),
         "a checked position has no package"
     );
     assert_eq!(
@@ -807,7 +836,7 @@ fn a_visit_binds_every_position_before_the_decision() {
     assert!(visit.is_clear());
     assert!(!box_.has_visit_open());
     assert_eq!(
-        kinds(&journal)[4..],
+        kinds(&journal)[7..],
         [JournalKind::Imprinted, JournalKind::Imprinted]
     );
     // the visit is over: a scan count is allowed again
@@ -821,16 +850,17 @@ fn a_bound_record_cannot_change_after_the_decision() {
     let w = world(Profile::InPerson, false);
     let mut box_ = OpenBox::open(w.config, tb(1));
     let mut modules = mocks(&w);
+    let mut journal = MemJournal::default();
     let mut staging = MemStaging::default();
     let mut visit = visit_work();
     let bound = build_position(
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     for m in &mut modules {
         let counter = m.issued[0].counter;
@@ -872,10 +902,10 @@ fn an_absentee_visit_prints_one_sticker_with_every_label() {
             &w,
             &mut box_,
             &mut modules,
+            &mut journal,
             &mut staging,
             &mut visit,
-            STYLE_SMALL,
-            option,
+            (STYLE_SMALL, option),
         );
     }
     let ready = box_
@@ -924,7 +954,11 @@ fn an_absentee_visit_prints_one_sticker_with_every_label() {
     assert_eq!(processed.label_command(&box_).err(), Some(Error::NoLabel));
     let last = entry_at(&journal, journal.entries.len() - 1);
     assert_eq!(last.kind(), JournalKind::LabelPrinted);
-    assert_eq!(last.record_hash(), entry_at(&journal, 3).record_hash());
+    let decision = (0..journal.entries.len())
+        .map(|i| entry_at(&journal, i))
+        .find(|e| e.kind() == JournalKind::VisitDecision)
+        .unwrap();
+    assert_eq!(last.record_hash(), decision.record_hash());
     assert!(last.module_counters().is_empty());
     assert!(
         processed
@@ -935,6 +969,9 @@ fn an_absentee_visit_prints_one_sticker_with_every_label() {
     assert_eq!(
         kinds(&journal),
         [
+            JournalKind::Bound,
+            JournalKind::Bound,
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::Challenge,
             JournalKind::Record,
@@ -960,10 +997,10 @@ fn a_failed_sticker_quarantines_the_visits_cast_records() {
             &w,
             &mut box_,
             &mut modules,
+            &mut journal,
             &mut staging,
             &mut visit,
-            STYLE_SMALL,
-            option,
+            (STYLE_SMALL, option),
         );
     }
     let ready = box_
@@ -1005,6 +1042,8 @@ fn a_failed_sticker_quarantines_the_visits_cast_records() {
     assert_eq!(
         kinds(&journal),
         [
+            JournalKind::Bound,
+            JournalKind::Bound,
             JournalKind::Record,
             JournalKind::Record,
             JournalKind::VisitDecision,
@@ -1020,10 +1059,10 @@ fn a_failed_sticker_quarantines_the_visits_cast_records() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
@@ -1124,10 +1163,10 @@ fn slip_needs_the_voter_code_scope_and_a_cast_ballot() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
@@ -1162,10 +1201,10 @@ fn slip_needs_the_voter_code_scope_and_a_cast_ballot() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
@@ -1206,10 +1245,10 @@ fn slip_needs_the_voter_code_scope_and_a_cast_ballot() {
                 &w,
                 &mut box_,
                 &mut modules,
+                &mut journal,
                 &mut staging,
                 &mut visit,
-                STYLE_SMALL,
-                option,
+                (STYLE_SMALL, option),
             )
             .tracking_code()
         })
@@ -1556,7 +1595,7 @@ fn the_work_areas_are_wiped_at_every_exit() {
     staging.fail = true;
     assert_eq!(
         ballot
-            .bind(&mut box_, &mut staging, &mut visit)
+            .bind(&mut box_, &mut journal, &mut staging, &mut visit, tb(1))
             .unwrap_err(),
         Error::Port(ityv_cunit::PortError::Transport)
     );
@@ -1568,10 +1607,10 @@ fn the_work_areas_are_wiped_at_every_exit() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     assert!(!visit.is_clear());
     let ready = box_
@@ -1586,10 +1625,10 @@ fn the_work_areas_are_wiped_at_every_exit() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
@@ -1615,10 +1654,10 @@ fn the_work_areas_are_wiped_at_every_exit() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)
@@ -1642,10 +1681,10 @@ fn the_work_areas_are_wiped_at_every_exit() {
         &w,
         &mut box_,
         &mut modules,
+        &mut journal,
         &mut staging,
         &mut visit,
-        STYLE_SMALL,
-        1,
+        (STYLE_SMALL, 1),
     );
     let ready = box_
         .end_visit(&visit_end(b"E-2026", 1), &mut visit)

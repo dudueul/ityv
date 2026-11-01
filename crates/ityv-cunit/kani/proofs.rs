@@ -284,14 +284,17 @@ fn any_stage() -> VisitStage {
 }
 
 /// The resume rule of PROTOCOL.md §7.3 (VC-069) is total and leaves
-/// nothing owed, for every last visit of up to eight positions and every
-/// attested waiting area: a plan never names a paper beyond those
-/// attested; a case-4 plan journals nothing and holds every paper; a
-/// case-1 plan quarantines every paper (the undecided positions by record
-/// hash, the rest without record); a case-2 or case-3 plan follows a
-/// decision, and once applied every cast position is settled, and out of
-/// district without a sticker entry none is left cast; an imprint entry is
-/// appended only for an imprinted front paper in person.
+/// nothing owed, for every last visit of up to eight positions, every
+/// attested waiting area and either answer of the modules about a ballot
+/// in flight: a plan never names a paper beyond those attested; a case-4
+/// plan journals nothing and holds every paper; a case-1 plan quarantines
+/// every bound position not yet quarantined by its record hash and its
+/// paper, journals the counters of the ballot in flight whenever the
+/// modules issued them, and returns to the voter only unbound papers that
+/// consumed nothing; a case-2 or case-3 plan follows a decision with no
+/// ballot in flight, and once applied every cast position is settled, and
+/// out of district without a sticker entry none is left cast; an imprint
+/// entry is appended only for an imprinted front paper in person.
 #[kani::proof]
 #[kani::unwind(10)]
 fn the_resume_plan_is_total_and_settles_every_cast_position() {
@@ -311,7 +314,8 @@ fn the_resume_plan_is_total_and_settles_every_cast_position() {
     };
     kani::assume(area.papers <= 9);
     let absentee: bool = kani::any();
-    let plan = resume_plan(&visit, area, absentee);
+    let in_flight: bool = kani::any();
+    let plan = resume_plan(&visit, area, absentee, in_flight);
     assert_eq!(plan.paper_count, area.papers);
     let n = usize::from(visit.positions);
     let papers = usize::from(area.papers).min(VISIT_POSITIONS);
@@ -319,6 +323,7 @@ fn the_resume_plan_is_total_and_settles_every_cast_position() {
     match plan.case {
         ResumeCase::Nothing => {
             assert_eq!(area.papers, 0);
+            assert!(!in_flight);
             assert!(plan.imprint.is_none() && plan.unjournaled == 0 && !plan.incident);
             assert!(!plan.quarantine.iter().any(|&q| q));
         }
@@ -329,21 +334,31 @@ fn the_resume_plan_is_total_and_settles_every_cast_position() {
             assert!(acts.iter().all(|&a| a == PaperAction::Hold));
         }
         ResumeCase::BeforeDecision => {
-            assert!(acts.iter().all(|&a| a == PaperAction::Quarantine));
             assert!(plan.imprint.is_none());
+            let undecided = visit.stage == VisitStage::Undecided;
+            let bound = if undecided { n } else { 0 };
             for p in 0..VISIT_POSITIONS {
-                let undecided = visit.stage == VisitStage::Undecided && p < n;
-                assert_eq!(plan.quarantine[p], undecided);
+                let open = undecided && p < n && visit.settled[p] != Settlement::Quarantined;
+                assert_eq!(plan.quarantine[p], open);
             }
-            let named = if visit.stage == VisitStage::Undecided {
-                visit.positions
-            } else {
-                0
-            };
-            assert_eq!(plan.unjournaled, area.papers.saturating_sub(named));
+            let anomaly = area.front_imprinted || area.sticker_printed;
+            let mut quarantined_unbound = 0usize;
+            for (i, &a) in acts.iter().enumerate() {
+                assert!(a == PaperAction::Quarantine || a == PaperAction::Return);
+                if i < bound {
+                    assert_eq!(a, PaperAction::Quarantine);
+                } else if a == PaperAction::Quarantine {
+                    quarantined_unbound += 1;
+                } else {
+                    assert!(!anomaly && !(in_flight && i == bound));
+                }
+            }
+            let entries = quarantined_unbound.max(usize::from(in_flight));
+            assert_eq!(usize::from(plan.unjournaled), entries);
         }
         ResumeCase::AfterDecision | ResumeCase::LabelMissing => {
             assert_eq!(visit.stage, VisitStage::Decided);
+            assert!(!in_flight);
             assert!(usize::from(area.papers) <= n);
             assert_eq!(plan.unjournaled, 0);
             assert!(acts.iter().all(|&a| a != PaperAction::Hold));

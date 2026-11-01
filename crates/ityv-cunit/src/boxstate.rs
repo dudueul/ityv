@@ -337,6 +337,14 @@ impl<'c> OpenBox<'c> {
         self.totals
     }
 
+    /// The latest time bucket the box used (the opening's, or the last
+    /// journal entry's): every later entry must carry this bucket or a
+    /// later one.
+    #[must_use]
+    pub const fn last_time_bucket(&self) -> TimeBucket {
+        TimeBucket::new(self.last_bucket)
+    }
+
     /// The high-water mark of every module counter, in configuration order.
     #[must_use]
     pub fn module_counters(&self) -> &[u64] {

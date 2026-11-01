@@ -2,14 +2,16 @@
 //!
 //! A voter inserts every ballot they received (one to eight) at once. Each
 //! ballot is built as one position ([`crate::ballot`]) and bound to the
-//! open visit; the interpretation unit then sends `VisitEnd`, and only
-//! once every position is bound, with its device and module record
-//! signatures, does the unit take the voter's cast-or-check decision
-//! (VC-068). The decision journals every position, then the decision entry
+//! open visit, which makes its bound entry (kind 9: record hash and
+//! consumed counters) durable; the interpretation unit then sends
+//! `VisitEnd`, and only once every position is bound, with its device and
+//! module record signatures, does the unit take the voter's cast-or-check
+//! decision (VC-068). The decision journals every position's decision
+//! entry (kind 1 or 2, repeating its bound entry), then the decision entry
 //! (kind 7) with one fsync, and only then may papers move (VC-054).
 //!
 //! ```text
-//! interpret … bind (per position) ─▶ OpenBox::end_visit ─▶ ReadyVisit ─decide─▶ DecidedVisit
+//! interpret … bind (per position, kind 9) ─▶ OpenBox::end_visit ─▶ ReadyVisit ─decide─▶ DecidedVisit
 //!     DecidedVisit: per position in order, imprint (kind 6) / imprint failed (kind 3) / open a check
 //!     DecidedVisit ─finish_positions─▶ ProcessedVisit: label sticker (kind 8), slip ─finish─▶ done
 //! ```
@@ -354,8 +356,9 @@ pub(crate) enum Step {
     Building,
     /// `VisitEnd` matched: waiting for the decision.
     Ended,
-    /// The decision failed after `journaled` position entries.
-    Deciding { journaled: u8 },
+    /// The decision failed part way: some position entries may be
+    /// journaled, the decision entry is not.
+    Deciding,
     /// The decision entry is durable; positions are being processed.
     Decided,
     /// Every position is processed; the sticker and the slip remain.
@@ -637,16 +640,35 @@ impl<'c> OpenBox<'c> {
     }
 
     /// Binds the ballot in flight `ticket` as the next position of the open
-    /// visit.
+    /// visit: its bound entry (kind 9: the record hash and the counters
+    /// the ballot consumed) is made durable first, then the position
+    /// counts as bound (PROTOCOL.md §7.3 step 5). Nothing changes if this
+    /// fails; the ballot stays in flight.
     pub(crate) fn bind_position(
         &mut self,
         ticket: u64,
         style: &'c BallotStyle<'c>,
         hashes: &PositionHashes,
+        sink: &mut dyn JournalSink,
+        time_bucket: TimeBucket,
     ) -> Result<(), Error> {
+        self.usable()?;
         let flight = self.check_ticket(ticket)?;
-        let visit = self.visit.as_mut().ok_or(Error::NoVisit)?;
+        let visit = self.visit.ok_or(Error::NoVisit)?;
         visit.accepts_position()?;
+        self.journal(
+            sink,
+            &EntryFields {
+                kind: JournalKind::Bound,
+                record_hash: hashes.record,
+                share_package_hash: Hash512::ZERO,
+                counters: &flight.counters,
+                include: flight.issued,
+                time_bucket,
+            },
+            None,
+        )?;
+        let visit = self.visit.as_mut().ok_or(Error::NoVisit)?;
         let slot = visit
             .positions
             .get_mut(usize::from(visit.count))
@@ -755,9 +777,7 @@ impl<'c> OpenBox<'c> {
             };
             self.journal_with(io.sink, &fields, package, true)?;
             let visit = self.visit_mut(ticket)?;
-            visit.step = Step::Deciding {
-                journaled: index.checked_add(1).ok_or(Error::Overflow)?,
-            };
+            visit.step = Step::Deciding;
             visit.position_mut(index)?.choice = choice;
             *entry = (kind.code(), position.hashes.record);
         }
@@ -960,11 +980,11 @@ impl<'c> OpenBox<'c> {
     /// match, a position failed to build or bind, the decision failed, the
     /// visit state was dropped (PROTOCOL.md §7.3, 결정 없이 끝난 방문).
     ///
-    /// * Before the decision: every position (and the ballot in flight)
-    ///   that consumed counters gets a quarantine entry without record
-    ///   (kind 3, hash zero) with its counters; one that consumed none is
-    ///   returned to the voter. Positions whose entries the failed decision
-    ///   already journaled are quarantined by their record hash instead.
+    /// * Before the decision: every bound position is quarantined by its
+    ///   record hash (kind 3, repeating the counters of its bound entry).
+    ///   Then the ballot in flight, if it consumed counters, gets a
+    ///   quarantine entry without record (kind 3, hash zero) with them;
+    ///   one that consumed none is returned to the voter.
     /// * After the decision: every cast position not yet imprinted, and out
     ///   of district every cast position while the sticker entry is
     ///   missing, is quarantined by its record hash.
@@ -985,55 +1005,41 @@ impl<'c> OpenBox<'c> {
         if self.visit.is_none() && self.in_flight.is_none() {
             return Err(Error::NoVisit);
         }
+        // (an in-flight ballot without a visit cannot exist; the visit
+        // opens with its first interpretation)
+        if let Some(visit) = self.visit {
+            match visit.step {
+                Step::Building | Step::Ended | Step::Deciding => {
+                    for (index, position) in visit.bound().enumerate() {
+                        let index = u8::try_from(index).map_err(|_| Error::Capacity)?;
+                        if matches!(position.settled, Settlement::Quarantined) {
+                            continue;
+                        }
+                        self.quarantine_undecided(sink, position, time_bucket)?;
+                        self.visit_mut(visit.ticket)?.position_mut(index)?.settled =
+                            Settlement::Quarantined;
+                    }
+                }
+                Step::Decided | Step::Processed => {
+                    for (index, position) in visit.bound().enumerate() {
+                        let index = u8::try_from(index).map_err(|_| Error::Capacity)?;
+                        let owed = match position.settled {
+                            Settlement::Open => true,
+                            Settlement::Imprinted => visit.label_owed(),
+                            Settlement::Quarantined => false,
+                        };
+                        if matches!(position.choice, Choice::Cast) && owed {
+                            self.quarantine_position(visit.ticket, index, sink, time_bucket)?;
+                        }
+                    }
+                }
+            }
+        }
         if let Some(flight) = self.in_flight {
             if flight.issued.contains(&true) {
                 self.quarantine_unrecorded(sink, &flight.counters, flight.issued, time_bucket)?;
             }
             self.in_flight = None;
-        }
-        let Some(visit) = self.visit else {
-            return Ok(());
-        };
-        // (an in-flight ballot without a visit cannot exist; the visit
-        // opens with its first interpretation)
-        match visit.step {
-            Step::Building | Step::Ended | Step::Deciding { .. } => {
-                let journaled = match visit.step {
-                    Step::Deciding { journaled } => journaled,
-                    Step::Building | Step::Ended | Step::Decided | Step::Processed => 0,
-                };
-                for (index, position) in visit.bound().enumerate() {
-                    let index = u8::try_from(index).map_err(|_| Error::Capacity)?;
-                    if matches!(position.settled, Settlement::Quarantined) {
-                        continue;
-                    }
-                    if index < journaled {
-                        self.quarantine_undecided(sink, position, time_bucket)?;
-                    } else {
-                        self.quarantine_unrecorded(
-                            sink,
-                            &position.counters,
-                            position.issued,
-                            time_bucket,
-                        )?;
-                    }
-                    self.visit_mut(visit.ticket)?.position_mut(index)?.settled =
-                        Settlement::Quarantined;
-                }
-            }
-            Step::Decided | Step::Processed => {
-                for (index, position) in visit.bound().enumerate() {
-                    let index = u8::try_from(index).map_err(|_| Error::Capacity)?;
-                    let owed = match position.settled {
-                        Settlement::Open => true,
-                        Settlement::Imprinted => visit.label_owed(),
-                        Settlement::Quarantined => false,
-                    };
-                    if matches!(position.choice, Choice::Cast) && owed {
-                        self.quarantine_position(visit.ticket, index, sink, time_bucket)?;
-                    }
-                }
-            }
         }
         self.visit = None;
         Ok(())
@@ -1063,8 +1069,9 @@ impl<'c> OpenBox<'c> {
         self.count_quarantine()
     }
 
-    /// A quarantine entry naming an undecided position's record (its
-    /// entry was journaled, the decision was not).
+    /// A quarantine entry naming an undecided position's record (its bound
+    /// entry is journaled, the decision entry is not), repeating its
+    /// counters.
     fn quarantine_undecided(
         &mut self,
         sink: &mut dyn JournalSink,
@@ -1717,12 +1724,7 @@ pub(crate) mod tests {
         visit.count = 8;
         assert_eq!(visit.accepts_position(), Err(Error::VisitFull));
         visit.count = 1;
-        for step in [
-            Step::Ended,
-            Step::Deciding { journaled: 0 },
-            Step::Decided,
-            Step::Processed,
-        ] {
+        for step in [Step::Ended, Step::Deciding, Step::Decided, Step::Processed] {
             visit.step = step;
             assert_eq!(visit.accepts_position(), Err(Error::VisitInProgress));
         }

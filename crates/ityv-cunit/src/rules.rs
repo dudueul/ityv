@@ -344,9 +344,11 @@ pub struct WaitingArea {
 pub enum ResumeCase {
     /// Nothing is pending and the waiting area is empty.
     Nothing,
-    /// (1) The machine stopped before a visit's decision: every journaled
-    /// position is quarantined by its record hash, every other paper by a
-    /// quarantine without record.
+    /// (1) The machine stopped before a visit's decision: every bound
+    /// position is quarantined by its record hash; a paper behind them
+    /// whose ballot consumed counters (the one in flight) by a quarantine
+    /// without record carrying them; any other paper consumed nothing and
+    /// goes back to the voter.
     BeforeDecision,
     /// (2) The machine stopped after the decision: the remaining positions
     /// are settled as decided, except that a cast paper without an imprint
@@ -369,13 +371,17 @@ pub enum PaperAction {
     SpoilChute,
     /// Into the quarantine envelope.
     Quarantine,
+    /// Back to the voter, to be inserted again: its ballot consumed no
+    /// counter and nothing names it.
+    Return,
     /// Kept aside for the review of an incident.
     Hold,
 }
 
 /// What the unit does at resume ([`resume_plan`]); entries are appended
 /// in this order: the imprint entry, the quarantines by record hash in
-/// position order, the quarantines without record.
+/// position order, the quarantines without record (the first carrying
+/// the counters of the ballot in flight, if the modules issued them).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ResumePlan {
     /// The case.
@@ -389,7 +395,7 @@ pub struct ResumePlan {
     /// Positions quarantined by their record hash (kind 3).
     pub quarantine: [bool; VISIT_POSITIONS],
     /// Quarantines without record (kind 3, hash zero) for papers no entry
-    /// names.
+    /// names that cannot go back to the voter.
     pub unjournaled: u8,
     /// Out of district: the visit's papers already in the return tray go
     /// to the quarantine envelope.
@@ -423,23 +429,28 @@ impl ResumePlan {
             *slot = action;
         }
     }
-
-    fn set_all_papers(&mut self, action: PaperAction) {
-        for slot in self.papers.iter_mut().take(usize::from(self.paper_count)) {
-            *slot = action;
-        }
-    }
 }
 
 /// The resume rule of PROTOCOL.md §7.3 (VC-069) for the journal's last
-/// visit and the attested waiting area. Papers are processed in position
-/// order, so the papers left are always the visit's last positions.
+/// visit, the attested waiting area and `in_flight`: whether the modules
+/// issued counters the journal does not show (the ballot being built when
+/// the machine stopped, before its bound entry). Papers are processed in
+/// position order, so the papers left are always the visit's last
+/// positions, followed by the papers of positions not yet bound.
 ///
-/// * No pending visit: papers left belong to a visit whose positions were
-///   never journaled: case 1, each quarantined without record (an
-///   imprinted one is also an incident).
-/// * An undecided visit: case 1, every journaled position quarantined by
-///   its record hash and the papers beyond them without record.
+/// * No pending visit: the papers belong to a visit none of whose
+///   positions was bound: case 1 (see the unbound papers below).
+/// * An undecided visit (bound entries, no decision entry): case 1. Every
+///   bound position not yet quarantined is quarantined by its record hash
+///   and its paper goes to the quarantine envelope; fewer papers than
+///   bound positions is an incident.
+/// * Unbound papers, in case 1: the first one is the ballot in flight; if
+///   `in_flight`, it is quarantined by an entry without record carrying
+///   the issued counters (without such a paper the entry is still written,
+///   and the missing paper is an incident). Every other unbound paper
+///   consumed nothing and goes back to the voter. An imprinted front paper
+///   or a printed sticker fits no unbound ballot: every paper is
+///   quarantined without record, and it is an incident.
 /// * A decided visit: the papers are taken to be its positions
 ///   `N−R+1..N`. That fits if every unsettled cast position is among them,
 ///   only the front may be settled, the front is imprinted exactly when it
@@ -450,47 +461,95 @@ impl ResumePlan {
 ///   district without a sticker entry the labels are lost, so every cast
 ///   record of the visit is quarantined and the return tray goes to the
 ///   quarantine envelope (case 3 when no paper is left). If it does not
-///   fit and the visit owes nothing (every cast position settled, and its
-///   sticker entry out of district), the papers are a new visit's (case
-///   1; an imprinted one, or a sticker, is also an incident); out of
-///   district after the sticker entry they always are. Otherwise case 4:
-///   an incident, nothing journaled.
+///   fit, or `in_flight`, and the visit owes nothing (every cast position
+///   settled, and its sticker entry out of district), the papers are a new
+///   visit's unbound papers (case 1); out of district after the sticker
+///   entry they always are. Otherwise case 4: an incident, nothing
+///   journaled.
 #[must_use]
-pub fn resume_plan(visit: &VisitState, area: WaitingArea, absentee: bool) -> ResumePlan {
+pub fn resume_plan(
+    visit: &VisitState,
+    area: WaitingArea,
+    absentee: bool,
+    in_flight: bool,
+) -> ResumePlan {
     let papers = area.papers;
     if usize::from(papers) > VISIT_POSITIONS {
         return ResumePlan::inconsistent(papers);
     }
     match visit.stage {
-        VisitStage::None => unjournaled_papers(area),
-        VisitStage::Undecided => {
-            let mut plan = ResumePlan::new(ResumeCase::BeforeDecision, papers);
-            let journaled = usize::from(visit.positions).min(VISIT_POSITIONS);
-            for slot in plan.quarantine.iter_mut().take(journaled) {
-                *slot = true;
-            }
-            plan.unjournaled = papers.saturating_sub(visit.positions);
-            plan.set_all_papers(PaperAction::Quarantine);
-            plan
-        }
-        VisitStage::Decided => decided_plan(visit, area, absentee),
+        VisitStage::None => unbound_plan(area, in_flight),
+        VisitStage::Undecided => undecided_plan(visit, area, in_flight),
+        VisitStage::Decided => decided_plan(visit, area, absentee, in_flight),
     }
 }
 
-/// Papers that no journal entry names: case 1, or nothing.
-fn unjournaled_papers(area: WaitingArea) -> ResumePlan {
-    if area.papers == 0 {
+/// Case 1 for papers none of which is bound, or nothing.
+fn unbound_plan(area: WaitingArea, in_flight: bool) -> ResumePlan {
+    if area.papers == 0 && !in_flight {
         return ResumePlan::new(ResumeCase::Nothing, 0);
     }
     let mut plan = ResumePlan::new(ResumeCase::BeforeDecision, area.papers);
-    plan.unjournaled = area.papers;
-    plan.set_all_papers(PaperAction::Quarantine);
-    plan.incident = area.front_imprinted || area.sticker_printed;
+    place_unbound(&mut plan, area, 0, in_flight);
     plan
 }
 
+/// Case 1 for an undecided visit of `visit.positions` bound positions.
+fn undecided_plan(visit: &VisitState, area: WaitingArea, in_flight: bool) -> ResumePlan {
+    let mut plan = ResumePlan::new(ResumeCase::BeforeDecision, area.papers);
+    let n = usize::from(visit.positions).min(VISIT_POSITIONS);
+    for (slot, settled) in plan.quarantine.iter_mut().zip(visit.settled.iter()).take(n) {
+        *slot = !matches!(settled, Settlement::Quarantined);
+    }
+    for slot in plan.papers.iter_mut().take(usize::from(area.papers).min(n)) {
+        *slot = PaperAction::Quarantine;
+    }
+    if usize::from(area.papers) < n {
+        plan.incident = true;
+    }
+    place_unbound(&mut plan, area, n, in_flight);
+    plan
+}
+
+/// The papers from index `first` on are unbound: the first is the
+/// ballot in flight (quarantined with its counters if `in_flight`), the
+/// others go back to the voter, unless an imprint or a sticker shows
+/// that something does not fit.
+fn place_unbound(plan: &mut ResumePlan, area: WaitingArea, first: usize, in_flight: bool) {
+    let papers = usize::from(area.papers);
+    let unbound = papers.saturating_sub(first);
+    let anomaly = area.front_imprinted || area.sticker_printed;
+    if anomaly {
+        plan.incident = true;
+    }
+    for (offset, slot) in plan.papers.iter_mut().skip(first).take(unbound).enumerate() {
+        let quarantined = anomaly || (in_flight && offset == 0);
+        *slot = if quarantined {
+            PaperAction::Quarantine
+        } else {
+            PaperAction::Return
+        };
+    }
+    // one entry per quarantined unbound paper; the counters of the ballot
+    // in flight are journaled even when its paper is missing
+    let entries = if anomaly {
+        unbound.max(usize::from(in_flight))
+    } else {
+        usize::from(in_flight)
+    };
+    plan.unjournaled = u8::try_from(entries).unwrap_or(u8::MAX);
+    if in_flight && unbound == 0 {
+        plan.incident = true;
+    }
+}
+
 /// The resume rule for a decided visit.
-fn decided_plan(visit: &VisitState, area: WaitingArea, absentee: bool) -> ResumePlan {
+fn decided_plan(
+    visit: &VisitState,
+    area: WaitingArea,
+    absentee: bool,
+    in_flight: bool,
+) -> ResumePlan {
     let n = usize::from(visit.positions).min(VISIT_POSITIONS);
     let positions = visit.choices.iter().zip(visit.settled.iter()).take(n);
     let unsettled = positions
@@ -501,12 +560,13 @@ fn decided_plan(visit: &VisitState, area: WaitingArea, absentee: bool) -> Resume
         .any(|(c, s)| matches!(c, Choice::Cast) && !matches!(s, Settlement::Quarantined));
     let label_missing = absentee && !visit.label_printed && live;
     let complete = !unsettled && !label_missing;
-    if complete && area.papers == 0 {
+    if complete && area.papers == 0 && !in_flight {
         return ResumePlan::new(ResumeCase::Nothing, 0);
     }
     // Out of district a sticker entry means every position was processed:
-    // papers left belong to a new visit.
-    let processed = absentee && visit.label_printed;
+    // papers left belong to a new visit. So do they once the modules
+    // issued for a ballot after the decision.
+    let processed = (absentee && visit.label_printed) || in_flight;
     let fitted = if processed {
         None
     } else {
@@ -516,7 +576,7 @@ fn decided_plan(visit: &VisitState, area: WaitingArea, absentee: bool) -> Resume
         Some(plan) => plan,
         // A settled visit: the papers are a new visit's (an imprinted one,
         // or a sticker, does not fit and is an incident).
-        None if complete => unjournaled_papers(area),
+        None if complete => unbound_plan(area, in_flight),
         None => ResumePlan::inconsistent(area.papers),
     }
 }
