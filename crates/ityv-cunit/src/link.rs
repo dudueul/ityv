@@ -12,6 +12,7 @@
 //! Decoders apply the fixed-width rules of ENCODING.md and report the
 //! first violation with its absolute offset, like every other schema.
 
+use ityv_crypto::Sha3Hasher;
 use ityv_encoding::{
     BallotStyleId, Decode, ElectionId, Encode, Error as EncodingError, ErrorKind, Hash512,
     MAX_CHUNKS, ModuleCounters, ModuleId, Reader, Scalar32, SchemaId, TAG_LEN, TimeBucket,
@@ -462,6 +463,26 @@ impl JournalKind {
             _ => None,
         }
     }
+}
+
+/// Label of the visit decision digest (ENCODING.md §8.19).
+pub const LABEL_VISIT: &[u8] = b"ityv:visit:v1";
+
+/// The visit decision digest a kind-7 entry carries (ENCODING.md §8.19):
+/// `SHA3-512("ityv:visit:v1" ‖ 0x00 ‖ n: u8 ‖ (kind_i: u8 ‖
+/// record_hash_i)…)` over the visit's `n` position entries in position
+/// order. A kind-8 entry repeats it.
+#[must_use]
+pub fn visit_digest(positions: &[(u8, Hash512)]) -> Hash512 {
+    let mut hasher = Sha3Hasher::new();
+    hasher.absorb(LABEL_VISIT);
+    hasher.absorb(&[0x00]);
+    hasher.absorb(&[u8::try_from(positions.len()).unwrap_or(u8::MAX)]);
+    for (kind, record_hash) in positions {
+        hasher.absorb(&[*kind]);
+        hasher.absorb(&record_hash.0);
+    }
+    Hash512(hasher.finish())
 }
 
 /// `JournalEntry` (schema 0x0014): one link of the sealed journal chain.

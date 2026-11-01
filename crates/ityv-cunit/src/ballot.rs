@@ -1,99 +1,71 @@
-//! The per-ballot typestate (PROTOCOL.md §7.3–§7.7, §8, §9; ADR-0017 §5
-//! and 개정 3–5).
+//! The per-ballot typestate: one position of a visit, from its
+//! interpretation to its binding (PROTOCOL.md §7.3 steps 1–5, §9; ADR-0017
+//! §5 and 개정 3–5, ADR-0021).
 //!
 //! ```text
-//! OpenBox::interpret ─▶ Interpreted ─issue─▶ Issued ─commit─▶ Committed ─build─▶ Built
-//!                                                    Built ─cast─▶ Durable ─imprinted / imprint_failed─▶ Done
-//!                                                    Built ─challenge─▶ Challenged
+//! OpenBox::interpret ─▶ Interpreted ─issue─▶ Issued ─commit─▶ Committed ─build─▶ Built ─bind─▶ Bound
 //! ```
 //!
-//! Each transition consumes the ballot. An imprint command and a slip exist
-//! only on [`Durable`], which only [`Ballot::cast`] creates, after the
-//! journal sink reported the record and its share package durable
-//! (VC-054):
+//! Each transition consumes the ballot. [`Ballot::bind`] hands the built
+//! record and share package to the host's staging store, keeps their
+//! hashes in the box and the position's small secrets in the caller's
+//! [`VisitWork`]; what happens next (the decision, the journal, the
+//! imprint, the opening of a checked ballot) belongs to the visit
+//! ([`crate::visit`]). A built ballot cannot be imprinted, opened or
+//! journaled on its own:
 //!
 //! ```compile_fail
 //! # use ityv_cunit::ballot::{Ballot, Built};
 //! # use ityv_cunit::boxstate::OpenBox;
-//! fn no_imprint_before_cast<'c>(ballot: &Ballot<'c, '_, Built<'_>>, open: &OpenBox<'c>) {
+//! fn no_imprint_before_the_decision<'c>(ballot: &Ballot<'c, '_, Built<'_>>, open: &OpenBox<'c>) {
 //!     let _ = ballot.imprint_command(open);
 //! }
 //! ```
 //!
 //! ```compile_fail
 //! # use ityv_cunit::ballot::{Ballot, Built};
-//! # use ityv_cunit::boxstate::{OpenBox, Signer};
-//! # use ityv_encoding::TimeBucket;
-//! fn no_slip_before_cast<'c>(
-//!     ballot: &Ballot<'c, '_, Built<'_>>,
-//!     open: &OpenBox<'c>,
-//!     signer: Signer<'_>,
-//! ) {
-//!     let mut out = [0u8; 8];
-//!     let _ = ballot.slip(open, signer, TimeBucket::new(0), &mut out);
-//! }
-//! ```
-//!
-//! A cast ballot can no longer be challenged (the challenge is a pre-cast
-//! choice, PROTOCOL.md §8):
-//!
-//! ```compile_fail
-//! # use ityv_cunit::ballot::{Ballot, Durable};
-//! # use ityv_cunit::boxstate::{OpenBox, Signer};
+//! # use ityv_cunit::boxstate::OpenBox;
 //! # use ityv_cunit::port::JournalSink;
 //! # use ityv_encoding::TimeBucket;
-//! fn no_challenge_after_cast<'c>(
-//!     ballot: Ballot<'c, '_, Durable<'_>>,
-//!     open: &mut OpenBox<'c>,
-//!     sink: &mut dyn JournalSink,
-//!     signer: Signer<'_>,
-//! ) {
-//!     let mut out = [0u8; 8];
-//!     let _ = ballot.challenge(open, sink, signer, TimeBucket::new(0), &mut out);
-//! }
-//! ```
-//!
-//! The same calls compile in the states that allow them:
-//!
-//! ```
-//! # use ityv_cunit::ballot::{Ballot, Built, Durable};
-//! # use ityv_cunit::boxstate::{OpenBox, Signer};
-//! # use ityv_cunit::port::JournalSink;
-//! # use ityv_encoding::TimeBucket;
-//! fn after_cast<'c>(
-//!     ballot: &Ballot<'c, '_, Durable<'_>>,
-//!     open: &OpenBox<'c>,
-//!     signer: Signer<'_>,
-//! ) {
-//!     let _ = ballot.imprint_command(open);
-//!     let mut out = [0u8; 8];
-//!     let _ = ballot.slip(open, signer, TimeBucket::new(0), &mut out);
-//! }
-//! fn before_cast<'c>(
+//! fn no_cast_without_the_visit<'c>(
 //!     ballot: Ballot<'c, '_, Built<'_>>,
 //!     open: &mut OpenBox<'c>,
 //!     sink: &mut dyn JournalSink,
-//!     signer: Signer<'_>,
 //! ) {
-//!     let mut out = [0u8; 8];
-//!     let _ = ballot.challenge(open, sink, signer, TimeBucket::new(0), &mut out);
+//!     let _ = ballot.cast(open, sink, TimeBucket::new(0));
+//! }
+//! ```
+//!
+//! What a built ballot can do:
+//!
+//! ```
+//! # use ityv_cunit::ballot::{Ballot, Built};
+//! # use ityv_cunit::boxstate::OpenBox;
+//! # use ityv_cunit::port::StagingPort;
+//! # use ityv_cunit::visit::VisitWork;
+//! fn bind<'c>(
+//!     ballot: Ballot<'c, '_, Built<'_>>,
+//!     open: &mut OpenBox<'c>,
+//!     staging: &mut dyn StagingPort,
+//!     visit: &mut VisitWork,
+//! ) {
+//!     let _ = ballot.bind(open, staging, visit);
 //! }
 //! ```
 //!
 //! # The work area
 //!
-//! Every per-ballot secret lives in one place: the caller's [`BallotWork`].
-//! It holds the choice, each module's contribution, the summed randomness,
-//! the cast id, the envelope label, the ballot generator, the secret values
-//! shared with the trustees, each member's share plaintext and the proof.
-//! A ballot borrows the work area for its whole life, and transitions work
-//! on it in place instead of moving secrets from state to state. The work
-//! area is wiped when a ballot is created, when the shares are sealed,
-//! when the ballot becomes durable (only the cast id and the envelope label
-//! remain), when the ballot reaches a terminal state, whenever a
-//! transition fails (the consumed ballot drops), when a ballot value is
-//! dropped, and when the work area itself is dropped. Terminal states carry
-//! no secret and no choice.
+//! Every per-ballot secret lives in one place while the ballot is built:
+//! the caller's [`BallotWork`]. It holds the choice, each module's
+//! contribution, the summed randomness, the cast id, the envelope label,
+//! the ballot generator, the secret values shared with the trustees, each
+//! member's share plaintext and the proof. A ballot borrows the work area
+//! for its whole life, and transitions work on it in place instead of
+//! moving secrets from state to state. The work area is wiped when a
+//! ballot is created, when the shares are sealed, when the ballot is bound
+//! (its small secrets move to the visit's [`VisitWork`] slot first),
+//! whenever a transition fails (the consumed ballot drops), when a ballot
+//! value is dropped, and when the work area itself is dropped.
 
 use core::fmt;
 
@@ -103,19 +75,15 @@ use ityv_crypto::{
     sign_record, split, verify_record,
 };
 use ityv_encoding::{
-    CastRecord, CastRecordBody, CastRecordParts, ChallengeOpening, ChallengeOpeningBody,
-    ChallengeOpeningParts, Commitments, Encode, HYBRID_SIG_LEN, Hash512, MAX_CHALLENGE_BODY_LEN,
-    MAX_SECRETS, MAX_SLIP_BODY_LEN, MemberShare, ModuleOpening, ModuleRecordSig,
-    PROOF_SYSTEM_OR_REP_V1, Point32, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY,
-    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_MEMBER_SHARE,
-    SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, Scalar32, Scalars,
-    ShareEntry, SharePackage, Slip, SlipBody, TAG_LEN, TRANSPORT_KEM_FALLBACK,
-    TRANSPORT_NEUTRAL_MODULE, TimeBucket, Token192, Transport, Writer, decode_object,
-    encode_object,
+    CastRecord, CastRecordBody, CastRecordParts, Commitments, Encode, Hash512, MAX_SECRETS,
+    MemberShare, ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, Point32, SCHEMA_CAST_RECORD,
+    SCHEMA_CAST_RECORD_BODY, SCHEMA_MEMBER_SHARE, SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, Scalar32,
+    Scalars, ShareEntry, SharePackage, TAG_LEN, TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE,
+    Token192, Transport, Writer, decode_object, encode_object,
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::boxstate::{OpenBox, Signer};
+use crate::boxstate::OpenBox;
 use crate::config::{
     BallotStyle, ElectionConfig, MAX_MODULES, MAX_TRUSTEES, ModuleConfig, TrusteeConfig,
     chamber_code,
@@ -125,9 +93,11 @@ use crate::link::{
     Interpretation, MAX_MODULE_ISSUE_LEN, MAX_TAGS, ModuleIssue, SCHEMA_INTERPRETATION,
     SCHEMA_MODULE_ISSUE,
 };
-use crate::port::{JournalSink, ModulePort, PortError};
+use crate::port::{ModulePort, PortError};
+use crate::port::{Staged, StagingPort};
 use crate::rng::{DeviceRng, LABEL_BALLOT_RNG};
 use crate::rules;
+use crate::visit::{ModuleRand, PositionHashes, PositionSecrets, VisitWork};
 
 /// Label of the cast-id derivation (PROTOCOL.md §7.3 step 2).
 pub const LABEL_CAST_ID: &[u8] = b"ityv:castid:v1";
@@ -228,37 +198,21 @@ impl Zeroize for Secrets {
     }
 }
 
-/// The scratch of a challenge opening, which reveals the choice.
-struct OpeningScratch {
-    rand: [Scalar32; ityv_crypto::MAX_CHUNKS],
-    module_rand: [[Scalar32; ityv_crypto::MAX_CHUNKS]; MAX_MODULES],
-    body: [u8; MAX_CHALLENGE_BODY_LEN],
-}
-
-impl Zeroize for OpeningScratch {
-    fn zeroize(&mut self) {
-        wipe_scalars(&mut self.rand);
-        for row in &mut self.module_rand {
-            wipe_scalars(row);
-        }
-        self.body.zeroize();
-    }
-}
-
-fn scalars_clear(scalars: &[Scalar32]) -> bool {
+pub(crate) fn scalars_clear(scalars: &[Scalar32]) -> bool {
     scalars.iter().all(|s| s.0 == [0; 32])
 }
 
-fn wipe_scalars(scalars: &mut [Scalar32]) {
+pub(crate) fn wipe_scalars(scalars: &mut [Scalar32]) {
     for scalar in scalars {
         scalar.0.zeroize();
     }
 }
 
 /// The caller-provided work area of one ballot (ADR-0017 개정 4): every
-/// per-ballot secret and the proof. About 35 KB; a host on a small target
-/// keeps one in a `static` (the constructor is `const`) and lends it to
-/// each ballot in turn. Not `Clone`; `Debug` shows nothing; wiped on drop.
+/// per-ballot secret and the proof while the ballot is built. About 30 KB;
+/// a host on a small target keeps one in a `static` (the constructor is
+/// `const`) and lends it to each position of a visit in turn. Not `Clone`;
+/// `Debug` shows nothing; wiped on drop.
 ///
 /// The proof is public once the record is published (it is
 /// zero-knowledge); it sits here so that no ballot state carries its 20 KB,
@@ -274,7 +228,6 @@ pub struct BallotWork {
     member: [Scalar32; MAX_SECRETS],
     plaintext: [u8; MAX_MEMBER_SHARE_LEN],
     proof: Proof,
-    opening: OpeningScratch,
 }
 
 impl BallotWork {
@@ -295,11 +248,6 @@ impl BallotWork {
             member: [Scalar32([0; 32]); MAX_SECRETS],
             plaintext: [0; MAX_MEMBER_SHARE_LEN],
             proof: Proof::EMPTY,
-            opening: OpeningScratch {
-                rand: [Scalar32([0; 32]); ityv_crypto::MAX_CHUNKS],
-                module_rand: [[Scalar32([0; 32]); ityv_crypto::MAX_CHUNKS]; MAX_MODULES],
-                body: [0; MAX_CHALLENGE_BODY_LEN],
-            },
         }
     }
 
@@ -308,7 +256,6 @@ impl BallotWork {
     /// check it after each ballot; the tests use it to observe the wipes.
     #[must_use]
     pub fn is_clear(&self) -> bool {
-        let opening = &self.opening;
         self.option == 0
             && self.contributions.iter().all(Contribution::is_clear)
             && self.secrets.cast_id.token().0 == [0; 24]
@@ -320,9 +267,6 @@ impl BallotWork {
             && scalars_clear(&self.member)
             && self.plaintext.iter().all(|&b| b == 0)
             && self.proof.is_empty()
-            && scalars_clear(&opening.rand)
-            && opening.module_rand.iter().all(|row| scalars_clear(row))
-            && opening.body.iter().all(|&b| b == 0)
     }
 
     /// Wipes the secret values and the member-share scratch once every
@@ -333,17 +277,27 @@ impl BallotWork {
         self.plaintext.zeroize();
     }
 
-    /// Wipes everything a durable ballot no longer needs: only the cast id
-    /// and the envelope label stay for the imprint.
-    fn keep_imprint_only(&mut self) {
-        self.option.zeroize();
-        self.contributions.zeroize();
-        self.secrets.rand.zeroize();
-        self.rng.wipe();
-        self.issue.zeroize();
-        self.wipe_shares();
-        self.proof.clear();
-        self.opening.zeroize();
+    /// Moves what the visit keeps of a bound position into `slot`: the
+    /// choice, the cast id, the envelope label, the summed randomness and
+    /// each module's randomness and cast-id part (PROTOCOL.md §8 needs them
+    /// to open a checked ballot; the imprint and the sticker need the cast
+    /// id and the label). The tags, the generator, the shares and the proof
+    /// stay behind and are wiped with the work area.
+    fn move_secrets(&mut self, slot: &mut PositionSecrets, module_rand: &mut ModuleRand) {
+        slot.option = self.option;
+        slot.cast_id = self.secrets.cast_id;
+        slot.env_label = self.secrets.env_label;
+        slot.rand = self.secrets.rand;
+        for ((cid, rand), src) in slot
+            .cids
+            .iter_mut()
+            .zip(module_rand.iter_mut())
+            .zip(self.contributions.iter())
+        {
+            *cid = src.cid;
+            *rand = src.rand;
+        }
+        self.zeroize();
     }
 }
 
@@ -355,8 +309,13 @@ impl Default for BallotWork {
 
 impl Zeroize for BallotWork {
     fn zeroize(&mut self) {
-        self.keep_imprint_only();
+        self.option.zeroize();
+        self.contributions.zeroize();
         self.secrets.zeroize();
+        self.rng.wipe();
+        self.issue.zeroize();
+        self.wipe_shares();
+        self.proof.clear();
     }
 }
 
@@ -443,68 +402,6 @@ pub struct Built<'b> {
     record: &'b [u8],
 }
 
-/// Durable: the record and its share package are in the journal; the work
-/// area holds only the cast id and the envelope label.
-#[derive(Debug, Clone, Copy)]
-pub struct Durable<'b> {
-    record_hash: Hash512,
-    record: &'b [u8],
-}
-
-/// Terminal: imprinted and journaled as such (the paper may drop into the
-/// box), or quarantined after an imprint failure (the paper goes to the
-/// quarantine envelope). Carries no secret and no choice; the work area is
-/// wiped.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Done(());
-
-/// Terminal: spoiled by a pre-cast challenge; the opening was published.
-/// Carries no secret and no choice; the work area is wiped.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Challenged(());
-
-/// What the imprinter prints (PROTOCOL.md §7.3 step 8). Not `Clone`;
-/// `Debug` shows nothing; zeroized on drop.
-pub struct ImprintCommand {
-    cast_id: [u8; 24],
-    env_label: Option<[u8; 24]>,
-}
-
-impl ImprintCommand {
-    /// The cast id, printed as digits and a 2-D barcode.
-    #[must_use]
-    pub const fn cast_id(&self) -> &[u8; 24] {
-        &self.cast_id
-    }
-
-    /// The envelope label (absentee profile), printed on the sticker.
-    #[must_use]
-    pub const fn env_label(&self) -> Option<&[u8; 24]> {
-        self.env_label.as_ref()
-    }
-}
-
-impl Zeroize for ImprintCommand {
-    fn zeroize(&mut self) {
-        self.cast_id.zeroize();
-        self.env_label.zeroize();
-    }
-}
-
-impl Drop for ImprintCommand {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
-
-impl ZeroizeOnDrop for ImprintCommand {}
-
-impl fmt::Debug for ImprintCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ImprintCommand(..)")
-    }
-}
-
 /// The host buffers one ballot's public objects are written into.
 #[derive(Debug)]
 pub struct BuildBuffers<'b> {
@@ -522,13 +419,16 @@ impl<'c> OpenBox<'c> {
     /// Accepts the bytes the interpretation unit sent: they must be one
     /// `Interpretation` object (schema 0x0101) naming this election, a
     /// configured ballot style and an option `0..=m+1` (ITYV-BEH-013). The
-    /// ballot borrows `work`, which is wiped first.
+    /// ballot is the next position of the open visit, or opens a new visit
+    /// (which needs room for eight records in the open batch). The ballot
+    /// borrows `work`, which is wiped first.
     ///
     /// # Errors
     /// The decoder's error, [`Error::WrongElection`],
     /// [`Error::UnknownBallotStyle`], [`Error::OptionOutOfRange`],
     /// [`Error::BoxClosed`], [`Error::JournalMismatch`],
-    /// [`Error::BallotInFlight`], [`Error::BatchFull`].
+    /// [`Error::BallotInFlight`], [`Error::BatchFull`],
+    /// [`Error::VisitFull`], [`Error::VisitInProgress`].
     pub fn interpret<'w>(
         &mut self,
         link: &[u8],
@@ -600,7 +500,7 @@ impl<'c, 'w> Ballot<'c, 'w, Interpreted> {
     /// `device_seed` and every module's private contribution. A module's
     /// counter is accepted (and consumed) only if it is the module's
     /// high-water mark plus one; a later check failing then leaves the
-    /// ballot to be quarantined ([`OpenBox::quarantine_in_flight`]).
+    /// visit to be abandoned ([`OpenBox::abandon_visit`]).
     ///
     /// # Errors
     /// [`Error::StaleBallot`], [`Error::PortCount`], port errors, decoding
@@ -1237,7 +1137,7 @@ impl<'c, 'w> Ballot<'c, 'w, Committed> {
     }
 }
 
-impl<'c, 'w, 'b> Ballot<'c, 'w, Built<'b>> {
+impl<'c, 'b> Ballot<'c, '_, Built<'b>> {
     /// The tracking code: the object hash of the record body.
     #[must_use]
     pub const fn tracking_code(&self) -> &Hash512 {
@@ -1262,258 +1162,82 @@ impl<'c, 'w, 'b> Ballot<'c, 'w, Built<'b>> {
         self.state.package
     }
 
-    /// Casts the ballot (PROTOCOL.md §7.3 step 7): appends the record entry
-    /// with its share package to the journal and only then returns the
-    /// [`Durable`] ballot that can imprint (VC-054). The work area keeps
-    /// only the cast id and the envelope label. On a journal error the
-    /// ballot is consumed and must be quarantined with
-    /// [`OpenBox::quarantine_in_flight`]; the paper goes to the quarantine
-    /// envelope.
+    /// Binds the built position to its visit (PROTOCOL.md §7.3 step 5,
+    /// VC-068): the `CastRecord` and the `SharePackage` go to the host's
+    /// staging store, the box keeps their hashes (and the record's
+    /// tracking code and counters), and the position's small secrets move
+    /// from the work area into the visit's slot. The work area is wiped.
+    /// The first position of a visit takes `visit` (wiping it); later
+    /// positions must bring the same one. Nothing is journaled: the visit's
+    /// decision does that for every position at once.
     ///
     /// # Errors
-    /// [`Error::StaleBallot`], [`Error::TimeRegression`], the journal's
-    /// error. The work area is wiped.
-    pub fn cast(
+    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`],
+    /// [`Error::StaleVisit`] if `visit` belongs to another visit, the
+    /// staging port's error. On error the ballot is dropped and the visit
+    /// must be abandoned ([`OpenBox::abandon_visit`]).
+    pub fn bind(
         self,
         open_box: &mut OpenBox<'c>,
-        sink: &mut dyn JournalSink,
-        time_bucket: TimeBucket,
-    ) -> Result<Ballot<'c, 'w, Durable<'b>>, Error> {
+        staging: &mut dyn StagingPort,
+        visit: &mut VisitWork,
+    ) -> Result<Bound, Error> {
         let Ballot {
-            config,
             style,
             ticket,
             work,
             state,
-        } = self;
-        open_box.journal_record(ticket, sink, state.record_hash, state.package, time_bucket)?;
-        work.0.keep_imprint_only();
-        Ok(Ballot {
-            config,
-            style,
-            ticket,
-            work,
-            state: Durable {
-                record_hash: state.record_hash,
-                record: state.record,
-            },
-        })
-    }
-
-    /// Spoils the ballot by a pre-cast challenge (PROTOCOL.md §8): writes
-    /// the signed `ChallengeOpening` into `out`, then journals the
-    /// challenge (kind 2). If the journal fails, `out` is wiped and nothing
-    /// is returned. The work area is wiped either way.
-    ///
-    /// # Errors
-    /// [`Error::StaleBallot`], [`Error::TimeRegression`], signing, encoding
-    /// and journal errors.
-    pub fn challenge<'o>(
-        self,
-        open_box: &mut OpenBox<'c>,
-        sink: &mut dyn JournalSink,
-        signer: Signer<'_>,
-        time_bucket: TimeBucket,
-        out: &'o mut [u8],
-    ) -> Result<(Challenged, &'o [u8]), Error> {
-        let Ballot {
-            config,
-            style,
-            ticket,
-            work,
-            state,
+            ..
         } = self;
         open_box.check_ticket(ticket)?;
-        let len = write_opening(config, style, work.0, &state.record_hash, signer, out)?;
-        if let Err(error) = open_box.journal_challenge(ticket, sink, state.record_hash, time_bucket)
-        {
-            out.zeroize();
-            return Err(error);
+        let (visit_ticket, position) = open_box.next_position()?;
+        let (slot, module_rand) = visit.slot_for(visit_ticket, position)?;
+        staging.stage(position, Staged::Record, state.record)?;
+        staging.stage(position, Staged::Package, state.package)?;
+        work.0.move_secrets(slot, module_rand);
+        let bound = open_box.bind_position(
+            ticket,
+            style,
+            &PositionHashes {
+                record: state.record_hash,
+                record_object: object_hash(state.record),
+                package: object_hash(state.package),
+            },
+        );
+        if bound.is_err() {
+            slot.zeroize();
+            for row in module_rand {
+                row.zeroize();
+            }
+            return Err(Error::StaleBallot);
         }
+        visit.note_bound();
         drop(work);
-        let written: &'o [u8] = out;
-        Ok((
-            Challenged(()),
-            written.get(..len).ok_or(Error::BufferTooSmall)?,
-        ))
-    }
-}
-
-/// Writes the `ChallengeOpening` object (PROTOCOL.md §8) into `out` and
-/// returns its length; the body is built in the work area.
-fn write_opening(
-    config: &ElectionConfig<'_>,
-    style: &BallotStyle<'_>,
-    work: &mut BallotWork,
-    record_hash: &Hash512,
-    signer: Signer<'_>,
-    out: &mut [u8],
-) -> Result<usize, Error> {
-    let k = usize::from(style.chunk_count());
-    let BallotWork {
-        option,
-        contributions,
-        secrets,
-        opening,
-        ..
-    } = work;
-    for (dst, src) in opening.rand.iter_mut().zip(secrets.rand.iter()).take(k) {
-        dst.0 = src.to_bytes();
-    }
-    let rand =
-        Scalars::new(opening.rand.get(..k).ok_or(Error::Capacity)?).ok_or(Error::Capacity)?;
-    let modules = config.modules();
-    let first = modules.first().ok_or(Error::Capacity)?;
-    let mut openings: [ModuleOpening<'_>; MAX_MODULES] = core::array::from_fn(|_| ModuleOpening {
-        module_id: first.module_id(),
-        counter: 0,
-        rand: rand.duplicate(),
-        cid: Token192([0; 24]),
-    });
-    for (((slot, module), contribution), row) in openings
-        .iter_mut()
-        .zip(modules)
-        .zip(contributions.iter())
-        .zip(opening.module_rand.iter_mut())
-    {
-        for (dst, src) in row.iter_mut().zip(contribution.rand.iter()).take(k) {
-            dst.0 = src.to_bytes();
-        }
-        *slot = ModuleOpening {
-            module_id: module.module_id(),
-            counter: contribution.counter,
-            rand: Scalars::new(row.get(..k).ok_or(Error::Capacity)?).ok_or(Error::Capacity)?,
-            cid: Token192(contribution.cid),
-        };
-    }
-    let body = ChallengeOpeningBody::new(&ChallengeOpeningParts {
-        election_id: config.election_id(),
-        box_id: config.box_id(),
-        ballot_style_id: style.id(),
-        record_hash: *record_hash,
-        option_index: *option,
-        cast_id: secrets.cast_id.token(),
-        rand: &rand,
-        modules: openings.get(..modules.len()).ok_or(Error::Capacity)?,
-    })
-    .ok_or(Error::Capacity)?;
-    let body_len = encode_object(
-        SCHEMA_CHALLENGE_OPENING_BODY,
-        SCHEMA_VERSION_1,
-        &body,
-        &mut opening.body,
-    )?;
-    let body_bytes = opening.body.get(..body_len).ok_or(Error::BufferTooSmall)?;
-    let mut sig = [0u8; HYBRID_SIG_LEN];
-    signer.sign_into(PURPOSE_CHALLENGE, body_bytes, &mut sig)?;
-    let challenge = ChallengeOpening::new(body_bytes, &sig)?;
-    Ok(encode_object(
-        SCHEMA_CHALLENGE_OPENING,
-        SCHEMA_VERSION_1,
-        &challenge,
-        out,
-    )?)
-}
-
-impl<'c, 'b> Ballot<'c, '_, Durable<'b>> {
-    /// The tracking code.
-    #[must_use]
-    pub const fn tracking_code(&self) -> &Hash512 {
-        &self.state.record_hash
-    }
-
-    /// The `CastRecord` object.
-    #[must_use]
-    pub const fn record_bytes(&self) -> &'b [u8] {
-        self.state.record
-    }
-
-    /// What the imprinter prints. Exists only after the journal write, and
-    /// only while this ballot is still the box's ballot in flight.
-    ///
-    /// # Errors
-    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`].
-    pub fn imprint_command(&self, open_box: &OpenBox<'c>) -> Result<ImprintCommand, Error> {
-        open_box.check_ticket(self.ticket)?;
-        let secrets = &self.work.0.secrets;
-        Ok(ImprintCommand {
-            cast_id: secrets.cast_id.token().0,
-            env_label: secrets.env_label,
+        Ok(Bound {
+            position,
+            tracking_code: state.record_hash,
         })
     }
+}
 
-    /// Writes the signed `Slip` object (PROTOCOL.md §7.7) into `out`, while
-    /// this ballot is still the box's ballot in flight.
-    ///
-    /// # Errors
-    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`],
-    /// [`Error::VoterCodeDisabled`], signing and encoding errors.
-    pub fn slip<'o>(
-        &self,
-        open_box: &OpenBox<'c>,
-        signer: Signer<'_>,
-        time_bucket: TimeBucket,
-        out: &'o mut [u8],
-    ) -> Result<&'o [u8], Error> {
-        open_box.check_ticket(self.ticket)?;
-        if !self.config.voter_code_enabled() {
-            return Err(Error::VoterCodeDisabled);
-        }
-        let body = SlipBody::new(
-            self.config.election_id(),
-            self.config.station_id(),
-            time_bucket,
-            core::slice::from_ref(&self.state.record_hash),
-        )
-        .ok_or(Error::Capacity)?;
-        let mut body_buf = [0u8; MAX_SLIP_BODY_LEN];
-        let body_len = encode_object(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body, &mut body_buf)?;
-        let body_bytes = body_buf.get(..body_len).ok_or(Error::BufferTooSmall)?;
-        let mut sig = [0u8; HYBRID_SIG_LEN];
-        signer.sign_into(PURPOSE_SLIP, body_bytes, &mut sig)?;
-        let slip = Slip::new(body_bytes, &sig)?;
-        let len = encode_object(SCHEMA_SLIP, SCHEMA_VERSION_1, &slip, out)?;
-        let written: &'o [u8] = out;
-        written.get(..len).ok_or(Error::BufferTooSmall)
+/// A position bound to its visit: its index and its tracking code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bound {
+    position: u8,
+    tracking_code: Hash512,
+}
+
+impl Bound {
+    /// The position in the visit, 0-based, in the order the ballots came.
+    #[must_use]
+    pub const fn position(&self) -> u8 {
+        self.position
     }
 
-    /// The imprinter printed the cast id (PROTOCOL.md §7.3 step 8): journals
-    /// the imprint-complete entry (kind 6, naming the record and repeating
-    /// its counters) and only then returns [`Done`], the host's signal to
-    /// drop the paper into the box. The work area is wiped either way. If
-    /// the entry fails, the paper must not drop: the ballot stays in flight
-    /// and the host quarantines it with [`OpenBox::quarantine_in_flight`]
-    /// (the paper goes to the quarantine envelope).
-    ///
-    /// # Errors
-    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`],
-    /// [`Error::TimeRegression`], the journal's error.
-    pub fn imprinted(
-        self,
-        open_box: &mut OpenBox<'c>,
-        sink: &mut dyn JournalSink,
-        time_bucket: TimeBucket,
-    ) -> Result<Done, Error> {
-        open_box.journal_imprint(self.ticket, sink, time_bucket)?;
-        Ok(Done(()))
-    }
-
-    /// The imprint failed (PROTOCOL.md §7.3 step 8, VC-023): journals a
-    /// quarantine entry naming the record, withdraws the record from the
-    /// open batch and counts the ballot as quarantined. The work area is
-    /// wiped.
-    ///
-    /// # Errors
-    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`],
-    /// [`Error::TimeRegression`], the journal's error.
-    pub fn imprint_failed(
-        self,
-        open_box: &mut OpenBox<'c>,
-        sink: &mut dyn JournalSink,
-        time_bucket: TimeBucket,
-    ) -> Result<Done, Error> {
-        open_box.quarantine_ticket(self.ticket, sink, time_bucket)?;
-        Ok(Done(()))
+    /// The tracking code (the record body's object hash).
+    #[must_use]
+    pub const fn tracking_code(&self) -> &Hash512 {
+        &self.tracking_code
     }
 }
 
@@ -1544,9 +1268,6 @@ mod tests {
         work.plaintext = [4; MAX_MEMBER_SHARE_LEN];
         work.proof = sample_proof().expect("a well-formed proof");
         assert!(!work.proof.is_empty());
-        work.opening.rand = [Scalar32([6; 32]); ityv_crypto::MAX_CHUNKS];
-        work.opening.module_rand = [[Scalar32([7; 32]); ityv_crypto::MAX_CHUNKS]; MAX_MODULES];
-        work.opening.body = [8; MAX_CHALLENGE_BODY_LEN];
         work
     }
 
@@ -1592,15 +1313,6 @@ mod tests {
         assert!(work.issue.iter().all(|&b| b == 0));
         assert!(shares_are_wiped(&work));
         assert!(work.proof.is_empty());
-        assert!(work.opening.rand.iter().all(|s| s.0 == [0; 32]));
-        assert!(
-            work.opening
-                .module_rand
-                .iter()
-                .flatten()
-                .all(|s| s.0 == [0; 32])
-        );
-        assert!(work.opening.body.iter().all(|&b| b == 0));
     }
 
     #[test]
@@ -1631,16 +1343,6 @@ mod tests {
             work.zeroize();
             assert!(work.is_clear(), "field {i} after zeroize");
         }
-        let opening: [fn(&mut BallotWork); 3] = [
-            |w| w.opening.rand[7].0[31] = 1,
-            |w| w.opening.module_rand[5][7].0[31] = 1,
-            |w| w.opening.body[MAX_CHALLENGE_BODY_LEN - 1] = 1,
-        ];
-        for make_dirty in opening {
-            let mut work = Box::new(BallotWork::new());
-            make_dirty(&mut work);
-            assert!(!work.is_clear());
-        }
         let mut counter_only = DeviceRng::empty();
         let mut byte = [0u8; 65];
         let Ok(()) = rand_core::TryRng::try_fill_bytes(&mut counter_only, &mut byte);
@@ -1649,19 +1351,23 @@ mod tests {
     }
 
     #[test]
-    fn durable_keeps_only_the_imprint_secrets() {
+    fn binding_moves_the_small_secrets_and_wipes_the_rest() {
         let mut work = filled();
-        work.keep_imprint_only();
-        assert_eq!(work.secrets.cast_id.token().0, [4; 24]);
-        assert_eq!(work.secrets.env_label, Some([6; 24]));
-        assert!(work.secrets.rand.iter().all(Scalar::is_zero));
-        assert_eq!(work.option, 0);
-        assert!(work.contributions.iter().all(|c| c.cid == [0; 24]));
-        assert!(rng_is_empty(&mut work.rng));
-        assert!(work.issue.iter().all(|&b| b == 0));
-        assert!(shares_are_wiped(&work));
-        assert!(work.proof.is_empty());
-        assert!(work.opening.body.iter().all(|&b| b == 0));
+        let mut slot = crate::visit::tests::empty_slot();
+        let mut module_rand = [[Scalar::ZERO; ityv_crypto::MAX_CHUNKS]; MAX_MODULES];
+        work.move_secrets(&mut slot, &mut module_rand);
+        assert!(work.is_clear(), "everything is wiped from the work area");
+        assert_eq!(slot.option, 7);
+        assert_eq!(slot.cast_id.token().0, [4; 24]);
+        assert_eq!(slot.env_label, Some([6; 24]));
+        assert!(slot.rand.iter().all(|s| *s == Scalar::from_u64(9)));
+        assert!(slot.cids.iter().all(|c| *c == [7; 24]));
+        assert!(
+            module_rand
+                .iter()
+                .flatten()
+                .all(|s| *s == Scalar::from_u64(5))
+        );
     }
 
     #[test]
@@ -1688,18 +1394,6 @@ mod tests {
     }
 
     #[test]
-    fn imprint_command_zeroizes_and_redacts() {
-        let mut command = ImprintCommand {
-            cast_id: [1; 24],
-            env_label: Some([2; 24]),
-        };
-        assert_eq!(std::format!("{command:?}"), "ImprintCommand(..)");
-        command.zeroize();
-        assert_eq!(command.cast_id(), &[0; 24]);
-        assert!(command.env_label().is_none());
-    }
-
-    #[test]
     fn a_keyed_generator_is_not_empty() {
         let mut work = filled();
         assert!(!rng_is_empty(&mut work.rng));
@@ -1719,11 +1413,10 @@ mod tests {
             "BallotWork(..)"
         );
         // Stack guard: no ballot state carries a secret array or the proof;
-        // the work area (about 36 KB with seven modules) lives with the
+        // the work area (about 30 KB with seven modules) lives with the
         // caller.
-        assert!(core::mem::size_of::<BallotWork>() <= 36 * 1024);
+        assert!(core::mem::size_of::<BallotWork>() <= 30 * 1024);
         assert!(core::mem::size_of::<Ballot<'static, 'static, Committed>>() <= 512);
         assert!(core::mem::size_of::<Ballot<'static, 'static, Built<'static>>>() <= 256);
-        assert!(core::mem::size_of::<Ballot<'static, 'static, Durable<'static>>>() <= 256);
     }
 }

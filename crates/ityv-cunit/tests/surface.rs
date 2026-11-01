@@ -21,8 +21,8 @@ use std::format;
 use std::string::String;
 
 use common::{
-    Buffers, MemJournal, SEED, STYLE_SMALL, interpretation, mocks, module_config, ports, signer,
-    tb, work, world,
+    Buffers, MemJournal, SEED, STYLE_SMALL, cast_built, interpretation, mocks, module_config,
+    ports, signer, tb, work, world,
 };
 use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox};
 use ityv_cunit::config::Profile;
@@ -147,12 +147,13 @@ fn ballots_debug_print_only_the_ticket() {
     let ballot = b
         .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
+    // the visit takes ticket 1, its first position ticket 2
     let text = format!("{ballot:?}");
     assert!(text.starts_with("Ballot"));
-    assert!(text.contains("ticket: 1"));
+    assert!(text.contains("ticket: 2"));
     let issued = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
     let text = format!("{issued:?}");
-    assert!(text.contains("ticket: 1"));
+    assert!(text.contains("ticket: 2"));
     assert!(!text.contains("rand"));
     assert!(!text.contains("cid"));
 }
@@ -181,10 +182,7 @@ fn built_and_durable_accessors_expose_the_written_objects() {
         decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, &record).unwrap();
     assert_eq!(parsed.body_bytes(), body.as_slice());
     assert_eq!(ballot.tracking_code(), &ityv_crypto::object_hash(&body));
-    let durable = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
-    assert_eq!(durable.record_bytes(), record.as_slice());
-    assert_eq!(durable.tracking_code(), &ityv_crypto::object_hash(&body));
-    durable.imprinted(&mut b, &mut j, tb(1)).unwrap();
+    cast_built(&mut b, &mut j, ballot);
     assert_eq!(b.config().election_id().as_bytes(), b"E-2026");
 }
 
@@ -205,11 +203,7 @@ fn a_close_with_an_open_batch_reports_it_in_the_body() {
         .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
         .unwrap();
     let code = *ballot.tracking_code();
-    ballot
-        .cast(&mut b, &mut j, tb(1))
-        .unwrap()
-        .imprinted(&mut b, &mut j, tb(1))
-        .unwrap();
+    cast_built(&mut b, &mut j, ballot);
     let inputs = CloseInputs {
         paper: 1,
         without_record: 0,
@@ -284,10 +278,10 @@ fn close_needs_room_and_no_ballot_in_flight() {
     assert_eq!(
         b.prepare_close(&inputs, signer(&w), &mut j, tb(1), &mut out)
             .unwrap_err(),
-        Error::BallotInFlight
+        Error::VisitOpen
     );
     drop(ballot);
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     let closed = b
         .prepare_close(&inputs, signer(&w), &mut j, tb(1), &mut out)
         .unwrap();
@@ -330,11 +324,7 @@ fn batch_index_counts_closed_batches() {
         let ballot = ballot
             .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
             .unwrap();
-        ballot
-            .cast(&mut b, &mut j, tb(1))
-            .unwrap()
-            .imprinted(&mut b, &mut j, tb(1))
-            .unwrap();
+        cast_built(&mut b, &mut j, ballot);
         let head = *b.journal_head();
         let mut out = std::vec![0u8; BATCH_WORK_LEN];
         b.close_batch(
@@ -599,11 +589,26 @@ fn secret_bearing_values_debug_print_nothing_secret() {
     let ballot = ballot
         .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
         .unwrap();
-    let ballot = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
-    let command = ballot.imprint_command(&b).unwrap();
+    let mut staging = common::MemStaging::default();
+    let mut visit = common::visit_work();
+    ballot.bind(&mut b, &mut staging, &mut visit).unwrap();
+    let ready = b
+        .end_visit(&common::visit_end(b"E-2026", 1), &mut visit)
+        .unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            &mut b,
+            ityv_cunit::Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
+        .unwrap();
+    let command = decided.imprint_command(&b).unwrap();
     assert_eq!(format!("{command:?}"), "ImprintCommand(..)");
-    assert!(command.env_label().is_none());
     assert_ne!(command.cast_id(), &[0; 24]);
-    ballot.imprinted(&mut b, &mut j, tb(1)).unwrap();
+    decided.imprinted(&mut b, &mut j, tb(1)).unwrap();
     assert!(area.is_clear());
 }

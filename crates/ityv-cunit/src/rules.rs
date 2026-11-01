@@ -7,10 +7,10 @@
 //! | [`option_in_range`] | PROTOCOL.md §7.3 step 1 (`t ∈ 0..=m+1`) |
 //! | [`check_counter`], [`advance_mark`] | PROTOCOL.md §7.2 (counter high-water mark) |
 //! | [`pad_consumption`], [`pad_index`] | PROTOCOL.md §9.4.3 (VC-034) |
-//! | [`batch_due`] | PROTOCOL.md §7.2.1 (64 records or one idle bucket) |
+//! | [`batch_due`] | PROTOCOL.md §7.2.1 (no room for a visit, or one idle bucket) |
 //! | [`scan_count_due`] | PROTOCOL.md §7.8 (50 records or eight buckets, VC-052) |
 //! | [`close_verdict`] | PROTOCOL.md §10.2 (VC-038) |
-//! | [`waiting_area_action`] | PROTOCOL.md §7.3 step 7 (resume after a power loss) |
+//! | [`resume_plan`] | PROTOCOL.md §7.3 재개 (resume after a power loss, VC-069) |
 
 use crate::error::Invariant;
 
@@ -90,12 +90,17 @@ pub const fn pad_index(counter: u64, consumption: u64) -> Option<u64> {
     counter.checked_mul(consumption)
 }
 
-/// `true` if the open batch must be closed now: it holds the maximum
-/// number of records, or it holds at least one and a full bucket has
-/// passed since its last record.
+/// The most records a batch may hold when a visit starts: a visit adds up
+/// to eight records at its decision, and a batch never exceeds
+/// [`BATCH_MAX_RECORDS`] (PROTOCOL.md §7.2.1).
+pub const BATCH_VISIT_START_MAX: u16 = BATCH_MAX_RECORDS - 8;
+
+/// `true` if the open batch must be closed before the next visit: it has
+/// no room left for a full visit, or it holds at least one record and a
+/// full bucket has passed since its last record.
 #[must_use]
 pub const fn batch_due(records: u16, last_record_bucket: u64, now: u64) -> bool {
-    if records >= BATCH_MAX_RECORDS {
+    if records > BATCH_VISIT_START_MAX {
         return true;
     }
     if records == 0 {
@@ -259,78 +264,329 @@ pub fn close_verdict(facts: &CloseFacts<'_>) -> Violations {
         .with(Invariant::StickerCount, !stickers_ok)
 }
 
-/// What two clerks and two observers found in the waiting area after a
-/// power loss (PROTOCOL.md §7.3 step 7).
+/// Ballots in one visit at most (ADR-0021), as a count of positions.
+pub const VISIT_POSITIONS: usize = 8;
+
+/// What a visit position was decided to be (PROTOCOL.md §7.3 step 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WaitingArea {
-    /// No paper.
-    Empty,
-    /// A paper carrying a printed cast id.
-    Imprinted,
-    /// A paper without a printed cast id.
-    Unimprinted,
+pub enum Choice {
+    /// Cast: imprinted and dropped into the box (or the return tray).
+    Cast,
+    /// Checked: opened (`ChallengeOpening`) and spoiled.
+    Check,
 }
 
-/// The state of the journal's last record when the journal ends.
+/// How the journal has settled a cast position after the decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RecordTail {
-    /// The journal holds no record.
-    NoRecord,
-    /// The last entry is a record without its imprint or quarantine entry.
+pub enum Settlement {
+    /// Neither imprinted nor quarantined yet.
     Open,
-    /// The last record has its imprint entry (kind 6).
+    /// The imprint entry (kind 6) is durable.
     Imprinted,
-    /// The last record was quarantined by its hash (kind 3).
+    /// A quarantine entry (kind 3) names the record.
     Quarantined,
-    /// The last record's paper went missing at an earlier resume: another
-    /// entry followed it without an imprint or quarantine entry.
-    Missing,
 }
 
-/// What resume does with the waiting area.
+/// Where the journal's last visit stands at resume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum WaitingAction {
-    /// Nothing is in the waiting area and nothing is owed.
-    Nothing,
-    /// The paper is the open record's and is imprinted: the unit journals
-    /// the imprint (kind 6) and the paper drops into the box.
-    JournalImprint,
-    /// The paper's imprint entry already exists: it drops into the box.
-    Drop,
-    /// The paper is the open record's but carries no imprint: the unit
-    /// quarantines that record by its hash (kind 3) and the paper goes to
-    /// the quarantine envelope.
-    QuarantineRecord,
-    /// The paper was never journaled: the unit journals a quarantine
-    /// without record (kind 3, hash zero) and the paper goes to the
-    /// quarantine envelope.
-    QuarantineUnjournaled,
-    /// The paper's record is already quarantined: the paper goes to the
-    /// quarantine envelope and nothing is journaled.
-    Divert,
-    /// An imprinted paper that matches no record: the unit journals a
-    /// quarantine without record, the paper goes to the quarantine envelope,
-    /// and the host records an incident (`HOLD_REVIEW`).
-    QuarantineUnmatched,
-    /// The open record's paper is gone: nothing is journaled, the host
-    /// records an incident and the close reports it (`HOLD_REVIEW`).
-    PaperMissing,
+pub enum VisitStage {
+    /// No visit is pending: none was journaled, or the last one was closed
+    /// (abandoned, or ended by an earlier resume).
+    None,
+    /// Position entries (kinds 1 and 2) without their decision entry.
+    Undecided,
+    /// The decision entry (kind 7) is durable.
+    Decided,
 }
 
-/// The resume decision of PROTOCOL.md §7.3 step 7 for the attested
-/// waiting-area state and the journal's last record.
-#[must_use]
-pub const fn waiting_area_action(area: WaitingArea, tail: RecordTail) -> WaitingAction {
-    match (area, tail) {
-        (WaitingArea::Empty, RecordTail::Open) => WaitingAction::PaperMissing,
-        (WaitingArea::Empty, _) => WaitingAction::Nothing,
-        (WaitingArea::Imprinted, RecordTail::Open) => WaitingAction::JournalImprint,
-        (WaitingArea::Imprinted, RecordTail::Imprinted) => WaitingAction::Drop,
-        (WaitingArea::Imprinted, RecordTail::Quarantined) => WaitingAction::Divert,
-        (WaitingArea::Imprinted, RecordTail::NoRecord | RecordTail::Missing) => {
-            WaitingAction::QuarantineUnmatched
+/// The journal's last visit, as [`resume_plan`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VisitState {
+    /// Where the visit stands.
+    pub stage: VisitStage,
+    /// Its journaled positions (at most [`VISIT_POSITIONS`]).
+    pub positions: u8,
+    /// The decision of each position (decided visits).
+    pub choices: [Choice; VISIT_POSITIONS],
+    /// The settlement of each cast position (decided visits).
+    pub settled: [Settlement; VISIT_POSITIONS],
+    /// Whether the label-printed entry (kind 8) is durable.
+    pub label_printed: bool,
+}
+
+impl VisitState {
+    /// No pending visit.
+    pub const NONE: Self = Self {
+        stage: VisitStage::None,
+        positions: 0,
+        choices: [Choice::Cast; VISIT_POSITIONS],
+        settled: [Settlement::Open; VISIT_POSITIONS],
+        label_printed: false,
+    };
+}
+
+/// What two clerks and two observers found after a power loss
+/// (PROTOCOL.md §7.3, 재개): the papers still in the waiting area, whether
+/// the front one carries a printed cast id, and (out of district) whether
+/// the visit's label sticker came out of the printer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WaitingArea {
+    /// Papers in the waiting area.
+    pub papers: u8,
+    /// The front paper carries a printed cast id.
+    pub front_imprinted: bool,
+    /// The visit's label sticker was printed.
+    pub sticker_printed: bool,
+}
+
+/// Which case of the resume rule (VC-069) applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResumeCase {
+    /// Nothing is pending and the waiting area is empty.
+    Nothing,
+    /// (1) The machine stopped before a visit's decision: every journaled
+    /// position is quarantined by its record hash, every other paper by a
+    /// quarantine without record.
+    BeforeDecision,
+    /// (2) The machine stopped after the decision: the remaining positions
+    /// are settled as decided, except that a cast paper without an imprint
+    /// is quarantined.
+    AfterDecision,
+    /// (3) Out of district, every position is settled but no sticker entry
+    /// exists: the visit's cast records are quarantined.
+    LabelMissing,
+    /// (4) The papers do not fit the journal: an incident, nothing is
+    /// journaled, the box is `HOLD_REVIEW`.
+    Inconsistent,
+}
+
+/// Where one paper of the waiting area goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaperAction {
+    /// Into the box (in person) or the return tray (out of district).
+    Drop,
+    /// Into the spoiled-ballot chute (a checked position).
+    SpoilChute,
+    /// Into the quarantine envelope.
+    Quarantine,
+    /// Kept aside for the review of an incident.
+    Hold,
+}
+
+/// What the unit does at resume ([`resume_plan`]); entries are appended
+/// in this order: the imprint entry, the quarantines by record hash in
+/// position order, the quarantines without record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResumePlan {
+    /// The case.
+    pub case: ResumeCase,
+    /// Where each paper goes, front first; `papers[..paper_count]` is set.
+    pub papers: [PaperAction; VISIT_POSITIONS],
+    /// Papers in the waiting area.
+    pub paper_count: u8,
+    /// The position whose imprint entry (kind 6) is appended.
+    pub imprint: Option<u8>,
+    /// Positions quarantined by their record hash (kind 3).
+    pub quarantine: [bool; VISIT_POSITIONS],
+    /// Quarantines without record (kind 3, hash zero) for papers no entry
+    /// names.
+    pub unjournaled: u8,
+    /// Out of district: the visit's papers already in the return tray go
+    /// to the quarantine envelope.
+    pub return_tray: bool,
+    /// The host records an incident (the close is `HOLD_REVIEW`).
+    pub incident: bool,
+}
+
+impl ResumePlan {
+    const fn new(case: ResumeCase, paper_count: u8) -> Self {
+        Self {
+            case,
+            papers: [PaperAction::Hold; VISIT_POSITIONS],
+            paper_count,
+            imprint: None,
+            quarantine: [false; VISIT_POSITIONS],
+            unjournaled: 0,
+            return_tray: false,
+            incident: false,
         }
-        (WaitingArea::Unimprinted, RecordTail::Open) => WaitingAction::QuarantineRecord,
-        (WaitingArea::Unimprinted, _) => WaitingAction::QuarantineUnjournaled,
     }
+
+    fn inconsistent(paper_count: u8) -> Self {
+        let mut plan = Self::new(ResumeCase::Inconsistent, paper_count);
+        plan.incident = true;
+        plan
+    }
+
+    fn set_paper(&mut self, index: usize, action: PaperAction) {
+        if let Some(slot) = self.papers.get_mut(index) {
+            *slot = action;
+        }
+    }
+
+    fn set_all_papers(&mut self, action: PaperAction) {
+        for slot in self.papers.iter_mut().take(usize::from(self.paper_count)) {
+            *slot = action;
+        }
+    }
+}
+
+/// The resume rule of PROTOCOL.md §7.3 (VC-069) for the journal's last
+/// visit and the attested waiting area. Papers are processed in position
+/// order, so the papers left are always the visit's last positions.
+///
+/// * No pending visit: papers left belong to a visit whose positions were
+///   never journaled: case 1, each quarantined without record (an
+///   imprinted one is also an incident).
+/// * An undecided visit: case 1, every journaled position quarantined by
+///   its record hash and the papers beyond them without record.
+/// * A decided visit: the papers are taken to be its positions
+///   `N−R+1..N`. That fits if every unsettled cast position is among them,
+///   only the front may be settled, the front is imprinted exactly when it
+///   is a cast position with or awaiting its imprint entry, and no sticker
+///   is out while papers are left. Then (case 2) a checked paper goes to
+///   the chute; the front cast paper, if imprinted, gets its imprint entry
+///   (if missing) and drops; every other cast paper is quarantined. Out of
+///   district without a sticker entry the labels are lost, so every cast
+///   record of the visit is quarantined and the return tray goes to the
+///   quarantine envelope (case 3 when no paper is left). If it does not
+///   fit and the visit owes nothing (every cast position settled, and its
+///   sticker entry out of district), the papers are a new visit's (case
+///   1; an imprinted one, or a sticker, is also an incident); out of
+///   district after the sticker entry they always are. Otherwise case 4:
+///   an incident, nothing journaled.
+#[must_use]
+pub fn resume_plan(visit: &VisitState, area: WaitingArea, absentee: bool) -> ResumePlan {
+    let papers = area.papers;
+    if usize::from(papers) > VISIT_POSITIONS {
+        return ResumePlan::inconsistent(papers);
+    }
+    match visit.stage {
+        VisitStage::None => unjournaled_papers(area),
+        VisitStage::Undecided => {
+            let mut plan = ResumePlan::new(ResumeCase::BeforeDecision, papers);
+            let journaled = usize::from(visit.positions).min(VISIT_POSITIONS);
+            for slot in plan.quarantine.iter_mut().take(journaled) {
+                *slot = true;
+            }
+            plan.unjournaled = papers.saturating_sub(visit.positions);
+            plan.set_all_papers(PaperAction::Quarantine);
+            plan
+        }
+        VisitStage::Decided => decided_plan(visit, area, absentee),
+    }
+}
+
+/// Papers that no journal entry names: case 1, or nothing.
+fn unjournaled_papers(area: WaitingArea) -> ResumePlan {
+    if area.papers == 0 {
+        return ResumePlan::new(ResumeCase::Nothing, 0);
+    }
+    let mut plan = ResumePlan::new(ResumeCase::BeforeDecision, area.papers);
+    plan.unjournaled = area.papers;
+    plan.set_all_papers(PaperAction::Quarantine);
+    plan.incident = area.front_imprinted || area.sticker_printed;
+    plan
+}
+
+/// The resume rule for a decided visit.
+fn decided_plan(visit: &VisitState, area: WaitingArea, absentee: bool) -> ResumePlan {
+    let n = usize::from(visit.positions).min(VISIT_POSITIONS);
+    let positions = visit.choices.iter().zip(visit.settled.iter()).take(n);
+    let unsettled = positions
+        .clone()
+        .any(|(c, s)| matches!(c, Choice::Cast) && matches!(s, Settlement::Open));
+    let live = positions
+        .clone()
+        .any(|(c, s)| matches!(c, Choice::Cast) && !matches!(s, Settlement::Quarantined));
+    let label_missing = absentee && !visit.label_printed && live;
+    let complete = !unsettled && !label_missing;
+    if complete && area.papers == 0 {
+        return ResumePlan::new(ResumeCase::Nothing, 0);
+    }
+    // Out of district a sticker entry means every position was processed:
+    // papers left belong to a new visit.
+    let processed = absentee && visit.label_printed;
+    let fitted = if processed {
+        None
+    } else {
+        trailing_plan(visit, area, absentee, label_missing, n)
+    };
+    match fitted {
+        Some(plan) => plan,
+        // A settled visit: the papers are a new visit's (an imprinted one,
+        // or a sticker, does not fit and is an incident).
+        None if complete => unjournaled_papers(area),
+        None => ResumePlan::inconsistent(area.papers),
+    }
+}
+
+/// The plan if the papers are the visit's last positions `N−R+1..N`
+/// (case 2, or case 3 with no paper left), or `None` if they do not fit:
+/// a cast paper still unsettled is missing, a settled paper other than
+/// the front is still there, the front's imprint does not match its
+/// entries, or a sticker is out while papers are left.
+fn trailing_plan(
+    visit: &VisitState,
+    area: WaitingArea,
+    absentee: bool,
+    label_missing: bool,
+    n: usize,
+) -> Option<ResumePlan> {
+    let papers = usize::from(area.papers);
+    if papers > n || (area.sticker_printed && papers > 0) {
+        return None;
+    }
+    let front = n.saturating_sub(papers);
+    let mut plan = ResumePlan::new(ResumeCase::AfterDecision, area.papers);
+    let positions = visit.choices.iter().zip(visit.settled.iter()).take(n);
+    for (p, (choice, settled)) in positions.enumerate() {
+        let remaining = p >= front;
+        let is_front = p == front;
+        let fits = match (choice, settled, remaining) {
+            // a cast paper leaves the waiting area only once settled
+            (Choice::Cast, Settlement::Open, false) => false,
+            (Choice::Check, _, true) => !(is_front && area.front_imprinted),
+            (Choice::Cast, Settlement::Open, true) | (_, _, false) => true,
+            (Choice::Cast, Settlement::Imprinted, true) => is_front && area.front_imprinted,
+            (Choice::Cast, Settlement::Quarantined, true) => is_front && !area.front_imprinted,
+        };
+        if !fits {
+            return None;
+        }
+        let cast_live =
+            matches!(choice, Choice::Cast) && !matches!(settled, Settlement::Quarantined);
+        if !remaining {
+            if label_missing && cast_live {
+                if let Some(q) = plan.quarantine.get_mut(p) {
+                    *q = true;
+                }
+                plan.return_tray = true;
+            }
+            continue;
+        }
+        let action = match (choice, settled) {
+            (Choice::Check, _) => PaperAction::SpoilChute,
+            (Choice::Cast, Settlement::Quarantined) => PaperAction::Quarantine,
+            (Choice::Cast, Settlement::Open | Settlement::Imprinted)
+                if is_front && area.front_imprinted && !absentee =>
+            {
+                if matches!(settled, Settlement::Open) {
+                    plan.imprint = u8::try_from(p).ok();
+                }
+                PaperAction::Drop
+            }
+            (Choice::Cast, Settlement::Open | Settlement::Imprinted) => {
+                if let Some(q) = plan.quarantine.get_mut(p) {
+                    *q = true;
+                }
+                PaperAction::Quarantine
+            }
+        };
+        plan.set_paper(p.saturating_sub(front), action);
+    }
+    if label_missing && papers == 0 {
+        plan.case = ResumeCase::LabelMissing;
+    }
+    Some(plan)
 }

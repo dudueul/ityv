@@ -383,7 +383,7 @@ fn build_rejects_a_wrong_pad_index_or_pad_id() {
             .unwrap_err();
         assert_eq!(err, expected);
         let mut j = MemJournal::default();
-        b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+        b.abandon_visit(&mut j, tb(1)).unwrap();
         assert_eq!(b.totals().quarantined, 1);
     }
 }
@@ -786,6 +786,13 @@ fn generators_are_deterministic_and_domain_separated() {
 
 #[test]
 fn module_batch_rule_examples() {
+    // a module signs one body per counter (VC-068)
+    assert!(ityv_cunit::module_may_sign_record(None, &[1; 64]));
+    assert!(ityv_cunit::module_may_sign_record(Some(&[1; 64]), &[1; 64]));
+    assert!(!ityv_cunit::module_may_sign_record(
+        Some(&[1; 64]),
+        &[2; 64]
+    ));
     assert!(module_may_sign_batch(&[4, 5, 6], 4, 6));
     assert!(module_may_sign_batch(&[4], 4, 4));
     assert!(!module_may_sign_batch(&[4, 6], 4, 6));
@@ -822,9 +829,12 @@ fn counting_rule_examples() {
     assert_eq!(rules::pad_consumption(222), Some(286));
     assert_eq!(rules::pad_index(3, 286), Some(858));
     assert_eq!(rules::pad_index(u64::MAX, 2), None);
+    // a batch closes before a visit could overflow it (57 + 8 > 64)
+    assert_eq!(rules::BATCH_VISIT_START_MAX, 56);
+    assert!(rules::batch_due(57, 0, 0));
     assert!(rules::batch_due(64, 0, 0));
-    assert!(!rules::batch_due(63, 5, 5));
-    assert!(rules::batch_due(63, 5, 6));
+    assert!(!rules::batch_due(56, 5, 5));
+    assert!(rules::batch_due(56, 5, 6));
     assert!(!rules::batch_due(0, 5, 100));
     assert!(!rules::batch_due(1, u64::MAX, u64::MAX));
     assert!(rules::scan_count_due(50, 0, 0));
@@ -933,35 +943,223 @@ proptest! {
     }
 }
 
+/// A visit state from a compact spec: `C.` cast open, `Ci` cast
+/// imprinted, `Cq` cast quarantined, `K` checked.
+fn visit_state(stage: rules::VisitStage, spec: &[&str], label_printed: bool) -> rules::VisitState {
+    use rules::{Choice, Settlement};
+    let mut visit = rules::VisitState::NONE;
+    visit.stage = stage;
+    visit.positions = spec.len() as u8;
+    visit.label_printed = label_printed;
+    for (i, p) in spec.iter().enumerate() {
+        let (choice, settled) = match *p {
+            "C." => (Choice::Cast, Settlement::Open),
+            "Ci" => (Choice::Cast, Settlement::Imprinted),
+            "Cq" => (Choice::Cast, Settlement::Quarantined),
+            "K" => (Choice::Check, Settlement::Open),
+            other => panic!("bad spec {other}"),
+        };
+        visit.choices[i] = choice;
+        visit.settled[i] = settled;
+    }
+    visit
+}
+
+fn area(papers: u8, front_imprinted: bool, sticker_printed: bool) -> rules::WaitingArea {
+    rules::WaitingArea {
+        papers,
+        front_imprinted,
+        sticker_printed,
+    }
+}
+
 #[test]
-fn the_waiting_area_decision_covers_every_case() {
-    use rules::WaitingAction::{
-        Divert, Drop, JournalImprint, Nothing, PaperMissing, QuarantineRecord,
-        QuarantineUnjournaled, QuarantineUnmatched,
+fn the_resume_plan_covers_the_four_cases() {
+    use rules::PaperAction::{Drop, Hold, Quarantine, SpoilChute};
+    use rules::ResumeCase::{AfterDecision, BeforeDecision, Inconsistent, LabelMissing, Nothing};
+    use rules::VisitStage::{Decided, None as NoVisit, Undecided};
+    let plan = |stage, spec: &[&str], label, a, absentee| {
+        rules::resume_plan(&visit_state(stage, spec, label), a, absentee)
     };
-    use rules::{RecordTail as T, WaitingArea as A};
-    let table = [
-        (A::Empty, T::NoRecord, Nothing),
-        (A::Empty, T::Open, PaperMissing),
-        (A::Empty, T::Imprinted, Nothing),
-        (A::Empty, T::Quarantined, Nothing),
-        (A::Empty, T::Missing, Nothing),
-        (A::Imprinted, T::NoRecord, QuarantineUnmatched),
-        (A::Imprinted, T::Open, JournalImprint),
-        (A::Imprinted, T::Imprinted, Drop),
-        (A::Imprinted, T::Quarantined, Divert),
-        (A::Imprinted, T::Missing, QuarantineUnmatched),
-        (A::Unimprinted, T::NoRecord, QuarantineUnjournaled),
-        (A::Unimprinted, T::Open, QuarantineRecord),
-        (A::Unimprinted, T::Imprinted, QuarantineUnjournaled),
-        (A::Unimprinted, T::Quarantined, QuarantineUnjournaled),
-        (A::Unimprinted, T::Missing, QuarantineUnjournaled),
-    ];
-    for (area, tail, action) in table {
+    let papers = |p: &rules::ResumePlan| p.papers[..usize::from(p.paper_count)].to_vec();
+    let quarantined = |p: &rules::ResumePlan| -> std::vec::Vec<usize> {
+        (0..8).filter(|&i| p.quarantine[i]).collect()
+    };
+    // nothing pending
+    let p = plan(NoVisit, &[], false, area(0, false, false), false);
+    assert_eq!((p.case, p.paper_count, p.incident), (Nothing, 0, false));
+    // (1) papers no entry names: quarantined without record
+    let p = plan(NoVisit, &[], false, area(2, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p)),
+        (BeforeDecision, 2, [Quarantine; 2].to_vec())
+    );
+    assert!(!p.incident);
+    let p = plan(NoVisit, &[], false, area(1, true, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.incident),
+        (BeforeDecision, 1, true)
+    );
+    // (1) an undecided visit: its positions by record hash, extra papers without
+    let p = plan(Undecided, &["C.", "K"], false, area(3, false, false), false);
+    assert_eq!(
+        (p.case, quarantined(&p), p.unjournaled),
+        (BeforeDecision, [0, 1].to_vec(), 1)
+    );
+    assert_eq!(papers(&p), [Quarantine; 3]);
+    let p = plan(Undecided, &["C.", "K"], false, area(1, false, false), false);
+    assert_eq!((quarantined(&p), p.unjournaled), ([0, 1].to_vec(), 0));
+    // (2) the front cast paper is imprinted: its entry, then it drops
+    let p = plan(
+        Decided,
+        &["Ci", "K", "C."],
+        false,
+        area(1, true, false),
+        false,
+    );
+    assert_eq!(
+        (p.case, p.imprint, papers(&p)),
+        (AfterDecision, Some(2), [Drop].to_vec())
+    );
+    assert!(quarantined(&p).is_empty());
+    // (2) its imprint entry already exists: it just drops
+    let p = plan(
+        Decided,
+        &["Ci", "K", "Ci"],
+        false,
+        area(1, true, false),
+        false,
+    );
+    assert_eq!(
+        (p.case, p.imprint, papers(&p)),
+        (AfterDecision, None, [Drop].to_vec())
+    );
+    // (2) not imprinted: quarantined by its record hash
+    let p = plan(
+        Decided,
+        &["Ci", "K", "C."],
+        false,
+        area(1, false, false),
+        false,
+    );
+    assert_eq!(
+        (p.imprint, quarantined(&p), papers(&p)),
+        (None, [2].to_vec(), [Quarantine].to_vec())
+    );
+    // (2) a checked paper goes to the chute, later cast papers are quarantined
+    let p = plan(
+        Decided,
+        &["Ci", "K", "C."],
+        false,
+        area(2, false, false),
+        false,
+    );
+    assert_eq!(
+        (papers(&p), quarantined(&p)),
+        ([SpoilChute, Quarantine].to_vec(), [2].to_vec())
+    );
+    // (2) a quarantined front paper goes to the envelope without a new entry
+    let p = plan(Decided, &["Cq", "C."], false, area(2, false, false), false);
+    assert_eq!(
+        (papers(&p), quarantined(&p)),
+        ([Quarantine, Quarantine].to_vec(), [1].to_vec())
+    );
+    // a settled visit: trailing checked papers, or a new visit's
+    let p = plan(Decided, &["Ci", "Ci"], false, area(0, false, false), false);
+    assert_eq!(p.case, Nothing);
+    let p = plan(Decided, &["Ci", "K"], false, area(1, false, false), false);
+    assert_eq!((p.case, papers(&p)), (AfterDecision, [SpoilChute].to_vec()));
+    let p = plan(Decided, &["Ci", "K"], false, area(2, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.incident),
+        (BeforeDecision, 2, false)
+    );
+    let p = plan(Decided, &["Ci", "Ci"], false, area(1, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.incident),
+        (BeforeDecision, 1, false)
+    );
+    // an imprinted paper or a sticker that fits no position: quarantined
+    // without record, and an incident
+    for (spec, a) in [
+        (["Ci", "K"], area(1, true, false)),
+        (["Ci", "Cq"], area(1, true, false)),
+        (["Ci", "K"], area(1, false, true)),
+    ] {
+        let p = plan(Decided, &spec, false, a, false);
         assert_eq!(
-            rules::waiting_area_action(area, tail),
-            action,
-            "{area:?} {tail:?}"
+            (p.case, p.unjournaled, p.incident),
+            (BeforeDecision, 1, true),
+            "{spec:?}"
         );
     }
+    // (3) out of district without a sticker entry: every cast record
+    let p = plan(
+        Decided,
+        &["Ci", "K", "Ci"],
+        false,
+        area(0, false, false),
+        true,
+    );
+    assert_eq!(
+        (p.case, quarantined(&p), p.return_tray),
+        (LabelMissing, [0, 2].to_vec(), true)
+    );
+    // a sticker printed before its entry was written, no paper left: the
+    // same (the entry is what counts)
+    let p = plan(
+        Decided,
+        &["Ci", "K", "Ci"],
+        false,
+        area(0, false, true),
+        true,
+    );
+    assert_eq!(
+        (p.case, quarantined(&p), p.return_tray, p.incident),
+        (LabelMissing, [0, 2].to_vec(), true, false)
+    );
+    let p = plan(Decided, &["Ci", "C."], false, area(1, true, false), true);
+    assert_eq!(
+        (
+            p.case,
+            p.imprint,
+            quarantined(&p),
+            papers(&p),
+            p.return_tray
+        ),
+        (
+            AfterDecision,
+            None,
+            [0, 1].to_vec(),
+            [Quarantine].to_vec(),
+            true
+        )
+    );
+    let p = plan(Decided, &["Ci", "Ci"], true, area(0, false, false), true);
+    assert_eq!(p.case, Nothing);
+    let p = plan(Decided, &["Ci", "Ci"], true, area(1, false, false), true);
+    assert_eq!(
+        (p.case, p.unjournaled),
+        (BeforeDecision, 1),
+        "after the sticker, a new visit"
+    );
+    let p = plan(Decided, &["Cq", "K"], false, area(0, false, false), true);
+    assert_eq!(p.case, Nothing, "nothing cast, no sticker owed");
+    // (4) papers that do not fit
+    for (spec, a) in [
+        (&["C.", "K"][..], area(1, false, false)), // an unsettled cast paper is gone
+        (&["Ci", "C."], area(3, false, false)),    // more papers than positions
+        (&["Ci", "K", "C."], area(2, true, false)), // an imprinted checked paper
+        (&["Cq", "C."], area(2, true, false)),     // an imprinted quarantined paper
+        (&["C.", "C."], area(2, false, true)),     // a sticker while papers are left
+        (&["Ci", "C."], area(2, false, false)),    // an imprinted paper shown as not
+        (&["C.", "Ci"], area(2, false, false)),    // a settled paper behind the front
+    ] {
+        let p = plan(Decided, spec, false, a, false);
+        assert_eq!((p.case, p.incident), (Inconsistent, true), "{spec:?} {a:?}");
+        assert!(papers(&p).iter().all(|&x| x == Hold));
+        assert!(quarantined(&p).is_empty() && p.imprint.is_none() && p.unjournaled == 0);
+    }
+    let p = plan(NoVisit, &[], false, area(9, false, false), false);
+    assert_eq!((p.case, p.paper_count), (Inconsistent, 9));
 }

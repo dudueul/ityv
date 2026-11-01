@@ -16,8 +16,9 @@
 //! * the batch and scan-count triggers (§7.2.1, §7.8, VC-052);
 //! * every close invariant of §10.2 (VC-038), including the visit and
 //!   sticker counts of ADR-0021;
-//! * the resume decision for the waiting area (§7.3 step 7) against an
-//!   independently written table.
+//! * the resume rule for the journal's last visit and the attested waiting
+//!   area (§7.3 재개, VC-069): total, and leaving every cast position
+//!   settled.
 //!
 //! Kani additionally checks every harness for panics, overflow and
 //! out-of-bounds access on all explored inputs.
@@ -38,10 +39,10 @@
 use crate::error::Invariant;
 use crate::port::module_may_sign_batch;
 use crate::rules::{
-    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, EnvelopeCounts, PAD_KEY_BYTES,
-    RecordTail, SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, WaitingAction, WaitingArea, advance_mark,
-    batch_due, check_counter, close_verdict, option_in_range, pad_consumption, pad_index,
-    scan_count_due, waiting_area_action,
+    BATCH_IDLE_BUCKETS, BATCH_VISIT_START_MAX, Choice, CloseFacts, CounterCheck, EnvelopeCounts,
+    PAD_KEY_BYTES, PaperAction, ResumeCase, SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, Settlement,
+    VISIT_POSITIONS, VisitStage, VisitState, WaitingArea, advance_mark, batch_due, check_counter,
+    close_verdict, option_in_range, pad_consumption, pad_index, resume_plan, scan_count_due,
 };
 
 /// The option bound accepts exactly the indices `0..=option_count − 1`.
@@ -142,15 +143,16 @@ fn module_batch_rule_is_exact() {
     assert_eq!(module_may_sign_batch(slice, first, last), expected);
 }
 
-/// A batch is due at 64 records, or when it holds a record and a full
-/// bucket has passed since its last record.
+/// A batch is due once it has no room left for a full visit (more than
+/// 56 records), or when it holds a record and a full bucket has passed
+/// since its last record.
 #[kani::proof]
 fn batch_trigger_is_exact() {
     let records: u16 = kani::any();
     let last: u64 = kani::any();
     let now: u64 = kani::any();
     let idle = (now as u128) >= (last as u128) + (BATCH_IDLE_BUCKETS as u128);
-    let expected = records >= BATCH_MAX_RECORDS || (records > 0 && idle && last < u64::MAX);
+    let expected = records > BATCH_VISIT_START_MAX || (records > 0 && idle && last < u64::MAX);
     assert_eq!(batch_due(records, last, now), expected);
 }
 
@@ -257,35 +259,123 @@ fn close_verdict_is_exact() {
     assert_eq!(v.is_empty(), !any);
 }
 
-/// The resume decision of PROTOCOL.md §7.3 step 7 matches the table
-/// below, written row by row from the protocol text, for every
-/// waiting-area state and every state of the journal's last record.
+fn any_choice() -> Choice {
+    if kani::any() {
+        Choice::Cast
+    } else {
+        Choice::Check
+    }
+}
+
+fn any_settlement() -> Settlement {
+    match kani::any::<u8>() % 3 {
+        0 => Settlement::Open,
+        1 => Settlement::Imprinted,
+        _ => Settlement::Quarantined,
+    }
+}
+
+fn any_stage() -> VisitStage {
+    match kani::any::<u8>() % 3 {
+        0 => VisitStage::None,
+        1 => VisitStage::Undecided,
+        _ => VisitStage::Decided,
+    }
+}
+
+/// The resume rule of PROTOCOL.md §7.3 (VC-069) is total and leaves
+/// nothing owed, for every last visit of up to eight positions and every
+/// attested waiting area: a plan never names a paper beyond those
+/// attested; a case-4 plan journals nothing and holds every paper; a
+/// case-1 plan quarantines every paper (the undecided positions by record
+/// hash, the rest without record); a case-2 or case-3 plan follows a
+/// decision, and once applied every cast position is settled, and out of
+/// district without a sticker entry none is left cast; an imprint entry is
+/// appended only for an imprinted front paper in person.
 #[kani::proof]
-fn waiting_area_decision_matches_the_table() {
-    use WaitingAction::{
-        Divert as V, Drop as D, JournalImprint as J, Nothing as N, PaperMissing as M,
-        QuarantineRecord as R, QuarantineUnjournaled as U, QuarantineUnmatched as X,
+#[kani::unwind(10)]
+fn the_resume_plan_is_total_and_settles_every_cast_position() {
+    let mut visit = VisitState::NONE;
+    visit.stage = any_stage();
+    visit.positions = kani::any();
+    kani::assume(usize::from(visit.positions) <= VISIT_POSITIONS);
+    visit.label_printed = kani::any();
+    for (choice, settled) in visit.choices.iter_mut().zip(visit.settled.iter_mut()) {
+        *choice = any_choice();
+        *settled = any_settlement();
+    }
+    let area = WaitingArea {
+        papers: kani::any(),
+        front_imprinted: kani::any(),
+        sticker_printed: kani::any(),
     };
-    const AREAS: [WaitingArea; 3] = [
-        WaitingArea::Empty,
-        WaitingArea::Imprinted,
-        WaitingArea::Unimprinted,
-    ];
-    const TAILS: [RecordTail; 5] = [
-        RecordTail::NoRecord,
-        RecordTail::Open,
-        RecordTail::Imprinted,
-        RecordTail::Quarantined,
-        RecordTail::Missing,
-    ];
-    //            no record  open  imprinted  quarantined  missing
-    const TABLE: [[WaitingAction; 5]; 3] = [
-        /* empty       */ [N, M, N, N, N],
-        /* imprinted   */ [X, J, D, V, X],
-        /* unimprinted */ [U, R, U, U, U],
-    ];
-    let a: usize = kani::any();
-    let t: usize = kani::any();
-    kani::assume(a < 3 && t < 5);
-    assert_eq!(waiting_area_action(AREAS[a], TAILS[t]), TABLE[a][t]);
+    kani::assume(area.papers <= 9);
+    let absentee: bool = kani::any();
+    let plan = resume_plan(&visit, area, absentee);
+    assert_eq!(plan.paper_count, area.papers);
+    let n = usize::from(visit.positions);
+    let papers = usize::from(area.papers).min(VISIT_POSITIONS);
+    let acts = &plan.papers[..papers];
+    match plan.case {
+        ResumeCase::Nothing => {
+            assert_eq!(area.papers, 0);
+            assert!(plan.imprint.is_none() && plan.unjournaled == 0 && !plan.incident);
+            assert!(!plan.quarantine.iter().any(|&q| q));
+        }
+        ResumeCase::Inconsistent => {
+            assert!(plan.incident);
+            assert!(plan.imprint.is_none() && plan.unjournaled == 0);
+            assert!(!plan.quarantine.iter().any(|&q| q));
+            assert!(acts.iter().all(|&a| a == PaperAction::Hold));
+        }
+        ResumeCase::BeforeDecision => {
+            assert!(acts.iter().all(|&a| a == PaperAction::Quarantine));
+            assert!(plan.imprint.is_none());
+            for p in 0..VISIT_POSITIONS {
+                let undecided = visit.stage == VisitStage::Undecided && p < n;
+                assert_eq!(plan.quarantine[p], undecided);
+            }
+            let named = if visit.stage == VisitStage::Undecided {
+                visit.positions
+            } else {
+                0
+            };
+            assert_eq!(plan.unjournaled, area.papers.saturating_sub(named));
+        }
+        ResumeCase::AfterDecision | ResumeCase::LabelMissing => {
+            assert_eq!(visit.stage, VisitStage::Decided);
+            assert!(usize::from(area.papers) <= n);
+            assert_eq!(plan.unjournaled, 0);
+            assert!(acts.iter().all(|&a| a != PaperAction::Hold));
+            if plan.case == ResumeCase::LabelMissing {
+                assert!(absentee && area.papers == 0);
+            }
+            if let Some(p) = plan.imprint {
+                assert!(area.front_imprinted && !absentee);
+                assert_eq!(usize::from(p), n - usize::from(area.papers));
+            }
+            let mut live_after = false;
+            for p in 0..n {
+                let cast = visit.choices[p] == Choice::Cast;
+                if !cast {
+                    assert!(!plan.quarantine[p]);
+                    continue;
+                }
+                let settled_after = if plan.quarantine[p] {
+                    Settlement::Quarantined
+                } else if plan.imprint == Some(p as u8) {
+                    Settlement::Imprinted
+                } else {
+                    visit.settled[p]
+                };
+                assert!(settled_after != Settlement::Open);
+                if settled_after == Settlement::Imprinted {
+                    live_after = true;
+                }
+            }
+            if absentee && !visit.label_printed {
+                assert!(!live_after);
+            }
+        }
+    }
 }

@@ -139,6 +139,35 @@ pub enum Error {
     /// The close inputs carry envelope counts for an in-person box, or
     /// none for an absentee box.
     EnvelopeCountProfile,
+    /// A visit is open: batches, scan counts and the close wait for it to
+    /// end.
+    VisitOpen,
+    /// The open visit takes no new position (it ended, or is decided), or
+    /// the step asked for does not fit where the visit stands.
+    VisitInProgress,
+    /// The visit already has eight positions.
+    VisitFull,
+    /// No visit is open.
+    NoVisit,
+    /// The visit state or work area belongs to another visit.
+    StaleVisit,
+    /// `VisitEnd` names another number of ballots than were bound.
+    VisitCountMismatch,
+    /// A position of the visit is left to process.
+    VisitIncomplete,
+    /// The decision checks a position beyond the visit.
+    InvalidDecision,
+    /// A staged object differs from the one bound (its hash).
+    StagedMismatch,
+    /// The step does not fit the current position (an imprint for a
+    /// checked one, an opening for a cast one, or none left).
+    WrongPosition,
+    /// No label sticker is owed (in person, nothing cast, or printed).
+    NoLabel,
+    /// The out-of-district sticker is still owed.
+    LabelPending,
+    /// Nothing of the visit is cast: no slip.
+    NothingCast,
     /// The close token belongs to another box.
     ForeignCloseToken,
 }
@@ -261,6 +290,21 @@ impl fmt::Display for Error {
             Self::EnvelopeCountProfile => {
                 f.write_str("envelope counts presence disagrees with the profile")
             }
+            Self::VisitOpen => f.write_str("a visit is open"),
+            Self::VisitInProgress => f.write_str("the visit is not at this step"),
+            Self::VisitFull => f.write_str("the visit already has eight positions"),
+            Self::NoVisit => f.write_str("no visit is open"),
+            Self::StaleVisit => f.write_str("the visit state belongs to another visit"),
+            Self::VisitCountMismatch => {
+                f.write_str("VisitEnd ballot count differs from the bound positions")
+            }
+            Self::VisitIncomplete => f.write_str("a position of the visit is left to process"),
+            Self::InvalidDecision => f.write_str("the decision checks a position beyond the visit"),
+            Self::StagedMismatch => f.write_str("a staged object differs from the one bound"),
+            Self::WrongPosition => f.write_str("the step does not fit the current position"),
+            Self::NoLabel => f.write_str("no label sticker is owed"),
+            Self::LabelPending => f.write_str("the label sticker is still owed"),
+            Self::NothingCast => f.write_str("nothing of the visit is cast"),
             Self::ForeignCloseToken => f.write_str("close token belongs to another box"),
         }
     }

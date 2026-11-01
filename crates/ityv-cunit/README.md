@@ -1,74 +1,76 @@
 # ityv-cunit
 
-> English summary: The trusted core of the casting scanner's commitment unit (ADR-0017 and its 2026-11-01 amendment). A `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate that turns one interpreted ballot into every object the scanner emits: the generalized Pedersen commitments and their 1-of-(m+2) OR proof, the share package for the trustees (each secret split over the chamber access structure, sealed per member through the chamber module's one-time pad or the hybrid KEM), the device and module record signatures (module signatures verified against their genesis keys), the tracking code, the imprint command and the imprint-complete journal entry that must be durable before the paper drops, and on request the signed pre-cast challenge opening or the code slip. Every per-ballot secret (the choice, module contributions, summed randomness, cast id, envelope label, generator state, share plaintexts) and the proof live in one caller-provided work area that the ballot borrows and that is wiped on every exit path. The crate also keeps the box state: per-module counter high-water marks, the sealed journal hash chain, batch attestations (a dry run first, then one verified signature per consenting module), scan-count bodies, a fault latch on a journal mismatch, the box close with the VC-038 verdict (including papers lost or unmatched at a resume, and the visit, envelope and sticker counts of ADR-0021) and a box-bound close token, and resume from the journal after a power loss, deciding from the attested waiting-area state what happens to the paper there. Shares follow the per-party access structure of ADR-0019: party chambers P1..Pn (2 ≤ n ≤ 4) each with its own module, never delegated, and at most seven modules per scanner. A box accepts up to 4,096 ballot styles (an early-voting scanner holds every district's), sorted by identifier and found by binary search. The crate owns no I/O: the host implements the module ports, the journal sink and source, and supplies time buckets and per-operation seeds. Ordering rules are types: an imprint command or a slip exists only after the journal sink reported the record durable, a cast ballot cannot be challenged, and a closed box has no method that accepts a ballot.
+> English summary: The trusted core of the casting scanner's commitment unit (ADR-0017 with its amendments, ADR-0019, ADR-0021). A `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate that turns one voter's visit (one to eight interpreted ballots) into every object the scanner emits. Per ballot: the generalized Pedersen commitments and their 1-of-(m+2) OR proof, the share package for the trustees (each secret split over the per-party access structure, sealed per member through the chamber module's one-time pad or the hybrid KEM), the device and module record signatures (verified against genesis keys) and the tracking code. Per visit: the cast-or-check decision, which exists only once every position carries its device and module record signatures (VC-068); the journaled positions and decision entry with one fsync, before any paper moves (VC-054); per position in order the imprint command and imprint entry, the imprint-failure quarantine, or the signed opening of a checked ballot; out of district one label sticker with every envelope label of the visit; one slip listing the visit's cast tracking codes under one signature. A position's finished record and share package go to a host staging port as soon as it is bound; the unit keeps their hashes and re-checks the staged bytes before journaling or publishing them, so a full eight-ballot visit adds about 26 KB to the 30 KB ballot work area. The crate also keeps the box state: counter high-water marks, the sealed journal chain, batch attestations, scan-count bodies, a fault latch on a journal mismatch, the box close with the VC-038 verdict, and resume from the journal after a power loss with the four-case rule of PROTOCOL §7.3. Ordering rules are types and compile-fail doctests.
 
 ## 무엇인가
 
-커밋먼트 유닛은 투함 스캐너의 검증 부품이다(PROTOCOL.md §7.1, CONSTITUTION §4). 이 크레이트는 그 TCB 핵심이며 명세는 `docs/spec/PROTOCOL.md` §7–§10, `docs/spec/ENCODING.md` §8.6–§8.19, `docs/adr/ADR-0017-cunit-crate.md`(2026-11-01 개정 포함)다. 둘이 다르면 명세가 우선하고 크레이트가 결함이다.
+커밋먼트 유닛은 투함 스캐너의 검증 부품이다(PROTOCOL.md §7.1, CONSTITUTION §4). 이 크레이트는 그 TCB 핵심이며 명세는 `docs/spec/PROTOCOL.md` §7–§10, `docs/spec/ENCODING.md` §8.6–§8.19, `docs/adr/ADR-0017-cunit-crate.md`(개정 포함), ADR-0019, ADR-0021이다. 둘이 다르면 명세가 우선하고 크레이트가 결함이다.
 
 | 모듈 | 내용 | 명세 |
 |---|---|---|
-| `config` | genesis에서 호스트가 만드는 선거 구성: 투표양식(최대 4,096개, ID 오름차순, 이진 탐색), 모듈(챔버당 하나, 최대 7개; 정당 챔버 P1…Pn(2 ≤ n ≤ 4)은 자체 모듈만 쓰고 위임하지 않으며 n 밖의 정당 챔버는 모듈도 구성원도 없음, J·A·C는 자체 또는 중립 위임, N은 없음)과 모듈 공개키(Ed25519 기록 키, 하이브리드 배치 키), 신뢰기관 명부, 접근구조, `VOTER_CODE`. 투표함 단위 패드 소비 `b`를 검증 시 고정한다 | ADR-0017 §2, §12, 개정 1·10·16, ADR-0019 |
-| `link` | 해석 유닛 링크 `Interpretation`(0x0101)과 방문 끝 알림 `VisitEnd`(0x0104), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–8) | ENCODING.md §8.19, ADR-0021 |
-| `port` | 호스트 trait `ModulePort`(발급 `issue(k)`, 패드 봉인, 기록 서명, 배치 구간 확인 `check_batch`, 배치 서명)·`JournalSink`(내구 추가)·`JournalSource`(재개 시 읽기), 모듈의 배치 서명 규칙 `module_may_sign_batch` | ADR-0017 §3, §7–§8, 개정 6·11, VC-021 |
+| `config` | genesis에서 호스트가 만드는 선거 구성: 투표양식(최대 4,096개, ID 오름차순, 이진 탐색), 모듈(챔버당 하나, 최대 7개; 정당 챔버 P1…Pn(2 ≤ n ≤ 4)은 자체 모듈만 쓰고 위임하지 않으며 n 밖의 정당 챔버는 모듈도 구성원도 없음, J·A·C는 자체 또는 중립 위임, N은 없음)과 모듈 공개키(Ed25519 기록 키, 하이브리드 배치 키), 신뢰기관 명부, 접근구조, `VOTER_CODE`. 투표함 단위 패드 소비 `b`를 검증 시 고정한다 | ADR-0017 §2, §12, 개정 1·10·16·17, ADR-0019 |
+| `link` | 해석 유닛 링크 `Interpretation`(0x0101)과 방문 끝 알림 `VisitEnd`(0x0104), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–8), 방문 결정 다이제스트 `visit_digest` | ENCODING.md §8.19, ADR-0021 |
+| `port` | 호스트 trait `ModulePort`(발급 `issue(k)`, 패드 봉인, 기록 서명, 배치 구간 확인 `check_batch`, 배치 서명)·`JournalSink`(내구 추가와 미뤄 쓰기)·`JournalSource`(재개 시 읽기)·`StagingPort`(방문의 기록·share 패키지 보관), 모듈의 서명 규칙 `module_may_sign_batch`(VC-021)·`module_may_sign_record`(카운터당 본문 하나, VC-068) | ADR-0017 §3, §7–§8, 개정 6·11·18 |
 | `rng` | SHA3-512 카운터 모드 생성기 `DeviceRng`(표 생성기: 장치 시드와 모든 모듈의 비공개 기여로 시드, 작업 영역 안에서 재시드; 서명 생성기: 장치 시드) | ADR-0017 §12 |
-| `ballot` | 작업 영역 `BallotWork`, 표별 typestate `Interpreted → Issued → Committed → Built → Durable → Done` 또는 `Built → Challenged`, share 패키지·투함 기록·검증 공개·슬립 | PROTOCOL.md §7.3–§7.7, §8, §9, 개정 3–5 |
-| `boxstate` | `OpenBox`: 카운터 최고값, 저널 사슬, 배치 마감(`BatchAttest`), 스캔 카운터 본문, 고장 고정, 마감(`BoxCloseBody` + 장치 서명 + VC-038 판정 + 투표함에 묶인 토큰), 재개와 대기 구역 판정, 투표지 사건 수, `ClosedBox` | PROTOCOL.md §7.2.1, §7.3, §7.8, §10.2, 개정 5–9·11·14 |
-| `rules` | 순수 규칙(Kani 대상): 선택지 범위, 카운터 최고값, 패드 소비·인덱스·구간 배치, 배치·스캔 카운터 시점, 마감 불변식, 재개 때의 대기 구역 판정표 | §7.2, §7.3, VC-021, VC-034, VC-038, VC-052 |
+| `ballot` | 표 작업 영역 `BallotWork`, 위치별 typestate `Interpreted → Issued → Committed → Built → bind`, share 패키지·투함 기록 | PROTOCOL.md §7.3 1–5단계, §9, 개정 3–5·18 |
+| `visit` | 방문 작업 영역 `VisitWork`, 방문 typestate `ReadyVisit → DecidedVisit → ProcessedVisit`, 결정과 저널, 각인 명령, 확인 공개, 라벨 스티커, 슬립, 방문 포기 | PROTOCOL.md §7.3 6–11단계, §7.7, §8, ADR-0021, 개정 18 |
+| `boxstate` | `OpenBox`: 카운터 최고값, 저널 사슬, 배치 마감(`BatchAttest`), 스캔 카운터 본문, 고장 고정, 마감(`BoxCloseBody` + 장치 서명 + VC-038 판정 + 투표함에 묶인 토큰), `ClosedBox` | PROTOCOL.md §7.2.1, §7.8, §10.2, 개정 5–9·19·22 |
+| `resume` | 저널에서 투표함과 마지막 방문의 상태를 복원하고 재개 판정대로 항목을 덧붙임 | PROTOCOL.md §7.3 재개, §7.8, VC-069, 개정 20 |
+| `rules` | 순수 규칙(Kani 대상): 선택지 범위, 카운터 최고값, 패드 소비·인덱스, 배치·스캔 카운터 시점, 마감 불변식, 재개 판정 `resume_plan` | §7.2, §7.3, VC-021, VC-034, VC-038, VC-052, VC-069 |
 
 보장하는 것:
 - `no_std`, 힙 없음, `unsafe` 없음, 패닉 없음. 워크스페이스 lint 집합을 그대로 쓰며 `src/`에는 `#[allow]`·`#[expect]`가 하나도 없다(CONSTITUTION §1.1).
-- 해석 유닛에서는 `Interpretation` 객체 하나만 받는다. 다른 선거, 모르는 투표양식, `t > m+1`은 거부한다(ITYV-BEH-013).
-- 표는 한 번에 하나만 처리한다. 새 해석은 진행 중인 표가 있거나 배치가 가득 차면 거부된다. 배치 마감과 스캔 카운터 본문은 표와 표 사이에서만 나오므로 배치가 증명하는 모든 카운터는 이미 저널에 있는 표의 것이고, 스캔 카운터의 수량과 head는 뒤로 가지 않는다(VC-052).
-- 각인이 끝나면 `imprinted`가 각인 완료 항목(종류 6, 기록 해시와 그 기록의 카운터를 되풀이하며 새로 소비하지 않음)을 저널에 확정한 뒤에만 `Done`을 돌려주고, 호스트는 그때만 투표지를 함으로 떨어뜨린다(PROTOCOL.md §7.3 단계 8). 항목 쓰기가 실패하면 표는 진행 중으로 남고 호스트가 격리한다.
-- 각인 명령과 슬립은 `Durable` 상태에만 있고, `Durable`은 저널 싱크가 기록과 share 패키지의 내구 기록을 보고한 뒤에만 생긴다(VC-054). 둘 다 그 표가 여전히 투표함의 진행 중인 표일 때만 나온다(격리된 표는 `NoBallotInFlight`/`StaleBallot`). 투입된 표는 검증 폐기할 수 없다. 이 순서들은 컴파일 실패 문서 테스트로 고정한다. 마감한 투표함(`ClosedBox`)에는 표를 받는 메서드가 없다(VC-039).
-- 모듈 카운터는 모듈별 최고값 + 1일 때만 받는다. 최고값 이하(되감기·재사용)는 `CounterRegression`, 건너뛰기는 `CounterGap`이며 둘 다 최고값을 바꾸지 않는다(개정 2). 패드 인덱스는 `카운터 × b`여야 하고(VC-034) `b`는 투표함에 하나다. 청크 수가 다른 투표양식이 섞여도 패드 구간이 겹치지 않는다(개정 1).
+- 해석 유닛에서는 `Interpretation`과 `VisitEnd` 객체만 받는다. 다른 선거, 모르는 투표양식, `t > m+1`, 장수 0이나 9 이상은 거부한다(ITYV-BEH-013).
+- 방문은 한 번에 하나, 방문 안의 위치도 한 번에 하나만 처리한다. 첫 해석이 방문을 열고, 배치에 방문 하나(8건)를 더할 자리가 없으면 거부한다(`BatchFull`). 위치는 8개까지다(`VisitFull`). 배치 마감, 스캔 카운터 본문, 마감은 방문과 방문 사이에서만 나오므로(`VisitOpen`) 배치가 증명하는 모든 카운터는 이미 저널에 있는 위치의 것이고 스캔 카운터의 수량과 head는 뒤로 가지 않는다(VC-052).
+- 결정 전 결속(VC-068): 넣기·확인 결정은 `ReadyVisit`에만 있고, `ReadyVisit`은 `VisitEnd`의 장수가 묶인 위치 수와 같고 진행 중인 위치가 없을 때만 `OpenBox::end_visit`이 만든다. 묶인 위치는 장치와 모든 모듈의 기록 서명을 마친 것이다. 모듈은 한 카운터에 본문 해시 하나만 서명하므로(`module_may_sign_record`) 결정 뒤 기록을 바꿀 수 없다. 컴파일 실패 문서 테스트가 "묶이지 않은 표에 결정 없음", "결정 전 각인 없음", "처리 전 스티커·슬립 없음", "`ReadyVisit`을 만들 수 없음"을 고정한다.
+- 저널 순서(VC-069, VC-054): 결정은 위치 항목(넣는 표 1, 확인하는 표 2)을 위치 순으로 미뤄 쓰고(`append_deferred`), 방문 결정 항목(7, 다이제스트 `SHA3-512("ityv:visit:v1" ‖ 0x00 ‖ n ‖ (kind ‖ record_hash)…)`, 카운터 없음)을 써서 한 번에 내구화한 뒤에만 `DecidedVisit`을 만든다. 넣는 표의 share 패키지는 보관 포트에서 다시 읽어 묶을 때의 해시와 대조한 뒤에만 기록 항목과 함께 쓴다(`StagedMismatch`). 각인 명령·각인 완료(6)·각인 실패 격리(3)·확인 공개는 `DecidedVisit`에서 위치 순서로만 나오고(`WrongPosition`), 각인 완료 항목이 내구화된 뒤에만 종이가 움직인다.
+- 관외·재외 방문은 넣은 표(각인 완료, 격리되지 않음)가 있으면 스티커 하나에 그 `env_label` 목록을 싣고(`LabelCommand`), 인쇄 뒤 라벨 출력 항목(8, 결정 다이제스트, 카운터 없음)을 쓴다. 스티커를 뽑지 못하면 그 방문의 넣은 기록을 모두 격리한다. 스티커가 남아 있는 동안 슬립과 방문 종료는 없다(`LabelPending`).
+- 슬립은 방문당 하나이고 넣은 표의 추적코드를 위치 순으로 담아 하이브리드 서명 한 번으로 서명한다(VC-070). 넣은 표가 없으면 없다(`NothingCast`).
+- 모듈 카운터는 모듈별 최고값 + 1일 때만 받는다. 최고값 이하는 `CounterRegression`, 건너뛰기는 `CounterGap`이며 둘 다 최고값을 바꾸지 않는다(개정 2). 패드 인덱스는 `카운터 × b`여야 하고(VC-034) `b`는 투표함에 하나다(개정 1).
 - 모듈의 기록 서명과 배치 서명은 설정의 genesis 공개키로 검증한 뒤에만 객체에 넣는다(`RecordSignature`, `BatchSignature`).
-- 배치 마감은 모든 전제(투표함 상태, 진행 중인 표, 호스트가 저장 매체에서 다시 읽은 head, 빈 배치, 포트 수, 시간 구간, 작업 버퍼)를 먼저 검사한다. 그다음 모든 모듈에 구간 확인(서명·상태 변화 없음)을 묻고, 거부 목록을 넣은 최종 본문에 동의한 모듈마다 한 번씩 서명을 받는다. 한 모듈의 거부가 다른 모듈의 재서명이나 연쇄 거부를 부르지 않는다(개정 6).
+- 배치 마감은 모든 전제(투표함 상태, 열린 방문, 호스트가 저장 매체에서 다시 읽은 head, 빈 배치, 포트 수, 시간 구간, 작업 버퍼)를 먼저 검사한다. 그다음 모든 모듈에 구간 확인을 묻고, 거부 목록을 넣은 최종 본문에 동의한 모듈마다 한 번씩 서명을 받는다(개정 6).
 - 저널 head가 다르면 투표함은 고장 상태로 고정되어 새 표, 배치, 스캔 카운터, 마감 서명을 모두 거부한다(VC-056, 개정 7).
-- 마감은 프로필과 봉투 수를 대조한다(관외·재외는 봉투·스티커 수와 회송용 봉투 교부·빈 봉투 회수 수가 필수, 관내는 없음; `EnvelopeCountProfile`). 판정은 VC-038 전체다: 관내는 `paper_count == record_count + no_record_count`, 관외·재외는 `paper_count == 0`, `sticker_count == visit_count`, `envelope_count == 교부 − 빈 봉투 회수`, 그리고 모든 함에서 `visit_count ≤ record_count ≤ 8·visit_count`. 마감 토큰은 서명한 `BoxCloseBody`의 해시를 담아 그 투표함만 닫는다(`ForeignCloseToken`).
-- 격리의 회계(개정 5): 저널에 기록된 표의 격리는 그 기록 해시를 담은 항목 3을 쓰고, 기록을 기록 수와 열린 배치에서 빼 격리 수로 옮긴다. 기록 전 격리는 기록 해시 0과 소비된 카운터를 쓴다. 카운터를 하나도 소비하지 않은 표는 유권자에게 돌려준다(항목 없음).
-- 증명·비밀분산의 난수는 장치 시드와 모든 모듈 기여로 시드된 생성기에서만 나오므로 장치 혼자도, 모듈 하나도 그 난수를 정하지 못한다.
+- 마감은 프로필과 봉투 수를 대조하고(관외·재외는 봉투·스티커 수와 회송용 봉투 교부·빈 봉투 회수 수가 필수, 관내는 없음; `EnvelopeCountProfile`) VC-038 전체를 판정한다: 관내 `paper_count == record_count + no_record_count`, 관외·재외 `paper_count == 0`·`sticker_count == visit_count`·`envelope_count == 교부 − 빈 봉투 회수`, 모든 함에서 `visit_count ≤ record_count ≤ 8·visit_count`. `visit_count`는 넣은 표가 하나 이상 남은 방문 수다. 마감 토큰은 서명한 `BoxCloseBody`의 해시를 담아 그 투표함만 닫는다.
+- 방문 포기(`OpenBox::abandon_visit`): 결정 전이면 카운터를 소비한 위치마다 기록 없는 격리(3, 해시 0, 소비 카운터), 결정이 위치 항목 일부를 쓴 뒤 실패했으면 그 위치들은 기록 해시로 격리, 결정 후면 각인 안 된 넣는 표와(관외에서 스티커 항목이 없으면) 넣은 표 전부를 기록 해시로 격리한다. 카운터를 하나도 소비하지 않은 위치는 유권자에게 돌려준다.
+- 증명·비밀분산의 난수는 장치 시드와 모든 모듈 기여로 시드된 생성기에서만 나오므로 장치 혼자도, 모듈 하나도 그 난수를 정하지 못한다. 증명 생성은 `ityv-crypto`의 상수 시간 `prove_into`다(참 선택지로 분기하지 않음).
 
 ## 작업 영역 계약
 
-비밀은 한 곳에만 있다(개정 3·4). 호스트는 `BallotWork`(64비트에서 36,408바이트, 생성자는 `const`)를 하나 두고 표마다 `OpenBox::interpret(link, &mut work)`로 빌려준다. 소형 대상에서는 `static`에 둔다.
+비밀은 두 곳에만 있다(개정 3·4·18). 크기는 64비트 기준이며 `visit::memory` 단위 테스트가 잰다.
 
-- 작업 영역에 있는 것: 선택 인덱스, 모듈 기여(카운터, `r_{c,j}`, `cid_c`, `lab_c`, 태그), 투함 ID, 봉투 라벨, 합산 난수 `r_j`, 표 생성기 상태, 공유 비밀 값, 구성원별 share 스칼라와 `MemberShare` 평문, 증명(`Proof`), 검증 공개 본문 작성 공간.
-- 증명은 `ityv_crypto::prove_into`가 작업 영역의 `Proof`에 제자리로 쓴다(20 KB 임시값 없음). 소거는 `Proof::clear`, 빈 상태 확인은 `Proof::is_empty`다.
-- 표 상태가 들고 다니는 것은 공개값뿐이다: `Committed`는 커밋먼트, `Built`·`Durable`은 기록 해시와 호스트 버퍼의 슬라이스. 상태 하나는 64비트에서 300바이트 이하이며(단위 테스트가 상한을 고정한다) 20 KB 증명이나 2.6 KB 기여를 상태마다 복사하지 않는다.
-- 소거 시점: 표가 작업 영역을 빌릴 때, share 봉인을 마쳤을 때(공유 값과 평문), 투입(`cast`)으로 `Durable`이 될 때(투함 ID와 봉투 라벨만 남김), 종료 상태(`Done`, `Challenged`)에 이를 때, 전이가 실패할 때(소비된 표가 drop된다), 표 값이 버려질 때, 작업 영역 자체가 drop될 때. 종료 상태는 비밀도 선택도 갖지 않는다.
-- 검증 공개의 저널 쓰기가 실패하면 호스트 버퍼에 쓴 공개 객체도 0으로 덮는다.
-- `BallotWork::is_clear()`는 모든 필드가 비었는지 알려 준다. 호스트는 표마다 확인할 수 있고, 테스트는 이것으로 종료·실패 경로의 소거를 관찰한다.
-- 증명은 영지식이고 공개되므로 비밀이 아니다. 상태가 증명을 들고 다니지 않도록 작업 영역에 두며, 기록 본문을 쓰는 동안 인코딩은 호스트의 기록 버퍼에 잠시 둔다(기록은 그 위에 쓰인다).
-- `ityv-encoding`의 비밀 담는 값(`Scalars`, `MemberShare`, `ModuleOpening`, `ChallengeOpeningBody`)은 drop 때 스스로 지워지므로 구성원 평문과 검증 공개를 만드는 동안의 사본도 지워진다(개정 15).
+- `BallotWork`(30,264바이트, 생성자 `const`): 표 하나를 만드는 동안의 모든 비밀과 증명. 위치마다 `OpenBox::interpret(link, &mut work)`로 빌려주며, 방문의 위치들이 차례로 다시 쓴다. 선택 인덱스, 모듈 기여(카운터, `r_{c,j}`, `cid_c`, `lab_c`, 태그), 투함 ID, 봉투 라벨, 합산 난수, 표 생성기, 공유 비밀 값, 구성원 share와 `MemberShare` 평문, 증명.
+- `VisitWork`(24,304바이트): 묶인 위치마다 결정과 확인 공개에 필요한 것만(선택, 투함 ID, 봉투 라벨, 합산 난수, 모듈별 난수와 `cid_c`; 위치당 약 2.3 KB)과 확인 공개 작성 공간. 첫 위치를 묶을 때 비우고 받으며, 그 뒤의 위치는 같은 방문의 것이어야 한다(`StaleVisit`).
+- 상자 안 방문 장부(2,256바이트): 위치마다 투표양식, 소비 카운터, 추적코드, 보관한 기록·share 패키지의 해시, 결정, 처리 상태. 8장 방문이 한 장 처리 공간에 더하는 것은 합쳐 26,584바이트다(목표 64 KiB).
+- 기록(≤ 22,582바이트)과 share 패키지(≤ 269,088바이트)는 묶는 즉시 `StagingPort`로 넘어간다. 유닛은 결정 때 패키지를, 공개 때 기록을 보관 포트에서 다시 읽어 해시를 대조한다.
+- 소거 시점: 표가 작업 영역을 빌릴 때, share 봉인을 마쳤을 때, 표를 묶을 때(작은 비밀을 방문 작업 영역으로 옮긴 뒤), 전이가 실패할 때, 표 값이 버려질 때, 방문 상태 값(`ReadyVisit`·`DecidedVisit`·`ProcessedVisit`)이 버려지거나 방문이 끝날 때, 확인 공개를 쓴 뒤(작성 공간), 작업 영역 자체가 drop될 때. `BallotWork::is_clear()`와 `VisitWork::is_clear()`로 확인한다.
+- 증명은 영지식이고 공개되므로 비밀이 아니다. 상태가 증명을 들고 다니지 않도록 표 작업 영역에 두며, 기록 본문을 쓰는 동안 인코딩은 호스트의 기록 버퍼에 잠시 둔다.
+- `ityv-encoding`의 비밀 담는 값(`Scalars`, `MemberShare`, `ModuleOpening`, `ChallengeOpeningBody`)은 drop 때 스스로 지워진다(개정 15).
 
 ## 재개
 
-전원 상실 뒤 `OpenBox::resume(config, source, sink, inputs, package_buf)`는 `JournalSource`가 처음부터 읽어 주는 저널만으로 투표함을 다시 만들고 `(OpenBox, WaitingAction)`을 돌려준다(개정 11·14).
+전원 상실 뒤 `OpenBox::resume(config, source, sink, inputs, package_buf)`는 `JournalSource`가 처음부터 읽어 주는 저널만으로 투표함을 다시 만들고 `(OpenBox, ResumePlan)`을 돌려준다(개정 20).
 
-- 항목마다 검사한다: 0에서 시작하는 head 사슬, 디코딩, 시간 구간의 단조성(개함 구간 이상), 기록 항목 바로 뒤에만 share 패키지가 있고 그 해시가 맞는지, 소비된 카운터가 모듈마다 최고값 + 1인지, 기록을 지목하는 격리(종류 3)와 각인 완료(종류 6)가 바로 앞의 그 기록과 같은 카운터인지(카운터 최고값은 바뀌지 않는다), 배치 마감의 root와 카운터가 재생한 배치와 맞는지, 투표함 마감 뒤에 항목이 없는지. 하나라도 어긋나면 `JournalCorrupt`, 마감으로 끝나면 `BoxClosed`다.
-- 복원하는 것: head, 카운터 최고값, 열린 배치의 기록 해시와 마지막 기록 구간, 증명된 카운터, 배치 번호, 누적 수량, 투표지 사건 수. 진행 중인 표는 없다. 실제 운영에서 기록 뒤에는 그 기록의 각인이나 격리가 다른 어떤 항목보다 먼저 오므로, 기록 뒤에 다른 항목이 바로 오면 이전 재개에서 투표지가 사라진 것이고 사건 하나로 센다.
-- 대기 구역 판정(`rules::waiting_area_action`): 입력은 사무원 2인과 참관인 2인이 확인한 대기 구역 상태(`Empty`, `Imprinted`, `Unimprinted`)와 저널 마지막 기록의 상태다.
-
-| 대기 구역 \ 마지막 기록 | 기록 없음 | 열림(각인·격리 없음) | 각인 완료 | 격리됨 | 사라짐 |
-|---|---|---|---|---|---|
-| 비어 있음 | 없음 | `PaperMissing`: 사건, 항목 없음 | 없음 | 없음 | 없음 |
-| 각인된 투표지 | `QuarantineUnmatched`: 기록 없는 격리 + 사건 | `JournalImprint`: 종류 6 후 낙하 | `Drop`: 낙하(두 번째 전원 상실) | `Divert`: 격리 봉투로, 항목 없음 | `QuarantineUnmatched` |
-| 각인 없는 투표지 | `QuarantineUnjournaled`: 기록 없는 격리 | `QuarantineRecord`: 그 기록 해시로 격리 | `QuarantineUnjournaled` | `QuarantineUnjournaled` | `QuarantineUnjournaled` |
-
-  덧붙이는 항목은 `inputs.time_bucket`을 쓴다. Kani 하네스가 이 표를 독립적으로 적은 표와 대조한다.
-- 마감 판정에는 `paper_incidents` 사실과 `Invariant::PaperIncidents`를 더했다. 투표지가 사라지면 기록 수와 투표지 수가 우연히 맞더라도 마감은 `HOLD_REVIEW`다.
-- 재개 직후에는 스캔 카운터가 바로 기한이 된다(참관인이 복원된 head를 다시 증명한다).
+- 항목마다 검사한다: 0에서 시작하는 head 사슬, 디코딩, 시간 구간의 단조성, 기록 항목 바로 뒤에만 share 패키지가 있고 그 해시가 맞는지, 소비한 카운터가 모듈마다 최고값 + 1인지, 방문 순서(VC-069): 위치 항목(최대 8, 같은 기록 두 번 없음) → 그 위치들의 다이제스트를 담은 방문 결정 항목 → 넣는 위치마다 위치 순서의 각인 완료(6) 또는 그 기록을 지목하는 격리(3, 같은 카운터) → 관외면 결정 다이제스트를 되풀이하는 라벨 출력(8). 방문 항목(7·8)에는 카운터가 없다. 결정되지 않은 위치 뒤에는 위치, 결정, 그 위치를 지목하는 격리만 올 수 있다. 배치 마감의 root와 카운터, 투표함 마감 뒤 항목 없음. 하나라도 어긋나면 `JournalCorrupt`, 마감으로 끝나면 `BoxClosed`다.
+- 복원하는 것: head, 카운터 최고값, 열린 배치, 증명된 카운터, 배치 번호, 누적 수량(방문 수 포함), 투표지 사건 수, 마지막 방문의 상태. 결정된 방문이 무언가를 남긴 채(넣는 위치 미처리, 관외 스티커 항목 없음) 다른 방문이나 배치가 뒤따르면 이전 재개에서 투표지가 사라진 것이므로 사건 하나로 센다.
+- 재개 판정(`rules::resume_plan`, PROTOCOL §7.3의 네 경우): 입력은 마지막 방문의 상태와, 사무원 2인과 참관인 2인이 확인한 대기 구역(`WaitingArea`: 남은 장수, 맨 앞의 각인 여부, 스티커 출력 여부).
+  1. 결정 전 멈춤: 결정되지 않은 위치는 기록 해시로, 그 밖의 종이는 기록 없는 격리로 남기고 모두 격리 봉투로 보낸다. 마지막 방문이 끝났는데 종이가 남았으면 저널에 오르지 않은 새 방문의 종이다(각인된 종이면 사건도 센다).
+  2. 결정 후 멈춤: 남은 종이는 마지막 위치들이다. 확인한 종이는 폐기 슈트로, 맨 앞 넣는 종이에 각인이 있으면 각인 항목을 (없을 때만) 덧붙이고 투입, 그 밖의 넣는 종이는 기록 해시로 격리한다.
+  3. 관외에서 스티커 항목이 없으면 라벨을 다시 뽑을 수 없으므로 그 방문의 넣은 기록을 모두 격리하고 반환 트레이도 격리 봉투로 보낸다.
+  4. 종이가 저널과 맞지 않으면(넣는 종이가 사라짐, 처리된 종이가 맨 앞 뒤에 남음, 각인 여부가 항목과 맞지 않음, 종이가 남았는데 스티커가 나옴) 사건으로 세고 아무것도 쓰지 않으며 종이는 보류한다.
+  덧붙이는 항목은 `inputs.time_bucket`을 쓴다. Kani 하네스가 8위치까지 모든 입력에 대해 판정이 전부 정의되고, 경우 2·3을 적용하면 넣는 위치가 모두 처리되며 관외에서 스티커 없이 넣은 채 남는 기록이 없음을 증명한다.
+- 재개 직후에는 스캔 카운터가 바로 기한이 된다.
 
 ## 남은 명세 편차와 한계
 
-- 소거의 연역 증명(V3, VC-020)은 미해결이다. `Opening::new`와 `CastId`는 값으로 복사된다(`Opening`은 drop 때 지운다). 컴파일러가 이동 때 남기는 스택 사본은 Rust에서 보장해 지울 수 없다.
-- 투표함 마감의 `record_set_root`는 호스트가 저널에서 계산해 넘기고 유닛은 그 값에 서명한다(투표함 전체의 기록 해시를 고정 메모리에 담을 수 없다). 공개 검증기가 공표된 기록과 배치 root로 대조하므로 틀린 값은 `HOLD_REVIEW`다(개정 9, VC-027).
-- 마지막 배치 뒤 검증 폐기·격리로만 소비된 카운터는 `BatchAttest`에 들어가지 않는다(배치는 기록 1건 이상). `BoxClose`의 `module_counters`(장치 하이브리드 서명)와 해당 검증 공개·격리 항목이 그 구간을 덮는다(PROTOCOL.md §7.2.1).
-- 기록 해시를 담은 격리 항목(종류 3)은 그 기록의 카운터를 다시 적는다. 새로 소비하는 카운터가 아니라 기록을 재분류하는 표시다.
-- 대기 구역 판정에서 명세가 직접 정하지 않은 칸은 보수적으로 정했다. 각인 없는 투표지인데 마지막 기록이 이미 격리됐으면, 그 기록의 투표지가 아직 격리 봉투로 가지 않은 것인지 저널에 오르지 않은 새 투표지인지 가를 수 없다. 새 투표지로 보고 기록 없는 격리를 쓰므로, 앞의 경우라면 `SpoiledEnvelopes`가 어긋나 `HOLD_REVIEW`가 된다. 검증 폐기된 투표지가 대기 구역에 남은 경우도 같다. 각인된 투표지가 어떤 기록과도 맞지 않는 사건(`QuarantineUnmatched`)은 저널만으로는 다시 알아낼 수 없어 그 재개의 메모리에만 남는다. 호스트가 사건 이벤트로 기록해야 하며, 사라진 투표지 사건은 저널에서 다시 계산된다.
-- 순서가 바뀐 포트로 발급을 요청하면 그 모듈은 유닛이 받지 않은 카운터를 소비하고, 이후 그 모듈의 응답은 모두 `CounterGap`이 된다(모듈 사건, 장치 교체).
+- 소거의 연역 증명(V3, VC-020)은 미해결이다. 컴파일러가 이동 때 남기는 스택 사본은 Rust에서 보장해 지울 수 없다.
+- **결정 전 멈춤 뒤의 카운터.** 결정 전에 멈추면 묶은 위치들이 소비한 카운터는 저널에 없다(위치 항목은 결정 때 쓰인다). 재개는 명세대로 그 종이를 기록 없는 격리(카운터 없음)로 남기지만, 모듈은 유닛의 최고값보다 앞서 있으므로 다음 발급이 `CounterGap`이 된다. 배터리 요건(PROTOCOL §7.3) 아래 드문 경우지만 그 투표함은 장치 교체 없이 계속할 수 없다. 해결안(다음 라운드 제안): 재개 입력에 모듈의 현재 카운터를 받아 빈 구간을 기록 없는 격리로 덮거나, 위치를 묶을 때 소비 카운터만 담은 항목을 쓴다. 후자는 저널 종류를 늘리는 명세 변경이다.
+- 결정 후 멈춘 방문에서 남은 확인 위치는 투함 ID가 영속되지 않으므로 검증 공개를 만들 수 없다. 기록 상태는 `CHALLENGED_SPOILED`로 남고 공개만 빠진다.
+- 경우 4의 사건과, 새 방문의 종이 가운데 각인된 것이 있는 사건은 저널에 남지 않는다. 앞의 것은 그 방문 뒤에 다른 항목이 오면 다음 재개가 다시 세지만, 뒤의 것은 그 재개의 메모리에만 있다. 호스트가 사건 이벤트로 기록해야 한다.
+- 마지막 방문이 끝났는데(넣는 위치가 모두 처리됨) 관내에서 종이가 남았을 때, 그 종이가 마지막 확인 위치들인지 새 방문의 종이인지는 저널로 가를 수 없다(확인 위치는 처리 항목이 없다). 남은 장수가 끝의 확인 위치 수 이하면 확인 위치로 본다. 틀리면 폐기 봉투 수가 어긋나 `HOLD_REVIEW`가 된다.
+- 투표함 마감의 `record_set_root`는 호스트가 저널에서 계산해 넘기고 유닛은 그 값에 서명한다(개정 9). 공개 검증기가 공표된 기록과 배치 root로 대조한다(VC-027).
+- 마지막 배치 뒤 검증 폐기·격리로만 소비된 카운터는 `BatchAttest`에 들어가지 않는다. `BoxClose`의 `module_counters`와 해당 항목이 그 구간을 덮는다(PROTOCOL.md §7.2.1).
+- 증명 생성의 사전 계산(P6, `ityv_crypto::ProofPrecomputation`)은 이 유닛에서 쓰지 않는다. 증명 난수는 모듈 기여로 시드되므로(개정 4, §12) 모듈 발급 전, 곧 투표 전에는 뽑을 수 없다. 사전 계산을 쓰려면 증명 난수를 장치 시드만으로 미리 뽑아야 하는데, 그러면 장치 혼자 증명 난수를 정하게 된다. 이 선택은 다음 라운드의 결정 사항으로 남긴다.
+- `AttestChallenge`(0x0105) 디코딩과 현장 증명 `attest` API(ADR-0023)는 다음 라운드다.
 - 장치 키 보관(HSM)과 모듈 펌웨어(M8), 링크 전송, fsync, 인쇄는 범위 밖이다.
 
 ## 유도와 해시 규칙
@@ -99,25 +101,26 @@
 | `ModuleIssue`(0x0103) | `module_id: Ident<64>` ‖ `chamber: u8`(1–7: P1–P4, J, A, C) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(1개 이상) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>` (최대 534바이트) |
 | `JournalEntry`(0x0014) | `prev_head: Hash512` ‖ `kind: u8`(1–8) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id, counter}, 7>` ‖ `time_bucket: u64` (최대 753바이트) |
 
-`JournalEntry`의 `record_hash`와 `module_counters`는 종류마다 뜻이 다르다(ENCODING.md §8.19 개정): 1 기록·2 검증 폐기는 그 표의 기록 해시와 소비한 카운터, 3 격리는 기록된 표면 그 기록 해시와 그 카운터, 기록 전이면 0과 소비한 카운터(재개의 기록 없는 격리는 빈 목록), 4 배치 마감은 배치의 `records_root`와 모든 모듈의 최고값, 5 투표함 마감은 `record_set_root`와 모든 모듈의 최고값, 6 각인 완료는 그 기록 해시와 그 카운터, 7 방문 결정과 8 라벨 출력은 방문 결정 다이제스트와 빈 목록(ADR-0021). 기록을 지목하는 3과 6은 카운터를 새로 소비하지 않는다. 이 판은 아직 방문 단위로 투입하지 않으므로(투입 기록마다 방문 하나) 종류 7·8을 쓰지 않고, 재개에서 만나면 `JournalCorrupt`다. `VisitEnd`는 객체와 디코더만 있다.
+`JournalEntry`의 `record_hash`와 `module_counters`는 종류마다 뜻이 다르다(ENCODING.md §8.19 개정): 1 기록·2 검증 폐기는 그 표의 기록 해시와 소비한 카운터, 3 격리는 기록된 표면 그 기록 해시와 그 카운터, 기록 전이면 0과 소비한 카운터(재개의 기록 없는 격리는 빈 목록), 4 배치 마감은 배치의 `records_root`와 모든 모듈의 최고값, 5 투표함 마감은 `record_set_root`와 모든 모듈의 최고값, 6 각인 완료는 그 기록 해시와 그 카운터, 7 방문 결정과 8 라벨 출력은 방문 결정 다이제스트와 빈 목록(ADR-0021). 기록을 지목하는 3과 6은 카운터를 새로 소비하지 않는다. 한 방문의 항목은 위치 항목(1·2) n개, 방문 결정(7), 처리 항목(6·3), 관외면 라벨 출력(8) 순이다.
 
 나머지 객체(`CastRecordBody`, `CastRecord`, `SharePackage`, `MemberShare`, `ChallengeOpening`, `BatchAttest`, `ScanCountAttestBody`, `BoxCloseBody`, `Slip`)는 `ityv-encoding`이 구현한다(ENCODING.md §8.6–§8.18).
 
 ## 호스트 계약
 
-1. 모듈마다 `ModulePort`를 구현하고 구성의 모듈 순서(모듈 ID 오름차순)로 포트를 넘긴다. `issue(k, out)`은 그 표의 청크 수만큼 `rand`를 돌려준다. `seal_member`는 위 패드 구간 배치를 따르고, 패드가 소진되면 버퍼를 바꾸지 않고 `Exhausted`를 돌려준다. `check_batch`는 서명도 상태 변화도 없는 확인이고, `sign_batch`는 서명하면서 그 구간을 증명된 것으로 표시한다.
-2. `JournalSink::append`는 항목과(기록이면) share 패키지를 안정 저장소에 쓴(fsync) 뒤에만 `Ok`을 돌려준다. `JournalSource::next_item`은 스트림 틀(`u32_be 길이 ‖ 객체`)을 벗겨 항목과 패키지를 넘긴다.
-3. 배치 마감의 `host_head`는 저장 매체에서 다시 읽은 값이어야 한다. `OpenBox::journal_head`를 그대로 넘기면 VC-056 검사가 무의미해진다.
-4. 시간 구간은 단조 비감소로 준다(역행은 `TimeRegression`; 스캔 카운터 본문의 구간도 포함). 서명 연산마다 새 32바이트 시드를 `Signer::new(key, seed)`로 준다.
-5. 표가 오류로 끝나거나 값이 사라지면 `OpenBox::quarantine_in_flight`로 격리를 기록하고 투표지를 격리 봉투로 보낸다.
-6. 다음 표 전에 `batch_due`를 확인해 배치를 닫고, `scan_count_due`면 스캔 카운터 본문을 만들어 참관인 서명을 받는다. 마감 전에 열린 배치를 닫는다.
-7. 각인기가 인쇄를 마치면 `imprinted(open_box, sink, time_bucket)`를 부르고, `Done`이 돌아온 뒤에만 투표지를 함으로 떨어뜨린다. 오류면 떨어뜨리지 않고 `quarantine_in_flight`로 격리해 격리 봉투로 보낸다.
-8. 재개 후 돌아온 `WaitingAction`대로 대기 구역의 투표지를 처리하고(낙하 / 격리 봉투), `PaperMissing`·`QuarantineUnmatched`는 사건 이벤트로 기록한다.
-9. 투표양식 목록은 ID 바이트 오름차순으로 넘긴다(최대 4,096개). 구성은 그 슬라이스를 빌리기만 하므로 목록은 호스트 메모리에 있다(항목당 64비트 24바이트, 32비트 12바이트; 4,096개면 thumbv7em에서 48 KB).
-10. 마감은 `prepare_close`(본문·장치 서명·저널 항목, 판정 반환) 뒤 같은 투표함의 토큰으로 `into_closed`를 부른다. 판정이 비어 있지 않으면 `HOLD_REVIEW`다.
-11. `is_faulted()`가 참이면 장치를 교체한다.
+1. 모듈마다 `ModulePort`를 구현하고 구성의 모듈 순서(모듈 ID 오름차순)로 포트를 넘긴다. `issue(k, out)`은 그 표의 청크 수만큼 `rand`를 돌려준다. `seal_member`는 위 패드 구간 배치를 따르고, 패드가 소진되면 버퍼를 바꾸지 않고 `Exhausted`를 돌려준다. `sign_record`는 카운터당 본문 해시 하나만 서명한다(`module_may_sign_record`). `check_batch`는 서명도 상태 변화도 없는 확인이고, `sign_batch`는 서명하면서 그 구간을 증명된 것으로 표시한다.
+2. `JournalSink::append`는 그 항목과 앞서 미뤄 쓴 항목 모두가 안정 저장소에 쓰인(fsync) 뒤에만 `Ok`을 돌려준다. `append_deferred`는 기다리지 않고 쓴다(기본 구현은 `append`). `JournalSource::next_item`은 스트림 틀(`u32_be 길이 ‖ 객체`)을 벗겨 항목과 패키지를 넘긴다.
+3. `StagingPort`는 방문이 끝날 때까지 위치마다 `CastRecord`와 `SharePackage`를 보관하고 요청하면 되돌려준다. 유닛은 돌려받은 바이트를 해시와 대조한다.
+4. 방문: 표마다 `interpret → issue → commit → build → bind`, 해석 유닛의 `VisitEnd`로 `end_visit`, 유권자의 선택으로 `decide`(그 뒤에만 종이가 움직인다), `current()`가 가리키는 위치마다 넣는 표는 `imprint_command` → 인쇄 → `imprinted`(각인 실패면 `imprint_failed`, 종이는 격리 봉투), 확인하는 표는 `open_challenge`(종이는 폐기 슈트), 그다음 `finish_positions`, 관외면 `label_command` → 인쇄 → `label_printed`(실패면 `label_failed`, 반환 트레이를 격리 봉투로), `slip`, `finish`. 공개할 기록은 `record(...)`로 대조된 바이트를 받는다.
+5. 방문을 끝낼 수 없으면(유권자가 결정하지 않고 떠남, `VisitCountMismatch`, 위치 실패, 결정 실패, 방문 상태 값을 잃음) 사무원 2인과 참관인 2인이 확인한 뒤 `OpenBox::abandon_visit`을 부르고 남은 종이를 격리 봉투로 보낸다(확인 위치의 종이는 폐기 슈트).
+6. 배치 마감의 `host_head`는 저장 매체에서 다시 읽은 값이어야 한다. `OpenBox::journal_head`를 그대로 넘기면 VC-056 검사가 무의미해진다.
+7. 시간 구간은 단조 비감소로 준다(역행은 `TimeRegression`). 서명 연산마다 새 32바이트 시드를 `Signer::new(key, seed)`로 준다.
+8. 다음 방문 전에 `batch_due`를 확인해 배치를 닫고, `scan_count_due`면 스캔 카운터 본문을 만들어 참관인 서명을 받는다. 마감 전에 열린 배치를 닫는다.
+9. 재개 후 돌아온 `ResumePlan`대로 종이를 옮기고(함·반환 트레이, 폐기 슈트, 격리 봉투, 보류), `incident`면 사건 이벤트로 기록한다.
+10. 투표양식 목록은 ID 바이트 오름차순으로 넘긴다(최대 4,096개, 슬라이스를 빌림).
+11. 마감은 `prepare_close` 뒤 같은 투표함의 토큰으로 `into_closed`를 부른다. 판정이 비어 있지 않으면 `HOLD_REVIEW`다.
+12. `is_faulted()`가 참이면 장치를 교체한다.
 
-버퍼 크기: 작업 영역 `BallotWork` 하나(약 35 KB), 빌드 scratch `scratch_len(신뢰기관 수)`(신뢰기관당 3,542바이트), share 패키지 ≤ 269,088, 기록 본문 ≤ 21,570, 기록 ≤ 22,582(증명 인코딩의 임시 공간을 겸한다), 배치 작업 `BATCH_WORK_LEN`(76,922: 모듈 서명 7개와 장치 서명 1개의 자리, 그 뒤 `BatchAttest` ≤ 39,394), 마감 작업 `CLOSE_WORK_LEN`(5,715), 검증 공개 ≤ 7,805, 슬립 ≤ 5,387, 재개 패키지 버퍼 ≥ 투표함의 가장 큰 share 패키지.
+버퍼 크기: 표 작업 영역 `BallotWork` 하나(30,264바이트), 방문 작업 영역 `VisitWork` 하나(24,304바이트), 빌드 scratch `scratch_len(신뢰기관 수)`(신뢰기관당 3,542바이트), share 패키지 ≤ 269,088(빌드 버퍼, 결정 때 패키지를 다시 읽는 버퍼, 재개 패키지 버퍼), 기록 본문 ≤ 21,570, 기록 ≤ 22,582, 배치 작업 `BATCH_WORK_LEN`(76,922), 마감 작업 `CLOSE_WORK_LEN`(5,715), 검증 공개 ≤ 7,805, 슬립 ≤ 5,387, 보관 공간 ≤ 위치 8 × (기록 + 패키지).
 
 ## 검증
 
@@ -132,18 +135,18 @@ cargo build --locked -p ityv-cunit --target thumbv7em-none-eabihf   # no_std 빌
 
 | 파일 | 내용 |
 |---|---|
-| `tests/flow.rs` | 공개 검증기의 검사(추적코드, 장치·모듈 기록 서명, OR 증명), 신뢰기관의 검사(패드·KEM 복호, 전송 태그, 정족수로 모든 비밀 복원과 검증 공개값의 일치, 정당 챔버 하나나 J가 빠진 집합의 실패; 정당 2·3·4, 최대 구성인 모듈 7개·챔버 8개 포함), 모듈 태그 `tag_{c,i}`의 신뢰기관 측 검증(VC-022), KEM 연관 데이터 변조 시 복호 실패, 청크 수가 다른 투표양식의 패드 구간 분리, 포트 순서 오류, 다른 키의 기록 서명, 종료·실패 경로의 작업 영역 소거 |
-| `tests/boxes.rs` | 저널 사슬, 카운터 되감기·재사용·건너뛰기, 배치 범위·거부·연쇄 없음·서명 검증, 전제 검사 순서, 고장 고정, 스캔 카운터, 격리 회계(기록된 표·각인 실패·저널 실패), 마감 불변식 하나씩, 방문 수의 양쪽 상한, 관외 봉투·스티커 수와 프로필, 다른 투표함의 토큰 |
-| `tests/resume.rs` | 항목 종류마다 재개한 투표함과 원래 투표함의 동일성과 이어서 쓰기, 대기 구역 판정의 네 경우와 두 번째 전원 상실, 사라진 투표지 사건의 저널 재계산, 각인 항목 쓰기 실패, 손상·불일치 저널 거부(검사마다 하나씩) |
+| `tests/flow.rs` | 방문 흐름(세 위치의 결정 전 결속과 모듈 서명, 위치 순서 처리, 저널 순서와 fsync 한 번, 방문 슬립, 보관 포트에서의 기록 공개; 관외 스티커와 라벨 목록, 스티커 실패; 결정 뒤 같은 카운터의 다른 본문 거부), 공개 검증기의 검사(추적코드, 장치·모듈 기록 서명, OR 증명), 신뢰기관의 검사(패드·KEM 복호, 전송 태그, 정족수로 모든 비밀 복원과 검증 공개값의 일치, 정당 챔버 하나나 J가 빠진 집합의 실패; 정당 2·3·4, 최대 구성인 모듈 7개·챔버 8개 포함), 모듈 태그 `tag_{c,i}`의 신뢰기관 측 검증(VC-022), KEM 연관 데이터 변조 시 복호 실패, 청크 수가 다른 투표양식의 패드 구간 분리, 포트 순서 오류, 다른 키의 기록 서명, 두 작업 영역의 종료·실패 경로 소거 |
+| `tests/boxes.rs` | 저널 사슬, 카운터 되감기·재사용·건너뛰기, 배치 범위·거부·연쇄 없음·서명 검증, 방문 자리를 남기는 배치 시점, 전제 검사 순서, 고장 고정, 스캔 카운터, 격리 회계(배치 중간 기록의 각인 실패, 저널 실패, 버려진 결정 방문, 결정 중 저널 실패), 바뀐 보관 객체 거부, `VisitEnd` 장수·8위치·잘못된 결정, 방문 상태의 방문 결속, 마감 불변식 하나씩, 방문 수의 양쪽 상한, 관외 봉투·스티커 수와 프로필, 다른 투표함의 토큰 |
+| `tests/resume.rs` | 방문 종류마다 재개한 투표함과 원래 투표함의 동일성과 이어서 쓰기, 네 경우(결정 전: 저널에 없음·fsync 전 유실·결정 없는 위치; 결정 후: 폐기 슈트·각인 덧붙임·이미 각인; 관외 스티커 없음; 맞지 않는 종이와 사건 재계산·마감 보고), 스티커 항목 없이 다음 방문으로 넘어간 관외 방문의 사건(스티커가 있거나 넣은 표가 없으면 사건 아님), 재개 항목 쓰기 실패, 손상·불일치 저널 거부(결정 다이제스트, 위치 수, 각인 순서, 격리 대상, 스티커 항목, 배치, 마감) |
 | `tests/styles.rs` | 4,096개 투표양식 구성에서 처음·가운데·마지막 투표양식 조회와 투표, 모르는 투표양식, 정렬 안 됨·중복·초과 거부, 구성 크기 |
-| `tests/link.rs` | 링크 객체 배치와 디코더(`VisitEnd`, 저널 종류 1–8, 최대 길이), 구성 규칙(정당 챔버 모듈 필수·위임 금지, n 밖의 정당 챔버, 모듈 8개 거부), 계수 규칙 예, 속성 테스트 |
+| `tests/link.rs` | 링크 객체 배치와 디코더(`VisitEnd`, 저널 종류 1–8, 최대 길이), 구성 규칙(정당 챔버 모듈 필수·위임 금지, n 밖의 정당 챔버, 모듈 8개 거부), 계수 규칙과 모듈 서명 규칙 예, 재개 판정의 경우별 표, 속성 테스트 |
 | `tests/surface.rs` | 표시 문자열, 비밀을 담은 값의 `Debug`, 접근자, 경계값 |
 
-Kani 하네스(9개): 선택지 범위, 카운터 판정, 네 번의 발급에 걸친 카운터 최고값(되돌아가지 않고 같은 카운터를 두 번 받지 않음), 패드 소비·인덱스 산술, 모듈 배치 서명 규칙, 배치·스캔 카운터 시점, VC-038 판정 전체(투표지 사건, 방문·봉투·스티커 수 포함)를 128비트 산술로 독립 기술한 명제와 대조하고, 재개의 대기 구역 판정을 독립적으로 적은 3×5 표와 대조한다.
+Kani 하네스(9개): 선택지 범위, 카운터 판정, 네 번의 발급에 걸친 카운터 최고값(되돌아가지 않고 같은 카운터를 두 번 받지 않음), 패드 소비·인덱스 산술, 모듈 배치 서명 규칙, 배치·스캔 카운터 시점, VC-038 판정 전체(투표지 사건, 방문·봉투·스티커 수 포함)를 128비트 산술로 독립 기술한 명제와 대조하고, 재개 판정이 위치 8개까지의 모든 입력에 대해 정의되며 경우마다 약속을 지킴(경우 4는 아무것도 쓰지 않고 보류, 경우 1은 모든 종이를 격리, 경우 2·3을 적용하면 넣는 위치가 모두 처리되고 관외에서 스티커 없이 넣은 기록이 남지 않음, 각인 덧붙임은 관내 맨 앞 각인 종이만)을 증명한다.
 
 ### 변이 테스트 결과
 
-정당 챔버(ADR-0019)와 방문 수·봉투·스티커 마감 검사(ADR-0021) 반영 후(2026-11-01), 바뀐 파일만 두 번에 나눠 돌렸다(`-f`, `--timeout 300`). `config.rs`·`link.rs`·`rules.rs`·`error.rs`·`ballot.rs`: 변이 411개 중 잡힘 287, 빌드 불가 124, 놓침 0(17분). `boxstate.rs`: 변이 149개 중 잡힘 114, 빌드 불가 35, 놓침 0(6분). 바뀌지 않은 `port.rs`·`rng.rs`는 직전 전체 실행(변이 569개, 놓침 0)의 결과가 그대로다. 빌드 불가는 대부분 비공개 타입의 값을 기본값으로 바꾸는 변이다. 알려진 동치 변이는 없다.
+방문 단위 투입(ADR-0021) 반영 후(2026-11-01), 바뀐 파일만 두 번에 나눠 돌렸다(`-f`, `--timeout 300`). `visit.rs`·`resume.rs`·`rules.rs`·`port.rs`·`link.rs`: 변이 507개 중 잡힘 409, 빌드 불가 86, 시간 초과 1, 놓침 11(28분). 놓친 것은 시험을 더해 고쳤다: 기본 `append_deferred`가 `append`를 부름, 스티커 항목 없이 다음 방문으로 넘어간 관외 방문만 사건(`Trail::owes`의 네 변이), 스티커는 나왔지만 항목이 없고 종이가 없는 재개 판정, 지난 방문의 작업 영역으로 다음 방문을 끝내지 못함, 다른 방문의 결정 토큰으로 위치 처리를 끝내지 못함, 각인 실패로 격리된 표는 슬립에서 빠짐. 동치 변이 둘은 코드에서 없앴다: `Decision::checking`의 `position < 8` 검사(`checked_shl`이 이미 거름)와 결정 때 라벨 상태의 `cast > 0`(`label_owed`가 이미 넣은 표 수를 봄). 시간 초과(`imprinted`를 `Ok(())`로)는 시험 도우미의 처리 반복에 상한을 두어 바로 실패하게 했다. 해당 함수만 다시 돌린 결과 변이 68개 중 잡힘 60, 빌드 불가 7, 놓침 1이었고, 그 하나가 위의 `cast > 0`이다(없앤 뒤 다시 돌린 `apply_decision`의 변이 4개 모두 잡힘). `ballot.rs`·`boxstate.rs`·`error.rs`·`config.rs`: 변이 336개 중 잡힘 230, 빌드 불가 106, 놓침 0(13분). 바뀌지 않은 `rng.rs`는 직전 전체 실행의 결과가 그대로다. 빌드 불가는 대부분 비공개 타입의 값을 기본값으로 바꾸는 변이다. 알려진 동치 변이는 없다.
 
 ### `Drop` 소거의 시험
 
@@ -153,8 +156,10 @@ Kani 하네스(9개): 선택지 범위, 카운터 판정, 네 번의 발급에 �
 |---|---|---|
 | `BallotWork` | `zeroize` | `ballot::tests::zeroize_clears_every_field`, `is_clear_sees_every_field_on_its_own`; 통합 테스트가 종료·실패 경로마다 `is_clear()`를 확인 |
 | 작업 영역 보호자(`WorkGuard`, 비공개) | `BallotWork::zeroize` | `ballot::tests::guard_wipes_on_take_and_on_drop`이 보호자를 실제로 drop한 뒤 작업 영역을 읽는다 |
-| `ImprintCommand` | `zeroize` | `ballot::tests::imprint_command_zeroizes_and_redacts` |
-| `DeviceRng` | `wipe` | `ballot::tests::durable_keeps_only_the_imprint_secrets` 등(소거된 생성기는 0 키의 스트림을 낸다) |
+| `VisitWork` | `zeroize` | `visit::tests::is_clear_sees_every_field_and_zeroize_clears_it`; 통합 테스트가 방문 종료·실패 경로마다 `is_clear()`를 확인 |
+| 방문 보호자(`VisitGuard`, 비공개) | `VisitWork::zeroize` | `visit::tests::the_guard_and_the_first_slot_wipe_the_work_area` |
+| `ImprintCommand`, `LabelCommand` | `zeroize` | `visit::tests::commands_redact_and_zeroize` |
+| `DeviceRng` | `wipe` | `ballot::tests::binding_moves_the_small_secrets_and_wipes_the_rest` 등(소거된 생성기는 0 키의 스트림을 낸다) |
 | `ModuleIssue` | `wipe` | `link::tests::wipe_clears_the_private_part` |
 
 ## 테스트·하네스 코드의 lint 완화

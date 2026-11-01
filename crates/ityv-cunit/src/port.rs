@@ -1,15 +1,19 @@
 //! The host contract: chamber-module ports, the journal sink and the
-//! journal source read back at resume.
+//! journal source read back at resume, and the staging store for a visit's
+//! public objects.
 //!
 //! The commitment unit owns no I/O. The host implements [`ModulePort`] once
-//! per configured module (over the physical link of PROTOCOL.md §7.1) and
-//! [`JournalSink`] over its durable storage (PROTOCOL.md §7.8). Everything
-//! the unit needs from the outside world passes through these two traits
-//! and the time buckets it receives as arguments.
+//! per configured module (over the physical link of PROTOCOL.md §7.1),
+//! [`JournalSink`] over its durable storage (PROTOCOL.md §7.8) and
+//! [`StagingPort`] over whatever memory holds a visit's records and share
+//! packages until the decision (PROTOCOL.md §7.3). Everything the unit
+//! needs from the outside world passes through these traits and the time
+//! buckets it receives as arguments.
 //!
-//! The pure rule a module applies before signing a batch
-//! ([`module_may_sign_batch`], VC-021) lives here so that module firmware
-//! (M8) and the unit's tests use the same function.
+//! The pure rules a module applies before signing a batch
+//! ([`module_may_sign_batch`], VC-021) and a record
+//! ([`module_may_sign_record`], VC-068) live here so that module firmware
+//! (M8) and the unit's tests use the same functions.
 
 use core::fmt;
 
@@ -113,8 +117,11 @@ pub trait ModulePort {
     fn seal_member(&mut self, member_index: u8, buffer: &mut [u8]) -> Result<Sealed, PortError>;
 
     /// Signs the record message `body_hash ‖ module_id ‖ counter`
-    /// (PROTOCOL.md §7.2.1) with the module's Ed25519 key. The unit verifies
-    /// the signature with the module's genesis key before using it.
+    /// (PROTOCOL.md §7.2.1) with the module's Ed25519 key. The module signs
+    /// at most one body hash per counter ([`module_may_sign_record`]) and
+    /// keeps it until the counter is attested, so the unit cannot change a
+    /// record after the visit's decision (VC-068). The unit verifies the
+    /// signature with the module's genesis key before using it.
     ///
     /// # Errors
     /// [`PortError`] on link failure.
@@ -143,13 +150,63 @@ pub trait ModulePort {
 /// The sealed journal's durable storage.
 pub trait JournalSink {
     /// Appends `entry` (a `JournalEntry` object) and, for a record entry,
-    /// the `SharePackage` object bytes, returning only after both are on
-    /// stable storage (fsync). The unit creates the `Durable` state only
-    /// after this returns `Ok` (VC-054).
+    /// the `SharePackage` object bytes, returning only after they and every
+    /// entry appended before them are on stable storage (fsync). The unit
+    /// lets a paper be imprinted or move only after this returns `Ok`
+    /// (VC-054).
     ///
     /// # Errors
     /// [`JournalError`] if the write could not be made durable.
     fn append(&mut self, entry: &[u8], share_package: Option<&[u8]>) -> Result<(), JournalError>;
+
+    /// Appends like [`Self::append`] without waiting for stable storage; the
+    /// next [`Self::append`] makes it durable together with its own entry.
+    /// A visit's position entries use it, so the visit costs one fsync, at
+    /// its decision entry (PROTOCOL.md §7.3 step 7). The default waits
+    /// anyway, which is correct and only slower.
+    ///
+    /// # Errors
+    /// [`JournalError`] if the write failed.
+    fn append_deferred(
+        &mut self,
+        entry: &[u8],
+        share_package: Option<&[u8]>,
+    ) -> Result<(), JournalError> {
+        self.append(entry, share_package)
+    }
+}
+
+/// Which public object of a visit position the host stages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Staged {
+    /// The signed `CastRecord` object.
+    Record,
+    /// The `SharePackage` object.
+    Package,
+}
+
+/// The host's store for a visit's finished public objects (PROTOCOL.md
+/// §7.3 step 5): once a position's record is bound, the unit hands its
+/// `CastRecord` and `SharePackage` here and keeps only their hashes, so
+/// that a visit of eight ballots does not hold eight packages in the
+/// unit's memory. Whatever the host gives back is checked against those
+/// hashes before it is journaled or published; a swapped object is
+/// refused ([`crate::Error::StagedMismatch`]).
+pub trait StagingPort {
+    /// Stores `bytes` as the `kind` object of position `position`
+    /// (0-based) of the open visit, replacing any earlier one.
+    ///
+    /// # Errors
+    /// [`PortError`] if the store failed.
+    fn stage(&mut self, position: u8, kind: Staged, bytes: &[u8]) -> Result<(), PortError>;
+
+    /// Copies the staged `kind` object of `position` into `out` and
+    /// returns its length.
+    ///
+    /// # Errors
+    /// [`PortError::BufferTooSmall`] if `out` is too small; other variants
+    /// if the object is missing or unreadable.
+    fn fetch(&mut self, position: u8, kind: Staged, out: &mut [u8]) -> Result<usize, PortError>;
 }
 
 /// One item of the journal stream read back at resume.
@@ -177,6 +234,17 @@ pub trait JournalSource {
         entry: &mut [u8],
         package: &mut [u8],
     ) -> Result<Option<JournalItem>, JournalError>;
+}
+
+/// The module-side rule for signing a record (PROTOCOL.md §7.2.1, VC-068):
+/// a module signs the record message of a counter only if it has not
+/// signed that counter yet (`signed` is `None`) or signed the same body
+/// hash before (signing again is harmless). A second body for the same
+/// counter is refused, so a record cannot change after the decision. The
+/// module keeps the hash it signed until the counter is attested.
+#[must_use]
+pub fn module_may_sign_record(signed: Option<&[u8; 64]>, body_hash: &[u8; 64]) -> bool {
+    signed.is_none_or(|previous| previous == body_hash)
 }
 
 /// The module-side rule for signing a batch (PROTOCOL.md §7.2.1 step 3):
@@ -207,4 +275,46 @@ pub fn module_may_sign_batch(
             .and_then(|i| counter_first.checked_add(i))
             == Some(c)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JournalError, JournalSink};
+
+    /// A sink that implements only [`JournalSink::append`].
+    struct Durable {
+        appended: Option<(usize, bool)>,
+        fail: bool,
+    }
+
+    impl JournalSink for Durable {
+        fn append(
+            &mut self,
+            entry: &[u8],
+            share_package: Option<&[u8]>,
+        ) -> Result<(), JournalError> {
+            if self.fail {
+                return Err(JournalError::Full);
+            }
+            self.appended = Some((entry.len(), share_package.is_some()));
+            Ok(())
+        }
+    }
+
+    /// Without its own deferred write a sink appends durably, and its
+    /// errors pass through.
+    #[test]
+    fn a_deferred_append_defaults_to_a_durable_one() {
+        let mut sink = Durable {
+            appended: None,
+            fail: false,
+        };
+        sink.append_deferred(b"entry", Some(b"package")).unwrap();
+        assert_eq!(sink.appended, Some((5, true)));
+        sink.fail = true;
+        assert_eq!(
+            sink.append_deferred(b"entry", None),
+            Err(JournalError::Full)
+        );
+    }
 }

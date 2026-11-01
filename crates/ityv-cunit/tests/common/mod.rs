@@ -21,6 +21,7 @@
 )]
 
 use std::boxed::Box;
+use std::collections::BTreeMap;
 use std::vec;
 use std::vec::Vec;
 
@@ -31,7 +32,7 @@ use ityv_crypto::{
     sign_record,
 };
 use ityv_cunit::ballot::{
-    BallotWork, BuildBuffers, SCRATCH_SLOT_LEN, member_share_len, scratch_len,
+    Ballot, BallotWork, BuildBuffers, Built, SCRATCH_SLOT_LEN, member_share_len, scratch_len,
 };
 use ityv_cunit::boxstate::{OpenBox, Signer};
 use ityv_cunit::config::{
@@ -39,12 +40,15 @@ use ityv_cunit::config::{
 };
 use ityv_cunit::link::{
     Interpretation, ModuleIssue, ModuleIssueParts, SCHEMA_INTERPRETATION, SCHEMA_MODULE_ISSUE,
+    SCHEMA_VISIT_END, VisitEnd,
 };
 use ityv_cunit::port::{
-    JournalError, JournalItem, JournalSink, JournalSource, ModulePort, PortError, Sealed,
-    module_may_sign_batch,
+    JournalError, JournalItem, JournalSink, JournalSource, ModulePort, PortError, Sealed, Staged,
+    StagingPort, module_may_sign_batch, module_may_sign_record,
 };
 use ityv_cunit::rules::{PAD_MAC_KEY_OFFSET, PAD_PLAINTEXT_OFFSET, PAD_TAG_KEY_OFFSET};
+use ityv_cunit::visit::{Decision, VisitWork};
+use ityv_cunit::{Bound, Choice};
 use ityv_encoding::{
     BallotStyleId, BatchAttestBody, BoxId, ElectionId, Hash512, ModuleId, SCHEMA_BATCH_ATTEST_BODY,
     SCHEMA_VERSION_1, Scalar32, StationId, TimeBucket, Token192, TrusteeId, decode_object,
@@ -394,6 +398,8 @@ pub(crate) struct MockModule {
     pub(crate) batch_key: HybridSigningKey,
     pub(crate) pending: Vec<u64>,
     pub(crate) issued: Vec<IssueRecord>,
+    /// The body hash signed for each counter (VC-068).
+    pub(crate) signed: BTreeMap<u64, [u8; 64]>,
     /// Calls to `check_batch` and to `sign_batch`.
     pub(crate) checks: usize,
     pub(crate) signs: usize,
@@ -455,6 +461,7 @@ impl MockModule {
             batch_key,
             pending: Vec::new(),
             issued: Vec::new(),
+            signed: BTreeMap::new(),
             checks: 0,
             signs: 0,
             pad_uses: Vec::new(),
@@ -580,6 +587,13 @@ impl ModulePort for MockModule {
     }
 
     fn sign_record(&mut self, message: &[u8]) -> Result<RecordSignature, PortError> {
+        // message = body_hash (64) ‖ module_id (u32 length ‖ bytes) ‖ counter (u64)
+        let body_hash: [u8; 64] = message[..64].try_into().unwrap();
+        let counter = u64::from_be_bytes(message[message.len() - 8..].try_into().unwrap());
+        if !module_may_sign_record(self.signed.get(&counter), &body_hash) {
+            return Err(PortError::Refused);
+        }
+        self.signed.insert(counter, body_hash);
         let key = if self.wrong_record_key {
             module_keys(b"someone-else").0
         } else {
@@ -646,15 +660,59 @@ pub(crate) struct MemJournal {
     pub(crate) entries: Vec<Vec<u8>>,
     pub(crate) packages: Vec<Option<Vec<u8>>>,
     pub(crate) fail: bool,
+    /// Fails the append after this many more successful ones.
+    pub(crate) fail_after: Option<usize>,
+    /// Durable appends (each an fsync) and deferred ones.
+    pub(crate) syncs: usize,
+    pub(crate) deferred: usize,
+    /// Entries not yet durable (deferred and not followed by a durable
+    /// append): what a power loss would drop.
+    pub(crate) unsynced: usize,
+}
+
+impl MemJournal {
+    fn push(&mut self, entry: &[u8], share_package: Option<&[u8]>) -> Result<(), JournalError> {
+        if self.fail {
+            return Err(JournalError::NotDurable);
+        }
+        if let Some(n) = self.fail_after.as_mut() {
+            if *n == 0 {
+                return Err(JournalError::NotDurable);
+            }
+            *n -= 1;
+        }
+        self.entries.push(entry.to_vec());
+        self.packages.push(share_package.map(<[u8]>::to_vec));
+        Ok(())
+    }
+
+    /// Drops the entries a power loss would lose (the deferred ones not
+    /// yet made durable).
+    pub(crate) fn lose_unsynced(&mut self) {
+        for _ in 0..self.unsynced {
+            self.entries.pop();
+            self.packages.pop();
+        }
+        self.unsynced = 0;
+    }
 }
 
 impl JournalSink for MemJournal {
     fn append(&mut self, entry: &[u8], share_package: Option<&[u8]>) -> Result<(), JournalError> {
-        if self.fail {
-            return Err(JournalError::NotDurable);
-        }
-        self.entries.push(entry.to_vec());
-        self.packages.push(share_package.map(<[u8]>::to_vec));
+        self.push(entry, share_package)?;
+        self.syncs += 1;
+        self.unsynced = 0;
+        Ok(())
+    }
+
+    fn append_deferred(
+        &mut self,
+        entry: &[u8],
+        share_package: Option<&[u8]>,
+    ) -> Result<(), JournalError> {
+        self.push(entry, share_package)?;
+        self.deferred += 1;
+        self.unsynced += 1;
         Ok(())
     }
 }
@@ -722,9 +780,14 @@ pub(crate) fn interpretation(election: &[u8], style: &[u8], option: u16) -> Vec<
     out
 }
 
-/// A boxed work area (33 KB, kept off the test thread's stack).
+/// A boxed work area (about 30 KB, kept off the test thread's stack).
 pub(crate) fn work() -> Box<BallotWork> {
     Box::new(BallotWork::new())
+}
+
+/// A boxed visit work area.
+pub(crate) fn visit_work() -> Box<VisitWork> {
+    Box::new(VisitWork::new())
 }
 
 /// The device's signer for one operation.
@@ -739,8 +802,190 @@ pub(crate) fn tb(n: u64) -> TimeBucket {
     TimeBucket::new(n)
 }
 
-/// Casts and imprints one ballot of `style` choosing `option`; returns its
-/// tracking code.
+/// A `VisitEnd` object.
+pub(crate) fn visit_end(election: &[u8], ballots: u8) -> Vec<u8> {
+    let value = VisitEnd::new(ElectionId::new(election).unwrap(), ballots).unwrap();
+    let mut out = vec![0u8; 128];
+    let len = encode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &value, &mut out).unwrap();
+    out.truncate(len);
+    out
+}
+
+/// A staging store in memory, with failure and tampering switches.
+#[derive(Default)]
+pub(crate) struct MemStaging {
+    pub(crate) objects: BTreeMap<(u8, bool), Vec<u8>>,
+    pub(crate) fail: bool,
+    /// Flips one byte of what `fetch` returns for this object.
+    pub(crate) tamper: Option<(u8, Staged)>,
+}
+
+fn staged_key(position: u8, kind: Staged) -> (u8, bool) {
+    (position, kind == Staged::Package)
+}
+
+impl StagingPort for MemStaging {
+    fn stage(&mut self, position: u8, kind: Staged, bytes: &[u8]) -> Result<(), PortError> {
+        if self.fail {
+            return Err(PortError::Transport);
+        }
+        self.objects
+            .insert(staged_key(position, kind), bytes.to_vec());
+        Ok(())
+    }
+
+    fn fetch(&mut self, position: u8, kind: Staged, out: &mut [u8]) -> Result<usize, PortError> {
+        let bytes = self
+            .objects
+            .get(&staged_key(position, kind))
+            .ok_or(PortError::Transport)?;
+        let dst = out
+            .get_mut(..bytes.len())
+            .ok_or(PortError::BufferTooSmall)?;
+        dst.copy_from_slice(bytes);
+        if self.tamper == Some((position, kind)) {
+            dst[20] ^= 1;
+        }
+        Ok(bytes.len())
+    }
+}
+
+/// Builds the next position of `ballot` (style, option) and binds it.
+pub(crate) fn build_position(
+    w: &World,
+    b: &mut OpenBox<'static>,
+    m: &mut [MockModule],
+    staging: &mut MemStaging,
+    visit: &mut VisitWork,
+    style: &[u8],
+    option: u16,
+) -> Bound {
+    let mut bufs = Buffers::new(w);
+    let mut area = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", style, option), &mut area)
+        .unwrap();
+    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
+    let ballot = ballot.commit(b).unwrap();
+    let ballot = ballot
+        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let bound = ballot.bind(b, staging, visit).unwrap();
+    assert!(area.is_clear(), "the work area is wiped once bound");
+    bound
+}
+
+/// Binds a built ballot as the only position of a visit, casts and
+/// imprints it, prints the sticker out of district, finishes.
+pub(crate) fn cast_built(
+    box_: &mut OpenBox<'static>,
+    journal: &mut MemJournal,
+    ballot: Ballot<'static, '_, Built<'_>>,
+) {
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    ballot.bind(box_, &mut staging, &mut visit).unwrap();
+    let ready = box_
+        .end_visit(&visit_end(b"E-2026", 1), &mut visit)
+        .unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            box_,
+            Decision::CAST_ALL,
+            journal,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
+        .unwrap();
+    decided.imprinted(box_, journal, tb(1)).unwrap();
+    let mut processed = decided.finish_positions(box_).unwrap();
+    if processed.label_command(box_).is_ok() {
+        processed.label_printed(box_, journal, tb(1)).unwrap();
+    }
+    processed.finish(box_).unwrap();
+}
+
+/// What a whole visit produced.
+pub(crate) struct VisitResult {
+    /// The tracking code of every position.
+    pub(crate) codes: Vec<Hash512>,
+    /// The `ChallengeOpening` of every checked position, in order.
+    pub(crate) openings: Vec<Vec<u8>>,
+    /// The staged `CastRecord` and `SharePackage` of every position.
+    pub(crate) staging: MemStaging,
+}
+
+/// Runs one whole visit: builds and binds every ballot, ends the visit,
+/// decides (`checks` bit i = check position i), imprints every cast
+/// position and opens every checked one, prints the sticker out of
+/// district, finishes. Every entry carries bucket `at`.
+pub(crate) fn run_visit(
+    w: &World,
+    b: &mut OpenBox<'static>,
+    m: &mut [MockModule],
+    j: &mut MemJournal,
+    ballots: &[(&[u8], u16)],
+    checks: u8,
+    at: u64,
+) -> VisitResult {
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let mut codes = Vec::new();
+    for &(style, option) in ballots {
+        let bound = build_position(w, b, m, &mut staging, &mut visit, style, option);
+        codes.push(*bound.tracking_code());
+    }
+    let ready = b
+        .end_visit(
+            &visit_end(b"E-2026", u8::try_from(ballots.len()).unwrap()),
+            &mut visit,
+        )
+        .unwrap();
+    let mut package = vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            b,
+            Decision::from_checks(checks),
+            j,
+            &mut staging,
+            &mut package,
+            tb(at),
+        )
+        .unwrap();
+    let mut openings = Vec::new();
+    for _ in ballots {
+        let (_, choice) = decided.current(b).expect("a position is left");
+        match choice {
+            Choice::Cast => {
+                let command = decided.imprint_command(b).unwrap();
+                assert_eq!(command.cast_id().len(), 24);
+                decided.imprinted(b, j, tb(at)).unwrap();
+            }
+            Choice::Check => {
+                let mut out = vec![0u8; 8192];
+                let opening = decided.open_challenge(b, signer(w), &mut out).unwrap();
+                openings.push(opening.to_vec());
+            }
+        }
+    }
+    assert_eq!(decided.current(b), None, "every position is processed");
+    let mut processed = decided.finish_positions(b).unwrap();
+    if processed.label_command(b).is_ok() {
+        processed.label_printed(b, j, tb(at)).unwrap();
+    }
+    processed.finish(b).unwrap();
+    assert!(visit.is_clear(), "the visit work area is wiped at the end");
+    VisitResult {
+        codes,
+        openings,
+        staging,
+    }
+}
+
+/// Casts and imprints one ballot of `style` choosing `option` in a visit
+/// of its own; returns its tracking code.
 pub(crate) fn cast_with(
     w: &World,
     b: &mut OpenBox<'static>,
@@ -750,20 +995,7 @@ pub(crate) fn cast_with(
     option: u16,
     at: u64,
 ) -> Hash512 {
-    let mut bufs = Buffers::new(w);
-    let mut work = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", style, option), &mut work)
-        .unwrap();
-    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
-    let ballot = ballot.commit(b).unwrap();
-    let ballot = ballot
-        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
-        .unwrap();
-    let ballot = ballot.cast(b, j, tb(at)).unwrap();
-    let code = *ballot.tracking_code();
-    ballot.imprinted(b, j, tb(at)).unwrap();
-    code
+    run_visit(w, b, m, j, &[(style, option)], 0, at).codes[0]
 }
 
 /// Casts and imprints one small-style ballot; returns its tracking code.
@@ -777,7 +1009,7 @@ pub(crate) fn cast_one(
     cast_with(w, b, m, j, STYLE_SMALL, 1, at)
 }
 
-/// Builds one small-style ballot and challenges it.
+/// One small-style ballot in a visit of its own, checked and opened.
 pub(crate) fn challenge_one(
     w: &World,
     b: &mut OpenBox<'static>,
@@ -785,18 +1017,7 @@ pub(crate) fn challenge_one(
     j: &mut MemJournal,
     at: u64,
 ) {
-    let mut bufs = Buffers::new(w);
-    let mut work = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 0), &mut work)
-        .unwrap();
-    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
-    let ballot = ballot.commit(b).unwrap();
-    let ballot = ballot
-        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
-        .unwrap();
-    let mut out = vec![0u8; 8192];
-    ballot.challenge(b, j, signer(w), tb(at), &mut out).unwrap();
+    run_visit(w, b, m, j, &[(STYLE_SMALL, 0)], 1, at);
 }
 
 /// Owned buffers for one ballot.

@@ -52,6 +52,8 @@ pub enum Error {
     ProofInvalid,
     /// An opening does not match its commitments.
     OpeningInvalid,
+    /// A proof precomputation is empty or was made for another option set.
+    PrecomputationMismatch,
     /// An aggregate opening does not match the product of commitments.
     AggregateInvalid,
     /// An X25519 shared secret is the all-zero point (a non-contributory peer
@@ -95,6 +97,9 @@ impl core::fmt::Display for Error {
             Self::InconsistentShares => f.write_str("shares are inconsistent"),
             Self::ProofInvalid => f.write_str("proof verification failed"),
             Self::OpeningInvalid => f.write_str("opening does not match the commitment"),
+            Self::PrecomputationMismatch => {
+                f.write_str("proof precomputation is empty or for another option set")
+            }
             Self::AggregateInvalid => f.write_str("aggregate opening does not match"),
             Self::NonContributoryKey => f.write_str("peer key is non-contributory"),
             Self::AeadInvalid => f.write_str("authenticated decryption failed"),

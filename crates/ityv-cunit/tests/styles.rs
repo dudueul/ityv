@@ -17,8 +17,8 @@
 mod common;
 
 use common::{
-    Buffers, MODULES, MemJournal, SEED, World, interpretation, mocks, ports, styles, tb, work,
-    world_full,
+    Buffers, MODULES, MemJournal, SEED, World, cast_built, interpretation, mocks, ports, styles,
+    tb, work, world_full,
 };
 use ityv_cunit::Error;
 use ityv_cunit::boxstate::OpenBox;
@@ -93,8 +93,7 @@ fn ballots_of_the_first_middle_and_last_style_are_cast() {
         let record: CastRecord<'_> =
             decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, ballot.record_bytes()).unwrap();
         assert_eq!(record.body().ballot_style_id().as_bytes(), text);
-        let ballot = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
-        ballot.imprinted(&mut b, &mut j, tb(1)).unwrap();
+        cast_built(&mut b, &mut j, ballot);
     }
     assert_eq!(b.totals().records, 3);
     let mut area = work();

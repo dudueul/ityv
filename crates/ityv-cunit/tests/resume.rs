@@ -1,7 +1,7 @@
-//! Resume after a power loss (PROTOCOL.md §7.3 steps 7–8, §7.8; ADR-0017
-//! 개정 11, 14): the rebuilt box equals the box that wrote the journal, the
-//! attested waiting-area state decides what happens to the paper there,
-//! and every broken or inconsistent journal is refused.
+//! Resume after a power loss (PROTOCOL.md §7.3 재개, §7.8; ADR-0021;
+//! VC-069): the rebuilt box equals the box that wrote the journal, the
+//! attested waiting area decides what happens to the papers left (the
+//! four cases), and every broken or inconsistent journal is refused.
 // Integration-test crate: outside the TCB. Tests express "this must hold"
 // with unwrap/expect/panic/indexing and small arithmetic on test sizes,
 // so these lints are relaxed for this file only (CONSTITUTION.md §1.1).
@@ -20,17 +20,20 @@
 mod common;
 
 use common::{
-    Buffers, MemJournal, MockModule, SEED, STYLE_SMALL, World, cast_one, challenge_one,
-    interpretation, mocks, ports, signer, tb, work, world,
+    MemJournal, MemStaging, MockModule, STYLE_SMALL, World, build_position, cast_one,
+    challenge_one, mocks, ports, run_visit, signer, tb, visit_end, visit_work, world,
 };
 use ityv_crypto::object_hash;
-use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox, ResumeInputs};
+use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox};
 use ityv_cunit::config::Profile;
 use ityv_cunit::error::Invariant;
-use ityv_cunit::link::{JournalEntry, JournalKind, MAX_JOURNAL_ENTRY_LEN, SCHEMA_JOURNAL_ENTRY};
+use ityv_cunit::link::{
+    JournalEntry, JournalKind, MAX_JOURNAL_ENTRY_LEN, SCHEMA_JOURNAL_ENTRY, visit_digest,
+};
 use ityv_cunit::port::{JournalItem, JournalSource};
-use ityv_cunit::rules::{WaitingAction, WaitingArea, close_verdict};
-use ityv_cunit::{Error, JournalError};
+use ityv_cunit::rules::{PaperAction, ResumeCase, ResumePlan, WaitingArea, close_verdict};
+use ityv_cunit::visit::{Decision, VisitWork};
+use ityv_cunit::{Error, JournalError, ResumeInputs};
 use ityv_encoding::{
     BatchAttest, Hash512, ModuleCounter, ModuleCounters, ModuleId, SCHEMA_BATCH_ATTEST,
     SCHEMA_VERSION_1, TimeBucket, decode_object, encode_object,
@@ -38,6 +41,20 @@ use ityv_encoding::{
 use ityv_ledger::merkle::sorted_set_root;
 
 const PACKAGE_ROOM: usize = 64 * 1024;
+
+const EMPTY: WaitingArea = WaitingArea {
+    papers: 0,
+    front_imprinted: false,
+    sticker_printed: false,
+};
+
+const fn area(papers: u8, front_imprinted: bool) -> WaitingArea {
+    WaitingArea {
+        papers,
+        front_imprinted,
+        sticker_printed: false,
+    }
+}
 
 fn entry(bytes: &[u8]) -> JournalEntry<'_> {
     decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, bytes).unwrap()
@@ -51,14 +68,14 @@ fn kinds(j: &MemJournal) -> std::vec::Vec<JournalKind> {
 fn resume_at(
     w: &World,
     j: &mut MemJournal,
-    area: WaitingArea,
+    waiting_area: WaitingArea,
     opened: u64,
     at: u64,
-) -> Result<(OpenBox<'static>, WaitingAction), Error> {
+) -> Result<(OpenBox<'static>, ResumePlan), Error> {
     let copy = MemJournal {
         entries: j.entries.clone(),
         packages: j.packages.clone(),
-        fail: false,
+        ..MemJournal::default()
     };
     let mut package = std::vec![0u8; PACKAGE_ROOM];
     OpenBox::resume(
@@ -67,7 +84,7 @@ fn resume_at(
         j,
         &ResumeInputs {
             opened: tb(opened),
-            waiting_area: area,
+            waiting_area,
             time_bucket: tb(at),
         },
         &mut package,
@@ -77,10 +94,10 @@ fn resume_at(
 fn resume(
     w: &World,
     j: &mut MemJournal,
-    area: WaitingArea,
+    waiting_area: WaitingArea,
     at: u64,
-) -> Result<(OpenBox<'static>, WaitingAction), Error> {
-    resume_at(w, j, area, 1, at)
+) -> Result<(OpenBox<'static>, ResumePlan), Error> {
+    resume_at(w, j, waiting_area, 1, at)
 }
 
 fn close(
@@ -107,408 +124,529 @@ fn assert_same(live: &OpenBox<'_>, resumed: &OpenBox<'_>) {
     for at in [1, 2, 3, 4, 5, 6] {
         assert_eq!(live.batch_due(tb(at)), resumed.batch_due(tb(at)), "{at}");
     }
-    assert!(!resumed.has_ballot_in_flight());
+    assert!(!resumed.has_visit_open());
     assert!(!resumed.is_faulted());
 }
 
-/// Builds and casts one ballot, leaving it durable (not imprinted).
-fn durable_one(
+fn papers(plan: &ResumePlan) -> std::vec::Vec<PaperAction> {
+    plan.papers[..usize::from(plan.paper_count)].to_vec()
+}
+
+/// Binds `options.len()` small-style positions, ends and decides the
+/// visit (`checks` bit i = check position i), then imprints the first
+/// `imprints` cast positions and opens the checked ones before them, and
+/// drops the visit state (the machine stops). Returns the codes.
+fn decided_visit(
     w: &World,
     b: &mut OpenBox<'static>,
     m: &mut [MockModule],
     j: &mut MemJournal,
-    at: u64,
-) -> Hash512 {
-    let mut bufs = Buffers::new(w);
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+    options: &[u16],
+    checks: u8,
+    processed: u8,
+) -> std::vec::Vec<Hash512> {
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let codes = bind_all(w, b, m, &mut staging, &mut visit, options);
+    let ready = b
+        .end_visit(&visit_end(b"E-2026", options.len() as u8), &mut visit)
         .unwrap();
-    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
-    let ballot = ballot.commit(b).unwrap();
-    let ballot = ballot
-        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            b,
+            Decision::from_checks(checks),
+            j,
+            &mut staging,
+            &mut package,
+            tb(2),
+        )
         .unwrap();
-    let ballot = ballot.cast(b, j, tb(at)).unwrap();
-    *ballot.tracking_code()
+    for _ in 0..processed {
+        match decided.current(b).unwrap().1 {
+            ityv_cunit::Choice::Cast => decided.imprinted(b, j, tb(2)).unwrap(),
+            ityv_cunit::Choice::Check => {
+                let mut out = std::vec![0u8; 8192];
+                decided.open_challenge(b, signer(w), &mut out).unwrap();
+            }
+        }
+    }
+    codes
 }
 
-/// A ballot whose issue consumed counters, then quarantined unjournaled.
-fn partial_one(_: &World, b: &mut OpenBox<'static>, m: &mut [MockModule], j: &mut MemJournal) {
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
-        .unwrap();
-    let _ = ballot.issue(b, &mut ports(m), &SEED).unwrap();
-    b.quarantine_in_flight(j, tb(4)).unwrap();
+fn bind_all(
+    w: &World,
+    b: &mut OpenBox<'static>,
+    m: &mut [MockModule],
+    staging: &mut MemStaging,
+    visit: &mut VisitWork,
+    options: &[u16],
+) -> std::vec::Vec<Hash512> {
+    options
+        .iter()
+        .map(|&option| {
+            *build_position(w, b, m, staging, visit, STYLE_SMALL, option).tracking_code()
+        })
+        .collect()
 }
 
 #[test]
 fn an_empty_journal_resumes_a_fresh_box() {
     let w = world(Profile::InPerson, false);
-    let live = OpenBox::open(w.config, tb(1));
     let mut j = MemJournal::default();
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Empty, 1).unwrap();
-    assert_same(&live, &resumed);
-    assert_eq!(action, WaitingAction::Nothing);
+    let (resumed, plan) = resume(&w, &mut j, EMPTY, 1).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
+    assert_same(&OpenBox::open(w.config, tb(1)), &resumed);
     assert!(j.entries.is_empty());
 }
 
+/// One step of a live box.
+type Step = fn(&World, &mut OpenBox<'static>, &mut [MockModule], &mut MemJournal);
+
 #[test]
-fn the_resumed_box_equals_the_live_box_after_every_entry_kind() {
-    type Step = fn(&World, &mut OpenBox<'static>, &mut [MockModule], &mut MemJournal);
-    let record: Step = |w, b, m, j| {
-        cast_one(w, b, m, j, 4);
-    };
-    let challenge: Step = |w, b, m, j| challenge_one(w, b, m, j, 4);
-    let quarantine_record: Step = |w, b, m, j| {
-        durable_one(w, b, m, j, 4);
-        b.quarantine_in_flight(j, tb(4)).unwrap();
-    };
-    let quarantine_partial: Step = partial_one;
-    let batch: Step = |w, b, m, j| {
-        close(w, b, m, j, 4).unwrap();
-    };
-    let scenarios: [(&str, &[Step]); 7] = [
-        ("record and imprint", &[record]),
-        ("challenge", &[record, challenge]),
-        ("quarantine of a record", &[record, quarantine_record]),
-        ("quarantine before a record", &[quarantine_partial]),
-        ("batch close", &[record, challenge, record, batch]),
-        ("after a batch", &[record, batch, record]),
-        (
-            "everything",
-            &[
-                record,
-                quarantine_partial,
-                challenge,
-                quarantine_record,
-                record,
-                batch,
-                challenge,
-                record,
-            ],
-        ),
+fn the_resumed_box_equals_the_live_box_after_every_visit_kind() {
+    let w = world(Profile::InPerson, false);
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let steps: [(&str, Step); 6] = [
+        ("cast", |w, b, m, j| {
+            cast_one(w, b, m, j, 2);
+        }),
+        ("check", |w, b, m, j| challenge_one(w, b, m, j, 2)),
+        ("mixed visit", |w, b, m, j| {
+            run_visit(
+                w,
+                b,
+                m,
+                j,
+                &[(STYLE_SMALL, 1), (STYLE_SMALL, 2), (STYLE_SMALL, 3)],
+                0b010,
+                3,
+            );
+        }),
+        ("batch", |w, b, m, j| {
+            close(w, b, m, j, 3).unwrap();
+        }),
+        ("abandoned before the decision", |w, b, m, j| {
+            let mut staging = MemStaging::default();
+            let mut visit = visit_work();
+            bind_all(w, b, m, &mut staging, &mut visit, &[1, 2]);
+            b.abandon_visit(j, tb(3)).unwrap();
+        }),
+        ("imprint failed", |w, b, m, j| {
+            let mut staging = MemStaging::default();
+            let mut visit = visit_work();
+            bind_all(w, b, m, &mut staging, &mut visit, &[1, 2]);
+            let ready = b.end_visit(&visit_end(b"E-2026", 2), &mut visit).unwrap();
+            let mut package = std::vec![0u8; 300_000];
+            let mut decided = ready
+                .decide(b, Decision::CAST_ALL, j, &mut staging, &mut package, tb(3))
+                .unwrap();
+            decided.imprint_failed(b, j, tb(3)).unwrap();
+            decided.imprinted(b, j, tb(3)).unwrap();
+            decided.finish_positions(b).unwrap().finish(b).unwrap();
+        }),
     ];
-    for (name, steps) in scenarios {
-        let w = world(Profile::InPerson, false);
-        let mut live = OpenBox::open(w.config, tb(1));
-        let mut m = mocks(&w);
-        let mut j = MemJournal::default();
-        for step in steps {
-            step(&w, &mut live, &mut m, &mut j);
-        }
+    for (name, step) in steps {
+        step(&w, &mut live, &mut m, &mut j);
         let entries = j.entries.len();
-        let (mut resumed, action) = resume(&w, &mut j, WaitingArea::Empty, 4).unwrap();
-        assert_eq!(action, WaitingAction::Nothing, "{name}");
+        let (resumed, plan) = resume(&w, &mut j, EMPTY, 4).unwrap();
+        assert_eq!(plan.case, ResumeCase::Nothing, "{name}");
         assert_same(&live, &resumed);
         assert_eq!(j.entries.len(), entries, "{name}: nothing appended");
-        // the resumed box carries on: the modules (which kept their state
-        // across the power loss) sign the next batch over the restored
-        // ranges, and the batch root covers the restored records
-        let mut open_codes = std::vec::Vec::new();
-        for bytes in &j.entries {
-            let e = entry(bytes);
-            match e.kind() {
-                JournalKind::Record => open_codes.push(*e.record_hash()),
-                JournalKind::Quarantine if *e.record_hash() != Hash512::ZERO => {
-                    open_codes.pop();
-                }
-                JournalKind::BatchClose => open_codes.clear(),
-                JournalKind::Challenge
-                | JournalKind::Quarantine
-                | JournalKind::BoxClose
-                | JournalKind::Imprinted
-                | JournalKind::VisitDecision
-                | JournalKind::LabelPrinted => {}
-            }
-        }
-        let next = cast_one(&w, &mut resumed, &mut m, &mut j, 5);
-        let attest = close(&w, &mut resumed, &mut m, &mut j, 5).unwrap();
-        let parsed: BatchAttest<'_> =
-            decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, &attest).unwrap();
-        assert!(parsed.body().module_refusals().is_empty(), "{name}");
-        open_codes.push(next);
-        open_codes.sort_by_key(|h| h.0);
-        assert_eq!(
-            parsed.body().records_root(),
-            &sorted_set_root(&open_codes).unwrap(),
-            "{name}"
-        );
-        assert_eq!(resumed.batch_index(), live.batch_index() + 1, "{name}");
     }
+    // the resumed box carries on: the modules (which kept their state)
+    // sign the next batch over the restored ranges
+    let (mut resumed, _) = resume(&w, &mut j, EMPTY, 4).unwrap();
+    let next = cast_one(&w, &mut resumed, &mut m, &mut j, 5);
+    let attest = close(&w, &mut resumed, &mut m, &mut j, 5).unwrap();
+    let parsed: BatchAttest<'_> =
+        decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, &attest).unwrap();
+    assert!(parsed.body().module_refusals().is_empty());
+    assert_eq!(parsed.body().record_count(), 2);
+    assert_ne!(
+        parsed.body().records_root(),
+        &sorted_set_root(&[next]).unwrap()
+    );
+    assert_eq!(resumed.totals().quarantined, 3);
 }
 
-// --- the waiting area (PROTOCOL.md §7.3 step 7) -----------------------------
-
-/// A box whose last record is durable but not yet imprinted.
-fn open_tail() -> (World, MemJournal, Hash512) {
+#[test]
+fn case_1_papers_bound_but_never_journaled_are_quarantined_without_record() {
     let w = world(Profile::InPerson, false);
     let mut live = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
     cast_one(&w, &mut live, &mut m, &mut j, 2);
-    let code = durable_one(&w, &mut live, &mut m, &mut j, 2);
-    (w, j, code)
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    bind_all(&w, &mut live, &mut m, &mut staging, &mut visit, &[1, 2]);
+    // the machine stops before the decision: nothing of the visit is in
+    // the journal, two papers wait
+    let (resumed, plan) = resume(&w, &mut j, area(2, false), 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::BeforeDecision);
+    assert_eq!(papers(&plan), [PaperAction::Quarantine; 2]);
+    assert_eq!((plan.unjournaled, plan.incident), (2, false));
+    assert_eq!(
+        kinds(&j)[3..],
+        [JournalKind::Quarantine, JournalKind::Quarantine]
+    );
+    let last = entry(j.entries.last().unwrap());
+    assert_eq!(last.record_hash(), &Hash512::ZERO);
+    assert!(last.module_counters().is_empty());
+    assert_eq!(resumed.totals().quarantined, 2);
+    // Known limit (README): the counters those positions consumed were
+    // never journaled, so the modules are now ahead of the unit's marks.
+    assert_eq!(resumed.module_counters(), &[1, 1, 1, 1, 1]);
 }
 
 #[test]
-fn case_1_an_imprinted_paper_completes_its_record() {
-    let (w, mut j, code) = open_tail();
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Imprinted, 3).unwrap();
-    assert_eq!(action, WaitingAction::JournalImprint);
-    let last = entry(j.entries.last().unwrap());
-    assert_eq!(last.kind(), JournalKind::Imprinted);
-    assert_eq!(last.record_hash(), &code);
-    assert_eq!(last.time_bucket(), tb(3));
+fn case_1_a_decision_lost_before_its_fsync_leaves_no_trace() {
+    let w = world(Profile::InPerson, false);
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    bind_all(&w, &mut live, &mut m, &mut staging, &mut visit, &[1, 2, 3]);
+    let ready = live
+        .end_visit(&visit_end(b"E-2026", 3), &mut visit)
+        .unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    j.fail_after = Some(3); // the three position entries, then the decision fails
+    assert!(
+        ready
+            .decide(
+                &mut live,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(2)
+            )
+            .is_err()
+    );
+    assert_eq!(j.unsynced, 3);
+    j.lose_unsynced();
+    j.fail_after = None;
+    assert!(
+        j.entries.is_empty(),
+        "the deferred entries died with the power"
+    );
+    let (resumed, plan) = resume(&w, &mut j, area(3, false), 3).unwrap();
     assert_eq!(
-        last.module_counters(),
-        entry(&j.entries[2]).module_counters()
+        (plan.case, plan.unjournaled),
+        (ResumeCase::BeforeDecision, 3)
+    );
+    assert_eq!(resumed.totals().quarantined, 3);
+}
+
+#[test]
+fn case_1_positions_without_their_decision_are_quarantined_by_record_hash() {
+    let w = world(Profile::InPerson, false);
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let codes = bind_all(&w, &mut live, &mut m, &mut staging, &mut visit, &[1, 2]);
+    let ready = live
+        .end_visit(&visit_end(b"E-2026", 2), &mut visit)
+        .unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    j.fail_after = Some(2); // the host's deferred writes happened to land
+    assert!(
+        ready
+            .decide(
+                &mut live,
+                Decision::from_checks(0b10),
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(2)
+            )
+            .is_err()
+    );
+    j.fail_after = None;
+    assert_eq!(kinds(&j), [JournalKind::Record, JournalKind::Challenge]);
+    // three papers: the two positions and one more never journaled
+    let (resumed, plan) = resume(&w, &mut j, area(3, false), 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::BeforeDecision);
+    assert_eq!(
+        (plan.quarantine[0], plan.quarantine[1], plan.unjournaled),
+        (true, true, 1)
+    );
+    assert_eq!(
+        kinds(&j)[2..],
+        [
+            JournalKind::Quarantine,
+            JournalKind::Quarantine,
+            JournalKind::Quarantine
+        ]
+    );
+    assert_eq!(entry(&j.entries[2]).record_hash(), &codes[0]);
+    assert_eq!(entry(&j.entries[3]).record_hash(), &codes[1]);
+    assert_eq!(entry(&j.entries[4]).record_hash(), &Hash512::ZERO);
+    assert_eq!(
+        (
+            resumed.totals().records,
+            resumed.totals().challenged,
+            resumed.totals().quarantined
+        ),
+        (0, 0, 3)
+    );
+    assert_eq!(resumed.batch_records(), 0);
+    // the journal resumes again to the same box
+    let (again, plan) = resume(&w, &mut j, EMPTY, 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
+    assert_same(&resumed, &again);
+}
+
+#[test]
+fn case_2_the_remaining_positions_are_settled_as_decided() {
+    let w = world(Profile::InPerson, false);
+    // cast, check, cast; the first imprinted; the machine stops at the check
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let codes = decided_visit(&w, &mut live, &mut m, &mut j, &[1, 2, 3], 0b010, 1);
+    let mut base = MemJournal {
+        entries: j.entries.clone(),
+        packages: j.packages.clone(),
+        ..MemJournal::default()
+    };
+    let (resumed, plan) = resume(&w, &mut base, area(2, false), 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::AfterDecision);
+    assert_eq!(
+        papers(&plan),
+        [PaperAction::SpoilChute, PaperAction::Quarantine]
+    );
+    assert_eq!(entry(base.entries.last().unwrap()).record_hash(), &codes[2]);
+    assert_eq!(
+        (
+            resumed.totals().records,
+            resumed.totals().challenged,
+            resumed.totals().quarantined
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(resumed.totals().visits, 1);
+    // the last paper was printed but its entry is missing: journal it, drop
+    let mut base = MemJournal {
+        entries: j.entries.clone(),
+        packages: j.packages.clone(),
+        ..MemJournal::default()
+    };
+    let (resumed, plan) = resume(&w, &mut base, area(1, true), 3).unwrap();
+    assert_eq!(
+        (plan.case, plan.imprint),
+        (ResumeCase::AfterDecision, Some(2))
+    );
+    assert_eq!(papers(&plan), [PaperAction::Drop]);
+    let last = entry(base.entries.last().unwrap());
+    assert_eq!(
+        (last.kind(), last.record_hash()),
+        (JournalKind::Imprinted, &codes[2])
     );
     assert_eq!(resumed.totals().records, 2);
-    assert_eq!(resumed.totals().quarantined, 0);
-    assert_eq!(resumed.module_counters(), &[2, 2, 2, 2, 2]);
-    assert_eq!(resumed.journal_head(), &j.head());
-    assert_eq!(resumed.paper_incidents(), 0);
-    // A second power loss before the drop: the imprint entry is there, so
-    // the paper simply drops; nothing more is appended.
+    // its entry was durable already: it only drops
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    decided_visit(&w, &mut live, &mut m, &mut j, &[1, 2, 3], 0b010, 3);
     let entries = j.entries.len();
-    let (again, action) = resume(&w, &mut j, WaitingArea::Imprinted, 3).unwrap();
-    assert_eq!(action, WaitingAction::Drop);
+    let (resumed, plan) = resume(&w, &mut j, area(1, true), 3).unwrap();
+    assert_eq!(
+        (plan.case, plan.imprint, papers(&plan)),
+        (
+            ResumeCase::AfterDecision,
+            None,
+            [PaperAction::Drop].to_vec()
+        )
+    );
     assert_eq!(j.entries.len(), entries);
-    assert_eq!(again.totals(), resumed.totals());
+    assert_eq!(resumed.totals().records, 2);
+    // a resumed box takes the next visit
+    let mut resumed = resumed;
+    cast_one(&w, &mut resumed, &mut m, &mut j, 4);
+    assert_eq!(resumed.totals().visits, 2);
 }
 
 #[test]
-fn a_loss_after_the_imprint_entry_but_before_the_drop_drops_the_paper() {
+fn case_3_a_missing_sticker_entry_quarantines_the_visits_cast_records() {
+    let w = world(Profile::Absentee, false);
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let codes = decided_visit(&w, &mut live, &mut m, &mut j, &[1, 2, 3], 0b010, 3);
+    let (resumed, plan) = resume(&w, &mut j, EMPTY, 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::LabelMissing);
+    assert!(plan.return_tray);
+    let tail: std::vec::Vec<Hash512> = j.entries[j.entries.len() - 2..]
+        .iter()
+        .map(|e| *entry(e).record_hash())
+        .collect();
+    assert_eq!(tail, [codes[0], codes[2]]);
+    assert_eq!(
+        (
+            resumed.totals().records,
+            resumed.totals().quarantined,
+            resumed.totals().visits
+        ),
+        (0, 2, 0)
+    );
+    // with a paper still waiting the labels are lost as well
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    decided_visit(&w, &mut live, &mut m, &mut j, &[1, 2], 0, 1);
+    let (resumed, plan) = resume(&w, &mut j, area(1, true), 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::AfterDecision);
+    assert_eq!(
+        (plan.imprint, papers(&plan), plan.return_tray),
+        (None, [PaperAction::Quarantine].to_vec(), true)
+    );
+    assert_eq!(
+        (resumed.totals().records, resumed.totals().quarantined),
+        (0, 2)
+    );
+    // a printed sticker entry ends the visit
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    run_visit(&w, &mut live, &mut m, &mut j, &[(STYLE_SMALL, 1)], 0, 2);
+    let (resumed, plan) = resume(&w, &mut j, EMPTY, 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
+    assert_same(&live, &resumed);
+}
+
+/// Out of district a finished visit owes nothing (its sticker entry is
+/// there, or nothing of it was cast), so the next visit counts no incident;
+/// a decided visit whose sticker entry is missing when the next visit
+/// starts counts one, and its record stays cast.
+#[test]
+fn only_a_visit_still_owing_its_sticker_counts_an_incident() {
+    let w = world(Profile::Absentee, false);
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    cast_one(&w, &mut live, &mut m, &mut j, 2);
+    challenge_one(&w, &mut live, &mut m, &mut j, 2);
+    cast_one(&w, &mut live, &mut m, &mut j, 2);
+    let (resumed, plan) = resume(&w, &mut j, EMPTY, 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
+    assert_same(&live, &resumed);
+    assert_eq!(resumed.paper_incidents(), 0);
+    let s = specs(&j);
+    assert_eq!(s[3].kind, JournalKind::LabelPrinted);
+    let mut x = s.clone();
+    x.remove(3);
+    let mut gap = chain(&x);
+    let (resumed, plan) = resume(&w, &mut gap, EMPTY, 3).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
+    assert_eq!(resumed.paper_incidents(), 1);
+    assert_eq!((resumed.totals().records, resumed.totals().visits), (2, 2));
+}
+
+#[test]
+fn case_4_papers_that_do_not_fit_are_an_incident_the_close_reports() {
     let w = world(Profile::InPerson, false);
     let mut live = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    // cast_one journals the imprint; the power fails before the drop
-    cast_one(&w, &mut live, &mut m, &mut j, 2);
-    assert_eq!(kinds(&j), [JournalKind::Record, JournalKind::Imprinted]);
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Imprinted, 2).unwrap();
-    assert_eq!(action, WaitingAction::Drop);
-    assert_eq!(j.entries.len(), 2);
-    assert_same(&live, &resumed);
-    // or the paper had already dropped
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Empty, 2).unwrap();
-    assert_eq!(action, WaitingAction::Nothing);
-    assert_same(&live, &resumed);
-}
-
-#[test]
-fn case_2_an_unimprinted_paper_quarantines_the_open_record() {
-    let (w, mut j, code) = open_tail();
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Unimprinted, 3).unwrap();
-    assert_eq!(action, WaitingAction::QuarantineRecord);
-    let last = entry(j.entries.last().unwrap());
-    assert_eq!(last.kind(), JournalKind::Quarantine);
-    assert_eq!(last.record_hash(), &code);
-    assert_eq!(
-        last.module_counters(),
-        entry(&j.entries[2]).module_counters()
-    );
-    assert_eq!(resumed.totals().records, 1);
-    assert_eq!(resumed.totals().quarantined, 1);
-    assert_eq!(resumed.batch_records(), 1);
-    assert_eq!(resumed.module_counters(), &[2, 2, 2, 2, 2]);
-    // resuming again replays the quarantine and appends nothing
+    // cast, cast: the first imprinted, then both papers are gone
+    let codes = decided_visit(&w, &mut live, &mut m, &mut j, &[1, 2], 0, 1);
     let entries = j.entries.len();
-    let (again, action) = resume(&w, &mut j, WaitingArea::Empty, 3).unwrap();
-    assert_eq!(action, WaitingAction::Nothing);
-    assert_eq!(again.totals(), resumed.totals());
-    assert_eq!(j.entries.len(), entries);
-}
-
-#[test]
-fn case_3_an_unimprinted_paper_after_an_imprinted_record_was_never_journaled() {
-    for with_record in [true, false] {
-        let w = world(Profile::InPerson, false);
-        let mut live = OpenBox::open(w.config, tb(1));
-        let mut m = mocks(&w);
-        let mut j = MemJournal::default();
-        if with_record {
-            cast_one(&w, &mut live, &mut m, &mut j, 2);
-        }
-        let entries = j.entries.len();
-        let (resumed, action) = resume(&w, &mut j, WaitingArea::Unimprinted, 2).unwrap();
-        assert_eq!(action, WaitingAction::QuarantineUnjournaled);
-        assert_eq!(j.entries.len(), entries + 1);
-        let last = entry(j.entries.last().unwrap());
-        assert_eq!(last.kind(), JournalKind::Quarantine);
-        assert_eq!(last.record_hash(), &Hash512::ZERO);
-        assert_eq!(last.module_counters().len(), 0);
-        assert_eq!(resumed.totals().records, u64::from(with_record));
-        assert_eq!(resumed.totals().quarantined, 1);
-        assert_eq!(resumed.paper_incidents(), 0);
-    }
-}
-
-#[test]
-fn case_4_a_missing_paper_is_an_incident_that_the_close_reports() {
-    let (w, mut j, code) = open_tail();
-    let entries = j.entries.len();
-    let (mut resumed, action) = resume(&w, &mut j, WaitingArea::Empty, 3).unwrap();
-    assert_eq!(action, WaitingAction::PaperMissing);
-    assert_eq!(j.entries.len(), entries, "nothing is journaled");
+    let (mut resumed, plan) = resume(&w, &mut j, EMPTY, 3).unwrap();
+    assert_eq!((plan.case, plan.incident), (ResumeCase::Inconsistent, true));
+    assert_eq!(j.entries.len(), entries, "nothing journaled");
     assert_eq!(resumed.paper_incidents(), 1);
-    assert_eq!(resumed.totals().records, 2, "the record stands");
-    // The box carries on. The record that never got its imprint stays in
-    // the journal, followed by other entries: a later resume derives the
-    // incident from the journal alone.
-    let mut m = mocks(&w);
-    for module in &mut m {
-        module.counter = 2;
-    }
-    cast_one(&w, &mut resumed, &mut m, &mut j, 4);
-    assert_eq!(resumed.paper_incidents(), 1);
-    let (later, action) = resume(&w, &mut j, WaitingArea::Empty, 4).unwrap();
-    assert_eq!(action, WaitingAction::Nothing);
-    assert_eq!(later.paper_incidents(), 1);
-    assert_same(&resumed, &later);
-    // the close is HOLD_REVIEW even though every paper count balances
-    let mut codes = std::vec![code];
-    for bytes in &j.entries {
-        let e = entry(bytes);
-        if e.kind() == JournalKind::Record && *e.record_hash() != code {
-            codes.push(*e.record_hash());
-        }
-    }
-    codes.sort_by_key(|h| h.0);
+    // the box goes on; a later resume recounts the incident from the
+    // journal when another visit follows the one left open
+    let next = cast_one(&w, &mut resumed, &mut m, &mut j, 4);
+    let (again, plan) = resume(&w, &mut j, EMPTY, 4).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
+    assert_eq!(again.paper_incidents(), 1);
+    assert_same(&resumed, &again);
+    // and the close reports it
+    let mut resumed = again;
+    close(&w, &mut resumed, &mut m, &mut j, 4).unwrap();
+    let mut all = std::vec![codes[0], codes[1], next];
+    all.sort_by_key(|h| h.0);
     let inputs = CloseInputs {
         paper: 3,
         without_record: 0,
         spoiled_envelopes: 0,
         envelopes: None,
         fallback_declared: false,
-        record_set_root: sorted_set_root(&codes).unwrap(),
+        record_set_root: sorted_set_root(&all).unwrap(),
         seal_digest: Hash512::ZERO,
     };
-    let verdict = close_verdict(&later.close_facts(&inputs));
+    let verdict = close_verdict(&resumed.close_facts(&inputs));
     assert!(verdict.contains(Invariant::PaperIncidents));
-    assert!(verdict.contains(Invariant::OpenBatches));
-    assert_eq!(verdict.count(), 2);
-    // a second resume with the same journal and an empty waiting area
-    // counts the same missing paper once, not twice
-    let (open_again, _) = {
-        let (w2, mut j2, _) = open_tail();
-        let first = resume(&w2, &mut j2, WaitingArea::Empty, 3).unwrap();
-        assert_eq!(first.0.paper_incidents(), 1);
-        resume(&w2, &mut j2, WaitingArea::Empty, 3).unwrap()
+    let mut out = std::vec![0u8; CLOSE_WORK_LEN];
+    let closed = resumed
+        .prepare_close(&inputs, signer(&w), &mut j, tb(4), &mut out)
+        .unwrap();
+    assert!(closed.verdict.contains(Invariant::PaperIncidents));
+}
+
+#[test]
+fn the_resume_entries_need_a_durable_write_and_time() {
+    let w = world(Profile::InPerson, false);
+    let mut live = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    decided_visit(&w, &mut live, &mut m, &mut j, &[1], 0, 0);
+    let copy = MemJournal {
+        entries: j.entries.clone(),
+        packages: j.packages.clone(),
+        ..MemJournal::default()
     };
-    assert_eq!(open_again.paper_incidents(), 1);
-}
-
-#[test]
-fn an_imprinted_paper_without_a_waiting_record() {
-    // its record was already quarantined: the paper joins it in the
-    // quarantine envelope and nothing is journaled
-    let (w, mut j, _) = open_tail();
-    resume(&w, &mut j, WaitingArea::Unimprinted, 3).unwrap();
-    let entries = j.entries.len();
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Imprinted, 3).unwrap();
-    assert_eq!(action, WaitingAction::Divert);
-    assert_eq!(j.entries.len(), entries);
-    assert_eq!(resumed.paper_incidents(), 0);
-    // no record at all: an incident, the paper quarantined without record
-    let mut empty = MemJournal::default();
-    let (fresh, action) = resume(&w, &mut empty, WaitingArea::Imprinted, 1).unwrap();
-    assert_eq!(action, WaitingAction::QuarantineUnmatched);
-    assert_eq!(kinds(&empty), [JournalKind::Quarantine]);
-    assert_eq!(fresh.totals().quarantined, 1);
-    assert_eq!(fresh.paper_incidents(), 1);
-    // the open record's paper went missing earlier: an imprinted paper now
-    // matches no waiting record either
-    let (w, mut j, _) = open_tail();
-    let (mut b, _) = resume(&w, &mut j, WaitingArea::Empty, 3).unwrap();
-    challenge_one(&w, &mut b, &mut mocks_at(&w, 2), &mut j, 3);
-    let (missing, action) = resume(&w, &mut j, WaitingArea::Imprinted, 3).unwrap();
-    assert_eq!(action, WaitingAction::QuarantineUnmatched);
-    assert_eq!(missing.paper_incidents(), 2);
-}
-
-/// Mock modules whose counters stand at `at`.
-fn mocks_at(w: &World, at: u64) -> std::vec::Vec<MockModule> {
-    let mut m = mocks(w);
-    for module in &mut m {
-        module.counter = at;
-    }
-    m
-}
-
-#[test]
-fn an_empty_waiting_area_owes_nothing_unless_a_record_is_open() {
-    for (setup, expected) in [(0u8, WaitingAction::Nothing), (1, WaitingAction::Nothing)] {
-        let w = world(Profile::InPerson, false);
-        let mut live = OpenBox::open(w.config, tb(1));
-        let mut m = mocks(&w);
-        let mut j = MemJournal::default();
-        cast_one(&w, &mut live, &mut m, &mut j, 2);
-        if setup == 1 {
-            durable_one(&w, &mut live, &mut m, &mut j, 2);
-            live.quarantine_in_flight(&mut j, tb(2)).unwrap();
-        }
-        let (_, action) = resume(&w, &mut j, WaitingArea::Empty, 2).unwrap();
-        assert_eq!(action, expected);
-    }
-}
-
-#[test]
-fn the_waiting_area_entry_needs_a_durable_write_and_time() {
-    let w = world(Profile::InPerson, false);
-    let mut live = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w);
-    let mut j = MemJournal::default();
-    durable_one(&w, &mut live, &mut m, &mut j, 4);
-    for area in [WaitingArea::Imprinted, WaitingArea::Unimprinted] {
-        assert_eq!(
-            resume(&w, &mut j, area, 3).unwrap_err(),
-            Error::TimeRegression
-        );
-        j.fail = true;
-        assert_eq!(
-            resume(&w, &mut j, area, 4).unwrap_err(),
-            Error::Journal(JournalError::NotDurable)
-        );
-        j.fail = false;
-    }
-    assert_eq!(j.entries.len(), 1);
-}
-
-#[test]
-fn a_failed_imprint_entry_keeps_the_paper_out_of_the_box() {
-    let w = world(Profile::InPerson, false);
-    let mut live = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w);
-    let mut j = MemJournal::default();
-    let mut bufs = Buffers::new(&w);
-    let mut area = work();
-    let ballot = live
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
-        .unwrap();
-    let ballot = ballot.issue(&mut live, &mut ports(&mut m), &SEED).unwrap();
-    let ballot = ballot.commit(&live).unwrap();
-    let ballot = ballot
-        .build(&live, &mut ports(&mut m), &w.device_record, bufs.as_build())
-        .unwrap();
-    let ballot = ballot.cast(&mut live, &mut j, tb(2)).unwrap();
-    let code = *ballot.tracking_code();
-    j.fail = true;
+    let mut sink = MemJournal {
+        fail: true,
+        ..MemJournal::default()
+    };
+    let mut package = std::vec![0u8; PACKAGE_ROOM];
+    let inputs = |at: u64| ResumeInputs {
+        opened: tb(1),
+        waiting_area: area(1, true),
+        time_bucket: tb(at),
+    };
     assert_eq!(
-        ballot.imprinted(&mut live, &mut j, tb(2)).unwrap_err(),
+        OpenBox::resume(
+            w.config,
+            &mut copy.reader(),
+            &mut sink,
+            &inputs(3),
+            &mut package
+        )
+        .unwrap_err(),
         Error::Journal(JournalError::NotDurable)
     );
-    assert!(area.is_clear());
-    // no drop token: the ballot is still in flight and is quarantined
-    assert!(live.has_ballot_in_flight());
-    j.fail = false;
-    live.quarantine_in_flight(&mut j, tb(2)).unwrap();
-    assert_eq!(kinds(&j), [JournalKind::Record, JournalKind::Quarantine]);
-    assert_eq!(entry(&j.entries[1]).record_hash(), &code);
-    assert_eq!(live.totals().records, 0);
-    assert_eq!(live.totals().quarantined, 1);
+    sink.fail = false;
+    assert_eq!(
+        OpenBox::resume(
+            w.config,
+            &mut copy.reader(),
+            &mut sink,
+            &inputs(1),
+            &mut package
+        )
+        .unwrap_err(),
+        Error::TimeRegression
+    );
+    let (_, plan) = OpenBox::resume(
+        w.config,
+        &mut copy.reader(),
+        &mut sink,
+        &inputs(3),
+        &mut package,
+    )
+    .unwrap();
+    assert_eq!(plan.imprint, Some(0));
+    assert_eq!(kinds(&sink), [JournalKind::Imprinted]);
 }
 
 #[test]
@@ -519,7 +657,7 @@ fn a_scan_count_is_due_right_after_resume() {
     let mut j = MemJournal::default();
     cast_one(&w, &mut live, &mut m, &mut j, 2);
     assert!(!live.scan_count_due(tb(2)));
-    let (mut resumed, _) = resume(&w, &mut j, WaitingArea::Empty, 2).unwrap();
+    let (mut resumed, _) = resume(&w, &mut j, EMPTY, 2).unwrap();
     assert!(resumed.scan_count_due(tb(2)));
     let mut out = std::vec![0u8; 512];
     resumed.scan_count_body(tb(2), &mut out).unwrap();
@@ -546,10 +684,7 @@ fn a_closed_box_does_not_resume() {
     let mut out = std::vec![0u8; CLOSE_WORK_LEN];
     live.prepare_close(&inputs, signer(&w), &mut j, tb(2), &mut out)
         .unwrap();
-    assert_eq!(
-        resume(&w, &mut j, WaitingArea::Empty, 2).unwrap_err(),
-        Error::BoxClosed
-    );
+    assert_eq!(resume(&w, &mut j, EMPTY, 2).unwrap_err(), Error::BoxClosed);
 }
 
 #[test]
@@ -569,7 +704,7 @@ fn a_source_failure_is_reported_as_such() {
         &mut sink,
         &ResumeInputs {
             opened: tb(1),
-            waiting_area: WaitingArea::Empty,
+            waiting_area: EMPTY,
             time_bucket: tb(2),
         },
         &mut package,
@@ -618,7 +753,7 @@ fn lengths_beyond_the_buffers_are_corrupt() {
             &mut MemJournal::default(),
             &ResumeInputs {
                 opened: tb(1),
-                waiting_area: WaitingArea::Empty,
+                waiting_area: EMPTY,
                 time_bucket: tb(1),
             },
             &mut package,
@@ -631,7 +766,7 @@ fn lengths_beyond_the_buffers_are_corrupt() {
 // --- crafted journals -------------------------------------------------------
 
 /// One journal entry as the tests write it.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Spec {
     kind: JournalKind,
     record_hash: Hash512,
@@ -698,50 +833,106 @@ fn chain(specs: &[Spec]) -> MemJournal {
     j
 }
 
-/// A live journal (marks end at 6):
+/// A live in-person journal (marks end at 6):
 ///
-/// | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
-/// |---|---|---|---|---|---|---|---|---|---|---|
-/// | R1 | I1 | C2 | R3 | I3 | B | R4 | I4 | R5 | Q5 | Q6 (no record) |
+/// | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+/// |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+/// | R1 | C2 | R3 | D | I1 | I3 | B | R4 | D | I4 | R5 | D | Q5 | Q6 (no record) |
 fn sample() -> (World, std::vec::Vec<Spec>) {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    cast_one(&w, &mut b, &mut m, &mut j, 2);
-    challenge_one(&w, &mut b, &mut m, &mut j, 2);
-    cast_one(&w, &mut b, &mut m, &mut j, 2);
+    run_visit(
+        &w,
+        &mut b,
+        &mut m,
+        &mut j,
+        &[(STYLE_SMALL, 1), (STYLE_SMALL, 2), (STYLE_SMALL, 3)],
+        0b010,
+        2,
+    );
     close(&w, &mut b, &mut m, &mut j, 3).unwrap();
     cast_one(&w, &mut b, &mut m, &mut j, 3);
-    durable_one(&w, &mut b, &mut m, &mut j, 3);
-    b.quarantine_in_flight(&mut j, tb(3)).unwrap();
-    partial_one(&w, &mut b, &mut m, &mut j);
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    bind_all(&w, &mut b, &mut m, &mut staging, &mut visit, &[1]);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            &mut b,
+            Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(3),
+        )
+        .unwrap();
+    decided.imprint_failed(&mut b, &mut j, tb(3)).unwrap();
+    decided
+        .finish_positions(&mut b)
+        .unwrap()
+        .finish(&mut b)
+        .unwrap();
+    let mut visit = visit_work();
+    bind_all(&w, &mut b, &mut m, &mut staging, &mut visit, &[1]);
+    b.abandon_visit(&mut j, tb(3)).unwrap();
     let s = specs(&j);
     (w, s)
 }
 
 fn corrupt(w: &World, specs: &[Spec]) -> Error {
     let mut j = chain(specs);
-    resume(w, &mut j, WaitingArea::Empty, 9).unwrap_err()
+    resume(w, &mut j, EMPTY, 9).unwrap_err()
+}
+
+/// A decision entry naming `positions` (kind, record hash).
+fn decision(positions: &[(JournalKind, Hash512)], bucket: u64) -> Spec {
+    let pairs: std::vec::Vec<(u8, Hash512)> =
+        positions.iter().map(|(k, h)| (k.code(), *h)).collect();
+    Spec {
+        kind: JournalKind::VisitDecision,
+        record_hash: visit_digest(&pairs),
+        package: None,
+        package_hash: None,
+        counters: std::vec::Vec::new(),
+        bucket,
+    }
 }
 
 #[test]
 fn the_sample_journal_resumes_when_rechained() {
     use JournalKind::{
         BatchClose as B, Challenge as C, Imprinted as I, Quarantine as Q, Record as R,
+        VisitDecision as D,
     };
     let (w, s) = sample();
     let kinds: std::vec::Vec<JournalKind> = s.iter().map(|x| x.kind).collect();
-    assert_eq!(kinds, [R, I, C, R, I, B, R, I, R, Q, Q]);
+    assert_eq!(kinds, [R, C, R, D, I, I, B, R, D, I, R, D, Q, Q]);
     let mut j = chain(&s);
-    let (resumed, action) = resume(&w, &mut j, WaitingArea::Empty, 9).unwrap();
-    assert_eq!(action, WaitingAction::Nothing);
+    let (resumed, plan) = resume(&w, &mut j, EMPTY, 9).unwrap();
+    assert_eq!(plan.case, ResumeCase::Nothing);
     assert_eq!(resumed.totals().records, 3);
     assert_eq!(resumed.totals().quarantined, 2);
     assert_eq!(resumed.totals().challenged, 1);
     assert_eq!(resumed.totals().attested, 2);
+    assert_eq!(resumed.totals().visits, 2);
     assert_eq!(resumed.module_counters(), &[6, 6, 6, 6, 6]);
     assert_eq!(resumed.paper_incidents(), 0);
+    // the decision digest covers the positions in order
+    assert_eq!(
+        s[3].record_hash,
+        decision(
+            &[
+                (R, s[0].record_hash),
+                (C, s[1].record_hash),
+                (R, s[2].record_hash)
+            ],
+            2
+        )
+        .record_hash
+    );
 }
 
 #[test]
@@ -751,15 +942,15 @@ fn a_broken_or_undecodable_entry_is_refused() {
     let copy = || MemJournal {
         entries: good.entries.clone(),
         packages: good.packages.clone(),
-        fail: false,
+        ..MemJournal::default()
     };
     // a flipped byte inside the imprint entry breaks its chain link, its
     // record hash or its package hash
     for at in [16, 40, 100, 200] {
         let mut j = copy();
-        j.entries[1][at] ^= 1;
+        j.entries[4][at] ^= 1;
         assert_eq!(
-            resume(&w, &mut j, WaitingArea::Empty, 9).unwrap_err(),
+            resume(&w, &mut j, EMPTY, 9).unwrap_err(),
             Error::JournalCorrupt,
             "byte {at}"
         );
@@ -769,14 +960,14 @@ fn a_broken_or_undecodable_entry_is_refused() {
     j.entries.remove(1);
     j.packages.remove(1);
     assert_eq!(
-        resume(&w, &mut j, WaitingArea::Empty, 9).unwrap_err(),
+        resume(&w, &mut j, EMPTY, 9).unwrap_err(),
         Error::JournalCorrupt
     );
     // a truncated entry does not decode
     let mut j = copy();
     j.entries[0].pop();
     assert_eq!(
-        resume(&w, &mut j, WaitingArea::Empty, 9).unwrap_err(),
+        resume(&w, &mut j, EMPTY, 9).unwrap_err(),
         Error::JournalCorrupt
     );
 }
@@ -794,14 +985,14 @@ fn share_packages_must_sit_exactly_after_records_and_match() {
     x[0].package_hash = Some(original);
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "missing package");
     let mut x = s.clone();
-    x[2].package = Some(std::vec![1, 2, 3]);
+    x[1].package = Some(std::vec![1, 2, 3]);
     assert_eq!(
         corrupt(&w, &x),
         Error::JournalCorrupt,
         "package on a challenge"
     );
     let mut x = s.clone();
-    x[2].package_hash = Some(Hash512([1; 64]));
+    x[1].package_hash = Some(Hash512([1; 64]));
     assert_eq!(
         corrupt(&w, &x),
         Error::JournalCorrupt,
@@ -813,11 +1004,11 @@ fn share_packages_must_sit_exactly_after_records_and_match() {
 fn time_must_not_run_backwards_in_the_journal() {
     let (w, s) = sample();
     let mut x = s.clone();
-    x[6].bucket = 2; // after the batch close at bucket 3
+    x[7].bucket = 2; // after the batch close at bucket 3
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt);
     let mut j = chain(&s);
     assert_eq!(
-        resume_at(&w, &mut j, WaitingArea::Empty, 3, 9).unwrap_err(),
+        resume_at(&w, &mut j, EMPTY, 3, 9).unwrap_err(),
         Error::JournalCorrupt,
         "entries before the box opened"
     );
@@ -827,13 +1018,13 @@ fn time_must_not_run_backwards_in_the_journal() {
 fn counters_must_follow_each_module_mark() {
     let (w, s) = sample();
     let mut x = s.clone();
-    x[3].counters[0].1 = 5; // record: gap (mark 2)
+    x[2].counters[0].1 = 5; // record: gap (mark 2)
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "record gap");
     let mut x = s.clone();
-    x[2].counters[4].1 = 1; // challenge: replay (mark 1)
+    x[1].counters[4].1 = 1; // challenge: replay (mark 1)
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "challenge replay");
     let mut x = s.clone();
-    x[10].counters[2].1 = 9; // quarantine without record: gap
+    x[13].counters[2].1 = 9; // quarantine without record: gap
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "quarantine gap");
     let mut x = s.clone();
     x[0].counters[3].0 = b"mod-q".to_vec(); // unknown module
@@ -842,73 +1033,248 @@ fn counters_must_follow_each_module_mark() {
 }
 
 #[test]
-fn a_record_quarantine_must_follow_its_record() {
+fn a_decision_must_close_its_positions_with_their_digest() {
     let (w, s) = sample();
     let mut x = s.clone();
-    x[9].record_hash = s[6].record_hash; // names an earlier record
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other record");
+    x[3].record_hash = Hash512([7; 64]);
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "wrong digest");
     let mut x = s.clone();
-    x[9].counters[0].1 = 4;
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other counters");
+    x[3].counters = s[2].counters.clone();
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "a decision with counters"
+    );
     let mut x = s.clone();
-    x[9].counters.pop();
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "fewer counters");
-    // after an imprint, the record is no longer waiting
+    x[3].record_hash = decision(
+        &[
+            (JournalKind::Record, s[0].record_hash),
+            (JournalKind::Challenge, s[1].record_hash),
+        ],
+        2,
+    )
+    .record_hash;
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "a digest over fewer positions"
+    );
+    // a decision with no position, or a second decision
+    let mut x = s[..6].to_vec();
+    x.push(s[3].clone());
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "second decision");
+    let x = [decision(&[], 1)];
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "no position");
+    // an undecided visit cannot be followed by anything but its own entries
     let mut x = s[..2].to_vec();
-    x.push(Spec {
-        kind: JournalKind::Quarantine,
-        ..s[1].clone()
-    });
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "after its imprint");
-}
-
-#[test]
-fn an_imprint_must_follow_its_record() {
-    let (w, s) = sample();
-    let mut x = s.clone();
-    x[7].record_hash = s[3].record_hash; // names an earlier record
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other record");
-    let mut x = s.clone();
-    x[7].counters[1].1 = 3;
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other counters");
-    // a second imprint of the same record
+    x.push(s[6].clone());
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "batch after undecided positions"
+    );
     let mut x = s[..2].to_vec();
-    x.push(s[1].clone());
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "twice");
-    // an imprint after the record was quarantined
-    let mut x = s[..10].to_vec();
+    x.push(s[13].clone());
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "unrecorded quarantine"
+    );
+    // a position may not repeat inside its visit, and a visit holds eight
+    let mut x = s[..1].to_vec();
     x.push(Spec {
-        kind: JournalKind::Imprinted,
-        ..s[9].clone()
+        counters: s[1].counters.clone(),
+        ..s[0].clone()
     });
     assert_eq!(
         corrupt(&w, &x),
         Error::JournalCorrupt,
-        "after its quarantine"
+        "the same record twice"
     );
-    // an imprint with nothing to imprint
-    let x = [Spec {
-        kind: JournalKind::Imprinted,
+    let ids: [&[u8]; 5] = [b"mod-a", b"mod-c", b"mod-j", b"mod-p1", b"mod-p2"];
+    let position = |n: u64| Spec {
+        kind: JournalKind::Challenge,
+        record_hash: Hash512([n as u8; 64]),
+        package: None,
+        package_hash: None,
+        counters: ids.iter().map(|id| (id.to_vec(), n)).collect(),
+        bucket: 1,
+    };
+    let eight: std::vec::Vec<Spec> = (1..=8).map(position).collect();
+    let mut j = chain(&eight);
+    let (_, plan) = resume(&w, &mut j, area(8, false), 1).unwrap();
+    assert_eq!(plan.case, ResumeCase::BeforeDecision);
+    let nine: std::vec::Vec<Spec> = (1..=9).map(position).collect();
+    assert_eq!(corrupt(&w, &nine), Error::JournalCorrupt, "nine positions");
+}
+
+#[test]
+fn an_imprint_must_name_the_next_cast_position() {
+    let (w, s) = sample();
+    // the third position imprinted before the first
+    let mut x = s.clone();
+    x.swap(4, 5);
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "out of order");
+    let mut x = s.clone();
+    x[4].counters[1].1 = 3;
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other counters");
+    let mut x = s.clone();
+    x[4].record_hash = s[1].record_hash;
+    x[4].counters = s[1].counters.clone();
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "a checked position");
+    let mut x = s[..5].to_vec();
+    x.push(s[4].clone());
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "twice");
+    let mut x = s[..3].to_vec();
+    x.push(s[4].clone());
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "before the decision"
+    );
+    let x = [s[4].clone()];
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "no visit");
+}
+
+#[test]
+fn a_quarantine_naming_a_record_must_fit_its_visit() {
+    let (w, s) = sample();
+    let mut x = s.clone();
+    x[12].record_hash = s[7].record_hash; // a record of an earlier visit
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other visit");
+    let mut x = s.clone();
+    x[12].counters[0].1 = 4;
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "other counters");
+    let mut x = s.clone();
+    x[12].counters.pop();
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "fewer counters");
+    // in person an imprinted record stays cast
+    let mut x = s[..5].to_vec();
+    x.push(Spec {
+        kind: JournalKind::Quarantine,
+        ..s[4].clone()
+    });
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "after its imprint");
+    // a checked position is never quarantined after the decision
+    let mut x = s[..4].to_vec();
+    x.push(Spec {
+        kind: JournalKind::Quarantine,
         ..s[1].clone()
-    }];
-    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "no record");
+    });
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "a checked position");
+    // twice
+    let mut x = s[..13].to_vec();
+    x.push(s[12].clone());
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "twice");
+    // nothing to name
+    let x = [s[12].clone()];
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "no visit");
+    // an undecided position quarantined twice
+    let mut x = s[..2].to_vec();
+    x.push(Spec {
+        kind: JournalKind::Quarantine,
+        package: None,
+        ..s[0].clone()
+    });
+    x.push(x[2].clone());
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "undecided twice");
+    // a decision after a quarantine of its positions
+    let mut x = s[..2].to_vec();
+    x.push(Spec {
+        kind: JournalKind::Quarantine,
+        package: None,
+        ..s[0].clone()
+    });
+    x.push(decision(
+        &[
+            (JournalKind::Record, s[0].record_hash),
+            (JournalKind::Challenge, s[1].record_hash),
+        ],
+        2,
+    ));
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "decided after quarantine"
+    );
+}
+
+#[test]
+fn a_sticker_entry_must_close_an_out_of_district_visit() {
+    let w = world(Profile::Absentee, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    run_visit(
+        &w,
+        &mut b,
+        &mut m,
+        &mut j,
+        &[(STYLE_SMALL, 1), (STYLE_SMALL, 2)],
+        0,
+        2,
+    );
+    let s = specs(&j);
+    assert_eq!(s[5].kind, JournalKind::LabelPrinted);
+    assert_eq!(s[5].record_hash, s[2].record_hash);
+    let mut good = chain(&s);
+    assert!(resume(&w, &mut good, EMPTY, 9).is_ok());
+    let mut x = s.clone();
+    x[5].record_hash = Hash512([1; 64]);
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "wrong digest");
+    let mut x = s.clone();
+    x[5].counters = s[0].counters.clone();
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "with counters");
+    let mut x = s[..4].to_vec();
+    x.push(s[5].clone());
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "before every imprint"
+    );
+    let mut x = s.clone();
+    x.push(s[5].clone());
+    assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "twice");
+    // after the sticker the cast records stay cast
+    let mut x = s.clone();
+    x.push(Spec {
+        kind: JournalKind::Quarantine,
+        ..s[3].clone()
+    });
+    assert_eq!(
+        corrupt(&w, &x),
+        Error::JournalCorrupt,
+        "quarantined after the sticker"
+    );
+    // in person there is no sticker
+    let (wp, sp) = sample();
+    let mut x = sp[..6].to_vec();
+    x.push(Spec {
+        kind: JournalKind::LabelPrinted,
+        record_hash: sp[3].record_hash,
+        package: None,
+        package_hash: None,
+        counters: std::vec::Vec::new(),
+        bucket: 2,
+    });
+    assert_eq!(corrupt(&wp, &x), Error::JournalCorrupt, "in person");
 }
 
 #[test]
 fn a_batch_close_must_match_the_replayed_batch() {
     let (w, s) = sample();
     let mut x = s.clone();
-    x[5].record_hash = Hash512([5; 64]);
+    x[6].record_hash = Hash512([5; 64]);
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "root");
     let mut x = s.clone();
-    x[5].counters.pop();
+    x[6].counters.pop();
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "missing module");
     let mut x = s.clone();
-    x[5].counters[1].1 = 2;
+    x[6].counters[1].1 = 2;
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "counter below mark");
     // a second batch close right after the first closes an empty batch
-    let mut x = s[..6].to_vec();
-    x.push(s[5].clone());
+    let mut x = s[..7].to_vec();
+    x.push(s[6].clone());
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt, "empty batch");
 }
 
@@ -920,7 +1286,7 @@ fn a_box_close_must_name_the_marks_and_end_the_journal() {
         record_hash: Hash512([3; 64]),
         package: None,
         package_hash: None,
-        counters: s[10].counters.clone(),
+        counters: s[13].counters.clone(),
         bucket: 4,
     };
     let mut x = s.clone();
@@ -949,7 +1315,7 @@ fn a_box_close_must_name_the_marks_and_end_the_journal() {
 fn a_sixty_fifth_unbatched_record_is_corrupt() {
     let w = world(Profile::InPerson, false);
     let ids: [&[u8]; 5] = [b"mod-a", b"mod-c", b"mod-j", b"mod-p1", b"mod-p2"];
-    let pair = |n: u64| {
+    let visit = |n: u64| {
         let record = Spec {
             kind: JournalKind::Record,
             record_hash: Hash512([n as u8; 64]),
@@ -958,18 +1324,19 @@ fn a_sixty_fifth_unbatched_record_is_corrupt() {
             counters: ids.iter().map(|id| (id.to_vec(), n)).collect(),
             bucket: 1,
         };
+        let decided = decision(&[(JournalKind::Record, record.record_hash)], 1);
         let imprint = Spec {
             kind: JournalKind::Imprinted,
             package: None,
             ..record.clone()
         };
-        [record, imprint]
+        [record, decided, imprint]
     };
-    let x: std::vec::Vec<Spec> = (1..=64).flat_map(pair).collect();
+    let x: std::vec::Vec<Spec> = (1..=64).flat_map(visit).collect();
     let mut j = chain(&x);
-    let (resumed, _) = resume(&w, &mut j, WaitingArea::Empty, 1).unwrap();
+    let (resumed, _) = resume(&w, &mut j, EMPTY, 1).unwrap();
     assert_eq!(resumed.batch_records(), 64);
     assert_eq!(resumed.paper_incidents(), 0);
-    let x: std::vec::Vec<Spec> = (1..=65).flat_map(pair).collect();
+    let x: std::vec::Vec<Spec> = (1..=65).flat_map(visit).collect();
     assert_eq!(corrupt(&w, &x), Error::JournalCorrupt);
 }

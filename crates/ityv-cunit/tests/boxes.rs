@@ -18,8 +18,9 @@
 mod common;
 
 use common::{
-    Buffers, MemJournal, MockModule, SEED, STYLE_SMALL, World, cast_one, challenge_one,
-    interpretation, mocks, ports, signer, tb, work, world,
+    Buffers, MemJournal, MemStaging, MockModule, SEED, STYLE_SMALL, World, build_position,
+    cast_one, challenge_one, interpretation, mocks, ports, signer, tb, visit_end, visit_work, work,
+    world,
 };
 use ityv_crypto::{HybridSignature, Purpose, verify_hybrid};
 use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox};
@@ -27,7 +28,8 @@ use ityv_cunit::config::Profile;
 use ityv_cunit::error::Invariant;
 use ityv_cunit::link::{JournalEntry, JournalKind, SCHEMA_JOURNAL_ENTRY};
 use ityv_cunit::rules::{CloseFacts, EnvelopeCounts, close_verdict};
-use ityv_cunit::{Error, JournalError, PortError};
+use ityv_cunit::visit::Decision;
+use ityv_cunit::{Error, JournalError, PortError, Staged};
 use ityv_encoding::{
     BatchAttest, BoxCloseBody, Decode, Hash512, Reader, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE_BODY,
     SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, ScanCountAttestBody, decode_object,
@@ -113,15 +115,31 @@ fn journal_entries_chain_and_carry_the_consumed_counters() {
     challenge_one(&w, &mut b, &mut m, &mut j, 2);
     cast_one(&w, &mut b, &mut m, &mut j, 3);
     let mut head = Hash512::ZERO;
-    // record 1, its imprint, challenge 2, record 3, its imprint: the
-    // imprint entries repeat their record's counters
-    let consumed = [1u64, 1, 2, 3, 3];
+    // per visit: the position entry, the decision entry (no counters),
+    // and for a cast ballot its imprint entry repeating the record's
+    // counters
+    let consumed = [
+        Some(1u64),
+        None,
+        Some(1),
+        Some(2),
+        None,
+        Some(3),
+        None,
+        Some(3),
+    ];
+    assert_eq!(j.entries.len(), consumed.len());
     for (bytes, &expected) in j.entries.iter().zip(&consumed) {
         let e = entry(bytes);
         assert_eq!(e.prev_head(), &head);
-        assert_eq!(e.module_counters().len(), 5);
-        for counter in e.module_counters().iter() {
-            assert_eq!(counter.counter, expected);
+        if let Some(expected) = expected {
+            assert_eq!(e.module_counters().len(), 5);
+            for counter in e.module_counters().iter() {
+                assert_eq!(counter.counter, expected);
+            }
+        } else {
+            assert_eq!(e.kind(), JournalKind::VisitDecision);
+            assert!(e.module_counters().is_empty());
         }
         head = ityv_crypto::object_hash(bytes);
     }
@@ -131,19 +149,30 @@ fn journal_entries_chain_and_carry_the_consumed_counters() {
         kinds(&j),
         [
             JournalKind::Record,
+            JournalKind::VisitDecision,
             JournalKind::Imprinted,
             JournalKind::Challenge,
+            JournalKind::VisitDecision,
             JournalKind::Record,
+            JournalKind::VisitDecision,
             JournalKind::Imprinted
         ]
     );
+    // the imprint entry names the record; only the record entry carries a
+    // package
     assert_eq!(
-        entry(&j.entries[1]).record_hash(),
+        entry(&j.entries[2]).record_hash(),
         entry(&j.entries[0]).record_hash()
     );
-    assert_eq!(entry(&j.entries[1]).share_package_hash(), &Hash512::ZERO);
-    assert_eq!(j.packages[1], None);
-    assert_eq!(j.packages[2], None);
+    assert_eq!(entry(&j.entries[2]).share_package_hash(), &Hash512::ZERO);
+    assert!(
+        j.packages[1..]
+            .iter()
+            .step_by(1)
+            .enumerate()
+            .all(|(i, p)| { p.is_none() || i + 1 == 5 })
+    );
+    assert!(j.packages[5].is_some());
     assert_eq!(b.module_counters(), &[3, 3, 3, 3, 3]);
     assert_eq!(
         entry(&j.entries[0]).share_package_hash(),
@@ -170,8 +199,8 @@ fn a_backwards_or_replayed_counter_is_refused_and_leaves_the_mark() {
         assert_eq!(err, Error::CounterRegression, "counter {forced}");
         assert_eq!(b.module_counters(), &[2, 2, 2, 2, 2]);
         // nothing was consumed, so nothing is journaled
-        b.quarantine_in_flight(&mut j, tb(1)).unwrap();
-        assert_eq!(j.entries.len(), 4);
+        b.abandon_visit(&mut j, tb(1)).unwrap();
+        assert_eq!(j.entries.len(), 6);
     }
     // The mark was not moved back: the module's next counter, 3, is the
     // one accepted (a mark of 1 would have made it a gap).
@@ -197,7 +226,7 @@ fn a_counter_gap_is_refused_without_moving_that_module_mark() {
     );
     // mod-a, mod-c and mod-j consumed counter 2; mod-p1 and mod-p2 did not
     assert_eq!(b.module_counters(), &[2, 2, 2, 1, 1]);
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     assert_eq!(kinds(&j).last(), Some(&JournalKind::Quarantine));
     assert_eq!(
         entry(j.entries.last().unwrap()).record_hash(),
@@ -332,7 +361,7 @@ fn a_module_that_consents_then_refuses_or_signs_wrongly_leaves_the_batch_open() 
     );
     assert_eq!(
         (b.batch_records(), b.batch_index(), j.entries.len()),
-        (1, 0, 2)
+        (1, 0, 3)
     );
     let mut m = mocks(&w);
     let mut b2 = OpenBox::open(w.config, tb(1));
@@ -344,7 +373,14 @@ fn a_module_that_consents_then_refuses_or_signs_wrongly_leaves_the_batch_open() 
         Error::BatchSignature
     );
     assert_eq!(b2.batch_records(), 1);
-    assert_eq!(kinds(&j2), [JournalKind::Record, JournalKind::Imprinted]);
+    assert_eq!(
+        kinds(&j2),
+        [
+            JournalKind::Record,
+            JournalKind::VisitDecision,
+            JournalKind::Imprinted
+        ]
+    );
     assert!(!b2.is_faulted());
 }
 
@@ -401,7 +437,7 @@ fn batch_close_checks_every_precondition_before_asking_a_module() {
             tb(5),
             &mut out
         ),
-        Err(Error::BallotInFlight)
+        Err(Error::VisitOpen)
     );
     assert!(m.iter().all(|x| x.checks == 0 && x.signs == 0));
     assert_eq!(b.batch_records(), 1);
@@ -462,7 +498,14 @@ fn a_journal_mismatch_latches_the_box() {
             .unwrap_err(),
         Error::JournalMismatch
     );
-    assert_eq!(kinds(&j), [JournalKind::Record, JournalKind::Imprinted]);
+    assert_eq!(
+        kinds(&j),
+        [
+            JournalKind::Record,
+            JournalKind::VisitDecision,
+            JournalKind::Imprinted
+        ]
+    );
 }
 
 #[test]
@@ -475,10 +518,14 @@ fn batch_triggers_on_idle_time_and_refuses_the_sixty_fifth_record() {
     cast_one(&w, &mut b, &mut m, &mut j, 5);
     assert!(!b.batch_due(tb(5)));
     assert!(b.batch_due(tb(6)));
-    for _ in 1..64 {
+    // a visit starts only while the batch has room for eight more records
+    for _ in 1..56 {
         cast_one(&w, &mut b, &mut m, &mut j, 5);
     }
-    assert_eq!(b.batch_records(), 64);
+    assert_eq!(b.batch_records(), 56);
+    assert!(!b.batch_due(tb(5)));
+    cast_one(&w, &mut b, &mut m, &mut j, 5);
+    assert_eq!(b.batch_records(), 57);
     assert!(b.batch_due(tb(5)));
     let mut area = work();
     assert_eq!(
@@ -521,7 +568,7 @@ fn scan_count_is_due_after_fifty_records_or_eight_buckets() {
 }
 
 #[test]
-fn scan_count_is_refused_mid_ballot_and_holds_the_time_line() {
+fn scan_count_is_refused_mid_visit_and_holds_the_time_line() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
@@ -533,48 +580,46 @@ fn scan_count_is_refused_mid_ballot_and_holds_the_time_line() {
         .unwrap();
     assert_eq!(
         b.scan_count_body(tb(1), &mut out).unwrap_err(),
-        Error::BallotInFlight
+        Error::VisitOpen
     );
     drop(ballot);
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     b.scan_count_body(tb(9), &mut out).unwrap();
     // nothing journaled afterwards may carry an earlier bucket
-    let mut area = work();
-    let mut bufs = Buffers::new(&w);
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
-        .unwrap();
-    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
-    let ballot = ballot.commit(&b).unwrap();
-    let ballot = ballot
-        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
-        .unwrap();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    build_position(&w, &mut b, &mut m, &mut staging, &mut visit, STYLE_SMALL, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
     assert_eq!(
-        ballot.cast(&mut b, &mut j, tb(8)).unwrap_err(),
+        ready
+            .decide(
+                &mut b,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(8)
+            )
+            .unwrap_err(),
         Error::TimeRegression
     );
 }
 
-/// Builds and casts one ballot, leaving it durable; returns its code.
-fn durable_one(
+/// Builds `n` small-style positions and ends the visit; returns the codes.
+fn bind_visit(
     w: &World,
     b: &mut OpenBox<'static>,
     m: &mut [MockModule],
-    j: &mut MemJournal,
-    at: u64,
-) -> Hash512 {
-    let mut bufs = Buffers::new(w);
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
-        .unwrap();
-    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
-    let ballot = ballot.commit(b).unwrap();
-    let ballot = ballot
-        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
-        .unwrap();
-    let ballot = ballot.cast(b, j, tb(at)).unwrap();
-    *ballot.tracking_code()
+    staging: &mut MemStaging,
+    visit: &mut ityv_cunit::VisitWork,
+    n: u8,
+) -> std::vec::Vec<Hash512> {
+    (0..n)
+        .map(|i| {
+            *build_position(w, b, m, staging, visit, STYLE_SMALL, u16::from(i % 4)).tracking_code()
+        })
+        .collect()
 }
 
 #[test]
@@ -583,34 +628,52 @@ fn imprint_failure_quarantines_and_withdraws_the_record() {
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    cast_one(&w, &mut b, &mut m, &mut j, 1);
-    let mut bufs = Buffers::new(&w);
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+    let first = cast_one(&w, &mut b, &mut m, &mut j, 1);
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 3);
+    let ready = b.end_visit(&visit_end(b"E-2026", 3), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            &mut b,
+            Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(2),
+        )
         .unwrap();
-    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
-    let ballot = ballot.commit(&b).unwrap();
-    let ballot = ballot
-        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
-        .unwrap();
-    let ballot = ballot.cast(&mut b, &mut j, tb(2)).unwrap();
-    let code = *ballot.tracking_code();
-    assert_eq!(b.totals().records, 2);
-    ballot.imprint_failed(&mut b, &mut j, tb(2)).unwrap();
-    assert_eq!(b.totals().records, 1);
+    assert_eq!((b.totals().records, b.batch_records()), (4, 4));
+    decided.imprinted(&mut b, &mut j, tb(2)).unwrap();
+    // the middle position's imprint fails: its record leaves the batch,
+    // the others go on
+    decided.imprint_failed(&mut b, &mut j, tb(2)).unwrap();
+    assert_eq!(b.totals().records, 3);
     assert_eq!(b.totals().quarantined, 1);
-    assert_eq!(b.batch_records(), 1);
+    assert_eq!(b.totals().visits, 2, "the visit still has cast ballots");
+    assert_eq!(b.batch_records(), 3);
     let e = entry(j.entries.last().unwrap());
     assert_eq!(e.kind(), JournalKind::Quarantine);
-    assert_eq!(e.record_hash(), &code);
+    assert_eq!(e.record_hash(), &codes[1]);
     assert_eq!(e.module_counters().len(), 5);
-    assert!(!b.has_ballot_in_flight());
-    // the batch holds only the first record
+    decided.imprinted(&mut b, &mut j, tb(2)).unwrap();
+    decided
+        .finish_positions(&mut b)
+        .unwrap()
+        .finish(&mut b)
+        .unwrap();
+    // the batch holds the other three records
     let attest = close(&w, &mut b, &mut m, &mut j, 2).unwrap();
     let parsed: BatchAttest<'_> =
         decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, &attest).unwrap();
-    assert_eq!(parsed.body().record_count(), 1);
+    assert_eq!(parsed.body().record_count(), 3);
+    let mut kept = std::vec![first, codes[0], codes[2]];
+    kept.sort_by_key(|h| h.0);
+    assert_eq!(
+        parsed.body().records_root(),
+        &sorted_set_root(&kept).unwrap()
+    );
 }
 
 #[test]
@@ -619,90 +682,300 @@ fn an_imprint_failure_whose_entry_fails_stays_to_be_quarantined() {
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    let mut bufs = Buffers::new(&w);
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            &mut b,
+            Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
         .unwrap();
-    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
-    let ballot = ballot.commit(&b).unwrap();
-    let ballot = ballot
-        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
-        .unwrap();
-    let ballot = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
-    let code = *ballot.tracking_code();
     j.fail = true;
     assert_eq!(
-        ballot.imprint_failed(&mut b, &mut j, tb(1)).unwrap_err(),
+        decided.imprint_failed(&mut b, &mut j, tb(1)).unwrap_err(),
         Error::Journal(JournalError::NotDurable)
     );
-    // the record still stands until the quarantine entry is durable
+    assert_eq!(
+        decided.imprinted(&mut b, &mut j, tb(1)).unwrap_err(),
+        Error::Journal(JournalError::NotDurable)
+    );
+    // the record still stands until a quarantine entry is durable
     assert_eq!((b.totals().records, b.batch_records()), (1, 1));
-    assert!(b.has_ballot_in_flight());
+    assert!(b.has_visit_open());
+    drop(decided);
     j.fail = false;
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     assert_eq!((b.totals().records, b.batch_records()), (0, 0));
-    assert_eq!(b.totals().quarantined, 1);
-    assert_eq!(entry(j.entries.last().unwrap()).record_hash(), &code);
+    assert_eq!((b.totals().quarantined, b.totals().visits), (1, 0));
+    assert_eq!(entry(j.entries.last().unwrap()).record_hash(), &codes[0]);
+    assert_eq!(b.abandon_visit(&mut j, tb(1)).unwrap_err(), Error::NoVisit);
 }
 
 #[test]
-fn a_dropped_durable_ballot_is_quarantined_by_its_record_hash() {
+fn a_dropped_decided_visit_is_quarantined_by_its_record_hashes() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    let code = durable_one(&w, &mut b, &mut m, &mut j, 1);
-    assert!(b.has_ballot_in_flight());
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 3);
+    let ready = b.end_visit(&visit_end(b"E-2026", 3), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let mut decided = ready
+        .decide(
+            &mut b,
+            Decision::checking(&[2]).unwrap(),
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
+        .unwrap();
+    decided.imprinted(&mut b, &mut j, tb(1)).unwrap();
+    drop(decided);
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    // the imprinted one stays cast; the open cast one is quarantined; the
+    // checked one needs nothing more
     let e = entry(j.entries.last().unwrap());
     assert_eq!(e.kind(), JournalKind::Quarantine);
-    assert_eq!(e.record_hash(), &code);
-    assert_eq!(b.totals().records, 0);
-    assert_eq!(b.totals().quarantined, 1);
-    assert_eq!(b.batch_records(), 0);
-    assert_eq!(b.module_counters(), &[1, 1, 1, 1, 1]);
+    assert_eq!(e.record_hash(), &codes[1]);
     assert_eq!(
-        close(&w, &mut b, &mut m, &mut j, 1).unwrap_err(),
-        Error::BatchEmpty
+        (
+            b.totals().records,
+            b.totals().challenged,
+            b.totals().quarantined
+        ),
+        (1, 1, 1)
     );
+    assert_eq!(b.batch_records(), 1);
+    assert_eq!(b.module_counters(), &[3, 3, 3, 3, 3]);
 }
 
 #[test]
-fn a_journal_failure_at_cast_leaves_the_ballot_to_quarantine() {
+fn a_journal_failure_at_the_decision_leaves_the_visit_to_quarantine() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    let mut bufs = Buffers::new(&w);
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
-        .unwrap();
-    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
-    let ballot = ballot.commit(&b).unwrap();
-    let ballot = ballot
-        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
-        .unwrap();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
     j.fail = true;
     assert_eq!(
-        ballot.cast(&mut b, &mut j, tb(1)).unwrap_err(),
+        ready
+            .decide(
+                &mut b,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(1)
+            )
+            .unwrap_err(),
         Error::Journal(JournalError::NotDurable)
     );
     assert_eq!(b.totals().records, 0);
-    assert!(b.has_ballot_in_flight());
+    assert!(b.has_visit_open());
     assert_eq!(
-        b.quarantine_in_flight(&mut j, tb(1)).unwrap_err(),
+        b.abandon_visit(&mut j, tb(1)).unwrap_err(),
         Error::Journal(JournalError::NotDurable)
     );
     j.fail = false;
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     assert_eq!(b.totals().quarantined, 1);
     assert_eq!(kinds(&j), [JournalKind::Quarantine]);
     assert_eq!(entry(&j.entries[0]).record_hash(), &Hash512::ZERO);
+    assert_eq!(entry(&j.entries[0]).module_counters().len(), 5);
+    assert_eq!(b.abandon_visit(&mut j, tb(1)).unwrap_err(), Error::NoVisit);
+    // a failure after the first position entry: that one is quarantined by
+    // its record hash, the second without record
+    let mut visit = visit_work();
+    let codes = bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 2);
+    let ready = b.end_visit(&visit_end(b"E-2026", 2), &mut visit).unwrap();
+    j.fail_after = Some(1);
+    assert!(
+        ready
+            .decide(
+                &mut b,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(1)
+            )
+            .is_err()
+    );
+    j.fail_after = None;
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    let tail: std::vec::Vec<JournalKind> = kinds(&j)[1..].to_vec();
     assert_eq!(
-        b.quarantine_in_flight(&mut j, tb(1)).unwrap_err(),
-        Error::NoBallotInFlight
+        tail,
+        [
+            JournalKind::Record,
+            JournalKind::Quarantine,
+            JournalKind::Quarantine
+        ]
+    );
+    assert_eq!(entry(&j.entries[2]).record_hash(), &codes[0]);
+    assert_eq!(entry(&j.entries[3]).record_hash(), &Hash512::ZERO);
+    assert_eq!((b.totals().records, b.totals().quarantined), (0, 3));
+    assert_eq!(b.batch_records(), 0);
+}
+
+#[test]
+fn a_staged_object_that_changed_is_refused() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 2);
+    let ready = b.end_visit(&visit_end(b"E-2026", 2), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    staging.tamper = Some((1, Staged::Package));
+    assert_eq!(
+        ready
+            .decide(
+                &mut b,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(1)
+            )
+            .unwrap_err(),
+        Error::StagedMismatch
+    );
+    // the first position was journaled before the swap was found
+    assert_eq!(kinds(&j), [JournalKind::Record]);
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    // a swapped record is refused for publication
+    staging.tamper = None;
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let decided = ready
+        .decide(
+            &mut b,
+            Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
+        .unwrap();
+    let mut out = std::vec![0u8; 30_000];
+    assert!(decided.record(&b, &mut staging, 0, &mut out).is_ok());
+    staging.tamper = Some((0, Staged::Record));
+    assert_eq!(
+        decided.record(&b, &mut staging, 0, &mut out).unwrap_err(),
+        Error::StagedMismatch
+    );
+    let mut small = std::vec![0u8; 16];
+    assert_eq!(
+        decided.record(&b, &mut staging, 0, &mut small).unwrap_err(),
+        Error::Port(PortError::BufferTooSmall)
+    );
+    assert!(decided.record(&b, &mut staging, 1, &mut out).is_err());
+}
+
+#[test]
+fn a_visit_end_must_match_and_the_visit_takes_eight_positions() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    let mut other = visit_work();
+    assert_eq!(
+        b.end_visit(&visit_end(b"E-2026", 1), &mut visit)
+            .unwrap_err(),
+        Error::NoVisit
+    );
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 8);
+    let mut area = work();
+    assert_eq!(
+        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+            .unwrap_err(),
+        Error::VisitFull
+    );
+    assert_eq!(
+        b.end_visit(&visit_end(b"E-2027", 8), &mut visit)
+            .unwrap_err(),
+        Error::WrongElection
+    );
+    assert_eq!(
+        b.end_visit(&visit_end(b"E-2026", 7), &mut visit)
+            .unwrap_err(),
+        Error::VisitCountMismatch
+    );
+    assert_eq!(
+        b.end_visit(&visit_end(b"E-2026", 8), &mut other)
+            .unwrap_err(),
+        Error::StaleVisit
+    );
+    assert!(b.end_visit(&[0u8; 8], &mut visit).is_err());
+    // the clerks confirm and the visit is quarantined without a decision:
+    // one entry without record per position, with its counters
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    assert_eq!(kinds(&j), [JournalKind::Quarantine; 8]);
+    assert!(
+        j.entries
+            .iter()
+            .all(|e| entry(e).record_hash() == &Hash512::ZERO)
+    );
+    assert_eq!(b.totals().quarantined, 8);
+    assert_eq!(b.module_counters(), &[8, 8, 8, 8, 8]);
+    // the abandoned visit's work area cannot end the next visit, even one
+    // with as many positions
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut other, 8);
+    assert_eq!(
+        b.end_visit(&visit_end(b"E-2026", 8), &mut visit)
+            .unwrap_err(),
+        Error::StaleVisit
+    );
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    // after the end, no new position and no second end
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    assert_eq!(
+        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+            .unwrap_err(),
+        Error::VisitInProgress
+    );
+    let mut again = visit_work();
+    assert_eq!(
+        b.end_visit(&visit_end(b"E-2026", 1), &mut again)
+            .unwrap_err(),
+        Error::VisitInProgress
+    );
+    // a decision may not check a position beyond the visit
+    let mut package = std::vec![0u8; 300_000];
+    assert_eq!(
+        ready
+            .decide(
+                &mut b,
+                Decision::from_checks(0b10),
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(1)
+            )
+            .unwrap_err(),
+        Error::InvalidDecision
     );
 }
 
@@ -718,7 +991,7 @@ fn a_ballot_quarantined_by_the_box_is_stale() {
         .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut first)
         .unwrap();
     let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     assert_eq!(ballot.commit(&b).unwrap_err(), Error::NoBallotInFlight);
     // a newer ballot makes the old one stale rather than absent
     let ballot = b
@@ -726,7 +999,7 @@ fn a_ballot_quarantined_by_the_box_is_stale() {
         .unwrap();
     let other = b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut second);
     assert_eq!(other.unwrap_err(), Error::BallotInFlight);
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     let _fresh = b
         .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut second)
         .unwrap();
@@ -737,36 +1010,86 @@ fn a_ballot_quarantined_by_the_box_is_stale() {
 }
 
 #[test]
-fn imprint_command_and_slip_need_the_ballot_still_in_flight() {
+fn a_visit_state_is_bound_to_its_own_visit() {
     let w = world(Profile::InPerson, true);
     let mut b = OpenBox::open(w.config, tb(1));
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
-    let mut bufs = Buffers::new(&w);
-    let mut area = work();
-    let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
+    let decided = ready
+        .decide(
+            &mut b,
+            Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
         .unwrap();
-    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
-    let ballot = ballot.commit(&b).unwrap();
-    let ballot = ballot
-        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+    assert!(decided.imprint_command(&b).is_ok());
+    assert_eq!(
+        decided.finish_positions(&mut b).unwrap_err(),
+        Error::VisitIncomplete
+    );
+    // (finish_positions consumed the state; the box still holds the visit)
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    // a fresh visit: the old one's ready state no longer exists, and a
+    // second box's states cannot act on this one
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut other_box = OpenBox::open(w.config, tb(1));
+    assert_eq!(ready.positions(&other_box), 0);
+    assert!(ready.style(&other_box, 0).is_none());
+    assert_eq!(
+        ready
+            .decide(
+                &mut other_box,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(1)
+            )
+            .unwrap_err(),
+        Error::NoVisit
+    );
+    b.abandon_visit(&mut j, tb(1)).unwrap();
+    let mut visit = visit_work();
+    bind_visit(&w, &mut b, &mut m, &mut staging, &mut visit, 1);
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let decided = ready
+        .decide(
+            &mut b,
+            Decision::CAST_ALL,
+            &mut j,
+            &mut staging,
+            &mut package,
+            tb(1),
+        )
         .unwrap();
-    let ballot = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
-    assert!(ballot.imprint_command(&b).is_ok());
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
-    assert_eq!(
-        ballot.imprint_command(&b).unwrap_err(),
-        Error::NoBallotInFlight
+    let mut other_visit = visit_work();
+    let mut other_modules = mocks(&w);
+    bind_visit(
+        &w,
+        &mut other_box,
+        &mut other_modules,
+        &mut staging,
+        &mut other_visit,
+        1,
     );
-    let mut out = std::vec![0u8; ityv_cunit::ballot::MAX_SLIP_LEN];
+    assert_eq!(decided.current(&other_box), None);
     assert_eq!(
-        ballot.slip(&b, signer(&w), tb(1), &mut out).unwrap_err(),
-        Error::NoBallotInFlight
+        decided.imprint_command(&other_box).err(),
+        Some(Error::StaleVisit)
     );
     assert_eq!(
-        ballot.imprinted(&mut b, &mut j, tb(1)).unwrap_err(),
-        Error::NoBallotInFlight
+        decided.finish_positions(&mut other_box).err(),
+        Some(Error::StaleVisit)
     );
 }
 
@@ -785,7 +1108,7 @@ fn a_ballot_without_any_issue_is_returned_not_quarantined() {
         ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap_err(),
         Error::Port(PortError::Transport)
     );
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     assert!(j.entries.is_empty());
     assert_eq!(b.totals().quarantined, 0);
 }
@@ -806,12 +1129,26 @@ fn time_buckets_must_not_go_back() {
     let ballot = ballot
         .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
         .unwrap();
+    let mut staging = MemStaging::default();
+    let mut visit = visit_work();
+    ballot.bind(&mut b, &mut staging, &mut visit).unwrap();
+    let ready = b.end_visit(&visit_end(b"E-2026", 1), &mut visit).unwrap();
+    let mut package = std::vec![0u8; 300_000];
     assert_eq!(
-        ballot.cast(&mut b, &mut j, tb(4)).unwrap_err(),
+        ready
+            .decide(
+                &mut b,
+                Decision::CAST_ALL,
+                &mut j,
+                &mut staging,
+                &mut package,
+                tb(4)
+            )
+            .unwrap_err(),
         Error::TimeRegression
     );
     assert_eq!(
-        b.quarantine_in_flight(&mut j, tb(4)).unwrap_err(),
+        b.abandon_visit(&mut j, tb(4)).unwrap_err(),
         Error::TimeRegression
     );
 }
@@ -834,7 +1171,7 @@ fn busy_box(
         .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
         .unwrap();
     let _ = ballot.issue(&mut b, &mut ports(m), &SEED).unwrap();
-    b.quarantine_in_flight(j, tb(1)).unwrap();
+    b.abandon_visit(j, tb(1)).unwrap();
     close(w, &mut b, m, j, 1).unwrap();
     (b, codes)
 }
@@ -1005,10 +1342,10 @@ fn close_checks_its_preconditions_before_signing() {
     assert_eq!(
         b.prepare_close(&good, signer(&w), &mut j, tb(1), &mut out)
             .unwrap_err(),
-        Error::BallotInFlight
+        Error::VisitOpen
     );
     drop(ballot);
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     assert_eq!(j.entries.len(), entries);
     assert!(out.iter().all(|&byte| byte == 0), "nothing was signed");
     // a larger work buffer is fine
@@ -1270,7 +1607,7 @@ fn an_open_batch_and_a_module_gap_are_reported_at_close() {
         Error::CounterGap
     );
     assert_eq!(b.module_counters(), &[2, 2, 2, 1, 1]);
-    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    b.abandon_visit(&mut j, tb(1)).unwrap();
     let attest = close(&w, &mut b, &mut m, &mut j, 1).unwrap();
     assert_eq!(refusals(&attest), ids(&[b"mod-p1"]));
     let inputs = CloseInputs {
