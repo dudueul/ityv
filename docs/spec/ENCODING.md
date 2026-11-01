@@ -89,7 +89,7 @@ offset  size  field
 | 0x000A | `Slip` | 1 | 슬립 본문 바이트 + 장치 하이브리드 서명(§8.18) |
 | 0x000B | `SharePackage` | 1 | 신뢰기관별 암호화 share 묶음(§8.10, 공개하지 않음) |
 | 0x000C | `ReceiptMark` | 1 | 관외 수령 라벨 목록 |
-| 0x000D | `AuditSeed` | 1 | 표본 추출 시드 의식 |
+| 0x000D | `AuditSeed` | 1 | 표본 추출 시드 추첨 절차 |
 | 0x000E | `DisputeEvent` | 1 | 분쟁 접수·처리 |
 | 0x000F | `LegalDecisionRef` | 1 | 법정 결정 참조 |
 | 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
@@ -114,6 +114,8 @@ offset  size  field
 | 0x0023 | `DeviceAttestationBody` | 1 | 현장 증명 본문: 도전값, 부팅 횟수, 측정 해시, 모듈 진술(§8.28) |
 | 0x0024 | `DeviceAttestation` | 1 | 본문 바이트 + 증명 키 하이브리드 서명(§8.29) |
 | 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
+| 0x0026 | `ModuleProvisioned` | 1 | 모듈 발급 기록: 본체·패드 카드 ID, KEM 공개키, 챔버 엔트로피 약속, 보안 칩 여부, 정당 PRF 키 확인값(§8.31, ADR-0024) |
+| 0x0027 | `PartyKeyCeremony` | 1 | 정당 열쇠 생성 절차 기록. 키 자료 없음(§8.32, ADR-0024) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -367,8 +369,8 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 
 - `device_class`: 1 해석 유닛, 2 커밋먼트 유닛·스캐너 바깥 포트, 3 카운터·가명 유닛, 4 챔버 모듈, 5 선거일 신원 확인 단말, 6 사전투표 신원 확인 단말, 7 투표소 게이트웨이, 8 관찰 탭, 9 장부 수집 서버, 10 게시판 공표 서버, 11 증인, 12 신뢰기관 수신 시스템, 13 수령 라벨 판독기, 14 각인 판독기, 15 프린터류(각인기·슬립·라벨). 그 외 값은 `ValueOutOfRange`.
 - `direction`: 0 없음(봉인 또는 미장착), 1 내보내기만(수신 소자 없음), 2 받기만, 3 양방향.
-- `medium`: 0 없음, 1 광 송신 전용, 2 광커플러(장치 내부), 3 유선 이더넷, 4 광 회선, 5 선거 전용회선(통합선거인명부), 6 의식 현장 직결, 7 무선.
-- `schedule`: 0 사용 안 함, 1 투표함 개시–마감 처리, 2 사전투표 기간, 3 상시, 4 의식 때만.
+- `medium`: 0 없음, 1 광 송신 전용, 2 광커플러(장치 내부), 3 유선 이더넷, 4 광 회선, 5 선거 전용회선(통합선거인명부), 6 입회 절차 현장 직결, 7 무선.
+- `schedule`: 0 사용 안 함, 1 투표함 개시–마감 처리, 2 사전투표 기간, 3 상시, 4 입회 절차 때만.
 - `carries` 비트: 0 공개 기록·배치 증명, 1 봉인 share 패키지, 2 확인 카운터, 3 장치 링크 객체, 4 체크포인트·장부, 5 명부 조회(개인정보), 6 세션 기록. 정의되지 않은 비트가 서 있으면 `ValueOutOfRange`.
 - `frame_key`: `UplinkFrame`을 서명하는 Ed25519 공개키. 프레임을 보내지 않는 항목은 0이어야 한다.
 - 집합 불변식(`InvariantViolation`, `entries` 개수 접두사 오프셋): `device_class` 1–4의 항목은 `direction` ∈ {0, 1}이고 `medium` ≠ 7이다. `direction` 3은 `device_class` 6(`medium` 5, `schedule` 2), 7(바깥 회선), 9–12에만 쓴다. `device_class` 8은 `direction` 1만 쓴다. `carries` 비트 5는 `device_class` 6과 그 상대에만 쓴다. genesis의 장치·포트가 빠짐없이 덮였는지는 검증기가 genesis와 대조한다(VC-077).
@@ -495,3 +497,40 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 
 전체 크기는 약 450바이트로 QR 하나에 들어간다.
 
+### 8.31 `ModuleProvisioned` (`schema_id` 0x0026, `schema_version` 1)
+
+모듈 발급 절차의 기록이다(PROTOCOL §9.4.2). 패드 값, 패드 해시, 챔버 엔트로피 원본은 담지 않는다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `module_id` | `Ident<64>` | genesis에 등록된 값 |
+| 3 | `device_id` | `Ident<64>` | 이 모듈을 꽂을 장치 |
+| 4 | `chamber` | `u8` | 챔버 코드 1–7(N은 모듈이 없다) |
+| 5 | `member_count` | `u8` | 1..=8 |
+| 6 | `pad_length` | `u64` | 구성원당 패드 바이트 수 |
+| 7 | `chassis_id` | `Ident<64>` | 재사용 본체 ID |
+| 8 | `pad_card_id` | `Ident<64>` | 패드 카드 ID |
+| 9 | `reprovision_count` | `u32` | 본체 재발급 횟수 |
+| 10 | `chassis_check_hash` | `Hash512` | 본체 변조 검사·펌웨어 측정 결과 문서의 해시 |
+| 11 | `kem_ek` | `[u8; 1600]` | 모듈 하이브리드 KEM 공개키(`mlkem1024_ek ‖ x25519`). 정당 PRF 키 주입에 쓴다 |
+| 12 | `entropy_commitment` | `Hash512` | `SHA3-512("ityv:entropy:v1" ‖ 0x00 ‖ 챔버 엔트로피)` |
+| 13 | `se_present` | `bool` | 보안 칩이 있으면 1. 카운터·가명 유닛의 정당 모듈이면 반드시 1 |
+| 14 | `prf_key_check` | `Option<[u8; 32]>` | 카운터·가명 유닛의 정당 모듈이면 존재, 그 밖에는 부재. `HMAC-SHA-256(key_c, "ityv:prfcheck:v2")` |
+| 15 | `signatures` | `Array<{actor_id: Ident<64>, sig: [u8; 4691]}, 16>` | 위원회·챔버·참관인 하이브리드 서명, `actor_id` 오름차순, 중복 없음, purpose `module-provisioned`. 서명 대상은 필드 1–14의 인코딩 |
+
+### 8.32 `PartyKeyCeremony` (`schema_id` 0x0027, `schema_version` 1)
+
+정당 열쇠 생성 절차의 기록이다(PROTOCOL §6.4). 키, 몫, 엔트로피는 담지 않는다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `chamber` | `u8` | 정당 챔버 코드 1–4 |
+| 3 | `wrapped_module_count` | `u32` | `key_c`를 감싸 보낸 확인 모듈 수 |
+| 4 | `share_threshold` | `u8` | k(기본 2) |
+| 5 | `share_count` | `u8` | n(기본 3), `share_threshold ≤ share_count ≤ 8` |
+| 6 | `share_holders` | `Array<{trustee_id: Ident<64>, hsm_model: Ident<64>, hsm_serial_hash: Hash512}, 8>` | 몫 보관 구성원과 장비, `trustee_id` 오름차순, 개수 = `share_count` |
+| 7 | `prf_key_check` | `[u8; 32]` | 이 정당 모든 확인 모듈의 `ModuleProvisioned`와 같아야 함(VC-093) |
+| 8 | `time_bucket` | `u64` | |
+| 9 | `signatures` | `Array<{actor_id: Ident<64>, sig: [u8; 4691]}, 16>` | 위원회, 참석 정당 구성원, 서로 다른 조직의 참관인 2 이상. purpose `party-key`. 서명 대상은 필드 1–8의 인코딩 |

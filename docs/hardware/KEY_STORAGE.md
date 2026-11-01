@@ -2,7 +2,7 @@
 
 > English summary: Research draft comparing alternatives to a YubiHSM-class device for the roughly 252,000 field chamber modules and for the few hundred high-value keys, and laying out a life-cycle key storage strategy for our USB-form open MCU module. Finding: no off-the-shelf HSM or secure element does the whole field-module job (ML-DSA-87 signing, the counter rule, tens of megabytes of pads, open reproducible firmware, two MCU families, about USD 14–28 a unit). Keep the open MCU module from DEVICES.md, choose two of LPC55S69 / STM32U5·H5 / nRF54L, and add one cheap secure element (SE050-class, about USD 2–6) only to the check-in counter unit's party modules to hold the pseudonym PRF key non-exportably, because that key is identical in all of a party's ~18,700 modules and is the one key worth a lab attack. Mix chamber-supplied ceremony entropy into every key, encrypt the pad card at rest under a device-unique key, add a coin-cell tamper switch that zeroizes during the election window (added fleet cost about USD 0.40–0.95M), and never let the PRF key exist in clear outside the party ceremony and the modules. For the high-value tier use USB HSMs (YubiHSM 2, Nitrokey HSM 2) as key-encryption-key holders and share stores, and PQC-capable network HSMs (Entrust nShield firmware 13.8, Thales Luna) where hybrid ML-DSA signing must stay inside hardware. Status: research draft; ADR-0024 is proposed, not adopted.
 
-- 상태: 연구용 초안. 결정은 ADR-0024(제안)이며 아직 채택되지 않았다. 이 문서는 규범이 아니다.
+- 상태: 연구 문서. 결정은 ADR-0024로 2026-11-01 채택되었고, 규범은 `docs/spec/PROTOCOL.md`(§6.4, §6.5, §6.6, §9.4.2, §15)와 `ENCODING.md`(§8.31, §8.32)다. 이 문서는 근거와 비교를 남긴다.
 - 날짜: 2026-11-01
 - 관련: ADR-0019, ADR-0020, ADR-0023, ADR-0024; `docs/hardware/DEVICES.md` §5.1, §5.2, §5.5, §6.2; `docs/spec/PROTOCOL.md` §6.4, §6.6, §9.4.2, §15
 - 가격과 기능은 2026-11-01 기준 공개 자료다. 출처를 붙였고, 확인하지 못한 값은 (미확인)으로 적었다. 대량 단가는 견적으로 다시 확인해야 한다.
@@ -79,9 +79,9 @@ RP2350 결과가 주는 교훈은 칩 하나의 문제가 아니다. **실험실
 
 ### 5.1 생성
 
-- **모듈 안에서 만든다.** 서명 키, 증명 관련 키, 패드는 발급 의식에서 모듈 안에서 만든다. 밖에서 만든 키를 주입하지 않는다(정당 PRF 키만 예외, §5.4).
-- **챔버 엔트로피를 섞는다.** 각 챔버는 자기 장비(고가치 계층의 HSM 등)에서 32바이트 이상의 엔트로피를 만들어 의식 현장에서 유선으로 모듈에 넣는다. 모듈은 `seed = SHA3-512("ityv:keygen:v1" ‖ 0x00 ‖ TRNG 출력 ‖ 챔버 엔트로피 ‖ module_id)`로 키를 유도한다. 챔버 엔트로피는 공개하지 않는다. 칩의 난수원에 뒷문이 있어도 챔버 엔트로피를 모르면 키를 예측할 수 없고, 챔버 장비에 뒷문이 있어도 칩 난수원을 모르면 예측할 수 없다.
-- **기록.** `ModuleProvisioned`에 챔버 엔트로피를 넣었다는 사실과 그 엔트로피의 해시 약속(의식 참석 챔버만 원본을 앎)을 남긴다. 표마다의 난수 기여(`r_c`)는 계속 칩 난수원만 쓴다(표마다 의식을 할 수 없으므로). 그 대신 기여는 한 챔버 몫일 뿐이라 접근구조가 지킨다.
+- **모듈 안에서 만든다.** 서명 키, 증명 관련 키, 패드는 발급 절차에서 모듈 안에서 만든다. 밖에서 만든 키를 주입하지 않는다(정당 PRF 키만 예외, §5.4).
+- **챔버 엔트로피를 섞는다.** 각 챔버는 자기 장비(고가치 계층의 HSM 등)에서 32바이트 이상의 엔트로피를 만들어 발급 절차 현장에서 유선으로 모듈에 넣는다. 모듈은 `seed = SHA3-512("ityv:keygen:v1" ‖ 0x00 ‖ TRNG 출력 ‖ 챔버 엔트로피 ‖ module_id)`로 키를 유도한다. 챔버 엔트로피는 공개하지 않는다. 칩의 난수원에 뒷문이 있어도 챔버 엔트로피를 모르면 키를 예측할 수 없고, 챔버 장비에 뒷문이 있어도 칩 난수원을 모르면 예측할 수 없다.
+- **기록.** `ModuleProvisioned`에 챔버 엔트로피를 넣었다는 사실과 그 엔트로피의 해시 약속(발급 절차에 참석한 챔버만 원본을 앎)을 남긴다. 표마다의 난수 기여(`r_c`)는 계속 칩 난수원만 쓴다(표마다 입회 절차를 할 수 없으므로). 그 대신 기여는 한 챔버 몫일 뿐이라 접근구조가 지킨다.
 
 ### 5.2 보관 중 보호
 
@@ -109,9 +109,9 @@ RP2350 결과가 주는 교훈은 칩 하나의 문제가 아니다. **실험실
 
 **제안.**
 1. **선거마다 새 키.** 이미 명세에 있다(§9.4.2). 한 선거의 키가 털려도 다음 선거와 무관하다.
-2. **정당 의식에서 오프라인으로 만든다.** 위원회 주관, 참관인 입회 아래 정당 구성원들이 각자 엔트로피를 가져와 공기 차단된 컴퓨터에서 마스터 키를 만든다.
-3. **k-of-n으로 나눠 고가치 계층에 둔다.** 마스터 키는 정당 챔버 구성원(기본 2-of-3)에게 Shamir 몫으로 나눠 각자의 USB HSM(YubiHSM 2나 Nitrokey HSM 2)에 보관한다. 평문 마스터는 의식이 끝나면 지운다. 이 몫은 예비 모듈 발급과 중복 가명 조사(§6.6)에 쓰고, 공소시효나 재판이 끝날 때까지 보존한 뒤 파기한다(§6.6 6항).
-4. **모듈마다 감싸서 넣는다.** 각 확인 모듈은 발급 때 자기 키 캡슐화 키쌍(ML-KEM-1024 + X25519, `ityv-crypto`의 하이브리드 KEM)을 만들고 공개키만 내놓는다. 정당 의식은 마스터 키를 모듈 공개키마다 감싸서(암호화해서) 보낸다. 감싼 키는 그 모듈에서만 풀린다. 평문 PRF 키는 정당 의식의 컴퓨터와 모듈 안 말고는 어디에도 없다.
+2. **정당 열쇠 생성 절차에서 오프라인으로 만든다.** 위원회 주관, 참관인 입회 아래 정당 구성원들이 각자 엔트로피를 가져와 공기 차단된 컴퓨터에서 마스터 키를 만든다.
+3. **k-of-n으로 나눠 고가치 계층에 둔다.** 마스터 키는 정당 챔버 구성원(기본 2-of-3)에게 Shamir 몫으로 나눠 각자의 USB HSM(YubiHSM 2나 Nitrokey HSM 2)에 보관한다. 평문 마스터는 절차가 끝나면 지운다. 이 몫은 예비 모듈 발급과 중복 가명 조사(§6.6)에 쓰고, 공소시효나 재판이 끝날 때까지 보존한 뒤 파기한다(§6.6 6항).
+4. **모듈마다 감싸서 넣는다.** 각 확인 모듈은 발급 때 자기 키 캡슐화 키쌍(ML-KEM-1024 + X25519, `ityv-crypto`의 하이브리드 KEM)을 만들고 공개키만 내놓는다. 정당 열쇠 생성 절차는 마스터 키를 모듈 공개키마다 감싸서(암호화해서) 보낸다. 감싼 키는 그 모듈에서만 풀린다. 평문 PRF 키는 정당 열쇠 생성 절차의 컴퓨터와 모듈 안 말고는 어디에도 없다.
 5. **보안 칩에 넣는다(권장).** 확인 모듈의 정당 모듈에 SE050급 보안 칩을 붙이고, 모듈이 받은 PRF 키를 보안 칩의 보안 채널(SCP03)로 넣는다. 그 뒤 PRF 계산은 보안 칩 안의 HMAC로만 한다. 키는 칩 밖으로 나오지 않고, 칩을 털려면 일반 MCU보다 훨씬 비싼 실험실 공격이 필요하다. 정당마다 다른 보안 칩 공급원(SE050, TROPIC01 등)을 쓰면 한 칩의 공개 취약점으로 모든 정당 키가 한꺼번에 나오지 않는다.
    - **바뀌는 것.** PRF를 `SHA3-512(... ‖ key_c ‖ voter_id)`에서 `HMAC-SHA-256(key_c, "ityv:prf:v2" ‖ voter_id)`로 바꿔야 한다. SE050은 SHA3 기반 PRF를 칩 안에서 하지 못하기 때문이다.
    - **손익.** 안전성은 둘 다 충분하다(HMAC-SHA-256은 표준 PRF). 잃는 것은 해시를 SHA3 하나로 통일한 일관성 하나다. 얻는 것은 가장 넓게 퍼진 비밀 키가 칩 밖으로 나오지 않는다는 점이다.
@@ -128,7 +128,7 @@ RP2350 결과가 주는 교훈은 칩 하나의 문제가 아니다. **실험실
 ### 5.6 파기와 백업
 
 - **패드:** 쓰자마자 0으로 덮고(VC-034), 선거가 끝나면 패드 카드를 통째로 파쇄한다.
-- **모듈 본체:** 파기 의식에서 키 영역, 내부 플래시, RAM을 0으로 덮고 봉인 보관했다가 다음 선거에 새로 발급한다(P4).
+- **모듈 본체:** 파기 절차에서 키 영역, 내부 플래시, RAM을 0으로 덮고 봉인 보관했다가 다음 선거에 새로 발급한다(P4).
 - **백업:** 모듈마다의 키는 백업하지 않는다. 고장 나면 미리 발급한 봉인 예비 모듈로 바꾼다. 백업은 정당 PRF 마스터의 k-of-n 몫 하나뿐이다.
 
 ## 6. 위협별로 얻는 것과 막는 법
@@ -138,11 +138,11 @@ RP2350 결과가 주는 교훈은 칩 하나의 문제가 아니다. **실험실
 | 현장 모듈 하나 도난(스캐너) | 그 모듈의 서명 키, 그 스캐너 그 챔버 구성원 몫의 패드(카드 암호화를 풀면), 그 챔버의 기여. 표 하나 열 수 없음(접근구조) | 인계 사슬, 사건 기록과 키 무효, 패드 카드 암호화, 변조 스위치 |
 | 확인 모듈 하나 도난 | 위 + 그 정당의 PRF 키(보안 칩이 없으면) | 보안 칩, 정당마다 다른 칩 공급원, 키 무효, 선거마다 새 키 |
 | 정당마다 하나씩, 모두 n개 도난 | 모든 정당 PRF 키를 털면 누구든 가명 계산 → 투표 참여 여부와 투표소. 선택은 아님 | 보안 칩(정당마다 실험실 공격 필요), 도난 탐지, 탐지 시 `ParticipationSet` 열람 제한 전환 |
-| 발급 의식의 내부자 | 한 챔버 내부자는 자기 챔버 것만. 선관위 내부자는 키를 보지 못함(모듈 안에서 생성) | 모듈 내부 생성, 챔버 엔트로피, 정당 PRF 마스터의 k-of-n, 참관과 기록 |
+| 발급 절차의 내부자 | 한 챔버 내부자는 자기 챔버 것만. 선관위 내부자는 키를 보지 못함(모듈 안에서 생성) | 모듈 내부 생성, 챔버 엔트로피, 정당 PRF 마스터의 k-of-n, 참관과 기록 |
 | 한 MCU 계열의 공급망 뒷문 | 난수원 뒷문: 챔버 엔트로피가 막음. 판독 뒷문: 그 계열을 쓴 챔버들의 모듈 키 | MCU 계열 둘 이상, 정당마다 다른 계열(DEVICES §6.2), 접근구조 |
 | 훔친 모듈에 결함 주입·부채널 공격 | 일반 MCU는 결국 뚫린다고 본다(RP2350 사례) | 변조 스위치, 선거마다 새 키, 탐지 뒤 무효, PRF 키는 보안 칩 |
 | 패드 카드 분실 | 카드 암호화 덕분에 카드만으로는 없음. 모듈까지 털어도 한 챔버 한 스캐너 몫 | 카드 암호화, 그 모듈은 KEM 대체 경로로 전환(§9.4.5), 사건 기록 |
-| 정당 PRF 몫 보관 구성원 공모 | k명이 모이면 그 정당 키 하나. 혼자로는 가명 계산 불가 | k-of-n, 서로 다른 HSM 제품, 의식 기록 |
+| 정당 PRF 몫 보관 구성원 공모 | k명이 모이면 그 정당 키 하나. 혼자로는 가명 계산 불가 | k-of-n, 서로 다른 HSM 제품, 절차 기록 |
 
 ## 7. 함대 비용 차이(DEVICES §5.5 수량 기준, n = 4)
 
@@ -161,7 +161,7 @@ RP2350 결과가 주는 교훈은 칩 하나의 문제가 아니다. **실험실
 
 ## 8. 채택하려면 바꿔야 할 명세
 
-1. `PROTOCOL.md` §6.4: 정당 PRF 키의 생성(정당 의식, 오프라인), k-of-n 보관, 모듈별 감싼 주입, 평문 존재 범위를 규정. PRF를 `HMAC-SHA-256(key_c, "ityv:prf:v2" ‖ voter_id)`로 바꾸고 가명 식의 입력을 맞춤(보안 칩 채택 시).
+1. `PROTOCOL.md` §6.4: 정당 PRF 키의 생성(정당 열쇠 생성 절차, 오프라인), k-of-n 보관, 모듈별 감싼 주입, 평문 존재 범위를 규정. PRF를 `HMAC-SHA-256(key_c, "ityv:prf:v2" ‖ voter_id)`로 바꾸고 가명 식의 입력을 맞춤(보안 칩 채택 시).
 2. `PROTOCOL.md` §6.5: 모든 정당에서 확인 모듈 도난이 확인되면 `ParticipationSet`을 열람 제한으로 바꾸고 중복 수와 root만 공개하는 규칙.
 3. `PROTOCOL.md` §9.4.2: 챔버 엔트로피 혼합 키 생성, 패드 카드의 보관 중 암호화(기기 고유 키), 변조 스위치와 지움, `prf_key_check` 공개.
 4. `PROTOCOL.md` §15: 정당 PRF 마스터 몫의 보존·파기(§6.6 6항과 연결), 모듈 본체 0 덮기 증거.

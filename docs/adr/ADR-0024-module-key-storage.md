@@ -1,8 +1,8 @@
 # ADR-0024: 챔버 모듈과 고가치 키의 보관
 
-> English summary: Proposed (not adopted). Keep the open MCU chamber module rather than any off-the-shelf HSM; build it on at least two of LPC55S69, STM32U5/H5 and nRF54L; generate every module key inside the module from the chip TRNG mixed with secret chamber-supplied ceremony entropy; encrypt the key area and the pad card at rest under a device-unique key; add a coin-cell tamper switch live only during the election window. Treat the party pseudonym PRF key specially because it is identical in all of a party's check-in modules: generate it offline in a party ceremony, keep it as 2-of-3 Shamir shares on USB HSMs (YubiHSM 2 / Nitrokey HSM 2), inject it into each module wrapped to that module's hybrid KEM key, hold it inside an SE050-class secure element on the check-in modules and compute the PRF there as HMAC-SHA-256, publish a key-check hash so anyone can confirm a party's modules share one key, and downgrade ParticipationSet to restricted if every party's modules are confirmed stolen. Use USB HSMs and PQC-capable network HSMs only for the few hundred high-value keys. Added fleet cost about USD 0.40–0.95M.
+> English summary: Adopted 2026-11-01. Keep the open MCU chamber module rather than any off-the-shelf HSM; build it on at least two of LPC55S69, STM32U5/H5 and nRF54L; generate every module key inside the module from the chip TRNG mixed with secret chamber-supplied ceremony entropy; encrypt the key area and the pad card at rest under a device-unique key; add a coin-cell tamper switch live only during the election window. Treat the party pseudonym PRF key specially because it is identical in all of a party's check-in modules: generate it offline in a party ceremony, keep it as 2-of-3 Shamir shares on USB HSMs (YubiHSM 2 / Nitrokey HSM 2), inject it into each module wrapped to that module's hybrid KEM key, hold it inside an SE050-class secure element on the check-in modules and compute the PRF there as HMAC-SHA-256, publish a key-check hash so anyone can confirm a party's modules share one key, and downgrade ParticipationSet to restricted if every party's modules are confirmed stolen. Use USB HSMs and PQC-capable network HSMs only for the few hundred high-value keys. Added fleet cost about USD 0.40–0.95M.
 
-- 상태: 제안(사용자 승인 대기)
+- 상태: 채택(2026-11-01). 반영: PROTOCOL §6.4, §6.5, §6.6, §9.4.2, §15, 부록 A·B·C(VC-092..096), ENCODING §8.31·§8.32
 - 날짜: 2026-11-01
 - 관련: ADR-0019, ADR-0020, ADR-0023; `docs/hardware/KEY_STORAGE.md`; `docs/hardware/DEVICES.md` §5.1, §5.2, §5.5, §6.2; `docs/spec/PROTOCOL.md` §6.4, §6.5, §6.6, §9.4.2, §15
 
@@ -14,14 +14,14 @@
 
 2024–2025년 RP2350 공개 해킹 대회에서 출전자 넷 모두 OTP 비밀을 뽑았다. 실험실 장비가 있는 공격자는 일반 MCU의 읽기 보호를 결국 넘는다고 보고 설계해야 한다.
 
-## 결정(제안)
+## 결정
 
 1. **현장 모듈은 공개 MCU 모듈을 유지한다.** 완제품 HSM이나 보안 키를 사서 쓰지 않는다. MCU는 LPC55S69, STM32U5/H5, nRF54L 중 둘 이상을 같은 커넥터와 프로토콜로 지원하고, 정당마다 다른 계열을 쓴다. RP2350에는 오래 가는 비밀을 맡기지 않는다.
-2. **키 생성.** 모든 모듈 키는 발급 의식에서 모듈 안에서 만든다. 칩 난수원 출력과, 챔버가 자기 장비로 만들어 유선으로 넣은 비공개 엔트로피를 SHA3-512로 섞는다. `ModuleProvisioned`에는 엔트로피를 넣었다는 사실과 해시 약속만 남긴다.
+2. **키 생성.** 모든 모듈 키는 발급 절차에서 모듈 안에서 만든다. 칩 난수원 출력과, 챔버가 자기 장비로 만들어 유선으로 넣은 비공개 엔트로피를 SHA3-512로 섞는다. `ModuleProvisioned`에는 엔트로피를 넣었다는 사실과 해시 약속만 남긴다.
 3. **보관 중 보호.** 키 저장 영역과 패드 카드를 기기 고유 키(PUF 또는 HUK)로 암호화한다. 키 코드는 TrustZone 보안 영역에만 둔다. 디버그를 영구 잠그고, 칩의 글리치·변조 감지를 켠다. 선거 기간에만 코인 전지로 살아 있는 외함 변조 스위치가 열리면 키 영역을 지운다. 외함 전체를 덮는 변조 반응 망은 쓰지 않는다.
 4. **정당 PRF 키.**
-   - 선거마다 정당 의식에서 공기 차단된 컴퓨터로 만들고, 정당 구성원 2-of-3 Shamir 몫으로 나눠 USB HSM(YubiHSM 2 또는 Nitrokey HSM 2, 구성원마다 다른 제품 권장)에 보관한다.
-   - 각 확인 모듈의 하이브리드 KEM 공개키(ML-KEM-1024 + X25519)로 감싸 주입한다. 평문은 정당 의식의 컴퓨터와 모듈 안에만 존재한다.
+   - 선거마다 정당 열쇠 생성 절차에서 공기 차단된 컴퓨터로 만들고, 정당 구성원 2-of-3 Shamir 몫으로 나눠 USB HSM(YubiHSM 2 또는 Nitrokey HSM 2, 구성원마다 다른 제품 권장)에 보관한다.
+   - 각 확인 모듈의 하이브리드 KEM 공개키(ML-KEM-1024 + X25519)로 감싸 주입한다. 평문은 정당 열쇠 생성 절차의 컴퓨터와 모듈 안에만 존재한다.
    - 확인 카운터 유닛의 정당 모듈에 SE050급 보안 칩을 붙여 PRF 키를 보안 채널로 넣고, PRF를 칩 안에서 `HMAC-SHA-256(key_c, "ityv:prf:v2" ‖ voter_id)`로 계산한다. 정당마다 보안 칩 공급원을 다르게 하기를 권장한다.
    - 각 모듈은 `prf_key_check = SHA3-512("ityv:prfcheck:v1" ‖ 0x00 ‖ key_c)`를 공개해, 한 정당의 모든 모듈이 같은 키를 받았음을 누구나 확인할 수 있게 한다.
    - 몫은 예비 발급과 중복 가명 조사(§6.6)에 쓰고 §6.6 6항의 기한까지 보존한 뒤 파기한다.
@@ -49,6 +49,6 @@
 
 ## 연결되는 검증
 
-- 채택 시 명세 변경 목록은 `docs/hardware/KEY_STORAGE.md` §8에 있다(§6.4 PRF 정의와 키 배포, §6.5 공개 제한 전환, §9.4.2 엔트로피 혼합과 패드 카드 암호화, §15, 부록 A·C의 `PartyKeyCeremony`와 새 VC, `ModuleProvisioned` 필드).
+- 반영: PROTOCOL §6.4(HMAC-SHA-256 PRF, 정당 PRF 키 배포), §6.5(공개 제한 전환, `ParticipationRestriction`), §6.6(몫으로 다시 넣기, 보존), §9.4.2(엔트로피 혼합, 패드 카드·키 영역 암호화, 변조 스위치), §15, 부록 A·B·C. ENCODING §8.31 `ModuleProvisioned`(0x0026), §8.32 `PartyKeyCeremony`(0x0027). VC-092 정당 열쇠 생성 절차 기록, VC-093 `prf_key_check` 일치, VC-094 공개 제한 전환, VC-095 모듈 키 생성·보관 보호, VC-096 몫 보존·파기.
 - M8: SE050 변형별 HMAC와 SCP03 주입, TROPIC01 HMAC 지원과 단가, QS7001 공급·인증·단가, 세 MCU 계열의 결함 주입 시험, 변조 스위치 오작동률.
-- 코드(채택 시): `ityv-crypto`에 HMAC-SHA-256 PRF와 `prf_key_check`, 카운터 유닛 펌웨어(M8)에 보안 칩 드라이버.
+- 코드: `ityv-crypto`에 HMAC-SHA-256 PRF와 `prf_key_check`(카운터·가명 유닛 크레이트가 생길 때), 카운터 유닛 펌웨어(M8)에 보안 칩 드라이버. ROADMAP에 적었다.
