@@ -53,15 +53,35 @@ impl DeviceRng {
         }
     }
 
-    /// Creates a generator whose key is the digest of `hasher`, which the
-    /// caller has already fed with a label and the seed material.
-    pub(crate) fn from_hasher(hasher: Sha3Hasher) -> Self {
+    /// A generator with an all-zero key, the state of a wiped work area.
+    pub(crate) const fn empty() -> Self {
         Self {
-            key: hasher.finish(),
+            key: [0u8; 64],
             counter: 0,
             block: [0u8; 64],
             used: 64,
         }
+    }
+
+    /// Re-keys this generator in place with the digest of `hasher`, which
+    /// the caller has already fed with a label and the seed material.
+    pub(crate) fn reseed(&mut self, hasher: Sha3Hasher) {
+        self.wipe();
+        self.key = hasher.finish();
+    }
+
+    /// `true` if the key and the buffered block are all zero and the
+    /// counter is at its start (the state [`Self::wipe`] leaves).
+    pub(crate) fn is_wiped(&self) -> bool {
+        self.key.iter().chain(self.block.iter()).all(|&b| b == 0) && self.counter == 0
+    }
+
+    /// Overwrites the key and the buffered block with zeros.
+    pub(crate) fn wipe(&mut self) {
+        self.key.zeroize();
+        self.block.zeroize();
+        self.counter = 0;
+        self.used = 64;
     }
 
     /// The signing generator for the device: seeded from `device_seed`
@@ -96,6 +116,8 @@ impl DeviceRng {
         hasher.absorb(&self.key);
         hasher.absorb(&self.counter.to_be_bytes());
         self.block = hasher.finish();
+        // A block is 64 bytes, so the counter would wrap only after 2^70
+        // output bytes; no operation draws more than a few kilobytes.
         self.counter = self.counter.wrapping_add(1);
         self.used = 0;
     }
@@ -136,10 +158,7 @@ impl TryCryptoRng for DeviceRng {}
 
 impl Drop for DeviceRng {
     fn drop(&mut self) {
-        self.key.zeroize();
-        self.block.zeroize();
-        self.counter = 0;
-        self.used = 64;
+        self.wipe();
     }
 }
 

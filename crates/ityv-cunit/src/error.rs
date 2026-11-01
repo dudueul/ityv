@@ -12,7 +12,8 @@ use crate::port::{JournalError, PortError};
 pub enum ConfigFault {
     /// Modules are not strictly ascending by identifier, or more than six.
     ModulesUnsorted,
-    /// Chamber X or Y has no module, or N has one, or a chamber has two.
+    /// X or Y has no own module, J, A or C has no module (own or neutral
+    /// delegation), N has one, or a chamber has two.
     ChamberModules,
     /// Trustees are not strictly ascending by identifier, or more than 64.
     TrusteesUnsorted,
@@ -22,8 +23,6 @@ pub enum ConfigFault {
     ThresholdCount,
     /// No ballot style, more than the capacity, or duplicate style identifiers.
     Styles,
-    /// A style would share more than fifty secrets per member.
-    SecretCapacity,
 }
 
 /// A box-close invariant of PROTOCOL.md §10.2 (VC-038).
@@ -74,8 +73,11 @@ pub enum Error {
     WrongModule,
     /// A module issue's chamber is not the chamber the module serves.
     WrongChamber,
-    /// A module counter is not the previous one plus one.
+    /// A module counter skips past the module's high-water mark plus one.
     CounterGap,
+    /// A module counter is at or below the module's high-water mark (a
+    /// replayed or backwards counter); the mark is unchanged.
+    CounterRegression,
     /// A module issue's randomness count differs from the chunk count.
     ChunkCountMismatch,
     /// A module issue's envelope label is present or absent against the profile.
@@ -86,10 +88,17 @@ pub enum Error {
     PadIdMismatch,
     /// The returned pad index is not `counter × b` (VC-034).
     PadIndexMismatch,
-    /// A module's record signature could not be obtained.
+    /// A module's record signature does not verify under its genesis key.
     RecordSignature,
-    /// The in-memory journal head differs from the host's re-read head (VC-056).
+    /// A module's batch signature does not verify under its genesis key.
+    BatchSignature,
+    /// The in-memory journal head differs from the head the host re-read
+    /// from storage (VC-056). The unit stays faulted: it refuses new
+    /// ballots, batches, scan counts and the close signature.
     JournalMismatch,
+    /// A journal stream read at resume has a broken head chain, an entry
+    /// that does not decode, or an entry inconsistent with the ones before.
+    JournalCorrupt,
     /// The batch is empty, so it cannot be closed.
     BatchEmpty,
     /// The batch already holds 64 records.
@@ -112,6 +121,11 @@ pub enum Error {
     TimeRegression,
     /// Slips are printed only when the `VOTER_CODE` scope is active.
     VoterCodeDisabled,
+    /// The close inputs carry an envelope count for an in-person box, or
+    /// none for an absentee box.
+    EnvelopeCountProfile,
+    /// The close token belongs to another box.
+    ForeignCloseToken,
 }
 
 impl From<ityv_encoding::Error> for Error {
@@ -155,13 +169,12 @@ impl fmt::Display for ConfigFault {
         f.write_str(match self {
             Self::ModulesUnsorted => "modules not strictly ascending or more than six",
             Self::ChamberModules => {
-                "chamber module assignment violates X/Y mandatory, N none, one per chamber"
+                "chamber modules violate X/Y own, J/A/C own or neutral, N none, one per chamber"
             }
             Self::TrusteesUnsorted => "trustees not strictly ascending or more than 64",
             Self::MemberIndices => "member indices of a chamber are not 0..n",
             Self::ThresholdCount => "trustee count of a chamber differs from its threshold n",
             Self::Styles => "no ballot style, too many, or duplicate identifiers",
-            Self::SecretCapacity => "a style shares more than fifty secrets per member",
         })
     }
 }
@@ -196,7 +209,10 @@ impl fmt::Display for Error {
             Self::PortCount => f.write_str("port count differs from module count"),
             Self::WrongModule => f.write_str("module issue names another module"),
             Self::WrongChamber => f.write_str("module issue names another chamber"),
-            Self::CounterGap => f.write_str("module counter is not the previous plus one"),
+            Self::CounterGap => f.write_str("module counter skips past the high-water mark"),
+            Self::CounterRegression => {
+                f.write_str("module counter at or below the high-water mark")
+            }
             Self::ChunkCountMismatch => {
                 f.write_str("module randomness count differs from chunk count")
             }
@@ -206,10 +222,12 @@ impl fmt::Display for Error {
             Self::TagCount => f.write_str("module tag count differs from the member count"),
             Self::PadIdMismatch => f.write_str("pad identifier differs from the trustee's"),
             Self::PadIndexMismatch => f.write_str("pad index is not counter times the consumption"),
-            Self::RecordSignature => f.write_str("module record signature unavailable"),
+            Self::RecordSignature => f.write_str("module record signature does not verify"),
+            Self::BatchSignature => f.write_str("module batch signature does not verify"),
             Self::JournalMismatch => {
                 f.write_str("journal head differs from the host's re-read head")
             }
+            Self::JournalCorrupt => f.write_str("journal stream is broken or corrupt"),
             Self::BatchEmpty => f.write_str("batch is empty"),
             Self::BatchFull => f.write_str("batch holds 64 records"),
             Self::BoxClosed => f.write_str("box is closed"),
@@ -221,6 +239,10 @@ impl fmt::Display for Error {
             Self::StaleBallot => f.write_str("ballot is not the one in flight"),
             Self::TimeRegression => f.write_str("time bucket earlier than the journal's last"),
             Self::VoterCodeDisabled => f.write_str("voter code scope is not active"),
+            Self::EnvelopeCountProfile => {
+                f.write_str("envelope count presence disagrees with the profile")
+            }
+            Self::ForeignCloseToken => f.write_str("close token belongs to another box"),
         }
     }
 }

@@ -8,7 +8,9 @@
 //! implementation must use checked 64-bit arithmetic:
 //!
 //! * the option bound of PROTOCOL.md §7.3 step 1;
-//! * module counter continuity (PROTOCOL.md §7.2);
+//! * the module counter high-water mark (PROTOCOL.md §7.2, ADR-0017 개정 2):
+//!   the classification of one counter, and over a sequence of issues that
+//!   the mark never moves backwards and never accepts a counter twice;
 //! * the pad consumption and pad index of §9.4.3 (VC-034);
 //! * the module's batch-signing rule (VC-021);
 //! * the batch and scan-count triggers (§7.2.1, §7.8, VC-052);
@@ -33,9 +35,9 @@
 use crate::error::Invariant;
 use crate::port::module_may_sign_batch;
 use crate::rules::{
-    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, PAD_KEY_BYTES, SCAN_COUNT_BUCKETS,
-    SCAN_COUNT_RECORDS, batch_due, close_verdict, counter_follows, option_in_range,
-    pad_consumption, pad_index, scan_count_due,
+    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, PAD_KEY_BYTES,
+    SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, advance_mark, batch_due, check_counter, close_verdict,
+    option_in_range, pad_consumption, pad_index, scan_count_due,
 };
 
 /// The option bound accepts exactly the indices `0..=option_count − 1`.
@@ -48,14 +50,52 @@ fn option_bound_is_exact() {
     assert_eq!(option_in_range(count, index), expected);
 }
 
-/// A counter follows exactly when it is one more than the previous, and
-/// the largest counter has no successor.
+/// One counter is classified exactly: the next one is `mark + 1`, a
+/// regression is at or below the mark, a gap is beyond `mark + 1`.
 #[kani::proof]
-fn counter_continuity_is_exact() {
-    let previous: u64 = kani::any();
+fn counter_check_is_exact() {
+    let mark: u64 = kani::any();
     let counter: u64 = kani::any();
-    let expected = (counter as u128) == (previous as u128) + 1;
-    assert_eq!(counter_follows(previous, counter), expected);
+    let (m, c) = (mark as u128, counter as u128);
+    let expected = if c <= m {
+        CounterCheck::Regression
+    } else if c == m + 1 {
+        CounterCheck::Next
+    } else {
+        CounterCheck::Gap
+    };
+    assert_eq!(check_counter(mark, counter), expected);
+}
+
+/// Over a sequence of four issues with arbitrary counters (replays,
+/// regressions, gaps included), the mark moves only on an accepted
+/// counter, moves to exactly that counter, never decreases, and no counter
+/// is accepted twice.
+#[kani::proof]
+#[kani::unwind(5)]
+fn counter_mark_never_reuses() {
+    let start: u64 = kani::any();
+    let mut mark = start;
+    let mut accepted = [0u64; 4];
+    let mut n = 0usize;
+    for _ in 0..4 {
+        let counter: u64 = kani::any();
+        let before = mark;
+        let check = advance_mark(&mut mark, counter);
+        if check == CounterCheck::Next {
+            assert_eq!(mark, counter);
+            assert_eq!(mark as u128, before as u128 + 1);
+            for &previous in &accepted[..n] {
+                assert_ne!(previous, counter);
+            }
+            accepted[n] = counter;
+            n += 1;
+        } else {
+            assert_eq!(mark, before);
+        }
+        assert!(mark >= before);
+    }
+    assert_eq!(mark as u128, start as u128 + n as u128);
 }
 
 /// The pad consumption is the member share length plus the two 32-byte

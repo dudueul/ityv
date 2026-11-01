@@ -30,7 +30,10 @@ use ityv_crypto::{
     RecordSigningKey, RecordVerifyingKey, Scalar, Sha3Hasher, Threshold, one_time_tag, sign_hybrid,
     sign_record,
 };
-use ityv_cunit::ballot::{BuildBuffers, SCRATCH_SLOT_LEN, member_share_len, scratch_len};
+use ityv_cunit::ballot::{
+    BallotWork, BuildBuffers, SCRATCH_SLOT_LEN, member_share_len, scratch_len,
+};
+use ityv_cunit::boxstate::{OpenBox, Signer};
 use ityv_cunit::config::{
     BallotStyle, ConfigParts, ElectionConfig, ModuleConfig, Profile, TrusteeConfig,
 };
@@ -38,11 +41,14 @@ use ityv_cunit::link::{
     Interpretation, ModuleIssue, ModuleIssueParts, SCHEMA_INTERPRETATION, SCHEMA_MODULE_ISSUE,
 };
 use ityv_cunit::port::{
-    JournalError, JournalSink, ModulePort, PortError, Sealed, module_may_sign_batch,
+    JournalError, JournalItem, JournalSink, JournalSource, ModulePort, PortError, Sealed,
+    module_may_sign_batch,
 };
+use ityv_cunit::rules::{PAD_MAC_KEY_OFFSET, PAD_PLAINTEXT_OFFSET, PAD_TAG_KEY_OFFSET};
 use ityv_encoding::{
-    BallotStyleId, BatchAttestBody, BoxId, ElectionId, ModuleId, SCHEMA_BATCH_ATTEST_BODY,
-    SCHEMA_VERSION_1, Scalar32, StationId, Token192, TrusteeId, decode_object, encode_object,
+    BallotStyleId, BatchAttestBody, BoxId, ElectionId, Hash512, ModuleId, SCHEMA_BATCH_ATTEST_BODY,
+    SCHEMA_VERSION_1, Scalar32, StationId, TimeBucket, Token192, TrusteeId, decode_object,
+    encode_object,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
@@ -64,12 +70,17 @@ pub(crate) struct ModuleSpec {
     pub(crate) neutral: bool,
 }
 
-/// The default module set: own modules for J, X, Y; a neutral module for
-/// A; none for C and N (KEM transport). Ascending by identifier.
-pub(crate) const MODULES: [ModuleSpec; 4] = [
+/// The default module set: own modules for J, X, Y; neutral modules for A
+/// and C; none for N (KEM transport). Ascending by identifier.
+pub(crate) const MODULES: [ModuleSpec; 5] = [
     ModuleSpec {
         id: b"mod-a",
         chamber: Chamber::A,
+        neutral: true,
+    },
+    ModuleSpec {
+        id: b"mod-c",
+        chamber: Chamber::C,
         neutral: true,
     },
     ModuleSpec {
@@ -168,7 +179,7 @@ pub(crate) fn world_with(profile: Profile, voter_code: bool, modules: &[ModuleSp
         .collect();
     let module_configs: Vec<ModuleConfig<'static>> = modules
         .iter()
-        .map(|m| ModuleConfig::new(ModuleId::new(m.id).unwrap(), m.chamber, m.neutral))
+        .map(|m| module_config(m.id, m.chamber, m.neutral))
         .collect();
     let styles = vec![
         BallotStyle::new(
@@ -201,6 +212,33 @@ pub(crate) fn world_with(profile: Profile, voter_code: bool, modules: &[ModuleSp
         device_hybrid: HybridSigningKey::from_seeds([4; 32], [5; 32]),
         modules: modules.to_vec(),
     }
+}
+
+/// A module entry with the mock module's genesis keys.
+pub(crate) fn module_config(
+    id: &'static [u8],
+    chamber: Chamber,
+    neutral: bool,
+) -> ModuleConfig<'static> {
+    let (record, batch) = module_keys(id);
+    ModuleConfig::new(
+        ModuleId::new(id).unwrap(),
+        chamber,
+        neutral,
+        record.verifying_key(),
+        leak(batch.verifying_key()),
+    )
+}
+
+/// The record and batch signing keys of the mock module `id`.
+pub(crate) fn module_keys(id: &[u8]) -> (RecordSigningKey, HybridSigningKey) {
+    let seed = token_from(b"seed", &[id]);
+    let mut s32 = [0u8; 32];
+    s32[..24].copy_from_slice(&seed);
+    (
+        RecordSigningKey::from_seed(s32),
+        HybridSigningKey::from_seeds(s32, [9; 32]),
+    )
 }
 
 /// The pad stream of member `member` of module `module` at `offset`.
@@ -262,18 +300,25 @@ pub(crate) struct MockModule {
     pub(crate) chamber_code: u8,
     pub(crate) members: u8,
     pub(crate) counter: u64,
-    pub(crate) chunks: usize,
     pub(crate) label: bool,
     pub(crate) pad_b: u64,
     pub(crate) pad_ids: Vec<u32>,
     pub(crate) record_key: RecordSigningKey,
     pub(crate) batch_key: HybridSigningKey,
     pub(crate) pending: Vec<u64>,
-    signed_through: Option<u64>,
     pub(crate) issued: Vec<IssueRecord>,
+    /// Calls to `check_batch` and to `sign_batch`.
+    pub(crate) checks: usize,
+    pub(crate) signs: usize,
+    /// Every `(member, offset, len)` pad range a seal consumed.
+    pub(crate) pad_uses: Vec<(u8, u64, u64)>,
     // misbehaviour switches
     pub(crate) exhaust_member: Option<u8>,
     pub(crate) refuse_batches: bool,
+    pub(crate) refuse_at_signing: bool,
+    pub(crate) wrong_record_key: bool,
+    pub(crate) wrong_batch_key: bool,
+    pub(crate) force_counter: Option<u64>,
     pub(crate) wrong_pad_index: bool,
     pub(crate) wrong_pad_id: bool,
     pub(crate) skip_counter: bool,
@@ -286,10 +331,21 @@ pub(crate) struct MockModule {
 }
 
 impl MockModule {
-    pub(crate) fn new(world: &World, spec: &ModuleSpec, chunks: usize) -> Self {
+    pub(crate) fn new(world: &World, spec: &ModuleSpec) -> Self {
         let label = world.config.profile().has_label();
-        let style_secrets = world.modules.len() * chunks + 1 + usize::from(label);
-        let pad_b = (member_share_len(style_secrets, label) + 64) as u64;
+        // b is one per box: the longest member share over the box's styles
+        // plus the two 32-byte keys (PROTOCOL.md §9.4.3).
+        let longest = world
+            .config
+            .styles()
+            .iter()
+            .map(|s| {
+                let secrets = world.modules.len() * usize::from(s.chunk_count()) + 1;
+                member_share_len(secrets + usize::from(label), label)
+            })
+            .max()
+            .unwrap();
+        let pad_b = (longest + 64) as u64;
         let pad_ids = world
             .trustees
             .iter()
@@ -299,25 +355,28 @@ impl MockModule {
                 acc[usize::from(i)] = id;
                 acc
             });
-        let seed = token_from(b"seed", &[spec.id]);
-        let mut s32 = [0u8; 32];
-        s32[..24].copy_from_slice(&seed);
+        let (record_key, batch_key) = module_keys(spec.id);
         Self {
             id: spec.id,
             chamber_code: ityv_cunit::config::chamber_code(spec.chamber).code(),
             members: 2,
             counter: 0,
-            chunks,
             label,
             pad_b,
             pad_ids,
-            record_key: RecordSigningKey::from_seed(s32),
-            batch_key: HybridSigningKey::from_seeds(s32, [9; 32]),
+            record_key,
+            batch_key,
             pending: Vec::new(),
-            signed_through: None,
             issued: Vec::new(),
+            checks: 0,
+            signs: 0,
+            pad_uses: Vec::new(),
             exhaust_member: None,
             refuse_batches: false,
+            refuse_at_signing: false,
+            wrong_record_key: false,
+            wrong_batch_key: false,
+            force_counter: None,
             wrong_pad_index: false,
             wrong_pad_id: false,
             skip_counter: false,
@@ -338,30 +397,23 @@ impl MockModule {
         self.batch_key.verifying_key()
     }
 
-    fn share_len(&self) -> u64 {
-        self.pad_b - 64
-    }
-
     pub(crate) fn last_issue(&self) -> &IssueRecord {
         self.issued.last().unwrap()
     }
 }
 
 impl ModulePort for MockModule {
-    fn issue(&mut self, out: &mut [u8]) -> Result<usize, PortError> {
+    fn issue(&mut self, chunk_count: u8, out: &mut [u8]) -> Result<usize, PortError> {
         if self.fail_issue {
             return Err(PortError::Transport);
         }
-        if let Some(through) = self.signed_through.take() {
-            self.pending.retain(|&c| c > through);
-        }
-        self.counter += if self.skip_counter { 2 } else { 1 };
-        let n = self.counter;
-        let rand_count = if self.extra_rand {
-            self.chunks + 1
+        let n = if let Some(forced) = self.force_counter.take() {
+            forced
         } else {
-            self.chunks
+            self.counter += if self.skip_counter { 2 } else { 1 };
+            self.counter
         };
+        let rand_count = usize::from(chunk_count) + usize::from(self.extra_rand);
         let rand: Vec<Scalar32> = (0..rand_count)
             .map(|j| scalar_from(b"rand", &[self.id, &n.to_be_bytes(), &[j as u8]]))
             .collect();
@@ -379,7 +431,7 @@ impl ModulePort for MockModule {
         let tag_count = usize::from(self.members) + usize::from(self.extra_tag);
         let tags: Vec<[u8; 16]> = (0..tag_count)
             .map(|i| {
-                let key = pad_bytes(self.id, i as u8, n * self.pad_b + self.share_len() + 32, 32);
+                let key = pad_bytes(self.id, i as u8, n * self.pad_b + PAD_TAG_KEY_OFFSET, 32);
                 *one_time_tag(OneTimeKey::from_bytes(key.try_into().unwrap()), &message).as_bytes()
             })
             .collect();
@@ -388,10 +440,10 @@ impl ModulePort for MockModule {
         } else {
             self.id
         };
-        let chamber = if self.wrong_chamber {
-            5 - (self.chamber_code % 5)
-        } else {
-            self.chamber_code
+        let chamber = match (self.wrong_chamber, self.chamber_code) {
+            (false, code) => code,
+            (true, 1) => 2,
+            (true, _) => 1,
         };
         let issue = ModuleIssue::new(&ModuleIssueParts {
             module_id: ModuleId::new(id).unwrap(),
@@ -420,9 +472,14 @@ impl ModulePort for MockModule {
         }
         let offset = self.counter * self.pad_b;
         let len = buffer.len();
-        let key = pad_bytes(self.id, member_index, offset + len as u64, 32);
+        assert!(
+            PAD_PLAINTEXT_OFFSET + len as u64 <= self.pad_b,
+            "share fits the region"
+        );
+        self.pad_uses.push((member_index, offset, self.pad_b));
+        let key = pad_bytes(self.id, member_index, offset + PAD_MAC_KEY_OFFSET, 32);
         let tag = *one_time_tag(OneTimeKey::from_bytes(key.try_into().unwrap()), buffer).as_bytes();
-        let pad = pad_bytes(self.id, member_index, offset, len);
+        let pad = pad_bytes(self.id, member_index, offset + PAD_PLAINTEXT_OFFSET, len);
         for (b, p) in buffer.iter_mut().zip(pad) {
             *b ^= p;
         }
@@ -436,11 +493,22 @@ impl ModulePort for MockModule {
     }
 
     fn sign_record(&mut self, message: &[u8]) -> Result<RecordSignature, PortError> {
-        sign_record(&self.record_key, RecordPurpose::ModuleRecord, message)
-            .map_err(|_| PortError::Transport)
+        let key = if self.wrong_record_key {
+            module_keys(b"someone-else").0
+        } else {
+            module_keys(self.id).0
+        };
+        sign_record(&key, RecordPurpose::ModuleRecord, message).map_err(|_| PortError::Transport)
     }
 
-    fn sign_batch(&mut self, body: &[u8]) -> Result<Option<HybridSignature>, PortError> {
+    fn check_batch(&mut self, counter_first: u64, counter_last: u64) -> Result<bool, PortError> {
+        self.checks += 1;
+        Ok(!self.refuse_batches
+            && module_may_sign_batch(&self.pending, counter_first, counter_last))
+    }
+
+    fn sign_batch(&mut self, body: &[u8]) -> Result<HybridSignature, PortError> {
+        self.signs += 1;
         let parsed: BatchAttestBody<'_> =
             decode_object(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, body)
                 .map_err(|_| PortError::Transport)?;
@@ -448,25 +516,32 @@ impl ModulePort for MockModule {
             .module_ranges()
             .find(|r| r.module_id.as_bytes() == self.id)
             .ok_or(PortError::Transport)?;
-        if self.refuse_batches
+        if self.refuse_at_signing
+            || self.refuse_batches
             || !module_may_sign_batch(&self.pending, range.counter_first, range.counter_last)
         {
-            return Ok(None);
+            return Err(PortError::Refused);
         }
         let purpose = Purpose::new(b"batch-attest").unwrap();
-        let sig = sign_hybrid(&self.batch_key, &purpose, body, &mut rng(self.counter))
+        let key = if self.wrong_batch_key {
+            module_keys(b"someone-else").1
+        } else {
+            module_keys(self.id).1
+        };
+        let sig = sign_hybrid(&key, &purpose, body, &mut rng(self.counter))
             .map_err(|_| PortError::Transport)?;
-        self.signed_through = Some(range.counter_last);
-        Ok(Some(sig))
+        // Real firmware marks the range attested as it signs.
+        self.pending.retain(|&c| c > range.counter_last);
+        Ok(sig)
     }
 }
 
-/// Mock modules for every configured module, for `chunks` chunks.
-pub(crate) fn mocks(world: &World, chunks: usize) -> Vec<MockModule> {
+/// Mock modules for every configured module.
+pub(crate) fn mocks(world: &World) -> Vec<MockModule> {
     world
         .modules
         .iter()
-        .map(|m| MockModule::new(world, m, chunks))
+        .map(|m| MockModule::new(world, m))
         .collect()
 }
 
@@ -497,6 +572,56 @@ impl JournalSink for MemJournal {
     }
 }
 
+impl MemJournal {
+    /// A source reading the journal back from the first entry.
+    pub(crate) fn reader(&self) -> MemReader<'_> {
+        MemReader {
+            journal: self,
+            next: 0,
+            fail_at: None,
+        }
+    }
+
+    /// The head after the last entry, as the host re-reads it.
+    pub(crate) fn head(&self) -> Hash512 {
+        self.entries
+            .last()
+            .map_or(Hash512::ZERO, |e| ityv_crypto::object_hash(e))
+    }
+}
+
+/// The stream of a `MemJournal`.
+pub(crate) struct MemReader<'a> {
+    journal: &'a MemJournal,
+    next: usize,
+    pub(crate) fail_at: Option<usize>,
+}
+
+impl JournalSource for MemReader<'_> {
+    fn next_item(
+        &mut self,
+        entry: &mut [u8],
+        package: &mut [u8],
+    ) -> Result<Option<JournalItem>, JournalError> {
+        if self.fail_at == Some(self.next) {
+            return Err(JournalError::Unreadable);
+        }
+        let Some(bytes) = self.journal.entries.get(self.next) else {
+            return Ok(None);
+        };
+        entry[..bytes.len()].copy_from_slice(bytes);
+        let package_len = self.journal.packages[self.next].as_ref().map(|p| {
+            package[..p.len()].copy_from_slice(p);
+            p.len()
+        });
+        self.next += 1;
+        Ok(Some(JournalItem {
+            entry_len: bytes.len(),
+            package_len,
+        }))
+    }
+}
+
 /// An `Interpretation` object.
 pub(crate) fn interpretation(election: &[u8], style: &[u8], option: u16) -> Vec<u8> {
     let value = Interpretation::new(
@@ -508,6 +633,83 @@ pub(crate) fn interpretation(election: &[u8], style: &[u8], option: u16) -> Vec<
     let len = encode_object(SCHEMA_INTERPRETATION, SCHEMA_VERSION_1, &value, &mut out).unwrap();
     out.truncate(len);
     out
+}
+
+/// A boxed work area (33 KB, kept off the test thread's stack).
+pub(crate) fn work() -> Box<BallotWork> {
+    Box::new(BallotWork::new())
+}
+
+/// The device's signer for one operation.
+pub(crate) fn signer(world: &World) -> Signer<'_> {
+    Signer::new(&world.device_hybrid, &SEED)
+}
+
+/// The per-operation device seed of every test.
+pub(crate) const SEED: [u8; 32] = [11; 32];
+
+pub(crate) fn tb(n: u64) -> TimeBucket {
+    TimeBucket::new(n)
+}
+
+/// Casts and imprints one ballot of `style` choosing `option`; returns its
+/// tracking code.
+pub(crate) fn cast_with(
+    w: &World,
+    b: &mut OpenBox<'static>,
+    m: &mut [MockModule],
+    j: &mut MemJournal,
+    style: &[u8],
+    option: u16,
+    at: u64,
+) -> Hash512 {
+    let mut bufs = Buffers::new(w);
+    let mut work = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", style, option), &mut work)
+        .unwrap();
+    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
+    let ballot = ballot.commit(b).unwrap();
+    let ballot = ballot
+        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let ballot = ballot.cast(b, j, tb(at)).unwrap();
+    let code = *ballot.tracking_code();
+    ballot.imprinted(b).unwrap();
+    code
+}
+
+/// Casts and imprints one small-style ballot; returns its tracking code.
+pub(crate) fn cast_one(
+    w: &World,
+    b: &mut OpenBox<'static>,
+    m: &mut [MockModule],
+    j: &mut MemJournal,
+    at: u64,
+) -> Hash512 {
+    cast_with(w, b, m, j, STYLE_SMALL, 1, at)
+}
+
+/// Builds one small-style ballot and challenges it.
+pub(crate) fn challenge_one(
+    w: &World,
+    b: &mut OpenBox<'static>,
+    m: &mut [MockModule],
+    j: &mut MemJournal,
+    at: u64,
+) {
+    let mut bufs = Buffers::new(w);
+    let mut work = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 0), &mut work)
+        .unwrap();
+    let ballot = ballot.issue(b, &mut ports(m), &SEED).unwrap();
+    let ballot = ballot.commit(b).unwrap();
+    let ballot = ballot
+        .build(b, &mut ports(m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let mut out = vec![0u8; 8192];
+    ballot.challenge(b, j, signer(w), tb(at), &mut out).unwrap();
 }
 
 /// Owned buffers for one ballot.

@@ -5,7 +5,7 @@
 //! | rule | source |
 //! |---|---|
 //! | [`option_in_range`] | PROTOCOL.md §7.3 step 1 (`t ∈ 0..=m+1`) |
-//! | [`counter_follows`] | PROTOCOL.md §7.2 (module counters increase by one) |
+//! | [`check_counter`], [`advance_mark`] | PROTOCOL.md §7.2 (counter high-water mark) |
 //! | [`pad_consumption`], [`pad_index`] | PROTOCOL.md §9.4.3 (VC-034) |
 //! | [`batch_due`] | PROTOCOL.md §7.2.1 (64 records or one idle bucket) |
 //! | [`scan_count_due`] | PROTOCOL.md §7.8 (50 records or eight buckets, VC-052) |
@@ -24,6 +24,14 @@ pub const SCAN_COUNT_BUCKETS: u64 = 8;
 /// Pad bytes consumed per record besides the member share: the Poly1305
 /// key of the transport tag and the key of the module tag (§9.4.3).
 pub const PAD_KEY_BYTES: u64 = 64;
+/// Offset of the transport MAC key inside a record's pad region.
+pub const PAD_MAC_KEY_OFFSET: u64 = 0;
+/// Offset of the module tag key `key_{c,i,n}` inside a record's pad region.
+pub const PAD_TAG_KEY_OFFSET: u64 = 32;
+/// Offset of the plaintext pad inside a record's pad region; the pad runs
+/// for the length of that ballot's `MemberShare` and the rest of the
+/// region is not used.
+pub const PAD_PLAINTEXT_OFFSET: u64 = 64;
 
 /// `true` if `option_index` names an option of a set of `option_count`
 /// options (`0` BLANK, `1..=m` candidates, `m + 1` UNREADABLE).
@@ -32,13 +40,38 @@ pub const fn option_in_range(option_count: u16, option_index: u16) -> bool {
     option_index < option_count
 }
 
-/// `true` if `counter` is the module counter that follows `previous`.
+/// How a counter a module returned relates to the module's high-water
+/// mark, the highest counter the unit has accepted from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CounterCheck {
+    /// `counter == mark + 1`: accepted.
+    Next,
+    /// `counter <= mark`: a replayed or backwards counter.
+    Regression,
+    /// `counter > mark + 1`: the module skipped counters.
+    Gap,
+}
+
+/// Classifies `counter` against `mark`.
 #[must_use]
-pub const fn counter_follows(previous: u64, counter: u64) -> bool {
-    match previous.checked_add(1) {
-        Some(next) => next == counter,
-        None => false,
+pub const fn check_counter(mark: u64, counter: u64) -> CounterCheck {
+    if counter <= mark {
+        CounterCheck::Regression
+    } else if counter.abs_diff(mark) == 1 {
+        CounterCheck::Next
+    } else {
+        CounterCheck::Gap
     }
+}
+
+/// Applies [`check_counter`]: the mark moves to `counter` only when it is
+/// the next one; a regression or a gap leaves it unchanged.
+pub const fn advance_mark(mark: &mut u64, counter: u64) -> CounterCheck {
+    let check = check_counter(*mark, counter);
+    if matches!(check, CounterCheck::Next) {
+        *mark = counter;
+    }
+    check
 }
 
 /// The pad bytes `b` a module consumes per record for one member whose

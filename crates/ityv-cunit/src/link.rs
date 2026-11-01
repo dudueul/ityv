@@ -121,8 +121,8 @@ pub struct ModuleIssue<'a> {
     tag_count: u8,
 }
 
-/// Unvalidated inputs for [`ModuleIssue::new`].
-#[derive(Debug)]
+/// Unvalidated inputs for [`ModuleIssue::new`]. Its `Debug` output shows
+/// only the public fields.
 pub struct ModuleIssueParts<'a> {
     /// The module.
     pub module_id: ModuleId<'a>,
@@ -138,6 +138,16 @@ pub struct ModuleIssueParts<'a> {
     pub lab: Option<Token192>,
     /// The one-time MAC tags, one per chamber member (`<= 8`).
     pub tags: &'a [[u8; TAG_LEN]],
+}
+
+impl core::fmt::Debug for ModuleIssueParts<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ModuleIssueParts")
+            .field("module_id", &self.module_id)
+            .field("chamber", &self.chamber)
+            .field("counter", &self.counter)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> ModuleIssue<'a> {
@@ -219,8 +229,9 @@ impl<'a> ModuleIssue<'a> {
     }
 }
 
-impl Drop for ModuleIssue<'_> {
-    fn drop(&mut self) {
+impl ModuleIssue<'_> {
+    /// Overwrites the private part with zeros.
+    fn wipe(&mut self) {
         for scalar in &mut self.rand {
             scalar.0.zeroize();
         }
@@ -231,6 +242,12 @@ impl Drop for ModuleIssue<'_> {
         for tag in &mut self.tags {
             tag.zeroize();
         }
+    }
+}
+
+impl Drop for ModuleIssue<'_> {
+    fn drop(&mut self) {
+        self.wipe();
     }
 }
 
@@ -293,35 +310,40 @@ impl<'a> Decode<'a> for ModuleIssue<'a> {
         if counter == 0 {
             return Err(EncodingError::new(ErrorKind::ValueOutOfRange, counter_at));
         }
+        // The private part is decoded straight into the value, whose drop
+        // wipes it: a decoding error after this point leaves no copy of the
+        // part already read.
+        let mut issue = Self {
+            module_id,
+            chamber,
+            counter,
+            rand: [Scalar32([0; 32]); MAX_CHUNKS],
+            rand_count: 0,
+            cid: Token192([0; 24]),
+            lab: None,
+            tags: [[0u8; TAG_LEN]; MAX_TAGS],
+            tag_count: 0,
+        };
         let rand_at = r.position();
         let rand_count = r.read_count(MAX_CHUNKS)?;
         if rand_count == 0 {
             return Err(EncodingError::new(ErrorKind::ValueOutOfRange, rand_at));
         }
-        let mut rand = [Scalar32([0; 32]); MAX_CHUNKS];
-        for slot in rand.iter_mut().take(rand_count) {
+        for slot in issue.rand.iter_mut().take(rand_count) {
             *slot = Scalar32::decode(r)?;
         }
-        let cid = Token192::decode(r)?;
-        let lab = Option::<Token192>::decode(r)?;
+        issue.rand_count = u8::try_from(rand_count)
+            .map_err(|_| EncodingError::new(ErrorKind::CountExceedsMax, rand_at))?;
+        issue.cid = Token192::decode(r)?;
+        issue.lab = Option::<Token192>::decode(r)?;
+        let tags_at = r.position();
         let tag_count = r.read_count(MAX_TAGS)?;
-        let mut tags = [[0u8; TAG_LEN]; MAX_TAGS];
-        for slot in tags.iter_mut().take(tag_count) {
+        for slot in issue.tags.iter_mut().take(tag_count) {
             *slot = r.read_array::<TAG_LEN>()?;
         }
-        Ok(Self {
-            module_id,
-            chamber,
-            counter,
-            rand,
-            rand_count: u8::try_from(rand_count)
-                .map_err(|_| EncodingError::new(ErrorKind::CountExceedsMax, rand_at))?,
-            cid,
-            lab,
-            tags,
-            tag_count: u8::try_from(tag_count)
-                .map_err(|_| EncodingError::new(ErrorKind::CountExceedsMax, rand_at))?,
-        })
+        issue.tag_count = u8::try_from(tag_count)
+            .map_err(|_| EncodingError::new(ErrorKind::CountExceedsMax, tags_at))?;
+        Ok(issue)
     }
 }
 
@@ -466,5 +488,32 @@ impl<'a> Decode<'a> for JournalEntry<'a> {
             module_counters: ModuleCounters::decode(r)?,
             time_bucket: TimeBucket::decode(r)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wipe_clears_the_private_part() {
+        let rand = [Scalar32([1; 32]); MAX_CHUNKS];
+        let tags = [[2u8; TAG_LEN]; MAX_TAGS];
+        let mut issue = ModuleIssue::new(&ModuleIssueParts {
+            module_id: ModuleId::new(b"mod-x").expect("a valid identifier"),
+            chamber: 1,
+            counter: 3,
+            rand: &rand,
+            cid: Token192([3; 24]),
+            lab: Some(Token192([4; 24])),
+            tags: &tags,
+        })
+        .expect("valid parts");
+        issue.wipe();
+        assert!(issue.rand.iter().all(|s| s.0 == [0; 32]));
+        assert_eq!(issue.cid.0, [0; 24]);
+        assert_eq!(issue.lab.map(|l| l.0), Some([0; 24]));
+        assert!(issue.tags.iter().flatten().all(|&b| b == 0));
+        assert_eq!((issue.chamber, issue.counter), (1, 3), "public fields stay");
     }
 }

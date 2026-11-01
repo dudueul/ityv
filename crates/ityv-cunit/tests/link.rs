@@ -18,8 +18,8 @@
 mod common;
 
 use common::{
-    Buffers, MODULES, MemJournal, ModuleSpec, STYLE_SMALL, interpretation, mocks, ports, world,
-    world_with,
+    Buffers, MODULES, MemJournal, ModuleSpec, SEED, STYLE_SMALL, interpretation, mocks,
+    module_config, ports, tb, work, world, world_with,
 };
 use ityv_crypto::{AccessStructure, Chamber, OptionCount, Threshold};
 use ityv_cunit::boxstate::OpenBox;
@@ -37,16 +37,10 @@ use ityv_cunit::rng::DeviceRng;
 use ityv_cunit::{Error, module_may_sign_batch, rules};
 use ityv_encoding::{
     BallotStyleId, ElectionId, ErrorKind, Hash512, ModuleCounter, ModuleCounters, ModuleId,
-    SCHEMA_VERSION_1, Scalar32, TimeBucket, Token192, decode_object, encode_object,
+    SCHEMA_VERSION_1, Scalar32, Token192, decode_object, encode_object,
 };
 use proptest::prelude::*;
 use rand_core::Rng;
-
-const SEED: [u8; 32] = [11; 32];
-
-fn tb(n: u64) -> TimeBucket {
-    TimeBucket::new(n)
-}
 
 #[test]
 fn interpretation_layout_is_fixed() {
@@ -68,38 +62,39 @@ fn interpretation_layout_is_fixed() {
 fn interpret_accepts_only_this_election_known_styles_and_options_up_to_m_plus_one() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
+    let mut area = work();
     assert_eq!(
-        b.interpret(&interpretation(b"E-OTHER", STYLE_SMALL, 0))
+        b.interpret(&interpretation(b"E-OTHER", STYLE_SMALL, 0), &mut area)
             .unwrap_err(),
         Error::WrongElection
     );
     assert_eq!(
-        b.interpret(&interpretation(b"E-2026", b"NOPE", 0))
+        b.interpret(&interpretation(b"E-2026", b"NOPE", 0), &mut area)
             .unwrap_err(),
         Error::UnknownBallotStyle
     );
     assert_eq!(
-        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 4))
+        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 4), &mut area)
             .unwrap_err(),
         Error::OptionOutOfRange
     );
     assert_eq!(
-        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, u16::MAX))
+        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, u16::MAX), &mut area)
             .unwrap_err(),
         Error::OptionOutOfRange
     );
     assert!(matches!(
-        b.interpret(&[0u8; 30]).unwrap_err(),
+        b.interpret(&[0u8; 30], &mut area).unwrap_err(),
         Error::Encoding(_)
     ));
     let mut wrong_schema = interpretation(b"E-2026", STYLE_SMALL, 0);
     wrong_schema[7] = 0x02;
     assert!(
-        matches!(b.interpret(&wrong_schema).unwrap_err(), Error::Encoding(e) if e.kind() == ErrorKind::SchemaMismatch)
+        matches!(b.interpret(&wrong_schema, &mut area).unwrap_err(), Error::Encoding(e) if e.kind() == ErrorKind::SchemaMismatch)
     );
     assert!(!b.has_ballot_in_flight());
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 3))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 3), &mut area)
         .unwrap();
     assert_eq!(ballot.style().id().as_bytes(), STYLE_SMALL);
     assert!(b.has_ballot_in_flight());
@@ -231,10 +226,11 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
 fn issue_with(module: usize, setup: impl Fn(&mut common::MockModule)) -> Error {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
     setup(&mut m[module]);
+    let mut area = work();
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap_err()
 }
@@ -259,9 +255,10 @@ fn issue_rejects_every_module_misbehaviour() {
     );
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
+    let mut area = work();
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     assert_eq!(
         ballot
@@ -279,10 +276,11 @@ fn build_rejects_a_wrong_pad_index_or_pad_id() {
     ] {
         let w = world(Profile::InPerson, false);
         let mut b = OpenBox::open(w.config, tb(1));
-        let mut m = mocks(&w, 1);
+        let mut m = mocks(&w);
         let mut bufs = Buffers::new(&w);
+        let mut area = work();
         let ballot = b
-            .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+            .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
             .unwrap();
         let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
         let ballot = ballot.commit(&b).unwrap();
@@ -305,11 +303,12 @@ fn build_rejects_a_wrong_pad_index_or_pad_id() {
 fn build_needs_room_for_every_trustee() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     bufs.scratch.truncate(100);
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
     let ballot = ballot.commit(&b).unwrap();
@@ -375,13 +374,25 @@ fn configuration_rules_are_enforced() {
         }),
         ConfigFault::ChamberModules
     );
+    // J, A or C without a module (neither own nor delegated)
+    for chamber in [Chamber::J, Chamber::A, Chamber::C] {
+        let without: std::vec::Vec<_> = modules
+            .iter()
+            .copied()
+            .filter(|m| m.chamber() != chamber)
+            .collect();
+        assert_eq!(
+            config_fault(ConfigParts {
+                modules: leak_modules(without),
+                ..ok
+            }),
+            ConfigFault::ChamberModules,
+            "{chamber:?}"
+        );
+    }
     // N with a module
     let mut with_n = modules.to_vec();
-    with_n.push(ModuleConfig::new(
-        ModuleId::new(b"mod-z").unwrap(),
-        Chamber::N,
-        false,
-    ));
+    with_n.push(module_config(b"mod-z", Chamber::N, false));
     assert_eq!(
         config_fault(ConfigParts {
             modules: leak_modules(with_n),
@@ -394,7 +405,13 @@ fn configuration_rules_are_enforced() {
         .iter()
         .map(|m| {
             if m.chamber() == Chamber::X {
-                ModuleConfig::new(m.module_id(), Chamber::X, true)
+                ModuleConfig::new(
+                    m.module_id(),
+                    Chamber::X,
+                    true,
+                    *m.record_key(),
+                    m.batch_key(),
+                )
             } else {
                 *m
             }
@@ -409,11 +426,7 @@ fn configuration_rules_are_enforced() {
     );
     // two modules for one chamber
     let mut twice = modules.to_vec();
-    twice.push(ModuleConfig::new(
-        ModuleId::new(b"mod-z").unwrap(),
-        Chamber::J,
-        false,
-    ));
+    twice.push(module_config(b"mod-z", Chamber::J, false));
     assert_eq!(
         config_fault(ConfigParts {
             modules: leak_modules(twice),
@@ -424,8 +437,8 @@ fn configuration_rules_are_enforced() {
     // seven modules
     let seven: std::vec::Vec<_> = (0..7u8)
         .map(|i| {
-            ModuleConfig::new(
-                ModuleId::new(common::leak_bytes(std::vec![b'm', b'0' + i])).unwrap(),
+            module_config(
+                common::leak_bytes(std::vec![b'm', b'0' + i]),
                 Chamber::J,
                 false,
             )
@@ -564,7 +577,7 @@ fn configuration_accessors_and_chamber_codes() {
     assert!(c.voter_code_enabled());
     assert!(c.uses_neutral_module());
     assert_eq!(c.styles().len(), 2);
-    assert_eq!(c.modules().len(), 4);
+    assert_eq!(c.modules().len(), 5);
     assert_eq!(c.trustees().len(), 12);
     let (index, style) = c
         .style(BallotStyleId::new(common::STYLE_WIDE).unwrap())
@@ -572,8 +585,14 @@ fn configuration_accessors_and_chamber_codes() {
     assert_eq!(index, 1);
     assert_eq!(style.chunk_count(), 2);
     assert_eq!(style.option_count().get(), 12);
-    assert_eq!(c.secret_count(style), 4 * 2 + 2);
-    assert_eq!(c.module_for(Chamber::X).unwrap().0, 2);
+    assert_eq!(c.secret_count(style), 5 * 2 + 2);
+    // one b per box: the two-chunk style's share, 62 + 32·12 + 24 = 470
+    assert_eq!(c.member_share_len(style), 470);
+    assert_eq!(c.pad_consumption(), 534);
+    assert_eq!(c.module_for(Chamber::X).unwrap().0, 3);
+    let (record, batch) = common::module_keys(b"mod-x");
+    assert_eq!(c.modules()[3].record_key(), &record.verifying_key());
+    assert_eq!(c.modules()[3].batch_key(), &batch.verifying_key());
     assert!(c.module_for(Chamber::N).is_none());
     assert!(c.modules()[0].is_neutral());
     for chamber in Chamber::ALL {
@@ -581,9 +600,15 @@ fn configuration_accessors_and_chamber_codes() {
     }
     assert_eq!(chamber_code(Chamber::X).code(), 1);
     assert_eq!(chamber_code(Chamber::N).code(), 6);
-    let no_neutral: [ModuleSpec; 2] = [MODULES[2], MODULES[3]];
+    let own = |spec: ModuleSpec| ModuleSpec {
+        neutral: false,
+        ..spec
+    };
+    let no_neutral: [ModuleSpec; 5] = MODULES.map(own);
     let w2 = world_with(Profile::InPerson, false, &no_neutral);
     assert!(!w2.config.uses_neutral_module());
+    // in person: 62 + 32·11 = 414 for the two-chunk style
+    assert_eq!(w2.config.pad_consumption(), 478);
     for t in w.config.trustees() {
         assert_eq!(
             t.chamber(),
@@ -652,12 +677,24 @@ fn module_batch_rule_examples() {
 
 #[test]
 fn counting_rule_examples() {
+    use rules::CounterCheck::{Gap, Next, Regression};
     assert!(rules::option_in_range(4, 3));
     assert!(!rules::option_in_range(4, 4));
-    assert!(rules::counter_follows(4, 5));
-    assert!(!rules::counter_follows(4, 6));
-    assert!(!rules::counter_follows(4, 4));
-    assert!(!rules::counter_follows(u64::MAX, 0));
+    assert_eq!(rules::check_counter(4, 5), Next);
+    assert_eq!(rules::check_counter(4, 6), Gap);
+    assert_eq!(rules::check_counter(4, 4), Regression);
+    assert_eq!(rules::check_counter(4, 3), Regression);
+    assert_eq!(rules::check_counter(u64::MAX, 0), Regression);
+    assert_eq!(rules::check_counter(0, u64::MAX), Gap);
+    let mut mark = 4;
+    assert_eq!(rules::advance_mark(&mut mark, 5), Next);
+    assert_eq!(mark, 5);
+    assert_eq!(rules::advance_mark(&mut mark, 3), Regression);
+    assert_eq!(rules::advance_mark(&mut mark, 7), Gap);
+    assert_eq!(mark, 5);
+    assert_eq!(rules::PAD_MAC_KEY_OFFSET, 0);
+    assert_eq!(rules::PAD_TAG_KEY_OFFSET, 32);
+    assert_eq!(rules::PAD_PLAINTEXT_OFFSET, 64);
     assert_eq!(rules::pad_consumption(222), Some(286));
     assert_eq!(rules::pad_index(3, 286), Some(858));
     assert_eq!(rules::pad_index(u64::MAX, 2), None);
@@ -698,11 +735,18 @@ fn errors_display_without_secrets() {
         Error::BatchFull,
         Error::BoxClosed,
         Error::CounterGap,
+        Error::CounterRegression,
+        Error::RecordSignature,
+        Error::BatchSignature,
+        Error::JournalCorrupt,
+        Error::EnvelopeCountProfile,
+        Error::ForeignCloseToken,
+        Error::Journal(ityv_cunit::JournalError::Unreadable),
     ]
     .iter()
     .map(|e| std::format!("{e}"))
     .collect();
-    assert_eq!(shown.len(), 9);
+    assert_eq!(shown.len(), 16);
 }
 
 proptest! {

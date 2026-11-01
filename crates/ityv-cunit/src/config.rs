@@ -8,15 +8,26 @@
 //! module (PROTOCOL.md §7.1) is modelled as one *logical* module per
 //! delegated chamber with `neutral = true`; the host may implement several
 //! such logical modules over one physical device, each with its own
-//! identifier, counter and port. Chambers X and Y must have a non-neutral
-//! module; N never has one and always receives KEM transport.
+//! identifier, counter, keys and port. Chambers X and Y must have their own
+//! module; J, A and C must have their own module or a neutral delegation;
+//! N never has one and always receives KEM transport (ADR-0017 개정 10).
+//!
+//! The pad bytes `b` a module consumes per record and member are fixed per
+//! box when the configuration is validated: the largest `MemberShare` over
+//! the box's styles plus 64 (PROTOCOL.md §9.4.3, ADR-0017 개정 1), so that
+//! styles with different chunk counts never share pad bytes.
 
-use ityv_crypto::{AccessStructure, Chamber, HybridKemPublicKey, OptionCount};
+use ityv_crypto::{
+    AccessStructure, Chamber, HybridKemPublicKey, HybridVerifyingKey, OptionCount,
+    RecordVerifyingKey,
+};
 use ityv_encoding::{
     BallotStyleId, BoxId, ChamberCode, ElectionId, MAX_SECRETS, ModuleId, StationId, TrusteeId,
 };
 
+use crate::ballot::member_share_len;
 use crate::error::{ConfigFault, Error};
+use crate::rules::PAD_KEY_BYTES;
 
 /// Maximum number of modules (one per chamber with a module).
 pub const MAX_MODULES: usize = 6;
@@ -81,24 +92,48 @@ impl<'a> BallotStyle<'a> {
     }
 }
 
-/// One logical chamber module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One logical chamber module with its genesis public keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleConfig<'a> {
     module_id: ModuleId<'a>,
     chamber: Chamber,
     neutral: bool,
+    record_key: RecordVerifyingKey,
+    batch_key: &'a HybridVerifyingKey,
 }
 
 impl<'a> ModuleConfig<'a> {
     /// Builds a module entry. `neutral` marks a module supplied by the
-    /// Independent Verification Committee for a delegated chamber.
+    /// Independent Verification Committee for a delegated chamber;
+    /// `record_key` verifies its record signatures (Ed25519) and
+    /// `batch_key` its batch signatures (hybrid).
     #[must_use]
-    pub const fn new(module_id: ModuleId<'a>, chamber: Chamber, neutral: bool) -> Self {
+    pub const fn new(
+        module_id: ModuleId<'a>,
+        chamber: Chamber,
+        neutral: bool,
+        record_key: RecordVerifyingKey,
+        batch_key: &'a HybridVerifyingKey,
+    ) -> Self {
         Self {
             module_id,
             chamber,
             neutral,
+            record_key,
+            batch_key,
         }
+    }
+
+    /// The Ed25519 key of the module's record signatures.
+    #[must_use]
+    pub const fn record_key(&self) -> &RecordVerifyingKey {
+        &self.record_key
+    }
+
+    /// The hybrid key of the module's batch signatures.
+    #[must_use]
+    pub const fn batch_key(&self) -> &'a HybridVerifyingKey {
+        self.batch_key
     }
 
     /// The identifier.
@@ -209,6 +244,7 @@ pub struct ConfigParts<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct ElectionConfig<'a> {
     parts: ConfigParts<'a>,
+    pad_consumption: u64,
 }
 
 fn ascending<T>(items: &[T], key: impl Fn(&T) -> &[u8]) -> bool {
@@ -227,7 +263,11 @@ impl<'a> ElectionConfig<'a> {
         Self::check_modules(parts.modules)?;
         Self::check_trustees(parts.trustees, &parts.access)?;
         Self::check_styles(&parts)?;
-        Ok(Self { parts })
+        let pad_consumption = box_pad_consumption(parts.modules.len(), parts.styles, parts.profile);
+        Ok(Self {
+            parts,
+            pad_consumption,
+        })
     }
 
     fn check_modules(modules: &[ModuleConfig<'_>]) -> Result<(), ConfigFault> {
@@ -244,10 +284,13 @@ impl<'a> ElectionConfig<'a> {
                 return Err(ConfigFault::ChamberModules);
             }
         }
-        let x = per_chamber.get(Chamber::X.index()).copied().unwrap_or(0);
-        let y = per_chamber.get(Chamber::Y.index()).copied().unwrap_or(0);
-        if x != 1 || y != 1 || per_chamber.iter().any(|&n| n > 1) {
-            return Err(ConfigFault::ChamberModules);
+        // Every chamber but N has exactly one module (own or delegated).
+        for chamber in Chamber::ALL {
+            let count = per_chamber.get(chamber.index()).copied().unwrap_or(0);
+            let expected = u8::from(!matches!(chamber, Chamber::N));
+            if count != expected {
+                return Err(ConfigFault::ChamberModules);
+            }
         }
         Ok(())
     }
@@ -379,12 +422,43 @@ impl<'a> ElectionConfig<'a> {
         )
     }
 
+    /// Length of a module member's `MemberShare` object for `style`.
+    #[must_use]
+    pub fn member_share_len(&self, style: &BallotStyle<'_>) -> usize {
+        member_share_len(self.secret_count(style), self.parts.profile.has_label())
+    }
+
+    /// The pad bytes `b` every module consumes per record and member in
+    /// this box: the largest [`Self::member_share_len`] over the box's
+    /// styles plus 64. Record `n` uses the region `[n·b, (n+1)·b)`.
+    #[must_use]
+    pub const fn pad_consumption(&self) -> u64 {
+        self.pad_consumption
+    }
+
     /// Whether any configured module is neutral (sets `transport_flags`
     /// bit 1 on every record).
     #[must_use]
     pub fn uses_neutral_module(&self) -> bool {
         self.parts.modules.iter().any(|m| m.neutral)
     }
+}
+
+/// `max over styles of len(MemberShare) + 64` (PROTOCOL.md §9.4.3).
+fn box_pad_consumption(modules: usize, styles: &[BallotStyle<'_>], profile: Profile) -> u64 {
+    let longest = styles
+        .iter()
+        .map(|style| {
+            member_share_len(
+                secret_count(modules, style.chunk_count(), profile),
+                profile.has_label(),
+            )
+        })
+        .max()
+        .unwrap_or(0);
+    u64::try_from(longest)
+        .unwrap_or(u64::MAX)
+        .saturating_add(PAD_KEY_BYTES)
 }
 
 /// `modules × k + 1 (+ 1 for the envelope label)`.

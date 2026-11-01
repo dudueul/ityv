@@ -20,21 +20,18 @@ use std::collections::BTreeSet;
 use std::format;
 use std::string::String;
 
-use common::{Buffers, MemJournal, STYLE_SMALL, interpretation, mocks, ports, world};
+use common::{
+    Buffers, MemJournal, SEED, STYLE_SMALL, interpretation, mocks, module_config, ports, signer,
+    tb, work, world,
+};
 use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox};
 use ityv_cunit::config::Profile;
 use ityv_cunit::error::{ConfigFault, Invariant};
 use ityv_cunit::{Error, JournalError, PortError};
 use ityv_encoding::{
     BoxCloseBody, CastRecord, CastRecordBody, Hash512, SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD,
-    SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, TimeBucket, decode_object,
+    SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, decode_object,
 };
-
-const SEED: [u8; 32] = [11; 32];
-
-fn tb(n: u64) -> TimeBucket {
-    TimeBucket::new(n)
-}
 
 fn distinct_nonempty(texts: &[String]) {
     assert!(texts.iter().all(|t| !t.is_empty()));
@@ -52,7 +49,6 @@ fn every_enum_displays_a_distinct_text() {
             ConfigFault::MemberIndices,
             ConfigFault::ThresholdCount,
             ConfigFault::Styles,
-            ConfigFault::SecretCapacity,
         ]
         .map(|f| format!("{f}")),
     );
@@ -77,7 +73,14 @@ fn every_enum_displays_a_distinct_text() {
         ]
         .map(|e| format!("{e}")),
     );
-    distinct_nonempty(&[JournalError::NotDurable, JournalError::Full].map(|e| format!("{e}")));
+    distinct_nonempty(
+        &[
+            JournalError::NotDurable,
+            JournalError::Full,
+            JournalError::Unreadable,
+        ]
+        .map(|e| format!("{e}")),
+    );
     let errors = [
         Error::Encoding(ityv_encoding::Error::new(
             ityv_encoding::ErrorKind::BadMagic,
@@ -96,13 +99,16 @@ fn every_enum_displays_a_distinct_text() {
         Error::WrongModule,
         Error::WrongChamber,
         Error::CounterGap,
+        Error::CounterRegression,
         Error::ChunkCountMismatch,
         Error::LabelPresence,
         Error::TagCount,
         Error::PadIdMismatch,
         Error::PadIndexMismatch,
         Error::RecordSignature,
+        Error::BatchSignature,
         Error::JournalMismatch,
+        Error::JournalCorrupt,
         Error::BatchEmpty,
         Error::BatchFull,
         Error::BoxClosed,
@@ -114,6 +120,8 @@ fn every_enum_displays_a_distinct_text() {
         Error::StaleBallot,
         Error::TimeRegression,
         Error::VoterCodeDisabled,
+        Error::EnvelopeCountProfile,
+        Error::ForeignCloseToken,
     ];
     let texts: std::vec::Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
     distinct_nonempty(&texts);
@@ -132,9 +140,11 @@ fn every_enum_displays_a_distinct_text() {
 fn ballots_debug_print_only_the_ticket() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
+    let mut area = work();
+    assert_eq!(format!("{area:?}"), "BallotWork(..)");
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let text = format!("{ballot:?}");
     assert!(text.starts_with("Ballot"));
@@ -150,11 +160,12 @@ fn ballots_debug_print_only_the_ticket() {
 fn built_and_durable_accessors_expose_the_written_objects() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
     let mut j = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
     let ballot = ballot.commit(&b).unwrap();
@@ -180,11 +191,12 @@ fn built_and_durable_accessors_expose_the_written_objects() {
 fn a_close_with_an_open_batch_reports_it_in_the_body() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
     let mut j = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
     let ballot = ballot.commit(&b).unwrap();
@@ -206,19 +218,19 @@ fn a_close_with_an_open_batch_reports_it_in_the_body() {
         record_set_root: ityv_ledger::merkle::sorted_set_root(&[code]).unwrap(),
         seal_digest: Hash512([1; 64]),
     };
-    let mut work = std::vec![0u8; CLOSE_WORK_LEN];
-    let out = b
-        .prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(2), &mut work)
+    let mut out = std::vec![0u8; CLOSE_WORK_LEN];
+    let closing = b
+        .prepare_close(&inputs, signer(&w), &mut j, tb(2), &mut out)
         .unwrap();
-    assert!(out.verdict.contains(Invariant::OpenBatches));
+    assert!(closing.verdict.contains(Invariant::OpenBatches));
     let body: BoxCloseBody<'_> =
-        decode_object(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, out.body).unwrap();
+        decode_object(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, closing.body).unwrap();
     assert_eq!(body.open_batches(), 1);
     assert_eq!(body.counts().records, 1);
     assert_eq!(body.counts().attested, 0);
     assert_eq!(body.time_bucket(), tb(2));
     assert_eq!(body.seal_digest(), &Hash512([1; 64]));
-    let token = out.token;
+    let token = closing.token;
     // nothing else is accepted once the close entry is written
     let head = *b.journal_head();
     let mut bw = std::vec![0u8; BATCH_WORK_LEN];
@@ -226,8 +238,7 @@ fn a_close_with_an_open_batch_reports_it_in_the_body() {
         b.close_batch(
             &head,
             &mut ports(&mut m),
-            &w.device_hybrid,
-            &SEED,
+            signer(&w),
             &mut j,
             tb(2),
             &mut bw
@@ -240,7 +251,7 @@ fn a_close_with_an_open_batch_reports_it_in_the_body() {
         b.scan_count_body(tb(2), &mut sw).unwrap_err(),
         Error::BoxClosed
     );
-    let closed = b.into_closed(token);
+    let closed = b.into_closed(token).unwrap();
     assert_eq!(closed.config().box_id().as_bytes(), b"BOX-1");
 }
 
@@ -260,24 +271,26 @@ fn close_needs_room_and_no_ballot_in_flight() {
     };
     let mut small = std::vec![0u8; 100];
     assert_eq!(
-        b.prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(1), &mut small)
+        b.prepare_close(&inputs, signer(&w), &mut j, tb(1), &mut small)
             .unwrap_err(),
         Error::BufferTooSmall
     );
-    let _ballot = b
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+    let mut area = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
-    let mut work = std::vec![0u8; CLOSE_WORK_LEN];
+    let mut out = std::vec![0u8; CLOSE_WORK_LEN];
     assert_eq!(
-        b.prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(1), &mut work)
+        b.prepare_close(&inputs, signer(&w), &mut j, tb(1), &mut out)
             .unwrap_err(),
         Error::BallotInFlight
     );
+    drop(ballot);
     b.quarantine_in_flight(&mut j, tb(1)).unwrap();
-    let out = b
-        .prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(1), &mut work)
+    let closed = b
+        .prepare_close(&inputs, signer(&w), &mut j, tb(1), &mut out)
         .unwrap();
-    assert!(out.verdict.is_empty());
+    assert!(closed.verdict.is_empty());
     assert_eq!(j.entries.len(), 1);
 }
 
@@ -298,13 +311,14 @@ fn work_buffer_sizes_are_exact() {
 fn batch_index_counts_closed_batches() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(1));
-    let mut m = mocks(&w, 1);
+    let mut m = mocks(&w);
     let mut j = MemJournal::default();
     assert_eq!(b.batch_index(), 0);
     for expected in 1..=2u32 {
         let mut bufs = Buffers::new(&w);
+        let mut area = work();
         let ballot = b
-            .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+            .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
             .unwrap();
         let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
         let ballot = ballot.commit(&b).unwrap();
@@ -317,15 +331,14 @@ fn batch_index_counts_closed_batches() {
             .imprinted(&mut b)
             .unwrap();
         let head = *b.journal_head();
-        let mut work = std::vec![0u8; BATCH_WORK_LEN];
+        let mut out = std::vec![0u8; BATCH_WORK_LEN];
         b.close_batch(
             &head,
             &mut ports(&mut m),
-            &w.device_hybrid,
-            &SEED,
+            signer(&w),
             &mut j,
             tb(1),
-            &mut work,
+            &mut out,
         )
         .unwrap();
         assert_eq!(b.batch_index(), expected);
@@ -338,7 +351,7 @@ fn configuration_boundaries_are_exact() {
     use ityv_cunit::config::{
         BallotStyle, ConfigParts, ElectionConfig, ModuleConfig, TrusteeConfig,
     };
-    use ityv_encoding::{BallotStyleId, ModuleId};
+    use ityv_encoding::BallotStyleId;
     let w = world(Profile::InPerson, false);
     let ok = ConfigParts {
         election_id: w.config.election_id(),
@@ -358,7 +371,13 @@ fn configuration_boundaries_are_exact() {
     // a duplicate module identifier is not strictly ascending
     let modules = w.config.modules();
     let mut dup = modules.to_vec();
-    dup[1] = ModuleConfig::new(modules[0].module_id(), modules[1].chamber(), false);
+    dup[1] = ModuleConfig::new(
+        modules[0].module_id(),
+        modules[1].chamber(),
+        false,
+        *modules[1].record_key(),
+        modules[1].batch_key(),
+    );
     assert_eq!(
         fault(ConfigParts {
             modules: common::leak(dup).as_slice(),
@@ -377,8 +396,8 @@ fn configuration_boundaries_are_exact() {
                 Chamber::X,
                 Chamber::Y,
             ][usize::from(i)];
-            ModuleConfig::new(
-                ModuleId::new(common::leak_bytes(std::vec![b'm', b'0' + i])).unwrap(),
+            module_config(
+                common::leak_bytes(std::vec![b'm', b'0' + i]),
                 chamber,
                 false,
             )
@@ -512,8 +531,8 @@ fn chamber_code_five_is_a_module_chamber() {
 fn scan_count_accepts_the_bucket_of_the_last_entry_and_verdicts_report_violations() {
     let w = world(Profile::InPerson, false);
     let mut b = OpenBox::open(w.config, tb(4));
-    let mut work = std::vec![0u8; 512];
-    assert!(b.scan_count_body(tb(4), &mut work).is_ok());
+    let mut out = std::vec![0u8; 512];
+    assert!(b.scan_count_body(tb(4), &mut out).is_ok());
     let counters = [1u64];
     let facts = ityv_cunit::rules::CloseFacts {
         paper: 1,
@@ -534,4 +553,49 @@ fn scan_count_accepts_the_bucket_of_the_last_entry_and_verdicts_report_violation
     assert_eq!(v.count(), 2);
     assert!(v.contains(Invariant::PaperCount));
     assert!(v.contains(Invariant::ModuleCounters));
+}
+
+#[test]
+fn secret_bearing_values_debug_print_nothing_secret() {
+    use ityv_cunit::link::ModuleIssueParts;
+    use ityv_encoding::{ModuleId, Scalar32, Token192};
+    let w = world(Profile::InPerson, true);
+    assert_eq!(format!("{:?}", signer(&w)), "Signer(..)");
+    let rand = [Scalar32([0xAB; 32])];
+    let tags = [[0xCD; 16]];
+    let parts = ModuleIssueParts {
+        module_id: ModuleId::new(b"mod-x").unwrap(),
+        chamber: 1,
+        counter: 7,
+        rand: &rand,
+        cid: Token192([0xEF; 24]),
+        lab: Some(Token192([0x12; 24])),
+        tags: &tags,
+    };
+    let text = format!("{parts:?}");
+    assert!(text.starts_with("ModuleIssueParts"));
+    assert!(text.contains("counter: 7"));
+    for secret in ["rand", "cid", "lab", "tags", "171", "205", "239"] {
+        assert!(!text.contains(secret), "{secret} in {text}");
+    }
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let mut bufs = Buffers::new(&w);
+    let mut area = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+    let ballot = ballot.commit(&b).unwrap();
+    let ballot = ballot
+        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let ballot = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
+    let command = ballot.imprint_command(&b).unwrap();
+    assert_eq!(format!("{command:?}"), "ImprintCommand(..)");
+    assert!(command.env_label().is_none());
+    assert_ne!(command.cast_id(), &[0; 24]);
+    ballot.imprinted(&mut b).unwrap();
+    assert!(area.is_clear());
 }

@@ -18,8 +18,8 @@
 mod common;
 
 use common::{
-    Buffers, MemJournal, STYLE_SMALL, STYLE_WIDE, World, interpretation, mocks, pad_bytes, ports,
-    world,
+    Buffers, MemJournal, SEED, STYLE_SMALL, STYLE_WIDE, World, interpretation, mocks, pad_bytes,
+    ports, signer, tb, work, world,
 };
 use ityv_crypto::{
     AeadTag, Bases, CastId, ChunkIndex, Commitment, HybridCiphertext, MemberId, OneTimeKey,
@@ -31,18 +31,13 @@ use ityv_cunit::ballot::KEM_CIPHERTEXT_LEN;
 use ityv_cunit::boxstate::OpenBox;
 use ityv_cunit::config::Profile;
 use ityv_cunit::link::{JournalEntry, JournalKind, SCHEMA_JOURNAL_ENTRY};
+use ityv_cunit::rules::{PAD_MAC_KEY_OFFSET, PAD_PLAINTEXT_OFFSET};
 use ityv_encoding::{
     CastRecord, ChallengeOpening, Decode, Encode, HYBRID_SIG_LEN, MemberShare, Reader,
     SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_MEMBER_SHARE, SCHEMA_SHARE_PACKAGE,
-    SCHEMA_VERSION_1, SharePackage, TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE, TimeBucket,
-    Token192, Transport, Writer, decode_object,
+    SCHEMA_VERSION_1, SharePackage, TRANSPORT_KEM_FALLBACK, TRANSPORT_NEUTRAL_MODULE, Token192,
+    Transport, Writer, decode_object,
 };
-
-const SEED: [u8; 32] = [11; 32];
-
-fn tb(n: u64) -> TimeBucket {
-    TimeBucket::new(n)
-}
 
 /// Verifies a `CastRecord` the way the public verifier does: tracking code,
 /// device and module record signatures, OR proof.
@@ -107,11 +102,12 @@ fn verify_cast_record(
 fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     let w = world(Profile::InPerson, false);
     let mut box_ = OpenBox::open(w.config, tb(10));
-    let mut modules = mocks(&w, 1);
+    let mut modules = mocks(&w);
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = box_
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
         .unwrap();
     let ballot = ballot
         .issue(&mut box_, &mut ports(&mut modules), &SEED)
@@ -129,8 +125,8 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     let record = ballot.record_bytes().to_vec();
     let package = ballot.package_bytes().to_vec();
     let ballot = ballot.cast(&mut box_, &mut journal, tb(11)).unwrap();
-    let imprint = ballot.imprint_command();
-    assert!(imprint.env_label.is_none());
+    let imprint = ballot.imprint_command(&box_).unwrap();
+    assert!(imprint.env_label().is_none());
     let _done = ballot.imprinted(&mut box_).unwrap();
 
     verify_cast_record(&w, &modules, &record, &tracking);
@@ -148,7 +144,7 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     for m in &modules {
         h.absorb(&m.last_issue().cid);
     }
-    assert_eq!(imprint.cast_id[..], h.finish()[..24]);
+    assert_eq!(imprint.cast_id()[..], h.finish()[..24]);
 
     assert_eq!(journal.entries.len(), 1);
     let entry: JournalEntry<'_> =
@@ -162,7 +158,7 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
         &ityv_crypto::object_hash(&journal.entries[0])
     );
     assert_eq!(box_.totals().records, 1);
-    assert_eq!(box_.module_counters(), &[1, 1, 1, 1]);
+    assert_eq!(box_.module_counters(), &[1, 1, 1, 1, 1]);
     assert!(!box_.has_ballot_in_flight());
 }
 
@@ -189,7 +185,7 @@ fn decrypt_package(
                 let pad = pad_bytes(
                     module.id,
                     trustee.member_index,
-                    pad_index,
+                    pad_index + PAD_PLAINTEXT_OFFSET,
                     entry.ciphertext.len(),
                 );
                 let plain: std::vec::Vec<u8> = entry
@@ -201,7 +197,7 @@ fn decrypt_package(
                 let key = pad_bytes(
                     module.id,
                     trustee.member_index,
-                    pad_index + plain.len() as u64,
+                    pad_index + PAD_MAC_KEY_OFFSET,
                     32,
                 );
                 let _ = verify_one_time_tag(
@@ -267,11 +263,12 @@ fn reconstruct_secret(
 fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
     let w = world(profile, false);
     let mut box_ = OpenBox::open(w.config, tb(1));
-    let mut modules = mocks(&w, chunks);
+    let mut modules = mocks(&w);
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = box_
-        .interpret(&interpretation(b"E-2026", style, option))
+        .interpret(&interpretation(b"E-2026", style, option), &mut area)
         .unwrap();
     let ballot = ballot
         .issue(&mut box_, &mut ports(&mut modules), &SEED)
@@ -288,16 +285,9 @@ fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
     let tracking = *ballot.tracking_code();
     let record = ballot.record_bytes().to_vec();
     let package = ballot.package_bytes().to_vec();
-    let mut work = std::vec![0u8; 8192];
+    let mut out = std::vec![0u8; 8192];
     let (_spoiled, opening) = ballot
-        .challenge(
-            &mut box_,
-            &mut journal,
-            &w.device_hybrid,
-            &SEED,
-            tb(2),
-            &mut work,
-        )
+        .challenge(&mut box_, &mut journal, signer(&w), tb(2), &mut out)
         .unwrap();
     let opening = opening.to_vec();
     assert_eq!(box_.totals().challenged, 1);
@@ -323,6 +313,7 @@ fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
     assert_eq!(body.option_index(), option);
     assert_eq!(body.record_hash(), &tracking);
     let rec: CastRecord<'_> = decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, &record).unwrap();
+    assert_eq!(rec.body().commitments().as_slice().len(), chunks);
     let bases = Bases::derive();
     let cast_id = CastId::new(*body.cast_id());
     for (j, (point, r)) in rec
@@ -440,11 +431,12 @@ fn absentee_challenge_reconstructs_the_envelope_label() {
 fn absentee_ballot_imprints_an_envelope_label() {
     let w = world(Profile::Absentee, false);
     let mut box_ = OpenBox::open(w.config, tb(1));
-    let mut modules = mocks(&w, 1);
+    let mut modules = mocks(&w);
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = box_
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let ballot = ballot
         .issue(&mut box_, &mut ports(&mut modules), &SEED)
@@ -459,9 +451,9 @@ fn absentee_ballot_imprints_an_envelope_label() {
         )
         .unwrap();
     let ballot = ballot.cast(&mut box_, &mut journal, tb(1)).unwrap();
-    let imprint = ballot.imprint_command();
-    assert!(imprint.env_label.is_some());
-    assert_ne!(imprint.env_label, Some(imprint.cast_id));
+    let imprint = ballot.imprint_command(&box_).unwrap();
+    assert!(imprint.env_label().is_some());
+    assert_ne!(imprint.env_label(), Some(imprint.cast_id()));
     ballot.imprinted(&mut box_).unwrap();
 }
 
@@ -469,12 +461,14 @@ fn absentee_ballot_imprints_an_envelope_label() {
 fn exhausted_pad_falls_back_to_the_kem_and_sets_bit_zero() {
     let w = world(Profile::InPerson, false);
     let mut box_ = OpenBox::open(w.config, tb(1));
-    let mut modules = mocks(&w, 1);
-    modules[2].exhaust_member = Some(1); // mod-x, member 1
+    let mut modules = mocks(&w);
+    modules[3].exhaust_member = Some(1); // mod-x, member 1
+    modules[2].exhaust_member = Some(0); // mod-j, member 0
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = box_
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 0))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 0), &mut area)
         .unwrap();
     let ballot = ballot
         .issue(&mut box_, &mut ports(&mut modules), &SEED)
@@ -503,11 +497,9 @@ fn exhausted_pad_falls_back_to_the_kem_and_sets_bit_zero() {
     let pkg: SharePackage<'_> =
         decode_object(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &package).unwrap();
     for (entry, trustee) in pkg.entries().zip(&w.trustees) {
-        let expect_kem = matches!(
-            trustee.chamber,
-            ityv_crypto::Chamber::C | ityv_crypto::Chamber::N
-        ) || (trustee.chamber == ityv_crypto::Chamber::X
-            && trustee.member_index == 1);
+        let expect_kem = trustee.chamber == ityv_crypto::Chamber::N
+            || (trustee.chamber == ityv_crypto::Chamber::X && trustee.member_index == 1)
+            || (trustee.chamber == ityv_crypto::Chamber::J && trustee.member_index == 0);
         assert_eq!(
             entry.transport == Transport::Kem,
             expect_kem,
@@ -527,11 +519,12 @@ fn exhausted_pad_falls_back_to_the_kem_and_sets_bit_zero() {
 fn slip_is_signed_over_the_tracking_code() {
     let w = world(Profile::InPerson, true);
     let mut box_ = OpenBox::open(w.config, tb(1));
-    let mut modules = mocks(&w, 1);
+    let mut modules = mocks(&w);
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = box_
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let ballot = ballot
         .issue(&mut box_, &mut ports(&mut modules), &SEED)
@@ -546,9 +539,9 @@ fn slip_is_signed_over_the_tracking_code() {
         )
         .unwrap();
     let ballot = ballot.cast(&mut box_, &mut journal, tb(3)).unwrap();
-    let mut work = std::vec![0u8; ityv_cunit::ballot::MAX_SLIP_LEN];
+    let mut out = std::vec![0u8; ityv_cunit::ballot::MAX_SLIP_LEN];
     let slip_bytes = ballot
-        .slip(&w.device_hybrid, &SEED, tb(3), &mut work)
+        .slip(&box_, signer(&w), tb(3), &mut out)
         .unwrap()
         .to_vec();
     let slip: ityv_encoding::Slip<'_> =
@@ -571,11 +564,12 @@ fn slip_is_signed_over_the_tracking_code() {
 fn slip_requires_the_voter_code_scope() {
     let w = world(Profile::InPerson, false);
     let mut box_ = OpenBox::open(w.config, tb(1));
-    let mut modules = mocks(&w, 1);
+    let mut modules = mocks(&w);
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
+    let mut area = work();
     let ballot = box_
-        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
         .unwrap();
     let ballot = ballot
         .issue(&mut box_, &mut ports(&mut modules), &SEED)
@@ -590,11 +584,378 @@ fn slip_requires_the_voter_code_scope() {
         )
         .unwrap();
     let ballot = ballot.cast(&mut box_, &mut journal, tb(3)).unwrap();
-    let mut work = std::vec![0u8; ityv_cunit::ballot::MAX_SLIP_LEN];
+    let mut out = std::vec![0u8; ityv_cunit::ballot::MAX_SLIP_LEN];
     assert_eq!(
-        ballot
-            .slip(&w.device_hybrid, &SEED, tb(3), &mut work)
-            .unwrap_err(),
+        ballot.slip(&box_, signer(&w), tb(3), &mut out).unwrap_err(),
         ityv_cunit::Error::VoterCodeDisabled
     );
+}
+
+/// Casts one ballot of `style` and returns its record and package bytes.
+fn cast_bytes(
+    w: &World,
+    box_: &mut OpenBox<'static>,
+    modules: &mut [common::MockModule],
+    journal: &mut MemJournal,
+    style: &[u8],
+    option: u16,
+) -> (std::vec::Vec<u8>, std::vec::Vec<u8>) {
+    let mut bufs = Buffers::new(w);
+    let mut area = work();
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", style, option), &mut area)
+        .unwrap();
+    let ballot = ballot.issue(box_, &mut ports(modules), &SEED).unwrap();
+    let ballot = ballot.commit(box_).unwrap();
+    let ballot = ballot
+        .build(box_, &mut ports(modules), &w.device_record, bufs.as_build())
+        .unwrap();
+    let record = ballot.record_bytes().to_vec();
+    let package = ballot.package_bytes().to_vec();
+    ballot
+        .cast(box_, journal, tb(1))
+        .unwrap()
+        .imprinted(box_)
+        .unwrap();
+    assert!(area.is_clear());
+    (record, package)
+}
+
+#[test]
+fn styles_with_different_chunk_counts_never_share_pad_bytes() {
+    let w = world(Profile::InPerson, false);
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    let mut journal = MemJournal::default();
+    let b = w.config.pad_consumption();
+    // in person, five modules: k = 1 shares 254 bytes, k = 2 shares 414
+    assert_eq!(b, 414 + 64);
+    assert_eq!(modules[0].pad_b, b);
+    let mut packages = std::vec::Vec::new();
+    for (style, option) in [(STYLE_SMALL, 1), (STYLE_WIDE, 9), (STYLE_SMALL, 3)] {
+        let (_, package) = cast_bytes(&w, &mut box_, &mut modules, &mut journal, style, option);
+        packages.push(package);
+    }
+    for module in &modules {
+        for member in 0..2u8 {
+            let mut regions: std::vec::Vec<(u64, u64)> = module
+                .pad_uses
+                .iter()
+                .filter(|(m, _, _)| *m == member)
+                .map(|&(_, offset, len)| (offset, offset + len))
+                .collect();
+            assert_eq!(regions.len(), 3, "{:?}", module.id);
+            regions.sort_unstable();
+            for (n, pair) in regions.windows(2).enumerate() {
+                assert!(pair[0].1 <= pair[1].0, "{:?} overlap at {n}", module.id);
+            }
+            for (n, region) in regions.iter().enumerate() {
+                assert_eq!(region.0, (n as u64 + 1) * b);
+            }
+        }
+    }
+    // every member opens every share with the per-box layout
+    let lens: std::vec::Vec<usize> = packages
+        .iter()
+        .map(|package| {
+            let shares = decrypt_package(&w, package);
+            assert_eq!(shares.len(), 12);
+            shares[0].2.len()
+        })
+        .collect();
+    assert_eq!(lens, [254, 414, 254]);
+}
+
+#[test]
+fn trustees_check_the_module_tag_with_their_pad_key() {
+    let w = world(Profile::InPerson, false);
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    let mut journal = MemJournal::default();
+    cast_bytes(&w, &mut box_, &mut modules, &mut journal, STYLE_SMALL, 2);
+    let (record, package) = cast_bytes(&w, &mut box_, &mut modules, &mut journal, STYLE_SMALL, 1);
+    let rec: CastRecord<'_> = decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, &record).unwrap();
+    let shares = decrypt_package(&w, &package);
+    let qualified: std::vec::Vec<usize> = w
+        .trustees
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.chamber != ityv_crypto::Chamber::N)
+        .map(|(i, _)| i)
+        .collect();
+    // the sampled chamber X: its module is the fourth, so with k = 1 its
+    // contribution r_{X,0} is secret 3 (§9.1 order)
+    let module_index = 3;
+    let module = &modules[module_index];
+    let counter = rec
+        .body()
+        .module_counters()
+        .get(ityv_encoding::ModuleId::new(module.id).unwrap())
+        .unwrap();
+    assert_eq!(counter, 2);
+    let r = reconstruct_secret(&w, &shares, &qualified, module_index).unwrap();
+    let b = w.config.pad_consumption();
+    for (i, member, bytes) in &shares {
+        if member.chamber() != ityv_crypto::Chamber::X {
+            continue;
+        }
+        let share: MemberShare<'_> =
+            decode_object(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, bytes).unwrap();
+        let key = pad_bytes(
+            module.id,
+            member.index(),
+            counter * b + ityv_cunit::rules::PAD_TAG_KEY_OFFSET,
+            32,
+        );
+        let mut message = r.to_bytes().to_vec();
+        message.extend_from_slice(&share.cid().0);
+        let _ = verify_one_time_tag(
+            OneTimeKey::from_bytes(key.clone().try_into().unwrap()),
+            &message,
+            &OneTimeTag::from_bytes(*share.tag()),
+        )
+        .unwrap_or_else(|_| panic!("trustee {i}: the module's tag verifies"));
+        // a unit that replaced the module's randomness fails the check
+        let mut forged = r.add(&Scalar::from_u64(1)).to_bytes().to_vec();
+        forged.extend_from_slice(&share.cid().0);
+        assert!(
+            verify_one_time_tag(
+                OneTimeKey::from_bytes(key.try_into().unwrap()),
+                &forged,
+                &OneTimeTag::from_bytes(*share.tag()),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn a_kem_share_opens_only_under_its_own_associated_data() {
+    let w = world(Profile::InPerson, false);
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    let mut journal = MemJournal::default();
+    let (_, package) = cast_bytes(&w, &mut box_, &mut modules, &mut journal, STYLE_SMALL, 1);
+    let pkg: SharePackage<'_> =
+        decode_object(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &package).unwrap();
+    let (index, entry) = pkg
+        .entries()
+        .enumerate()
+        .find(|(_, e)| e.transport == Transport::Kem)
+        .unwrap();
+    let trustee = &w.trustees[index];
+    assert_eq!(trustee.chamber, ityv_crypto::Chamber::N);
+    let aad = |commitments: &ityv_encoding::Commitments, trustee_id: &[u8]| {
+        let mut out = [0u8; 512];
+        let mut wr = Writer::new(&mut out);
+        w.config.election_id().encode(&mut wr).unwrap();
+        w.config.box_id().encode(&mut wr).unwrap();
+        commitments.encode(&mut wr).unwrap();
+        ityv_encoding::TrusteeId::new(trustee_id)
+            .unwrap()
+            .encode(&mut wr)
+            .unwrap();
+        wr.write_u8(1).unwrap();
+        wr.write_u32(0).unwrap();
+        wr.write_u64(0).unwrap();
+        let len = wr.finish();
+        out[..len].to_vec()
+    };
+    let try_open = |aad: &[u8]| {
+        let ct =
+            HybridCiphertext::decode(&mut Reader::new(&entry.ciphertext[..KEM_CIPHERTEXT_LEN]))
+                .unwrap();
+        let key = decapsulate(&trustee.kem, &ct).unwrap();
+        let mut buf = entry.ciphertext[KEM_CIPHERTEXT_LEN..].to_vec();
+        open(key, aad, &mut buf, &AeadTag::from_bytes(*entry.tag)).is_ok()
+    };
+    assert!(try_open(&aad(pkg.commitments(), trustee.id)));
+    let mut points = pkg.commitments().as_slice().to_vec();
+    points[0].0[0] ^= 1;
+    let other = ityv_encoding::Commitments::new(&points).unwrap();
+    assert!(!try_open(&aad(&other, trustee.id)), "other commitments");
+    assert!(
+        !try_open(&aad(pkg.commitments(), b"t-n-1")),
+        "another trustee"
+    );
+}
+
+#[test]
+fn ports_in_another_order_are_rejected() {
+    let w = world(Profile::InPerson, false);
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    let mut journal = MemJournal::default();
+    let mut area = work();
+    // at issue, the first answer names the wrong module
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    modules.swap(0, 1);
+    assert_eq!(
+        ballot
+            .issue(&mut box_, &mut ports(&mut modules), &SEED)
+            .unwrap_err(),
+        ityv_cunit::Error::WrongModule
+    );
+    assert!(area.is_clear());
+    box_.quarantine_in_flight(&mut journal, tb(1)).unwrap();
+    // The misrouted request still consumed a counter inside mod-c, which
+    // the unit never accepted: from now on mod-c's answers are gaps.
+    modules.swap(0, 1);
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    assert_eq!(
+        ballot
+            .issue(&mut box_, &mut ports(&mut modules), &SEED)
+            .unwrap_err(),
+        ityv_cunit::Error::CounterGap
+    );
+    box_.quarantine_in_flight(&mut journal, tb(1)).unwrap();
+    // at build, another module's pad belongs to other members
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    let mut bufs = Buffers::new(&w);
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    let ballot = ballot
+        .issue(&mut box_, &mut ports(&mut modules), &SEED)
+        .unwrap();
+    let ballot = ballot.commit(&box_).unwrap();
+    modules.swap(2, 3);
+    assert_eq!(
+        ballot
+            .build(
+                &box_,
+                &mut ports(&mut modules),
+                &w.device_record,
+                bufs.as_build()
+            )
+            .unwrap_err(),
+        ityv_cunit::Error::PadIdMismatch
+    );
+    assert!(area.is_clear());
+}
+
+#[test]
+fn a_record_signature_from_another_key_is_rejected() {
+    let w = world(Profile::InPerson, false);
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    modules[4].wrong_record_key = true;
+    let mut bufs = Buffers::new(&w);
+    let mut area = work();
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    let ballot = ballot
+        .issue(&mut box_, &mut ports(&mut modules), &SEED)
+        .unwrap();
+    let ballot = ballot.commit(&box_).unwrap();
+    assert_eq!(
+        ballot
+            .build(
+                &box_,
+                &mut ports(&mut modules),
+                &w.device_record,
+                bufs.as_build()
+            )
+            .unwrap_err(),
+        ityv_cunit::Error::RecordSignature
+    );
+    assert!(area.is_clear());
+}
+
+#[test]
+fn the_work_area_is_wiped_at_every_terminal_and_failing_exit() {
+    let w = world(Profile::Absentee, false);
+    let mut box_ = OpenBox::open(w.config, tb(1));
+    let mut modules = mocks(&w);
+    let mut journal = MemJournal::default();
+    let mut bufs = Buffers::new(&w);
+    let mut area = work();
+    // challenged
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+        .unwrap();
+    let ballot = ballot
+        .issue(&mut box_, &mut ports(&mut modules), &SEED)
+        .unwrap();
+    let ballot = ballot.commit(&box_).unwrap();
+    let ballot = ballot
+        .build(
+            &box_,
+            &mut ports(&mut modules),
+            &w.device_record,
+            bufs.as_build(),
+        )
+        .unwrap();
+    let mut out = std::vec![0u8; 8192];
+    let (spoiled, _) = ballot
+        .challenge(&mut box_, &mut journal, signer(&w), tb(1), &mut out)
+        .unwrap();
+    assert_eq!(format!("{spoiled:?}"), "Challenged(())");
+    assert!(area.is_clear());
+    // a challenge whose journal entry fails wipes the opening too
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+        .unwrap();
+    let ballot = ballot
+        .issue(&mut box_, &mut ports(&mut modules), &SEED)
+        .unwrap();
+    let ballot = ballot.commit(&box_).unwrap();
+    let ballot = ballot
+        .build(
+            &box_,
+            &mut ports(&mut modules),
+            &w.device_record,
+            bufs.as_build(),
+        )
+        .unwrap();
+    journal.fail = true;
+    let mut out = std::vec![0xAAu8; 8192];
+    assert!(
+        ballot
+            .challenge(&mut box_, &mut journal, signer(&w), tb(1), &mut out)
+            .is_err()
+    );
+    assert!(out.iter().all(|&b| b == 0), "the opening was wiped");
+    assert!(area.is_clear());
+    journal.fail = false;
+    box_.quarantine_in_flight(&mut journal, tb(1)).unwrap();
+    // imprint failed
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+        .unwrap();
+    let ballot = ballot
+        .issue(&mut box_, &mut ports(&mut modules), &SEED)
+        .unwrap();
+    let ballot = ballot.commit(&box_).unwrap();
+    let ballot = ballot
+        .build(
+            &box_,
+            &mut ports(&mut modules),
+            &w.device_record,
+            bufs.as_build(),
+        )
+        .unwrap();
+    let ballot = ballot.cast(&mut box_, &mut journal, tb(1)).unwrap();
+    let done = ballot
+        .imprint_failed(&mut box_, &mut journal, tb(1))
+        .unwrap();
+    assert_eq!(format!("{done:?}"), "Done(())");
+    assert!(area.is_clear());
+    // a ballot value dropped mid-way
+    let ballot = box_
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 2), &mut area)
+        .unwrap();
+    let ballot = ballot
+        .issue(&mut box_, &mut ports(&mut modules), &SEED)
+        .unwrap();
+    let ballot = ballot.commit(&box_).unwrap();
+    drop(ballot);
+    assert!(area.is_clear());
+    box_.quarantine_in_flight(&mut journal, tb(1)).unwrap();
 }
