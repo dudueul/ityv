@@ -155,7 +155,7 @@ flowchart LR
     FIND --> CMP[SampleComparison 일치/불일치]
     CMP -->|임계 이하| PA[PAPER_AUDITED]
     CMP -->|임계 초과| EXP[표본 확대 → 전체 수검표, AuditFinding]
-    SAM --> SUB[은닉 채널 표본 2%: r_c만 복원, 모듈 태그 검증 §9.5]
+    SAM --> SUB[은닉 채널 표본 2%: 기록당 챔버 하나의 기여만 복원, 모듈 태그 검증 §9.5]
 ```
 
 ## 7. 분쟁 흐름 (§13)
