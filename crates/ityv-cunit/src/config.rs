@@ -8,9 +8,11 @@
 //! module (PROTOCOL.md §7.1) is modelled as one *logical* module per
 //! delegated chamber with `neutral = true`; the host may implement several
 //! such logical modules over one physical device, each with its own
-//! identifier, counter, keys and port. Chambers X and Y must have their own
-//! module; J, A and C must have their own module or a neutral delegation;
-//! N never has one and always receives KEM transport (ADR-0017 개정 10).
+//! identifier, counter, keys and port. Every party chamber P1..Pn taking
+//! part must have its own module, never a delegation (ADR-0019 §7); the
+//! party chambers beyond n have none; J, A and C must have their own module
+//! or a neutral delegation; N never has one and always receives KEM
+//! transport (ADR-0017 개정 10).
 //!
 //! The pad bytes `b` a module consumes per record and member are fixed per
 //! box when the configuration is validated: the largest `MemberShare` over
@@ -29,13 +31,15 @@ use crate::ballot::member_share_len;
 use crate::error::{ConfigFault, Error};
 use crate::rules::PAD_KEY_BYTES;
 
-/// Maximum number of modules (one per chamber with a module).
-pub const MAX_MODULES: usize = 6;
+/// Maximum number of modules (one per chamber with a module): P1–P4 and
+/// J, A, C (ADR-0019 §7).
+pub const MAX_MODULES: usize = ityv_encoding::MAX_MODULES;
 
-// Five chambers can hold a module (N never does) and a style has at most
-// eight chunks, so a member receives at most 5·8 + 2 = 42 secrets: every
-// valid configuration fits the fifty-share `MemberShare` capacity.
-const _: () = assert!(5 * ityv_crypto::MAX_CHUNKS + 2 <= MAX_SECRETS);
+// Seven chambers can hold a module (N never does) and a style has at most
+// eight chunks, so a member receives at most 7·8 + 2 = 58 secrets: every
+// valid configuration fits the `MemberShare` capacity.
+const _: () = assert!(MAX_MODULES * ityv_crypto::MAX_CHUNKS + 2 <= MAX_SECRETS);
+const _: () = assert!(MAX_MODULES == 7);
 /// Maximum number of trustees over all chambers.
 pub const MAX_TRUSTEES: usize = 64;
 /// Maximum number of ballot styles a box may receive. An early-voting
@@ -264,7 +268,7 @@ impl<'a> ElectionConfig<'a> {
     /// # Errors
     /// [`Error::Config`] with the first violated [`ConfigFault`].
     pub fn new(parts: ConfigParts<'a>) -> Result<Self, Error> {
-        Self::check_modules(parts.modules)?;
+        Self::check_modules(parts.modules, &parts.access)?;
         Self::check_trustees(parts.trustees, &parts.access)?;
         Self::check_styles(&parts)?;
         let pad_consumption = box_pad_consumption(parts.modules.len(), parts.styles, parts.profile);
@@ -274,7 +278,10 @@ impl<'a> ElectionConfig<'a> {
         })
     }
 
-    fn check_modules(modules: &[ModuleConfig<'_>]) -> Result<(), ConfigFault> {
+    fn check_modules(
+        modules: &[ModuleConfig<'_>],
+        access: &AccessStructure,
+    ) -> Result<(), ConfigFault> {
         if modules.len() > MAX_MODULES || !ascending(modules, |m| m.module_id.as_bytes()) {
             return Err(ConfigFault::ModulesUnsorted);
         }
@@ -283,15 +290,16 @@ impl<'a> ElectionConfig<'a> {
             if let Some(slot) = per_chamber.get_mut(module.chamber.index()) {
                 *slot = slot.saturating_add(1);
             }
-            let mandatory_neutral = module.chamber.is_mandatory() && module.neutral;
-            if matches!(module.chamber, Chamber::N) || mandatory_neutral {
+            // A party chamber's module is never delegated (ADR-0019 §7).
+            if module.chamber.is_party() && module.neutral {
                 return Err(ConfigFault::ChamberModules);
             }
         }
-        // Every chamber but N has exactly one module (own or delegated).
+        // Every chamber taking part but N has exactly one module (own or
+        // delegated); N and the party chambers beyond n have none.
         for chamber in Chamber::ALL {
             let count = per_chamber.get(chamber.index()).copied().unwrap_or(0);
-            let expected = u8::from(!matches!(chamber, Chamber::N));
+            let expected = u8::from(access.includes(chamber) && !matches!(chamber, Chamber::N));
             if count != expected {
                 return Err(ConfigFault::ChamberModules);
             }
@@ -307,7 +315,12 @@ impl<'a> ElectionConfig<'a> {
             return Err(ConfigFault::TrusteesUnsorted);
         }
         for chamber in Chamber::ALL {
-            let n = usize::from(access.threshold(chamber).n());
+            // A party chamber beyond n has no members.
+            let n = if access.includes(chamber) {
+                usize::from(access.threshold(chamber).n())
+            } else {
+                0
+            };
             let mut seen = [false; ityv_crypto::MAX_MEMBERS];
             let mut count = 0usize;
             for trustee in trustees.iter().filter(|t| t.chamber == chamber) {
@@ -469,12 +482,14 @@ pub fn secret_count(module_count: usize, chunk_count: u8, profile: Profile) -> u
         .saturating_add(usize::from(profile.has_label()))
 }
 
-/// The wire code of a chamber (ENCODING.md §8.10).
+/// The wire code of a chamber (ENCODING.md §8.10, ADR-0019).
 #[must_use]
 pub const fn chamber_code(chamber: Chamber) -> ChamberCode {
     match chamber {
-        Chamber::X => ChamberCode::X,
-        Chamber::Y => ChamberCode::Y,
+        Chamber::P1 => ChamberCode::P1,
+        Chamber::P2 => ChamberCode::P2,
+        Chamber::P3 => ChamberCode::P3,
+        Chamber::P4 => ChamberCode::P4,
         Chamber::J => ChamberCode::J,
         Chamber::A => ChamberCode::A,
         Chamber::C => ChamberCode::C,
@@ -486,8 +501,10 @@ pub const fn chamber_code(chamber: Chamber) -> ChamberCode {
 #[must_use]
 pub const fn chamber_of(code: ChamberCode) -> Chamber {
     match code {
-        ChamberCode::X => Chamber::X,
-        ChamberCode::Y => Chamber::Y,
+        ChamberCode::P1 => Chamber::P1,
+        ChamberCode::P2 => Chamber::P2,
+        ChamberCode::P3 => Chamber::P3,
+        ChamberCode::P4 => Chamber::P4,
         ChamberCode::J => Chamber::J,
         ChamberCode::A => Chamber::A,
         ChamberCode::C => Chamber::C,

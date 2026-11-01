@@ -30,14 +30,15 @@ use ityv_cunit::config::{
 use ityv_cunit::error::{ConfigFault, Invariant as I};
 use ityv_cunit::link::{
     Interpretation, JournalEntry, JournalKind, MAX_INTERPRETATION_LEN, MAX_JOURNAL_ENTRY_LEN,
-    MAX_MODULE_ISSUE_LEN, ModuleIssue, ModuleIssueParts, SCHEMA_INTERPRETATION,
-    SCHEMA_JOURNAL_ENTRY, SCHEMA_MODULE_ISSUE,
+    MAX_MODULE_CHAMBER_CODE, MAX_MODULE_ISSUE_LEN, MAX_VISIT_BALLOTS, MAX_VISIT_END_LEN,
+    ModuleIssue, ModuleIssueParts, SCHEMA_INTERPRETATION, SCHEMA_JOURNAL_ENTRY,
+    SCHEMA_MODULE_ISSUE, SCHEMA_VISIT_END, VisitEnd,
 };
 use ityv_cunit::rng::DeviceRng;
 use ityv_cunit::{Error, module_may_sign_batch, rules};
 use ityv_encoding::{
     BallotStyleId, ElectionId, ErrorKind, Hash512, ModuleCounter, ModuleCounters, ModuleId,
-    SCHEMA_VERSION_1, Scalar32, Token192, decode_object, encode_object,
+    SCHEMA_VERSION_1, Scalar32, Token192, TrusteeId, decode_object, encode_object,
 };
 use proptest::prelude::*;
 use rand_core::Rng;
@@ -113,7 +114,7 @@ fn module_issue_round_trips_and_rejects_bad_fields() {
     let rand = [Scalar32([1; 32]), Scalar32([2; 32])];
     let tags = [[3u8; 16], [4; 16]];
     let parts = ModuleIssueParts {
-        module_id: ModuleId::new(b"mod-x").unwrap(),
+        module_id: ModuleId::new(b"mod-p1").unwrap(),
         chamber: 1,
         counter: 7,
         rand: &rand,
@@ -122,7 +123,7 @@ fn module_issue_round_trips_and_rejects_bad_fields() {
         tags: &tags,
     };
     let bytes = issue_bytes(&parts);
-    assert_eq!(bytes.len(), MAX_MODULE_ISSUE_LEN - 6 * 32 - 6 * 16 - 64 + 5);
+    assert_eq!(bytes.len(), MAX_MODULE_ISSUE_LEN - 6 * 32 - 6 * 16 - 64 + 6);
     let parsed: ModuleIssue<'_> =
         decode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &bytes).unwrap();
     assert_eq!(parsed.counter(), 7);
@@ -133,7 +134,7 @@ fn module_issue_round_trips_and_rejects_bad_fields() {
     assert_eq!(parsed.lab().unwrap().0, [6; 24]);
     assert!(std::format!("{parsed:?}").contains("counter"));
     assert!(!std::format!("{parsed:?}").contains("cid"));
-    // body offsets: 16 header, id 4+5, chamber at 25, counter at 26, rand count at 34
+    // body offsets: 16 header, id 4+6, chamber at 26, counter at 27, rand count at 35
     let reject = |at: usize, value: &[u8], kind: ErrorKind, offset: usize| {
         let mut b = bytes.clone();
         b[at..at + value.len()].copy_from_slice(value);
@@ -141,18 +142,27 @@ fn module_issue_round_trips_and_rejects_bad_fields() {
             .unwrap_err();
         assert_eq!((e.kind(), e.offset()), (kind, offset));
     };
-    reject(25, &[0], ErrorKind::ValueOutOfRange, 25);
-    reject(25, &[6], ErrorKind::ValueOutOfRange, 25);
-    reject(26, &[0; 8], ErrorKind::ValueOutOfRange, 26);
-    reject(34, &[0, 0, 0, 0], ErrorKind::ValueOutOfRange, 34);
-    reject(34, &[0, 0, 0, 9], ErrorKind::CountExceedsMax, 34);
+    reject(26, &[0], ErrorKind::ValueOutOfRange, 26);
+    // N (code 8) has no module; codes 1..=7 (P1–P4, J, A, C) do
+    reject(26, &[8], ErrorKind::ValueOutOfRange, 26);
+    for code in 1..=MAX_MODULE_CHAMBER_CODE {
+        let mut b = bytes.clone();
+        b[26] = code;
+        let parsed: ModuleIssue<'_> =
+            decode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &b).unwrap();
+        assert_eq!(parsed.chamber(), code);
+    }
+    assert_eq!(MAX_MODULE_CHAMBER_CODE, 7);
+    reject(27, &[0; 8], ErrorKind::ValueOutOfRange, 27);
+    reject(35, &[0, 0, 0, 0], ErrorKind::ValueOutOfRange, 35);
+    reject(35, &[0, 0, 0, 9], ErrorKind::CountExceedsMax, 35);
     for bad in [
         ModuleIssueParts {
             chamber: 0,
             ..parts
         },
         ModuleIssueParts {
-            chamber: 6,
+            chamber: 8,
             ..parts
         },
         ModuleIssueParts {
@@ -177,11 +187,11 @@ fn module_issue_round_trips_and_rejects_bad_fields() {
 fn journal_entry_round_trips_and_rejects_unknown_kinds() {
     let counters = [
         ModuleCounter {
-            module_id: ModuleId::new(b"mod-x").unwrap(),
+            module_id: ModuleId::new(b"mod-p1").unwrap(),
             counter: 1,
         },
         ModuleCounter {
-            module_id: ModuleId::new(b"mod-y").unwrap(),
+            module_id: ModuleId::new(b"mod-p2").unwrap(),
             counter: 2,
         },
     ];
@@ -195,14 +205,14 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
     );
     let mut out = [0u8; MAX_JOURNAL_ENTRY_LEN];
     let len = encode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &entry, &mut out).unwrap();
-    assert_eq!(len, 16 + 64 + 1 + 64 + 64 + 4 + 2 * (4 + 5 + 8) + 8);
+    assert_eq!(len, 16 + 64 + 1 + 64 + 64 + 4 + 2 * (4 + 6 + 8) + 8);
     let parsed: JournalEntry<'_> =
         decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &out[..len]).unwrap();
     assert_eq!(parsed, entry);
     assert_eq!(parsed.kind(), JournalKind::BatchClose);
     assert_eq!(parsed.time_bucket(), tb(9));
     assert_eq!(parsed.share_package_hash(), &Hash512::ZERO);
-    for code in [0u8, 7, 255] {
+    for code in [0u8, 9, 255] {
         let mut b = out[..len].to_vec();
         b[80] = code;
         let e = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &b)
@@ -216,12 +226,89 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
         JournalKind::BatchClose,
         JournalKind::BoxClose,
         JournalKind::Imprinted,
+        JournalKind::VisitDecision,
+        JournalKind::LabelPrinted,
     ] {
         assert_eq!(JournalKind::from_code(kind.code()), Some(kind));
+        let mut b = out[..len].to_vec();
+        b[80] = kind.code();
+        let parsed: JournalEntry<'_> =
+            decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &b).unwrap();
+        assert_eq!(parsed.kind(), kind);
     }
     assert_eq!(JournalKind::Record.code(), 1);
     assert_eq!(JournalKind::BoxClose.code(), 5);
     assert_eq!(JournalKind::Imprinted.code(), 6);
+    assert_eq!(JournalKind::VisitDecision.code(), 7);
+    assert_eq!(JournalKind::LabelPrinted.code(), 8);
+    // the largest entry: seven counters with 64-byte identifiers
+    let ids: std::vec::Vec<std::vec::Vec<u8>> = (0..7u8)
+        .map(|i| {
+            let mut id = std::vec![b'm'; 64];
+            id[63] = b'0' + i;
+            id
+        })
+        .collect();
+    let seven: std::vec::Vec<ModuleCounter<'_>> = ids
+        .iter()
+        .map(|id| ModuleCounter {
+            module_id: ModuleId::new(id).unwrap(),
+            counter: u64::MAX,
+        })
+        .collect();
+    let largest = JournalEntry::new(
+        Hash512([1; 64]),
+        JournalKind::BoxClose,
+        Hash512([2; 64]),
+        Hash512::ZERO,
+        ModuleCounters::new(&seven).unwrap(),
+        tb(9),
+    );
+    let mut out = [0u8; MAX_JOURNAL_ENTRY_LEN];
+    let len = encode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &largest, &mut out).unwrap();
+    assert_eq!(len, MAX_JOURNAL_ENTRY_LEN);
+    assert_eq!(MAX_JOURNAL_ENTRY_LEN, 753);
+}
+
+#[test]
+fn visit_end_round_trips_and_rejects_bad_counts() {
+    let election = ElectionId::new(b"E-2026").unwrap();
+    for count in 1..=MAX_VISIT_BALLOTS {
+        let notice = VisitEnd::new(election, count).unwrap();
+        assert_eq!(
+            (notice.election_id(), notice.ballot_count()),
+            (election, count)
+        );
+        let mut out = [0u8; MAX_VISIT_END_LEN];
+        let len = encode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &notice, &mut out).unwrap();
+        assert_eq!(len, 16 + 4 + 6 + 1);
+        let parsed: VisitEnd<'_> =
+            decode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &out[..len]).unwrap();
+        assert_eq!(parsed, notice);
+        for cut in 0..len {
+            assert!(
+                decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &out[..cut])
+                    .is_err()
+            );
+        }
+        // a count of 0 or more than eight is out of range at its offset
+        for bad in [0u8, MAX_VISIT_BALLOTS + 1, u8::MAX] {
+            assert!(VisitEnd::new(election, bad).is_none());
+            let mut b = out[..len].to_vec();
+            b[26] = bad;
+            let e =
+                decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &b).unwrap_err();
+            assert_eq!((e.kind(), e.offset()), (ErrorKind::ValueOutOfRange, 26));
+        }
+    }
+    assert_eq!(MAX_VISIT_BALLOTS, 8);
+    assert_eq!(SCHEMA_VISIT_END.get(), 0x0104);
+    // the largest notice: a 64-byte election identifier
+    let long = [b'E'; 64];
+    let notice = VisitEnd::new(ElectionId::new(&long).unwrap(), 8).unwrap();
+    let mut out = [0u8; MAX_VISIT_END_LEN];
+    let len = encode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &notice, &mut out).unwrap();
+    assert_eq!(len, MAX_VISIT_END_LEN);
 }
 
 /// Runs `issue` with the first module misbehaving through `setup`.
@@ -363,11 +450,11 @@ fn configuration_rules_are_enforced() {
         }),
         ConfigFault::ModulesUnsorted
     );
-    // missing X
+    // missing P1
     let without_x: std::vec::Vec<_> = modules
         .iter()
         .copied()
-        .filter(|m| m.chamber() != Chamber::X)
+        .filter(|m| m.chamber() != Chamber::P1)
         .collect();
     assert_eq!(
         config_fault(ConfigParts {
@@ -402,14 +489,14 @@ fn configuration_rules_are_enforced() {
         }),
         ConfigFault::ChamberModules
     );
-    // neutral X
+    // a party module is never delegated: neutral P1
     let neutral_x: std::vec::Vec<_> = modules
         .iter()
         .map(|m| {
-            if m.chamber() == Chamber::X {
+            if m.chamber() == Chamber::P1 {
                 ModuleConfig::new(
                     m.module_id(),
-                    Chamber::X,
+                    Chamber::P1,
                     true,
                     *m.record_key(),
                     m.batch_key(),
@@ -436,8 +523,36 @@ fn configuration_rules_are_enforced() {
         }),
         ConfigFault::ChamberModules
     );
-    // seven modules
-    let seven: std::vec::Vec<_> = (0..7u8)
+    // a module for a party chamber beyond n = 2
+    let mut with_p3 = modules.to_vec();
+    with_p3.push(module_config(b"mod-p3", Chamber::P3, false));
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(with_p3.clone()),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // n = 3 without the P3 module
+    let three = common::access(3);
+    assert_eq!(
+        config_fault(ConfigParts {
+            access: three,
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // n = 3 with the P3 module but without P3 members
+    assert_eq!(
+        config_fault(ConfigParts {
+            access: three,
+            modules: leak_modules(with_p3),
+            ..ok
+        }),
+        ConfigFault::ThresholdCount
+    );
+    // eight modules
+    let eight: std::vec::Vec<_> = (0..8u8)
         .map(|i| {
             module_config(
                 common::leak_bytes(std::vec![b'm', b'0' + i]),
@@ -448,7 +563,7 @@ fn configuration_rules_are_enforced() {
         .collect();
     assert_eq!(
         config_fault(ConfigParts {
-            modules: leak_modules(seven),
+            modules: leak_modules(eight),
             ..ok
         }),
         ConfigFault::ModulesUnsorted
@@ -514,11 +629,28 @@ fn configuration_rules_are_enforced() {
         }),
         ConfigFault::ThresholdCount
     );
+    // members for a party chamber beyond n = 2
+    let mut with_p3_member = trustees.to_vec();
+    with_p3_member.push(TrusteeConfig::new(
+        TrusteeId::new(b"t-3-0").unwrap(),
+        Chamber::P3,
+        0,
+        7,
+        trustees[0].kem_public_key(),
+    ));
+    with_p3_member.sort_by(|a, b| a.trustee_id().as_bytes().cmp(b.trustee_id().as_bytes()));
+    assert_eq!(
+        config_fault(ConfigParts {
+            trustees: leak_trustees(with_p3_member),
+            ..ok
+        }),
+        ConfigFault::MemberIndices
+    );
     let t22 = Threshold::new(2, 2).unwrap();
     let t13 = Threshold::new(1, 3).unwrap();
     assert_eq!(
         config_fault(ConfigParts {
-            access: AccessStructure::new([t22, t22, t13, t13, t13, t13]),
+            access: AccessStructure::new(2, [t22, t22, t22, t22, t13, t13, t13, t13]).unwrap(),
             ..ok
         }),
         ConfigFault::ThresholdCount
@@ -545,10 +677,10 @@ fn configuration_rules_are_enforced() {
         ConfigFault::Styles
     );
 
-    // capacity: six modules × 8 chunks + cast id + label = 50 secrets fits
+    // capacity: seven modules × 8 chunks + cast id + label = 58 secrets fits
     assert_eq!(
-        ityv_cunit::config::secret_count(6, 8, Profile::Absentee),
-        50
+        ityv_cunit::config::secret_count(7, 8, Profile::Absentee),
+        58
     );
     assert_eq!(ityv_cunit::config::secret_count(4, 1, Profile::InPerson), 5);
 }
@@ -578,8 +710,8 @@ fn configuration_accessors_and_chamber_codes() {
     // one b per box: the two-chunk style's share, 62 + 32·12 + 24 = 470
     assert_eq!(c.member_share_len(style), 470);
     assert_eq!(c.pad_consumption(), 534);
-    assert_eq!(c.module_for(Chamber::X).unwrap().0, 3);
-    let (record, batch) = common::module_keys(b"mod-x");
+    assert_eq!(c.module_for(Chamber::P1).unwrap().0, 3);
+    let (record, batch) = common::module_keys(b"mod-p1");
     assert_eq!(c.modules()[3].record_key(), &record.verifying_key());
     assert_eq!(c.modules()[3].batch_key(), &batch.verifying_key());
     assert!(c.module_for(Chamber::N).is_none());
@@ -587,8 +719,11 @@ fn configuration_accessors_and_chamber_codes() {
     for chamber in Chamber::ALL {
         assert_eq!(chamber_of(chamber_code(chamber)), chamber);
     }
-    assert_eq!(chamber_code(Chamber::X).code(), 1);
-    assert_eq!(chamber_code(Chamber::N).code(), 6);
+    assert_eq!(chamber_code(Chamber::P1).code(), 1);
+    for (chamber, code) in Chamber::ALL.into_iter().zip(1u8..) {
+        assert_eq!(chamber_code(chamber).code(), code, "{chamber:?}");
+    }
+    assert_eq!(chamber_code(Chamber::N).code(), 8);
     let own = |spec: ModuleSpec| ModuleSpec {
         neutral: false,
         ..spec
@@ -744,6 +879,7 @@ proptest! {
         let _ = decode_object::<Interpretation<'_>>(SCHEMA_INTERPRETATION, SCHEMA_VERSION_1, &bytes);
         let _ = decode_object::<ModuleIssue<'_>>(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &bytes);
         let _ = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &bytes);
+        let _ = decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &bytes);
     }
 
     #[test]
@@ -764,24 +900,34 @@ proptest! {
     fn close_verdict_matches_its_definition(
         paper in 0u64..6, records in 0u64..6, attested in 0u64..6, open in 0u64..6,
         without in 0u64..3, challenged in 0u64..3, quarantined in 0u64..3, spoiled in 0u64..6,
-        c0 in 0u64..10, c1 in 0u64..10, batches in 0u8..2, envelopes in proptest::option::of(0u64..6),
+        c0 in 0u64..10, c1 in 0u64..10, batches in 0u8..2, visits in 0u64..4,
+        envelopes in proptest::option::of((0u64..4, 0u64..4, 0u64..6, 0u64..4)),
         declared in any::<bool>(), incidents in 0u64..3,
     ) {
         let counters = [c0, c1];
+        let envelopes = envelopes.map(|(envelopes, stickers, issued, returned_empty)| {
+            rules::EnvelopeCounts { envelopes, stickers, issued, returned_empty }
+        });
         let facts = rules::CloseFacts {
-            paper, records, attested, open_batch_records: open, without_record: without,
+            paper, records, visits, attested, open_batch_records: open, without_record: without,
             challenged, quarantined, spoiled_envelopes: spoiled, module_final_counters: &counters,
-            open_batches: batches, absentee_envelopes: envelopes, fallback_declared: declared,
+            open_batches: batches, envelopes, fallback_declared: declared,
             paper_incidents: incidents,
         };
         let v = rules::close_verdict(&facts);
-        prop_assert_eq!(v.contains(I::PaperCount), records + without != paper);
+        let paper_ok = if envelopes.is_some() { paper == 0 } else { records + without == paper };
+        prop_assert_eq!(v.contains(I::PaperCount), !paper_ok);
         prop_assert_eq!(v.contains(I::AttestedCount), attested + open != records);
         prop_assert_eq!(v.contains(I::SpoiledEnvelopes), challenged + quarantined != spoiled);
         let consumed = records + challenged + quarantined;
         prop_assert_eq!(v.contains(I::ModuleCounters), c0 != consumed || c1 != consumed);
         prop_assert_eq!(v.contains(I::OpenBatches), batches != 0);
-        prop_assert_eq!(v.contains(I::EnvelopeCount), envelopes.is_some_and(|n| n != records));
+        prop_assert_eq!(
+            v.contains(I::EnvelopeCount),
+            envelopes.is_some_and(|e| e.issued < e.returned_empty || e.issued - e.returned_empty != e.envelopes)
+        );
+        prop_assert_eq!(v.contains(I::StickerCount), envelopes.is_some_and(|e| e.stickers != visits));
+        prop_assert_eq!(v.contains(I::VisitCount), visits > records || records > 8 * visits);
         prop_assert_eq!(v.contains(I::FallbackDeclared), without > 0 && !declared);
         prop_assert_eq!(v.contains(I::PaperIncidents), incidents > 0);
     }

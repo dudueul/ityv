@@ -214,7 +214,7 @@ fn a_close_with_an_open_batch_reports_it_in_the_body() {
         paper: 1,
         without_record: 0,
         spoiled_envelopes: 0,
-        absentee_envelopes: None,
+        envelopes: None,
         fallback_declared: false,
         record_set_root: ityv_ledger::merkle::sorted_set_root(&[code]).unwrap(),
         seal_digest: Hash512([1; 64]),
@@ -265,7 +265,7 @@ fn close_needs_room_and_no_ballot_in_flight() {
         paper: 0,
         without_record: 0,
         spoiled_envelopes: 0,
-        absentee_envelopes: None,
+        envelopes: None,
         fallback_declared: false,
         record_set_root: Hash512::ZERO,
         seal_digest: Hash512::ZERO,
@@ -297,15 +297,19 @@ fn close_needs_room_and_no_ballot_in_flight() {
 
 #[test]
 fn work_buffer_sizes_are_exact() {
-    assert_eq!(ityv_cunit::boxstate::MAX_BATCH_ATTEST_LEN, 34_483);
-    assert_eq!(BATCH_WORK_LEN, 7 * 4691 + 34_483);
-    assert_eq!(BATCH_WORK_LEN, 67_320);
+    // seven module signatures and the device's, then the object
+    assert_eq!(ityv_cunit::boxstate::MAX_BATCH_ATTEST_LEN, 39_394);
+    assert_eq!(BATCH_WORK_LEN, 8 * 4691 + 39_394);
+    assert_eq!(BATCH_WORK_LEN, 76_922);
     assert_eq!(CLOSE_WORK_LEN, 1024 + 4691);
-    assert_eq!(ityv_cunit::ballot::MAX_MEMBER_SHARE_LEN, 1686);
-    assert_eq!(ityv_cunit::ballot::SCRATCH_SLOT_LEN, 1600 + 1686);
+    assert_eq!(ityv_cunit::ballot::MAX_MEMBER_SHARE_LEN, 1942);
+    assert_eq!(ityv_cunit::ballot::SCRATCH_SLOT_LEN, 1600 + 1942);
+    assert_eq!(ityv_cunit::ballot::MAX_SLIP_LEN, 5387);
+    assert_eq!(ityv_cunit::ballot::MAX_CHALLENGE_OPENING_LEN, 7805);
     assert_eq!(ityv_cunit::link::MAX_MODULE_ISSUE_LEN, 534);
     assert_eq!(ityv_cunit::link::MAX_INTERPRETATION_LEN, 154);
-    assert_eq!(ityv_cunit::link::MAX_JOURNAL_ENTRY_LEN, 677);
+    assert_eq!(ityv_cunit::link::MAX_VISIT_END_LEN, 85);
+    assert_eq!(ityv_cunit::link::MAX_JOURNAL_ENTRY_LEN, 753);
 }
 
 #[test]
@@ -386,16 +390,17 @@ fn configuration_boundaries_are_exact() {
         }),
         ConfigFault::ModulesUnsorted
     );
-    // six modules pass the capacity rule and fail the one-per-chamber rule
-    let six: std::vec::Vec<_> = (0..6u8)
+    // seven modules pass the capacity rule and fail the one-per-chamber rule
+    let seven: std::vec::Vec<_> = (0..7u8)
         .map(|i| {
             let chamber = [
                 Chamber::A,
                 Chamber::C,
                 Chamber::J,
                 Chamber::J,
-                Chamber::X,
-                Chamber::Y,
+                Chamber::P1,
+                Chamber::P2,
+                Chamber::P2,
             ][usize::from(i)];
             module_config(
                 common::leak_bytes(std::vec![b'm', b'0' + i]),
@@ -406,7 +411,7 @@ fn configuration_boundaries_are_exact() {
         .collect();
     assert_eq!(
         fault(ConfigParts {
-            modules: common::leak(six).as_slice(),
+            modules: common::leak(seven).as_slice(),
             ..ok
         }),
         ConfigFault::ChamberModules
@@ -458,7 +463,7 @@ fn configuration_boundaries_are_exact() {
                 let id = common::leak_bytes(std::vec![b't', b'0' + i / 10, b'0' + i % 10]);
                 TrusteeConfig::new(
                     ityv_encoding::TrusteeId::new(id).unwrap(),
-                    Chamber::X,
+                    Chamber::P1,
                     i,
                     0,
                     key,
@@ -504,7 +509,7 @@ fn configuration_boundaries_are_exact() {
 }
 
 #[test]
-fn chamber_code_five_is_a_module_chamber() {
+fn chamber_code_seven_is_a_module_chamber() {
     use ityv_cunit::link::{
         MAX_MODULE_ISSUE_LEN, ModuleIssue, ModuleIssueParts, SCHEMA_MODULE_ISSUE,
     };
@@ -512,7 +517,7 @@ fn chamber_code_five_is_a_module_chamber() {
     let rand = [Scalar32([1; 32])];
     let issue = ModuleIssue::new(&ModuleIssueParts {
         module_id: ModuleId::new(b"mod-c").unwrap(),
-        chamber: 5,
+        chamber: 7,
         counter: 1,
         rand: &rand,
         cid: Token192([2; 24]),
@@ -524,7 +529,7 @@ fn chamber_code_five_is_a_module_chamber() {
     let len = encode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &issue, &mut out).unwrap();
     let parsed: ModuleIssue<'_> =
         decode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &out[..len]).unwrap();
-    assert_eq!(parsed.chamber(), 5);
+    assert_eq!(parsed.chamber(), 7);
     assert!(parsed.tags().is_empty());
 }
 
@@ -546,7 +551,8 @@ fn scan_count_accepts_the_bucket_of_the_last_entry_and_verdicts_report_violation
         spoiled_envelopes: 0,
         module_final_counters: &counters,
         open_batches: 0,
-        absentee_envelopes: None,
+        visits: 0,
+        envelopes: None,
         fallback_declared: false,
         paper_incidents: 0,
     };
@@ -566,7 +572,7 @@ fn secret_bearing_values_debug_print_nothing_secret() {
     let rand = [Scalar32([0xAB; 32])];
     let tags = [[0xCD; 16]];
     let parts = ModuleIssueParts {
-        module_id: ModuleId::new(b"mod-x").unwrap(),
+        module_id: ModuleId::new(b"mod-p1").unwrap(),
         chamber: 1,
         counter: 7,
         rand: &rand,

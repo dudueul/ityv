@@ -197,7 +197,7 @@ fn cast_record_body_round_trip_and_length() {
 #[test]
 fn cast_record_body_maximal_size() {
     let proof = proof_bytes(64, 8, 0x5a);
-    let ids: Vec<Vec<u8>> = (0..6u8)
+    let ids: Vec<Vec<u8>> = (0..7u8)
         .map(|i| {
             let mut id = std::vec![b'a' + i; 64];
             id[63] = b'0' + i;
@@ -225,7 +225,7 @@ fn cast_record_body_maximal_size() {
     };
     let body = CastRecordBody::new(&parts).unwrap();
     let bytes = encode_to_vec(SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, &body);
-    assert_eq!(bytes.len(), 21_494);
+    assert_eq!(bytes.len(), 21_570);
     assert!(bytes.len() <= MAX_CAST_RECORD_BODY_LEN);
     let decoded: CastRecordBody<'_> =
         decode_object(SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
@@ -583,17 +583,26 @@ fn challenge_opening_round_trip_and_rules() {
     assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &swapped)).is_none());
     let mismatched = [module_opening(b"mod-X", 7, 1, 0x60)];
     assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &mismatched)).is_none());
-    let seven: Vec<ModuleOpening<'_>> =
-        [b"m1".as_slice(), b"m2", b"m3", b"m4", b"m5", b"m6", b"m7"]
-            .iter()
-            .map(|id| ModuleOpening {
-                module_id: ModuleId::new(id).unwrap(),
-                counter: 1,
-                rand: rand.duplicate(),
-                cid: Token192([0; 24]),
-            })
-            .collect();
-    assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &seven)).is_none());
+    let eight: Vec<ModuleOpening<'_>> = [
+        b"m1".as_slice(),
+        b"m2",
+        b"m3",
+        b"m4",
+        b"m5",
+        b"m6",
+        b"m7",
+        b"m8",
+    ]
+    .iter()
+    .map(|id| ModuleOpening {
+        module_id: ModuleId::new(id).unwrap(),
+        counter: 1,
+        rand: rand.duplicate(),
+        cid: Token192([0; 24]),
+    })
+    .collect();
+    assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &eight)).is_none());
+    assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &eight[..7])).is_some());
     // No modules is allowed by the table.
     assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &[])).is_some());
 
@@ -653,7 +662,7 @@ fn share_package_round_trip_and_rules() {
     let entries = [
         share_entry(
             b"trustee-A",
-            ChamberCode::X,
+            ChamberCode::P1,
             Transport::Pad {
                 pad_id: 5,
                 pad_index: 3_000,
@@ -686,12 +695,15 @@ fn share_package_round_trip_and_rules() {
     assert_eq!(decoded.commitments(), &commitments(2, 0x10));
     assert_eq!(decoded.election_id().as_bytes(), E);
     assert_eq!(decoded.box_id().as_bytes(), BOX);
-    assert_eq!(ChamberCode::from_code(6), Some(ChamberCode::N));
-    assert_eq!(ChamberCode::N.code(), 6);
+    assert_eq!(ChamberCode::from_code(8), Some(ChamberCode::N));
+    assert_eq!(ChamberCode::N.code(), 8);
+    assert_eq!(ChamberCode::from_code(1), Some(ChamberCode::P1));
+    assert_eq!(ChamberCode::from_code(4), Some(ChamberCode::P4));
     assert_eq!(ChamberCode::from_code(0), None);
+    assert_eq!(ChamberCode::from_code(9), None);
 
     let mut v = bytes.clone();
-    v[a_chamber] = 7;
+    v[a_chamber] = 9;
     assert_eq!(
         kind_at(decode_share_package(&v)),
         (ErrorKind::ValueOutOfRange, a_chamber)
@@ -776,7 +788,7 @@ fn share_package_round_trip_and_rules() {
     let big = std::vec![0u8; 4097];
     let too_long = [share_entry(
         b"trustee-A",
-        ChamberCode::X,
+        ChamberCode::P1,
         Transport::Kem,
         &big,
         &tag_a,
@@ -882,7 +894,7 @@ fn member_share_round_trip_and_rules() {
 
     let zero_tag = [0u8; 16];
     let without = MemberShare::new(
-        &Scalars::<MAX_SECRETS>::new(&scalars(50, 0x80)).unwrap(),
+        &Scalars::<MAX_SECRETS>::new(&scalars(58, 0x80)).unwrap(),
         false,
         Token192([0; 24]),
         None,
@@ -890,11 +902,12 @@ fn member_share_round_trip_and_rules() {
     )
     .unwrap();
     let wb = encode_to_vec(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &without);
-    assert_eq!(wb.len(), HEADER_LEN + 4 + 50 * 32 + 1 + 24 + 1 + 16);
-    assert_eq!(wb.len(), 1662);
-    // The maximal object: fifty shares, a module, and an envelope label.
+    assert_eq!(wb.len(), HEADER_LEN + 4 + 58 * 32 + 1 + 24 + 1 + 16);
+    assert_eq!(wb.len(), 1918);
+    // The maximal object: fifty-eight shares (seven modules × eight chunks
+    // + 2), a module, and an envelope label.
     let maximal = MemberShare::new(
-        &Scalars::<MAX_SECRETS>::new(&scalars(50, 0x80)).unwrap(),
+        &Scalars::<MAX_SECRETS>::new(&scalars(58, 0x80)).unwrap(),
         true,
         Token192([0xff; 24]),
         Some(Token192([0xfe; 24])),
@@ -903,7 +916,7 @@ fn member_share_round_trip_and_rules() {
     .unwrap();
     assert_eq!(
         encode_to_vec(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &maximal).len(),
-        1686
+        1942
     );
     let back: MemberShare<'_> = decode_object(SCHEMA_MEMBER_SHARE, SCHEMA_VERSION_1, &wb).unwrap();
     assert_eq!(back, without);
@@ -911,7 +924,7 @@ fn member_share_round_trip_and_rules() {
     assert_eq!(back.lab(), None);
 
     // Without a module: non-zero cid, present lab, non-zero tag.
-    let w_flag_at = HEADER_LEN + 4 + 50 * 32;
+    let w_flag_at = HEADER_LEN + 4 + 58 * 32;
     let w_cid_at = w_flag_at + 1;
     let w_lab_at = w_cid_at + 24;
     let w_tag_at = w_lab_at + 1;
@@ -972,7 +985,7 @@ fn member_share_round_trip_and_rules() {
         (ErrorKind::ValueOutOfRange, shares_at)
     );
     let mut v = bytes.clone();
-    v[shares_at..shares_at + 4].copy_from_slice(&51u32.to_be_bytes());
+    v[shares_at..shares_at + 4].copy_from_slice(&59u32.to_be_bytes());
     assert_eq!(
         kind_at(decode_member_share(&v)),
         (ErrorKind::CountExceedsMax, shares_at)
@@ -995,6 +1008,7 @@ fn member_share_round_trip_and_rules() {
     );
     assert!(MemberShare::new(&one, false, Token192([0; 24]), None, &tag).is_none());
     assert!(MemberShare::new(&one, true, Token192([0; 24]), None, &zero_tag).is_some());
-    assert!(Scalars::<MAX_SECRETS>::new(&scalars(51, 0)).is_none());
+    assert!(Scalars::<MAX_SECRETS>::new(&scalars(59, 0)).is_none());
+    assert_eq!(MAX_SECRETS, 58);
     let _ = Hash512::ZERO;
 }

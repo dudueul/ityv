@@ -218,7 +218,9 @@ fn the_resumed_box_equals_the_live_box_after_every_entry_kind() {
                 JournalKind::Challenge
                 | JournalKind::Quarantine
                 | JournalKind::BoxClose
-                | JournalKind::Imprinted => {}
+                | JournalKind::Imprinted
+                | JournalKind::VisitDecision
+                | JournalKind::LabelPrinted => {}
             }
         }
         let next = cast_one(&w, &mut resumed, &mut m, &mut j, 5);
@@ -379,7 +381,7 @@ fn case_4_a_missing_paper_is_an_incident_that_the_close_reports() {
         paper: 3,
         without_record: 0,
         spoiled_envelopes: 0,
-        absentee_envelopes: None,
+        envelopes: None,
         fallback_declared: false,
         record_set_root: sorted_set_root(&codes).unwrap(),
         seal_digest: Hash512::ZERO,
@@ -536,7 +538,7 @@ fn a_closed_box_does_not_resume() {
         paper: 1,
         without_record: 0,
         spoiled_envelopes: 0,
-        absentee_envelopes: None,
+        envelopes: None,
         fallback_declared: false,
         record_set_root: sorted_set_root(&[code]).unwrap(),
         seal_digest: Hash512::ZERO,
@@ -946,7 +948,7 @@ fn a_box_close_must_name_the_marks_and_end_the_journal() {
 #[test]
 fn a_sixty_fifth_unbatched_record_is_corrupt() {
     let w = world(Profile::InPerson, false);
-    let ids: [&[u8]; 5] = [b"mod-a", b"mod-c", b"mod-j", b"mod-x", b"mod-y"];
+    let ids: [&[u8]; 5] = [b"mod-a", b"mod-c", b"mod-j", b"mod-p1", b"mod-p2"];
     let pair = |n: u64| {
         let record = Spec {
             kind: JournalKind::Record,

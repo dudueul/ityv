@@ -18,8 +18,8 @@
 mod common;
 
 use common::{
-    Buffers, MemJournal, SEED, STYLE_SMALL, STYLE_WIDE, World, interpretation, mocks, pad_bytes,
-    ports, signer, tb, work, world,
+    Buffers, MODULES, MODULES_FOUR_PARTIES, MemJournal, ModuleSpec, SEED, STYLE_SMALL, STYLE_WIDE,
+    World, interpretation, mocks, pad_bytes, ports, signer, tb, work, world, world_with,
 };
 use ityv_crypto::{
     AeadTag, Bases, CastId, ChunkIndex, Commitment, HybridCiphertext, MemberId, OneTimeKey,
@@ -29,7 +29,7 @@ use ityv_crypto::{
 };
 use ityv_cunit::ballot::KEM_CIPHERTEXT_LEN;
 use ityv_cunit::boxstate::OpenBox;
-use ityv_cunit::config::Profile;
+use ityv_cunit::config::{MAX_MODULES, Profile};
 use ityv_cunit::link::{JournalEntry, JournalKind, SCHEMA_JOURNAL_ENTRY};
 use ityv_cunit::rules::{PAD_MAC_KEY_OFFSET, PAD_PLAINTEXT_OFFSET};
 use ityv_encoding::{
@@ -274,11 +274,15 @@ fn reconstruct_secret(
 }
 
 fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
-    let w = world(profile, false);
+    run_challenge_in(&world(profile, false), style, chunks, option);
+}
+
+fn run_challenge_in(w: &World, style: &[u8], chunks: usize, option: u16) {
+    let profile = w.config.profile();
     let mut box_ = OpenBox::open(w.config, tb(1));
-    let mut modules = mocks(&w);
+    let mut modules = mocks(w);
     let mut journal = MemJournal::default();
-    let mut bufs = Buffers::new(&w);
+    let mut bufs = Buffers::new(w);
     let mut area = work();
     let ballot = box_
         .interpret(&interpretation(b"E-2026", style, option), &mut area)
@@ -300,7 +304,7 @@ fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
     let package = ballot.package_bytes().to_vec();
     let mut out = std::vec![0u8; 8192];
     let (_spoiled, opening) = ballot
-        .challenge(&mut box_, &mut journal, signer(&w), tb(2), &mut out)
+        .challenge(&mut box_, &mut journal, signer(w), tb(2), &mut out)
         .unwrap();
     let opening = opening.to_vec();
     assert_eq!(box_.totals().challenged, 1);
@@ -361,7 +365,7 @@ fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
 
     // Trustees decrypt their shares and a qualified set reconstructs every
     // secret; the reconstructed values equal the opening (§9.1 order).
-    let shares = decrypt_package(&w, &package);
+    let shares = decrypt_package(w, &package);
     let qualified: std::vec::Vec<usize> = w
         .trustees
         .iter()
@@ -372,15 +376,15 @@ fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
     let mut index = 0;
     for opened in body.modules() {
         for r in opened.rand.as_slice() {
-            let got = reconstruct_secret(&w, &shares, &qualified, index).unwrap();
+            let got = reconstruct_secret(w, &shares, &qualified, index).unwrap();
             assert_eq!(got.to_bytes(), r.0);
             index += 1;
         }
     }
-    let got = reconstruct_secret(&w, &shares, &qualified, index).unwrap();
+    let got = reconstruct_secret(w, &shares, &qualified, index).unwrap();
     assert_eq!(got.to_bytes(), cast_id.to_scalar().to_bytes());
     if profile == Profile::Absentee {
-        let label = reconstruct_secret(&w, &shares, &qualified, index + 1).unwrap();
+        let label = reconstruct_secret(w, &shares, &qualified, index + 1).unwrap();
         let mut h = ityv_crypto::Sha3Hasher::new();
         h.absorb(b"ityv:envlabel:v1");
         h.absorb(&[0]);
@@ -400,15 +404,28 @@ fn run_challenge(profile: Profile, style: &[u8], chunks: usize, option: u16) {
             assert_eq!(share.lab().is_some(), share.has_module(), "trustee {i}");
         }
     }
-    // Without both X members the set is not qualified.
-    let unqualified: std::vec::Vec<usize> = qualified
-        .iter()
-        .copied()
-        .filter(|&i| {
-            !(w.trustees[i].chamber == ityv_crypto::Chamber::X && w.trustees[i].member_index == 0)
-        })
+    // Without both members (2-of-2) of any one party chamber, or with only
+    // two of J, A, C, N (J's 1-of-2 dropped whole), the set is not
+    // qualified (ADR-0019 §4).
+    let parties: std::vec::Vec<ityv_crypto::Chamber> = ityv_crypto::Chamber::ALL
+        .into_iter()
+        .filter(|&c| c.is_party() && w.config.access().includes(c))
         .collect();
-    assert!(reconstruct_secret(&w, &shares, &unqualified, 0).is_err());
+    assert_eq!(parties.len(), usize::from(w.config.access().parties()));
+    for dropped in parties.into_iter().chain([ityv_crypto::Chamber::J]) {
+        let unqualified: std::vec::Vec<usize> = qualified
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let t = &w.trustees[i];
+                t.chamber != dropped || (t.chamber.is_party() && t.member_index != 0)
+            })
+            .collect();
+        assert!(
+            reconstruct_secret(w, &shares, &unqualified, 0).is_err(),
+            "{dropped:?}"
+        );
+    }
     // Module members hold their module's cid and tag; the others hold zeros.
     for (i, _, bytes) in &shares {
         let share: MemberShare<'_> =
@@ -433,6 +450,36 @@ fn challenge_opening_matches_commitments_and_trustee_reconstruction() {
 #[test]
 fn two_chunk_challenge_reconstructs_every_chunk() {
     run_challenge(Profile::InPerson, STYLE_WIDE, 2, 11);
+}
+
+#[test]
+fn three_parties_challenge_reconstructs_every_secret() {
+    let mut modules = MODULES.to_vec();
+    modules.push(ModuleSpec {
+        id: b"mod-p3",
+        chamber: ityv_crypto::Chamber::P3,
+        neutral: false,
+    });
+    let w = world_with(Profile::InPerson, false, &modules);
+    assert_eq!(w.config.access().parties(), 3);
+    assert_eq!(w.config.trustees().len(), 14);
+    run_challenge_in(&w, STYLE_SMALL, 1, 2);
+}
+
+#[test]
+fn four_parties_and_seven_modules_reconstruct_every_secret() {
+    // the largest configuration: seven modules, eight chambers, and with
+    // the two-chunk style and an envelope label 7·2 + 2 = 16 secrets
+    let w = world_with(Profile::Absentee, false, &MODULES_FOUR_PARTIES);
+    assert_eq!(w.config.access().parties(), 4);
+    assert_eq!(w.config.modules().len(), MAX_MODULES);
+    assert_eq!(w.config.trustees().len(), 16);
+    let (_, style) = w
+        .config
+        .style(ityv_encoding::BallotStyleId::new(STYLE_WIDE).unwrap())
+        .unwrap();
+    assert_eq!(w.config.secret_count(style), 16);
+    run_challenge_in(&w, STYLE_WIDE, 2, 7);
 }
 
 #[test]
@@ -475,7 +522,7 @@ fn exhausted_pad_falls_back_to_the_kem_and_sets_bit_zero() {
     let w = world(Profile::InPerson, false);
     let mut box_ = OpenBox::open(w.config, tb(1));
     let mut modules = mocks(&w);
-    modules[3].exhaust_member = Some(1); // mod-x, member 1
+    modules[3].exhaust_member = Some(1); // mod-p1, member 1
     modules[2].exhaust_member = Some(0); // mod-j, member 0
     let mut journal = MemJournal::default();
     let mut bufs = Buffers::new(&w);
@@ -511,7 +558,7 @@ fn exhausted_pad_falls_back_to_the_kem_and_sets_bit_zero() {
         decode_object(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &package).unwrap();
     for (entry, trustee) in pkg.entries().zip(&w.trustees) {
         let expect_kem = trustee.chamber == ityv_crypto::Chamber::N
-            || (trustee.chamber == ityv_crypto::Chamber::X && trustee.member_index == 1)
+            || (trustee.chamber == ityv_crypto::Chamber::P1 && trustee.member_index == 1)
             || (trustee.chamber == ityv_crypto::Chamber::J && trustee.member_index == 0);
         assert_eq!(
             entry.transport == Transport::Kem,
@@ -559,7 +606,8 @@ fn slip_is_signed_over_the_tracking_code() {
         .to_vec();
     let slip: ityv_encoding::Slip<'_> =
         decode_object(ityv_encoding::SCHEMA_SLIP, SCHEMA_VERSION_1, &slip_bytes).unwrap();
-    assert_eq!(slip.body().tracking_code(), ballot.tracking_code());
+    // one ballot per visit until visit-level casting: one tracking code
+    assert_eq!(slip.body().tracking_codes(), &[*ballot.tracking_code()]);
     assert_eq!(slip.body().station_id().as_bytes(), b"ST-1");
     assert_eq!(slip.device_sig().len(), HYBRID_SIG_LEN);
     let sig = ityv_crypto::HybridSignature::decode(&mut Reader::new(slip.device_sig())).unwrap();
@@ -709,7 +757,7 @@ fn trustees_check_the_module_tag_with_their_pad_key() {
     let r = reconstruct_secret(&w, &shares, &qualified, module_index).unwrap();
     let b = w.config.pad_consumption();
     for (i, member, bytes) in &shares {
-        if member.chamber() != ityv_crypto::Chamber::X {
+        if member.chamber() != ityv_crypto::Chamber::P1 {
             continue;
         }
         let share: MemberShare<'_> =

@@ -26,7 +26,7 @@ use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox}
 use ityv_cunit::config::Profile;
 use ityv_cunit::error::Invariant;
 use ityv_cunit::link::{JournalEntry, JournalKind, SCHEMA_JOURNAL_ENTRY};
-use ityv_cunit::rules::{CloseFacts, close_verdict};
+use ityv_cunit::rules::{CloseFacts, EnvelopeCounts, close_verdict};
 use ityv_cunit::{Error, JournalError, PortError};
 use ityv_encoding::{
     BatchAttest, BoxCloseBody, Decode, Hash512, Reader, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE_BODY,
@@ -186,7 +186,7 @@ fn a_counter_gap_is_refused_without_moving_that_module_mark() {
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
     cast_one(&w, &mut b, &mut m, &mut j, 1);
-    m[3].skip_counter = true; // mod-x answers 3 after 1
+    m[3].skip_counter = true; // mod-p1 answers 3 after 1
     let mut area = work();
     let ballot = b
         .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
@@ -195,7 +195,7 @@ fn a_counter_gap_is_refused_without_moving_that_module_mark() {
         ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap_err(),
         Error::CounterGap
     );
-    // mod-a, mod-c and mod-j consumed counter 2; mod-x and mod-y did not
+    // mod-a, mod-c and mod-j consumed counter 2; mod-p1 and mod-p2 did not
     assert_eq!(b.module_counters(), &[2, 2, 2, 1, 1]);
     b.quarantine_in_flight(&mut j, tb(1)).unwrap();
     assert_eq!(kinds(&j).last(), Some(&JournalKind::Quarantine));
@@ -249,7 +249,7 @@ fn batch_attest_covers_records_and_every_counter_since_the_last_batch() {
     .unwrap();
     assert_eq!(
         verified_signers(&m, &attest),
-        ids(&[b"mod-a", b"mod-c", b"mod-j", b"mod-x", b"mod-y"])
+        ids(&[b"mod-a", b"mod-c", b"mod-j", b"mod-p1", b"mod-p2"])
     );
     // one dry run and one signature per module
     assert!(m.iter().all(|x| x.checks == 1 && x.signs == 1));
@@ -284,7 +284,7 @@ fn a_refusing_module_is_listed_and_the_others_sign_once_without_cascade() {
     assert_eq!(refusals(&attest), ids(&[b"mod-j"]));
     assert_eq!(
         verified_signers(&m, &attest),
-        ids(&[b"mod-a", b"mod-c", b"mod-x", b"mod-y"])
+        ids(&[b"mod-a", b"mod-c", b"mod-p1", b"mod-p2"])
     );
     for (i, module) in m.iter().enumerate() {
         assert_eq!(module.checks, 1);
@@ -452,7 +452,7 @@ fn a_journal_mismatch_latches_the_box() {
         paper: 1,
         without_record: 0,
         spoiled_envelopes: 0,
-        absentee_envelopes: None,
+        envelopes: None,
         fallback_declared: false,
         record_set_root: Hash512::ZERO,
         seal_digest: Hash512::ZERO,
@@ -845,7 +845,7 @@ fn good_inputs(codes: &mut [Hash512]) -> CloseInputs {
         paper: codes.len() as u64,
         without_record: 0,
         spoiled_envelopes: 2,
-        absentee_envelopes: None,
+        envelopes: None,
         fallback_declared: false,
         record_set_root: sorted_set_root(codes).unwrap(),
         seal_digest: Hash512([7; 64]),
@@ -877,6 +877,12 @@ fn a_consistent_box_closes_without_violations() {
         ),
         (2, 2, 1, 1)
     );
+    // in person: one visit per record, no envelopes or stickers
+    assert_eq!(
+        (counts.visits, counts.envelopes, counts.stickers),
+        (2, 0, 0)
+    );
+    assert_eq!(b.totals().visits, 2);
     assert_eq!(body.journal_head(), &head_before);
     assert_eq!(body.record_set_root(), &inputs.record_set_root);
     assert_eq!(body.open_batches(), 0);
@@ -971,7 +977,7 @@ fn close_checks_its_preconditions_before_signing() {
         Error::TimeRegression
     );
     let in_person_with_envelopes = CloseInputs {
-        absentee_envelopes: Some(1),
+        envelopes: Some(ENVELOPES_ONE),
         ..good
     };
     assert_eq!(
@@ -1011,8 +1017,17 @@ fn close_checks_its_preconditions_before_signing() {
         .unwrap();
 }
 
+/// One envelope with one sticker, from three issued and two returned
+/// empty.
+const ENVELOPES_ONE: EnvelopeCounts = EnvelopeCounts {
+    envelopes: 1,
+    stickers: 1,
+    issued: 3,
+    returned_empty: 2,
+};
+
 #[test]
-fn an_absentee_box_must_count_its_envelopes() {
+fn an_absentee_box_must_count_its_envelopes_and_stickers() {
     let w = world(Profile::Absentee, false);
     let mut m = mocks(&w);
     let mut j = MemJournal::default();
@@ -1021,6 +1036,7 @@ fn an_absentee_box_must_count_its_envelopes() {
     close(&w, &mut b, &mut m, &mut j, 1).unwrap();
     let base = CloseInputs {
         spoiled_envelopes: 0,
+        paper: 0,
         ..good_inputs(&mut codes)
     };
     let mut out = std::vec![0u8; CLOSE_WORK_LEN];
@@ -1029,21 +1045,81 @@ fn an_absentee_box_must_count_its_envelopes() {
             .unwrap_err(),
         Error::EnvelopeCountProfile
     );
-    let wrong = CloseInputs {
-        absentee_envelopes: Some(2),
-        ..base
-    };
-    let verdict = close_verdict(&b.close_facts(&wrong));
-    assert!(verdict.contains(Invariant::EnvelopeCount));
-    assert_eq!(verdict.count(), 1);
     let right = CloseInputs {
-        absentee_envelopes: Some(1),
+        envelopes: Some(ENVELOPES_ONE),
         ..base
     };
+    let check = |inputs: CloseInputs, invariant: Invariant| {
+        let verdict = close_verdict(&b.close_facts(&inputs));
+        assert!(verdict.contains(invariant), "{invariant:?}");
+        assert_eq!(verdict.count(), 1, "{invariant:?}");
+    };
+    // the ballots stay in their envelopes: no paper count
+    check(CloseInputs { paper: 1, ..right }, Invariant::PaperCount);
+    let with = |counts: EnvelopeCounts| CloseInputs {
+        envelopes: Some(counts),
+        ..right
+    };
+    // envelopes in the box == issued − returned empty
+    check(
+        with(EnvelopeCounts {
+            envelopes: 2,
+            ..ENVELOPES_ONE
+        }),
+        Invariant::EnvelopeCount,
+    );
+    check(
+        with(EnvelopeCounts {
+            issued: 4,
+            ..ENVELOPES_ONE
+        }),
+        Invariant::EnvelopeCount,
+    );
+    check(
+        with(EnvelopeCounts {
+            returned_empty: 1,
+            ..ENVELOPES_ONE
+        }),
+        Invariant::EnvelopeCount,
+    );
+    // more empty envelopes returned than issued: the subtraction fails
+    check(
+        with(EnvelopeCounts {
+            envelopes: 0,
+            issued: 1,
+            returned_empty: 2,
+            ..ENVELOPES_ONE
+        }),
+        Invariant::EnvelopeCount,
+    );
+    // one sticker per visit
+    check(
+        with(EnvelopeCounts {
+            stickers: 2,
+            ..ENVELOPES_ONE
+        }),
+        Invariant::StickerCount,
+    );
+    check(
+        with(EnvelopeCounts {
+            stickers: 0,
+            ..ENVELOPES_ONE
+        }),
+        Invariant::StickerCount,
+    );
     let closed = b
         .prepare_close(&right, signer(&w), &mut j, tb(1), &mut out)
         .unwrap();
     assert!(closed.verdict.is_empty());
+    let body: BoxCloseBody<'_> =
+        decode_object(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, closed.body).unwrap();
+    let counts = body.counts();
+    assert_eq!(
+        (counts.paper, counts.records, counts.visits),
+        (0, 1, 1),
+        "an absentee box reports no paper count"
+    );
+    assert_eq!((counts.envelopes, counts.stickers), (1, 1));
 }
 
 #[test]
@@ -1066,13 +1142,6 @@ fn every_close_invariant_is_reported_on_its_own() {
             ..good
         },
         Invariant::SpoiledEnvelopes,
-    );
-    check(
-        CloseInputs {
-            absentee_envelopes: Some(1),
-            ..good
-        },
-        Invariant::EnvelopeCount,
     );
     check(
         CloseInputs {
@@ -1108,7 +1177,8 @@ fn a_lost_attestation_is_an_attested_count_violation() {
         spoiled_envelopes: 0,
         module_final_counters: &counters,
         open_batches: 0,
-        absentee_envelopes: None,
+        visits: 3,
+        envelopes: None,
         fallback_declared: false,
         paper_incidents: 0,
     };
@@ -1122,6 +1192,55 @@ fn a_lost_attestation_is_an_attested_count_violation() {
         })
         .is_empty()
     );
+}
+
+#[test]
+fn visits_bound_the_records_from_both_sides() {
+    // visit_count ≤ record_count ≤ 8·visit_count (ADR-0021)
+    let counters = [8u64; 5];
+    let facts = |records: u64, visits: u64| CloseFacts {
+        paper: records,
+        records,
+        attested: records,
+        open_batch_records: 0,
+        without_record: 0,
+        challenged: 0,
+        quarantined: 0,
+        spoiled_envelopes: 0,
+        module_final_counters: &[],
+        open_batches: 0,
+        visits,
+        envelopes: None,
+        fallback_declared: false,
+        paper_incidents: 0,
+    };
+    let violated = |records: u64, visits: u64| {
+        let verdict = close_verdict(&facts(records, visits));
+        assert!(verdict.count() <= 1, "only the visit rule can fail");
+        verdict.contains(Invariant::VisitCount)
+    };
+    assert!(!violated(0, 0));
+    assert!(!violated(1, 1));
+    assert!(!violated(8, 1), "eight ballots in one visit");
+    assert!(violated(9, 1), "nine ballots cannot come from one visit");
+    assert!(
+        violated(1, 2),
+        "a visit without a cast ballot is not counted"
+    );
+    assert!(violated(1, 0));
+    assert!(violated(0, 1));
+    assert!(!violated(16, 2));
+    assert!(violated(17, 2));
+    assert!(!violated(2, 2));
+    // the product saturates instead of overflowing
+    assert!(!violated(u64::MAX, u64::MAX / 4));
+    assert!(!violated(u64::MAX, u64::MAX));
+    // counters checked against the facts as well
+    let with_counters = CloseFacts {
+        module_final_counters: &counters,
+        ..facts(8, 1)
+    };
+    assert!(close_verdict(&with_counters).is_empty());
 }
 
 #[test]
@@ -1153,7 +1272,7 @@ fn an_open_batch_and_a_module_gap_are_reported_at_close() {
     assert_eq!(b.module_counters(), &[2, 2, 2, 1, 1]);
     b.quarantine_in_flight(&mut j, tb(1)).unwrap();
     let attest = close(&w, &mut b, &mut m, &mut j, 1).unwrap();
-    assert_eq!(refusals(&attest), ids(&[b"mod-x"]));
+    assert_eq!(refusals(&attest), ids(&[b"mod-p1"]));
     let inputs = CloseInputs {
         spoiled_envelopes: 1,
         ..good_inputs(&mut codes)

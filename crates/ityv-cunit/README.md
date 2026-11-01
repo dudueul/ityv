@@ -1,6 +1,6 @@
 # ityv-cunit
 
-> English summary: The trusted core of the casting scanner's commitment unit (ADR-0017 and its 2026-11-01 amendment). A `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate that turns one interpreted ballot into every object the scanner emits: the generalized Pedersen commitments and their 1-of-(m+2) OR proof, the share package for the trustees (each secret split over the chamber access structure, sealed per member through the chamber module's one-time pad or the hybrid KEM), the device and module record signatures (module signatures verified against their genesis keys), the tracking code, the imprint command and the imprint-complete journal entry that must be durable before the paper drops, and on request the signed pre-cast challenge opening or the code slip. Every per-ballot secret (the choice, module contributions, summed randomness, cast id, envelope label, generator state, share plaintexts) and the proof live in one caller-provided work area that the ballot borrows and that is wiped on every exit path. The crate also keeps the box state: per-module counter high-water marks, the sealed journal hash chain, batch attestations (a dry run first, then one verified signature per consenting module), scan-count bodies, a fault latch on a journal mismatch, the box close with the VC-038 verdict (including papers lost or unmatched at a resume) and a box-bound close token, and resume from the journal after a power loss, deciding from the attested waiting-area state what happens to the paper there. A box accepts up to 4,096 ballot styles (an early-voting scanner holds every district's), sorted by identifier and found by binary search. The crate owns no I/O: the host implements the module ports, the journal sink and source, and supplies time buckets and per-operation seeds. Ordering rules are types: an imprint command or a slip exists only after the journal sink reported the record durable, a cast ballot cannot be challenged, and a closed box has no method that accepts a ballot.
+> English summary: The trusted core of the casting scanner's commitment unit (ADR-0017 and its 2026-11-01 amendment). A `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate that turns one interpreted ballot into every object the scanner emits: the generalized Pedersen commitments and their 1-of-(m+2) OR proof, the share package for the trustees (each secret split over the chamber access structure, sealed per member through the chamber module's one-time pad or the hybrid KEM), the device and module record signatures (module signatures verified against their genesis keys), the tracking code, the imprint command and the imprint-complete journal entry that must be durable before the paper drops, and on request the signed pre-cast challenge opening or the code slip. Every per-ballot secret (the choice, module contributions, summed randomness, cast id, envelope label, generator state, share plaintexts) and the proof live in one caller-provided work area that the ballot borrows and that is wiped on every exit path. The crate also keeps the box state: per-module counter high-water marks, the sealed journal hash chain, batch attestations (a dry run first, then one verified signature per consenting module), scan-count bodies, a fault latch on a journal mismatch, the box close with the VC-038 verdict (including papers lost or unmatched at a resume, and the visit, envelope and sticker counts of ADR-0021) and a box-bound close token, and resume from the journal after a power loss, deciding from the attested waiting-area state what happens to the paper there. Shares follow the per-party access structure of ADR-0019: party chambers P1..Pn (2 ≤ n ≤ 4) each with its own module, never delegated, and at most seven modules per scanner. A box accepts up to 4,096 ballot styles (an early-voting scanner holds every district's), sorted by identifier and found by binary search. The crate owns no I/O: the host implements the module ports, the journal sink and source, and supplies time buckets and per-operation seeds. Ordering rules are types: an imprint command or a slip exists only after the journal sink reported the record durable, a cast ballot cannot be challenged, and a closed box has no method that accepts a ballot.
 
 ## 무엇인가
 
@@ -8,8 +8,8 @@
 
 | 모듈 | 내용 | 명세 |
 |---|---|---|
-| `config` | genesis에서 호스트가 만드는 선거 구성: 투표양식(최대 4,096개, ID 오름차순, 이진 탐색), 모듈(챔버당 하나; X·Y는 자체 모듈, J·A·C는 자체 또는 중립 위임, N은 없음)과 모듈 공개키(Ed25519 기록 키, 하이브리드 배치 키), 신뢰기관 명부, 접근구조, `VOTER_CODE`. 투표함 단위 패드 소비 `b`를 검증 시 고정한다 | ADR-0017 §2, §12, 개정 1·10·16 |
-| `link` | 해석 유닛 링크 `Interpretation`(0x0101), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–6) | ENCODING.md §8.19 |
+| `config` | genesis에서 호스트가 만드는 선거 구성: 투표양식(최대 4,096개, ID 오름차순, 이진 탐색), 모듈(챔버당 하나, 최대 7개; 정당 챔버 P1…Pn(2 ≤ n ≤ 4)은 자체 모듈만 쓰고 위임하지 않으며 n 밖의 정당 챔버는 모듈도 구성원도 없음, J·A·C는 자체 또는 중립 위임, N은 없음)과 모듈 공개키(Ed25519 기록 키, 하이브리드 배치 키), 신뢰기관 명부, 접근구조, `VOTER_CODE`. 투표함 단위 패드 소비 `b`를 검증 시 고정한다 | ADR-0017 §2, §12, 개정 1·10·16, ADR-0019 |
+| `link` | 해석 유닛 링크 `Interpretation`(0x0101)과 방문 끝 알림 `VisitEnd`(0x0104), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–8) | ENCODING.md §8.19, ADR-0021 |
 | `port` | 호스트 trait `ModulePort`(발급 `issue(k)`, 패드 봉인, 기록 서명, 배치 구간 확인 `check_batch`, 배치 서명)·`JournalSink`(내구 추가)·`JournalSource`(재개 시 읽기), 모듈의 배치 서명 규칙 `module_may_sign_batch` | ADR-0017 §3, §7–§8, 개정 6·11, VC-021 |
 | `rng` | SHA3-512 카운터 모드 생성기 `DeviceRng`(표 생성기: 장치 시드와 모든 모듈의 비공개 기여로 시드, 작업 영역 안에서 재시드; 서명 생성기: 장치 시드) | ADR-0017 §12 |
 | `ballot` | 작업 영역 `BallotWork`, 표별 typestate `Interpreted → Issued → Committed → Built → Durable → Done` 또는 `Built → Challenged`, share 패키지·투함 기록·검증 공개·슬립 | PROTOCOL.md §7.3–§7.7, §8, §9, 개정 3–5 |
@@ -26,13 +26,13 @@
 - 모듈의 기록 서명과 배치 서명은 설정의 genesis 공개키로 검증한 뒤에만 객체에 넣는다(`RecordSignature`, `BatchSignature`).
 - 배치 마감은 모든 전제(투표함 상태, 진행 중인 표, 호스트가 저장 매체에서 다시 읽은 head, 빈 배치, 포트 수, 시간 구간, 작업 버퍼)를 먼저 검사한다. 그다음 모든 모듈에 구간 확인(서명·상태 변화 없음)을 묻고, 거부 목록을 넣은 최종 본문에 동의한 모듈마다 한 번씩 서명을 받는다. 한 모듈의 거부가 다른 모듈의 재서명이나 연쇄 거부를 부르지 않는다(개정 6).
 - 저널 head가 다르면 투표함은 고장 상태로 고정되어 새 표, 배치, 스캔 카운터, 마감 서명을 모두 거부한다(VC-056, 개정 7).
-- 마감은 프로필과 봉투 수를 대조한다(관외·재외는 필수, 관내는 없음; `EnvelopeCountProfile`). 마감 토큰은 서명한 `BoxCloseBody`의 해시를 담아 그 투표함만 닫는다(`ForeignCloseToken`).
+- 마감은 프로필과 봉투 수를 대조한다(관외·재외는 봉투·스티커 수와 회송용 봉투 교부·빈 봉투 회수 수가 필수, 관내는 없음; `EnvelopeCountProfile`). 판정은 VC-038 전체다: 관내는 `paper_count == record_count + no_record_count`, 관외·재외는 `paper_count == 0`, `sticker_count == visit_count`, `envelope_count == 교부 − 빈 봉투 회수`, 그리고 모든 함에서 `visit_count ≤ record_count ≤ 8·visit_count`. 마감 토큰은 서명한 `BoxCloseBody`의 해시를 담아 그 투표함만 닫는다(`ForeignCloseToken`).
 - 격리의 회계(개정 5): 저널에 기록된 표의 격리는 그 기록 해시를 담은 항목 3을 쓰고, 기록을 기록 수와 열린 배치에서 빼 격리 수로 옮긴다. 기록 전 격리는 기록 해시 0과 소비된 카운터를 쓴다. 카운터를 하나도 소비하지 않은 표는 유권자에게 돌려준다(항목 없음).
 - 증명·비밀분산의 난수는 장치 시드와 모든 모듈 기여로 시드된 생성기에서만 나오므로 장치 혼자도, 모듈 하나도 그 난수를 정하지 못한다.
 
 ## 작업 영역 계약
 
-비밀은 한 곳에만 있다(개정 3·4). 호스트는 `BallotWork`(64비트에서 34,936바이트, 생성자는 `const`)를 하나 두고 표마다 `OpenBox::interpret(link, &mut work)`로 빌려준다. 소형 대상에서는 `static`에 둔다.
+비밀은 한 곳에만 있다(개정 3·4). 호스트는 `BallotWork`(64비트에서 36,408바이트, 생성자는 `const`)를 하나 두고 표마다 `OpenBox::interpret(link, &mut work)`로 빌려준다. 소형 대상에서는 `static`에 둔다.
 
 - 작업 영역에 있는 것: 선택 인덱스, 모듈 기여(카운터, `r_{c,j}`, `cid_c`, `lab_c`, 태그), 투함 ID, 봉투 라벨, 합산 난수 `r_j`, 표 생성기 상태, 공유 비밀 값, 구성원별 share 스칼라와 `MemberShare` 평문, 증명(`Proof`), 검증 공개 본문 작성 공간.
 - 증명은 `ityv_crypto::prove_into`가 작업 영역의 `Proof`에 제자리로 쓴다(20 KB 임시값 없음). 소거는 `Proof::clear`, 빈 상태 확인은 `Proof::is_empty`다.
@@ -88,17 +88,18 @@
 
 구성원 평문 `MemberShare`(0x0015)의 길이는 `16 + (4 + 32·s) + 1 + 24 + (1 [+ 24]) + 16 = 62 + 32·s [+ 24]`바이트다(`s` = 공유 비밀 수 = 모듈 수 × k + 1 [+ 1]; 라벨 24바이트는 관외 프로필의 모듈 챔버 구성원만). 패드 소비는 투표함에 하나로 `b = max_style len(MemberShare) + 64`이며 `ElectionConfig::pad_consumption`이 돌려준다. 기록 n의 패드 인덱스는 `n × b`다.
 
-시험 구성: 모듈 5개(A·C 중립, J·X·Y 자체), 투표양식 `P-4`(k = 1)와 `L-12`(k = 2), 챔버당 신뢰기관 2명(X·Y 2-of-2, 나머지 1-of-2). 관내는 `s` = 6 / 11, 길이 254 / 414, `b = 478`. 관외는 `s` = 7 / 12, 길이 310 / 470, `b = 534`.
+시험 구성: 정당 둘(n = 2), 모듈 5개(A·C 중립, J·P1·P2 자체), 투표양식 `P-4`(k = 1)와 `L-12`(k = 2), 참여 챔버당 신뢰기관 2명(정당 챔버 2-of-2, 나머지 1-of-2). 관내는 `s` = 6 / 11, 길이 254 / 414, `b = 478`. 관외는 `s` = 7 / 12, 길이 310 / 470, `b = 534`.
 
 ## 바이트 배치
 
 | 객체 | 인코딩(§3 헤더 16바이트 뒤) |
 |---|---|
 | `Interpretation`(0x0101) | `election_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `option_index: u16` (최대 154바이트) |
-| `ModuleIssue`(0x0103) | `module_id: Ident<64>` ‖ `chamber: u8`(1–5) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(1개 이상) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>` (최대 534바이트) |
-| `JournalEntry`(0x0014) | `prev_head: Hash512` ‖ `kind: u8`(1–6) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id, counter}, 6>` ‖ `time_bucket: u64` (최대 677바이트) |
+| `VisitEnd`(0x0104) | `election_id: Ident<64>` ‖ `ballot_count: u8`(1–8) (최대 85바이트) |
+| `ModuleIssue`(0x0103) | `module_id: Ident<64>` ‖ `chamber: u8`(1–7: P1–P4, J, A, C) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(1개 이상) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>` (최대 534바이트) |
+| `JournalEntry`(0x0014) | `prev_head: Hash512` ‖ `kind: u8`(1–8) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id, counter}, 7>` ‖ `time_bucket: u64` (최대 753바이트) |
 
-`JournalEntry`의 `record_hash`와 `module_counters`는 종류마다 뜻이 다르다(ENCODING.md §8.19 개정): 1 기록·2 검증 폐기는 그 표의 기록 해시와 소비한 카운터, 3 격리는 기록된 표면 그 기록 해시와 그 카운터, 기록 전이면 0과 소비한 카운터(재개의 기록 없는 격리는 빈 목록), 4 배치 마감은 배치의 `records_root`와 모든 모듈의 최고값, 5 투표함 마감은 `record_set_root`와 모든 모듈의 최고값, 6 각인 완료는 그 기록 해시와 그 카운터. 기록을 지목하는 3과 6은 카운터를 새로 소비하지 않는다.
+`JournalEntry`의 `record_hash`와 `module_counters`는 종류마다 뜻이 다르다(ENCODING.md §8.19 개정): 1 기록·2 검증 폐기는 그 표의 기록 해시와 소비한 카운터, 3 격리는 기록된 표면 그 기록 해시와 그 카운터, 기록 전이면 0과 소비한 카운터(재개의 기록 없는 격리는 빈 목록), 4 배치 마감은 배치의 `records_root`와 모든 모듈의 최고값, 5 투표함 마감은 `record_set_root`와 모든 모듈의 최고값, 6 각인 완료는 그 기록 해시와 그 카운터, 7 방문 결정과 8 라벨 출력은 방문 결정 다이제스트와 빈 목록(ADR-0021). 기록을 지목하는 3과 6은 카운터를 새로 소비하지 않는다. 이 판은 아직 방문 단위로 투입하지 않으므로(투입 기록마다 방문 하나) 종류 7·8을 쓰지 않고, 재개에서 만나면 `JournalCorrupt`다. `VisitEnd`는 객체와 디코더만 있다.
 
 나머지 객체(`CastRecordBody`, `CastRecord`, `SharePackage`, `MemberShare`, `ChallengeOpening`, `BatchAttest`, `ScanCountAttestBody`, `BoxCloseBody`, `Slip`)는 `ityv-encoding`이 구현한다(ENCODING.md §8.6–§8.18).
 
@@ -116,7 +117,7 @@
 10. 마감은 `prepare_close`(본문·장치 서명·저널 항목, 판정 반환) 뒤 같은 투표함의 토큰으로 `into_closed`를 부른다. 판정이 비어 있지 않으면 `HOLD_REVIEW`다.
 11. `is_faulted()`가 참이면 장치를 교체한다.
 
-버퍼 크기: 작업 영역 `BallotWork` 하나(약 35 KB), 빌드 scratch `scratch_len(신뢰기관 수)`(신뢰기관당 3,286바이트), share 패키지 ≤ 269,088, 기록 본문 ≤ 21,494, 기록 ≤ 22,374(증명 인코딩의 임시 공간을 겸한다), 배치 작업 `BATCH_WORK_LEN`(67,320), 마감 작업 `CLOSE_WORK_LEN`(5,715), 검증 공개 ≤ 7,445, 슬립 ≤ 4,935, 재개 패키지 버퍼 ≥ 투표함의 가장 큰 share 패키지.
+버퍼 크기: 작업 영역 `BallotWork` 하나(약 35 KB), 빌드 scratch `scratch_len(신뢰기관 수)`(신뢰기관당 3,542바이트), share 패키지 ≤ 269,088, 기록 본문 ≤ 21,570, 기록 ≤ 22,582(증명 인코딩의 임시 공간을 겸한다), 배치 작업 `BATCH_WORK_LEN`(76,922: 모듈 서명 7개와 장치 서명 1개의 자리, 그 뒤 `BatchAttest` ≤ 39,394), 마감 작업 `CLOSE_WORK_LEN`(5,715), 검증 공개 ≤ 7,805, 슬립 ≤ 5,387, 재개 패키지 버퍼 ≥ 투표함의 가장 큰 share 패키지.
 
 ## 검증
 
@@ -131,18 +132,18 @@ cargo build --locked -p ityv-cunit --target thumbv7em-none-eabihf   # no_std 빌
 
 | 파일 | 내용 |
 |---|---|
-| `tests/flow.rs` | 공개 검증기의 검사(추적코드, 장치·모듈 기록 서명, OR 증명), 신뢰기관의 검사(패드·KEM 복호, 전송 태그, 정족수로 모든 비밀 복원과 검증 공개값의 일치, 비정족수 실패), 모듈 태그 `tag_{c,i}`의 신뢰기관 측 검증(VC-022), KEM 연관 데이터 변조 시 복호 실패, 청크 수가 다른 투표양식의 패드 구간 분리, 포트 순서 오류, 다른 키의 기록 서명, 종료·실패 경로의 작업 영역 소거 |
-| `tests/boxes.rs` | 저널 사슬, 카운터 되감기·재사용·건너뛰기, 배치 범위·거부·연쇄 없음·서명 검증, 전제 검사 순서, 고장 고정, 스캔 카운터, 격리 회계(기록된 표·각인 실패·저널 실패), 마감 불변식 하나씩, 봉투 수와 프로필, 다른 투표함의 토큰 |
+| `tests/flow.rs` | 공개 검증기의 검사(추적코드, 장치·모듈 기록 서명, OR 증명), 신뢰기관의 검사(패드·KEM 복호, 전송 태그, 정족수로 모든 비밀 복원과 검증 공개값의 일치, 정당 챔버 하나나 J가 빠진 집합의 실패; 정당 2·3·4, 최대 구성인 모듈 7개·챔버 8개 포함), 모듈 태그 `tag_{c,i}`의 신뢰기관 측 검증(VC-022), KEM 연관 데이터 변조 시 복호 실패, 청크 수가 다른 투표양식의 패드 구간 분리, 포트 순서 오류, 다른 키의 기록 서명, 종료·실패 경로의 작업 영역 소거 |
+| `tests/boxes.rs` | 저널 사슬, 카운터 되감기·재사용·건너뛰기, 배치 범위·거부·연쇄 없음·서명 검증, 전제 검사 순서, 고장 고정, 스캔 카운터, 격리 회계(기록된 표·각인 실패·저널 실패), 마감 불변식 하나씩, 방문 수의 양쪽 상한, 관외 봉투·스티커 수와 프로필, 다른 투표함의 토큰 |
 | `tests/resume.rs` | 항목 종류마다 재개한 투표함과 원래 투표함의 동일성과 이어서 쓰기, 대기 구역 판정의 네 경우와 두 번째 전원 상실, 사라진 투표지 사건의 저널 재계산, 각인 항목 쓰기 실패, 손상·불일치 저널 거부(검사마다 하나씩) |
 | `tests/styles.rs` | 4,096개 투표양식 구성에서 처음·가운데·마지막 투표양식 조회와 투표, 모르는 투표양식, 정렬 안 됨·중복·초과 거부, 구성 크기 |
-| `tests/link.rs` | 링크 객체 배치와 디코더, 구성 규칙, 계수 규칙 예, 속성 테스트 |
+| `tests/link.rs` | 링크 객체 배치와 디코더(`VisitEnd`, 저널 종류 1–8, 최대 길이), 구성 규칙(정당 챔버 모듈 필수·위임 금지, n 밖의 정당 챔버, 모듈 8개 거부), 계수 규칙 예, 속성 테스트 |
 | `tests/surface.rs` | 표시 문자열, 비밀을 담은 값의 `Debug`, 접근자, 경계값 |
 
-Kani 하네스(9개): 선택지 범위, 카운터 판정, 네 번의 발급에 걸친 카운터 최고값(되돌아가지 않고 같은 카운터를 두 번 받지 않음), 패드 소비·인덱스 산술, 모듈 배치 서명 규칙, 배치·스캔 카운터 시점, VC-038 판정 전체(투표지 사건 포함)를 128비트 산술로 독립 기술한 명제와 대조하고, 재개의 대기 구역 판정을 독립적으로 적은 3×5 표와 대조한다.
+Kani 하네스(9개): 선택지 범위, 카운터 판정, 네 번의 발급에 걸친 카운터 최고값(되돌아가지 않고 같은 카운터를 두 번 받지 않음), 패드 소비·인덱스 산술, 모듈 배치 서명 규칙, 배치·스캔 카운터 시점, VC-038 판정 전체(투표지 사건, 방문·봉투·스티커 수 포함)를 128비트 산술로 독립 기술한 명제와 대조하고, 재개의 대기 구역 판정을 독립적으로 적은 3×5 표와 대조한다.
 
 ### 변이 테스트 결과
 
-`cargo mutants -p ityv-cunit --timeout 300`(2026-11-01, 각인 항목·대기 구역 판정·투표양식 4,096개 반영 후): 변이 569개 중 잡힘 409, 빌드 불가 160, 놓침 0, 시간 초과 0(23분). 빌드 불가는 대부분 비공개 타입의 값을 기본값으로 바꾸는 변이다. 알려진 동치 변이는 없다.
+정당 챔버(ADR-0019)와 방문 수·봉투·스티커 마감 검사(ADR-0021) 반영 후(2026-11-01), 바뀐 파일만 두 번에 나눠 돌렸다(`-f`, `--timeout 300`). `config.rs`·`link.rs`·`rules.rs`·`error.rs`·`ballot.rs`: 변이 411개 중 잡힘 287, 빌드 불가 124, 놓침 0(17분). `boxstate.rs`: 변이 149개 중 잡힘 114, 빌드 불가 35, 놓침 0(6분). 바뀌지 않은 `port.rs`·`rng.rs`는 직전 전체 실행(변이 569개, 놓침 0)의 결과가 그대로다. 빌드 불가는 대부분 비공개 타입의 값을 기본값으로 바꾸는 변이다. 알려진 동치 변이는 없다.
 
 ### `Drop` 소거의 시험
 

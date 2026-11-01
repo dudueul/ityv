@@ -23,8 +23,9 @@ pub const ED25519_SIG_LEN: usize = 64;
 /// Length of a Poly1305 or AEAD tag.
 pub const TAG_LEN: usize = 16;
 
-/// Maximum number of chamber modules on one scanner.
-pub const MAX_MODULES: usize = 6;
+/// Maximum number of chamber modules on one scanner: the party modules
+/// P1–P4 and J, A, C (ADR-0019; N has none).
+pub const MAX_MODULES: usize = 7;
 
 /// Maximum number of commitment chunks (`k`).
 pub const MAX_CHUNKS: usize = 8;

@@ -276,30 +276,39 @@ fn member_point_is_index_plus_one() {
     assert!(bytes[1..].iter().all(|b| *b == 0));
 }
 
-/// For a symbolic chamber: its index is its position in `Chamber::ALL`, X
-/// and Y are the mandatory chambers, and the rest points are
-/// `J = 1, A = 2, C = 3, N = 4` with none for X and Y.
+/// For a symbolic chamber: its index is its position in `Chamber::ALL`,
+/// the first four are the party chambers `P1..P4` with party numbers
+/// `0..4`, and the rest points are `J = 1, A = 2, C = 3, N = 4` with none
+/// for the party chambers.
 #[kani::proof]
 fn chamber_indices_and_rest_points() {
     let which: u8 = kani::any();
     kani::assume(usize::from(which) < CHAMBER_COUNT);
     let chamber = Chamber::ALL[usize::from(which)];
     assert_eq!(chamber.index(), usize::from(which));
-    assert_eq!(chamber.is_mandatory(), which < 2);
+    assert_eq!(chamber.is_party(), which < 4);
+    match chamber.party() {
+        Some(party) => assert_eq!(party, which),
+        None => assert!(which >= 4),
+    }
     match chamber.rest_point() {
-        None => assert!(chamber.is_mandatory()),
+        None => assert!(chamber.is_party()),
         Some(point) => {
-            assert!(!chamber.is_mandatory());
-            assert_eq!(usize::from(point), usize::from(which) - 1);
+            assert!(!chamber.is_party());
+            assert_eq!(usize::from(point), usize::from(which) - 3);
         }
     }
     assert_eq!(Chamber::ALL[chamber.index()], chamber);
 }
 
-/// `is_qualified` is exactly the access structure Γ of ADR-0012: X and Y
-/// reach their thresholds and at least three of J, A, C, N do.
+/// `is_qualified` is exactly the access structure Γ of ADR-0019 for every
+/// party count `n` in 2..=4: the party chambers `P1..Pn` reach their
+/// thresholds and at least three of J, A, C, N do; party chambers beyond
+/// `n` never reach and never matter.
 #[kani::proof]
+#[kani::unwind(10)]
 fn is_qualified_matches_access_structure() {
+    let parties: u8 = kani::any();
     let ks: [u8; CHAMBER_COUNT] = kani::any();
     let counts: [u8; CHAMBER_COUNT] = kani::any();
     let one = Threshold::new(1, 1).unwrap_or_else(|| unreachable!("1-of-1 is valid"));
@@ -308,17 +317,22 @@ fn is_qualified_matches_access_structure() {
         kani::assume(*k >= 1 && usize::from(*k) <= MAX_MEMBERS);
         *slot = Threshold::new(*k, 8).unwrap_or_else(|| unreachable!("k is in range"));
     }
-    let structure = AccessStructure::new(thresholds);
+    let built = AccessStructure::new(parties, thresholds);
+    assert_eq!(built.is_some(), (2..=4).contains(&parties));
+    let Some(structure) = built else { return };
     let flags = reached(&structure, counts);
     for i in 0..CHAMBER_COUNT {
-        assert_eq!(flags[i], counts[i] >= ks[i]);
+        let takes_part = i >= 4 || i < usize::from(parties);
+        assert_eq!(flags[i], takes_part && counts[i] >= ks[i]);
     }
-    let rest = usize::from(flags[2])
-        + usize::from(flags[3])
-        + usize::from(flags[4])
-        + usize::from(flags[5]);
-    let expected = flags[0] && flags[1] && rest >= 3;
-    assert_eq!(is_qualified(&structure, counts), expected);
+    let rest = usize::from(flags[4])
+        + usize::from(flags[5])
+        + usize::from(flags[6])
+        + usize::from(flags[7]);
+    // A constant loop bound: the solver knows `parties <= 4`, the unwinder
+    // does not.
+    let all_parties = (0..4).all(|i| i >= usize::from(parties) || flags[i]);
+    assert_eq!(is_qualified(&structure, counts), all_parties && rest >= 3);
 }
 
 /// `xor_in_place` fails exactly on a length mismatch, leaving the buffer

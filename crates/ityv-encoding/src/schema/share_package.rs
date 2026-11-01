@@ -21,31 +21,36 @@ use crate::reader::Reader;
 use crate::schema::util::{Commitments, Scalars, TAG_LEN, ascending_by, read_fixed};
 use crate::writer::Writer;
 
-/// Maximum number of trustee entries in one package.
+/// Maximum number of trustee entries in one package (eight chambers of at
+/// most eight members).
 pub const MAX_ENTRIES: usize = 64;
 
 /// Maximum length of one entry's ciphertext.
 pub const MAX_CIPHERTEXT_LEN: usize = 4096;
 
-/// Maximum number of secrets shared with one member (6 modules × 8 chunks + 2).
-pub const MAX_SECRETS: usize = 50;
+/// Maximum number of secrets shared with one member (7 modules × 8 chunks + 2).
+pub const MAX_SECRETS: usize = 58;
 
-/// Chamber code of a share entry (PROTOCOL.md §4.1).
+/// Chamber code of a share entry (PROTOCOL.md §4.1, ADR-0019).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum ChamberCode {
-    /// Chamber X.
-    X = 1,
-    /// Chamber Y.
-    Y = 2,
-    /// Chamber J.
-    J = 3,
-    /// Chamber A.
-    A = 4,
-    /// Chamber C.
-    C = 5,
-    /// Chamber N (no module; always KEM transport).
-    N = 6,
+    /// Party chamber 1.
+    P1 = 1,
+    /// Party chamber 2.
+    P2 = 2,
+    /// Party chamber 3.
+    P3 = 3,
+    /// Party chamber 4.
+    P4 = 4,
+    /// Judiciary.
+    J = 5,
+    /// Academia.
+    A = 6,
+    /// Civil society.
+    C = 7,
+    /// National Election Commission (no module; always KEM transport).
+    N = 8,
 }
 
 impl ChamberCode {
@@ -59,12 +64,14 @@ impl ChamberCode {
     #[must_use]
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
-            1 => Some(Self::X),
-            2 => Some(Self::Y),
-            3 => Some(Self::J),
-            4 => Some(Self::A),
-            5 => Some(Self::C),
-            6 => Some(Self::N),
+            1 => Some(Self::P1),
+            2 => Some(Self::P2),
+            3 => Some(Self::P3),
+            4 => Some(Self::P4),
+            5 => Some(Self::J),
+            6 => Some(Self::A),
+            7 => Some(Self::C),
+            8 => Some(Self::N),
             _ => None,
         }
     }

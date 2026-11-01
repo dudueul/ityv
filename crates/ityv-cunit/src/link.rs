@@ -5,6 +5,8 @@
 //!   from the interpretation unit.
 //! * [`ModuleIssue`] (schema 0x0103): a chamber module's answer to an
 //!   issue request; its private part never leaves the link.
+//! * [`VisitEnd`] (schema 0x0104): the interpretation unit's notice that a
+//!   voter's visit has ended (ADR-0021).
 //! * [`JournalEntry`] (schema 0x0014): one link of the sealed journal.
 //!
 //! Decoders apply the fixed-width rules of ENCODING.md and report the
@@ -21,22 +23,30 @@ use zeroize::Zeroize;
 pub const SCHEMA_INTERPRETATION: SchemaId = SchemaId::new(0x0101);
 /// Schema identifier of [`ModuleIssue`].
 pub const SCHEMA_MODULE_ISSUE: SchemaId = SchemaId::new(0x0103);
+/// Schema identifier of [`VisitEnd`].
+pub const SCHEMA_VISIT_END: SchemaId = SchemaId::new(0x0104);
 /// Schema identifier of [`JournalEntry`].
 pub const SCHEMA_JOURNAL_ENTRY: SchemaId = SchemaId::new(0x0014);
 
 /// Maximum members of one chamber (tags per issue).
 pub const MAX_TAGS: usize = ityv_crypto::MAX_MEMBERS;
-/// Largest chamber code a module may report (N has no module).
-pub const MAX_MODULE_CHAMBER_CODE: u8 = 5;
+/// Largest chamber code a module may report: 1–4 P1–P4, 5 J, 6 A, 7 C
+/// (N, code 8, has no module).
+pub const MAX_MODULE_CHAMBER_CODE: u8 = 7;
+/// Maximum ballots in one visit (ADR-0021): one per slip tracking code.
+pub const MAX_VISIT_BALLOTS: u8 = 8;
+const _: () = assert!(MAX_VISIT_BALLOTS == 8 && ityv_encoding::MAX_TRACKING_CODES == 8);
 
 /// Maximum encoded length of a `ModuleIssue` object, header included:
 /// 16 + 68 + 1 + 8 + (4 + 8·32) + 24 + 25 + (4 + 8·16).
 pub const MAX_MODULE_ISSUE_LEN: usize = 16 + 68 + 1 + 8 + 260 + 24 + 25 + 132;
 /// Maximum encoded length of an `Interpretation` object, header included.
 pub const MAX_INTERPRETATION_LEN: usize = 16 + 68 + 68 + 2;
+/// Maximum encoded length of a `VisitEnd` object, header included.
+pub const MAX_VISIT_END_LEN: usize = 16 + 68 + 1;
 /// Maximum encoded length of a `JournalEntry` object, header included:
-/// 16 + 64 + 1 + 64 + 64 + (4 + 6·76) + 8.
-pub const MAX_JOURNAL_ENTRY_LEN: usize = 16 + 64 + 1 + 64 + 64 + 460 + 8;
+/// 16 + 64 + 1 + 64 + 64 + (4 + 7·76) + 8.
+pub const MAX_JOURNAL_ENTRY_LEN: usize = 16 + 64 + 1 + 64 + 64 + 536 + 8;
 
 /// `Interpretation` (schema 0x0101): what the interpretation unit sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,6 +113,62 @@ impl<'a> Decode<'a> for Interpretation<'a> {
             ballot_style_id: BallotStyleId::decode(r)?,
             option_index: r.read_u16()?,
         })
+    }
+}
+
+/// `VisitEnd` (schema 0x0104): the interpretation unit sends it after the
+/// last ballot of a visit (ENCODING.md §8.19, ADR-0021). `ballot_count`
+/// is the number of `Interpretation` objects it sent since the previous
+/// `VisitEnd`, 1 to [`MAX_VISIT_BALLOTS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VisitEnd<'a> {
+    election_id: ElectionId<'a>,
+    ballot_count: u8,
+}
+
+impl<'a> VisitEnd<'a> {
+    /// Builds a notice; `None` unless `1 <= ballot_count <= 8`.
+    #[must_use]
+    pub const fn new(election_id: ElectionId<'a>, ballot_count: u8) -> Option<Self> {
+        if ballot_count == 0 || ballot_count > MAX_VISIT_BALLOTS {
+            return None;
+        }
+        Some(Self {
+            election_id,
+            ballot_count,
+        })
+    }
+
+    /// The election.
+    #[must_use]
+    pub const fn election_id(&self) -> ElectionId<'a> {
+        self.election_id
+    }
+
+    /// The number of ballots the interpretation unit sent in the visit.
+    #[must_use]
+    pub const fn ballot_count(&self) -> u8 {
+        self.ballot_count
+    }
+}
+
+impl Encode for VisitEnd<'_> {
+    fn encoded_len(&self) -> usize {
+        self.election_id.encoded_len().saturating_add(1)
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodingError> {
+        self.election_id.encode(w)?;
+        w.write_u8(self.ballot_count)
+    }
+}
+
+impl<'a> Decode<'a> for VisitEnd<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, EncodingError> {
+        let election_id = ElectionId::decode(r)?;
+        let count_at = r.position();
+        Self::new(election_id, r.read_u8()?)
+            .ok_or_else(|| EncodingError::new(ErrorKind::ValueOutOfRange, count_at))
     }
 }
 
@@ -347,7 +413,7 @@ impl<'a> Decode<'a> for ModuleIssue<'a> {
     }
 }
 
-/// The kind of a journal entry (ADR-0017 §7).
+/// The kind of a journal entry (ADR-0017 §7, ADR-0021).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum JournalKind {
@@ -364,6 +430,14 @@ pub enum JournalKind {
     /// A record's imprint completed; the paper may drop into the box
     /// (PROTOCOL.md §7.3 step 8).
     Imprinted = 6,
+    /// A visit's cast or check decision, after every position's record
+    /// signatures (ADR-0021, VC-068). `record_hash` holds the visit
+    /// decision digest; no share package and no counters.
+    VisitDecision = 7,
+    /// An out-of-district visit's label sticker printed. `record_hash`
+    /// holds the visit decision digest; the label value itself is not
+    /// journaled; no share package and no counters.
+    LabelPrinted = 8,
 }
 
 impl JournalKind {
@@ -383,6 +457,8 @@ impl JournalKind {
             4 => Some(Self::BatchClose),
             5 => Some(Self::BoxClose),
             6 => Some(Self::Imprinted),
+            7 => Some(Self::VisitDecision),
+            8 => Some(Self::LabelPrinted),
             _ => None,
         }
     }
@@ -504,7 +580,7 @@ mod tests {
         let rand = [Scalar32([1; 32]); MAX_CHUNKS];
         let tags = [[2u8; TAG_LEN]; MAX_TAGS];
         let mut issue = ModuleIssue::new(&ModuleIssueParts {
-            module_id: ModuleId::new(b"mod-x").expect("a valid identifier"),
+            module_id: ModuleId::new(b"mod-p1").expect("a valid identifier"),
             chamber: 1,
             counter: 3,
             rand: &rand,

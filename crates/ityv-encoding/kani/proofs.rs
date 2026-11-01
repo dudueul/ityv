@@ -241,41 +241,54 @@ fn ledger_frame_rejects_zero_seq() {
 // ---------------------------------------------------------------------------
 
 use crate::primitives::{BoxId, StationId, TimeBucket};
+use crate::schema::SCHEMA_SCAN_COUNT_ATTEST_BODY;
 use crate::schema::batch_attest::record_count_valid;
 use crate::schema::box_close::SignerRole;
 use crate::schema::cast_record::{ProofHeader, transport_flags_valid};
 use crate::schema::scan_count::ScanCountAttestBody;
 use crate::schema::share_package::{ChamberCode, pad_fields_valid, transport_code_valid};
 use crate::schema::slip::SlipBody;
-use crate::schema::{SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SLIP_BODY};
 
-/// A `SlipBody` with a symbolic time bucket and tracking code survives an
-/// object-level round trip and consumes every byte.
+/// `SlipBody::new` accepts exactly one to eight tracking codes without a
+/// repeat, and keeps them in position order, for every count `0..=9`. The
+/// codes are symbolic in their first byte (the rest zero), so equality is
+/// equality of that byte. The count runs over concrete values: a symbolic
+/// slice length would unroll every comparison loop to the bound. The
+/// object-level round trip of this body with an array field is covered by
+/// V1 like the other array bodies (README).
 #[kani::proof]
 #[kani::unwind(70)] // 64-byte array comparisons unroll to 64 iterations plus slack.
-fn slip_body_round_trip() {
-    let bucket: u64 = kani::any();
-    let code: [u8; 64] = kani::any();
+fn slip_body_constructor_is_exact() {
+    const SLOTS: usize = 9;
+    let firsts: [u8; SLOTS] = kani::any();
+    let mut codes = [Hash512::ZERO; SLOTS];
+    for (code, first) in codes.iter_mut().zip(firsts) {
+        code.0[0] = first;
+    }
     let Some(election_id) = ElectionId::new(b"E") else {
         unreachable!("literal identifier is valid");
     };
     let Some(station_id) = StationId::new(b"S") else {
         unreachable!("literal identifier is valid");
     };
-    let body = SlipBody::new(
-        election_id,
-        station_id,
-        TimeBucket::new(bucket),
-        Hash512(code),
-    );
-    let mut buf = [0u8; 128];
-    let Ok(len) = encode(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
-        unreachable!("128 bytes suffice for one-byte identifiers");
-    };
-    assert_eq!(len, 16 + 5 + 5 + 8 + 64);
-    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
-    let decoded: Result<SlipBody<'_>, _> = decode(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, bytes);
-    assert_eq!(decoded, Ok(body));
+    for n in 0..=SLOTS {
+        let built = SlipBody::new(election_id, station_id, TimeBucket::new(0), &codes[..n]);
+        let mut distinct = true;
+        for i in 0..n {
+            for j in 0..i {
+                if firsts[i] == firsts[j] {
+                    distinct = false;
+                }
+            }
+        }
+        assert_eq!(built.is_some(), (1..=8).contains(&n) && distinct);
+        if let Some(body) = built {
+            assert_eq!(body.tracking_codes().len(), n);
+            for i in 0..n {
+                assert_eq!(body.tracking_codes()[i].0[0], firsts[i]);
+            }
+        }
+    }
 }
 
 /// A `ScanCountAttestBody` with symbolic counts and bucket survives an
@@ -361,18 +374,21 @@ fn transport_flags_mask_is_exact() {
     assert_eq!(transport_flags_valid(flags), flags >> 2 == 0);
 }
 
-/// Chamber codes: exactly 1 X, 2 Y, 3 J, 4 A, 5 C, 6 N decode, each to
-/// the chamber whose code it is; every other byte is rejected.
+/// Chamber codes: exactly 1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C, 8 N
+/// decode, each to the chamber whose code it is; every other byte is
+/// rejected (ADR-0019).
 #[kani::proof]
 fn chamber_codes_are_exact() {
     let code: u8 = kani::any();
     let expected = match code {
-        1 => Some(ChamberCode::X),
-        2 => Some(ChamberCode::Y),
-        3 => Some(ChamberCode::J),
-        4 => Some(ChamberCode::A),
-        5 => Some(ChamberCode::C),
-        6 => Some(ChamberCode::N),
+        1 => Some(ChamberCode::P1),
+        2 => Some(ChamberCode::P2),
+        3 => Some(ChamberCode::P3),
+        4 => Some(ChamberCode::P4),
+        5 => Some(ChamberCode::J),
+        6 => Some(ChamberCode::A),
+        7 => Some(ChamberCode::C),
+        8 => Some(ChamberCode::N),
         _ => None,
     };
     assert_eq!(ChamberCode::from_code(code), expected);

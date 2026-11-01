@@ -30,15 +30,15 @@ use ityv_encoding::{
     Attestation, BallotStyleId, BatchAttest, BatchAttestBody, BatchAttestParts, BoxClose,
     BoxCloseBody, BoxCloseParts, BoxId, CastRecord, CastRecordBody, CastRecordParts,
     ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, ChamberCode, CloseCounts,
-    ElectionId, HEADER_LEN, MAX_CHUNKS, MAX_SECRETS, MemberShare, ModuleBatchSig, ModuleCounter,
-    ModuleCounters, ModuleId, ModuleIds, ModuleOpening, ModuleRange, ModuleRecordSig, ObserverId,
-    ObserverSig, OrgId, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE,
-    SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY, SCHEMA_CHALLENGE_OPENING,
-    SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_MEMBER_SHARE, SCHEMA_SCAN_COUNT_ATTEST,
-    SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP, SCHEMA_SLIP_BODY,
-    SCHEMA_VERSION_1, Scalars, ScanCountAttest, ScanCountAttestBody, ShareEntry, SharePackage,
-    SignerId, SignerRole, Slip, SlipBody, StationId, TimeBucket, Token192, Transport, TrusteeId,
-    decode_object,
+    ElectionId, HEADER_LEN, Hash512, MAX_CHUNKS, MAX_SECRETS, MemberShare, ModuleBatchSig,
+    ModuleCounter, ModuleCounters, ModuleId, ModuleIds, ModuleOpening, ModuleRange,
+    ModuleRecordSig, ObserverId, ObserverSig, OrgId, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY,
+    SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY,
+    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_MEMBER_SHARE,
+    SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP,
+    SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, Scalars, ScanCountAttest, ScanCountAttestBody, ShareEntry,
+    SharePackage, SignerId, SignerRole, Slip, SlipBody, StationId, TimeBucket, Token192, Transport,
+    TrusteeId, decode_object,
 };
 use std::vec::Vec;
 
@@ -328,7 +328,7 @@ fn share_package_vectors() {
     let entries = [
         ShareEntry {
             trustee_id: TrusteeId::new(b"trustee-A").unwrap(),
-            chamber: ChamberCode::X,
+            chamber: ChamberCode::P1,
             transport: Transport::Pad {
                 pad_id: 5,
                 pad_index: 3_000,
@@ -357,8 +357,8 @@ fn share_package_vectors() {
     let b_chamber = a_chamber + 1 + 1 + 4 + 8 + 4 + 300 + 16 + ident_len(b"trustee-B");
     let mut v = std::vec![valid("pad and kem entries", bytes.clone())];
     let mut b = bytes.clone();
-    b[a_chamber] = 7;
-    v.push(invalid("chamber 7", b, "ValueOutOfRange", a_chamber));
+    b[a_chamber] = 9;
+    v.push(invalid("chamber 9", b, "ValueOutOfRange", a_chamber));
     let mut b = bytes.clone();
     b[b_chamber + 2 + 3] = 1;
     v.push(invalid(
@@ -655,9 +655,9 @@ fn scan_count_attest_vectors() {
     );
 }
 
-#[test]
-fn box_close_vectors() {
-    let body = BoxCloseBody::new(&BoxCloseParts {
+/// The body behind the box-close vectors.
+fn vector_close_body() -> BoxCloseBody<'static> {
+    BoxCloseBody::new(&BoxCloseParts {
         election_id: ElectionId::new(E).unwrap(),
         box_id: BoxId::new(BOX).unwrap(),
         counts: CloseCounts {
@@ -667,6 +667,9 @@ fn box_close_vectors() {
             without_record: 10,
             challenged: 3,
             quarantined: 1,
+            visits: 140,
+            envelopes: 0,
+            stickers: 0,
         },
         record_set_root: patterned64(0x60),
         journal_head: patterned64(0x61),
@@ -675,9 +678,14 @@ fn box_close_vectors() {
             .unwrap(),
         open_batches: 0,
         time_bucket: TimeBucket::new(900),
-    });
+    })
+}
+
+#[test]
+fn box_close_vectors() {
+    let body = vector_close_body();
     let bytes = encode_to_vec(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body);
-    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 48 + 192;
+    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 72 + 192;
     let y_at = counters_at + 4 + ident_len(b"mod-X") + 8;
     let mut v = std::vec![valid("clean close", bytes.clone())];
     let mut b = bytes.clone();
@@ -762,17 +770,38 @@ fn box_close_vectors() {
 
 #[test]
 fn slip_vectors() {
-    let body = SlipBody::new(
-        ElectionId::new(E).unwrap(),
-        StationId::new(b"station-0007").unwrap(),
-        TimeBucket::new(41),
-        patterned64(0x90),
+    let slip_body = |codes: &[Hash512]| {
+        SlipBody::new(
+            ElectionId::new(E).unwrap(),
+            StationId::new(b"station-0007").unwrap(),
+            TimeBucket::new(41),
+            codes,
+        )
+        .unwrap()
+    };
+    let one = encode_to_vec(
+        SCHEMA_SLIP_BODY,
+        SCHEMA_VERSION_1,
+        &slip_body(&[patterned64(0x90)]),
     );
-    let bytes = encode_to_vec(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body);
-    let mut v = std::vec![valid("station 7 bucket 41", bytes.clone())];
+    let codes_at = HEADER_LEN + ident_len(E) + ident_len(b"station-0007") + 8;
+    let three = [patterned64(0x90), patterned64(0x92), patterned64(0x94)];
+    let bytes = encode_to_vec(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &slip_body(&three));
+    let mut v = std::vec![
+        valid("station 7 bucket 41, one code", one.clone()),
+        valid("station 7 bucket 41, three codes", bytes.clone()),
+    ];
     let mut b = bytes.clone();
     b.truncate(bytes.len() - 1);
     v.push(invalid("truncated", b, "BodyLengthMismatch", 12));
+    let mut b = one[..codes_at].to_vec();
+    b.extend_from_slice(&0u32.to_be_bytes());
+    let len = u32::try_from(b.len() - HEADER_LEN).unwrap();
+    b[12..16].copy_from_slice(&len.to_be_bytes());
+    v.push(invalid("no codes", b, "ValueOutOfRange", codes_at));
+    let mut b = bytes.clone();
+    b.copy_within(codes_at + 4..codes_at + 68, codes_at + 4 + 128);
+    v.push(invalid("code repeated", b, "Duplicate", codes_at + 4 + 128));
     check!(
         SlipBody<'_>,
         "slip_body.txt",
@@ -786,9 +815,9 @@ fn slip_vectors() {
     let sb = encode_to_vec(SCHEMA_SLIP, SCHEMA_VERSION_1, &slip);
     let mut w = std::vec![valid("signed slip", sb.clone())];
     let mut b = sb.clone();
-    b[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&257u32.to_be_bytes());
+    b[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&1025u32.to_be_bytes());
     w.push(invalid(
-        "body longer than 256",
+        "body longer than 1024",
         b,
         "LengthExceedsMax",
         HEADER_LEN,

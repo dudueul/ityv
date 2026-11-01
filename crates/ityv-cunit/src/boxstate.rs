@@ -39,8 +39,8 @@ use crate::link::{JournalEntry, JournalKind, MAX_JOURNAL_ENTRY_LEN, SCHEMA_JOURN
 use crate::port::{JournalSink, JournalSource, ModulePort};
 use crate::rng::DeviceRng;
 use crate::rules::{
-    self, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, RecordTail, Violations, WaitingAction,
-    WaitingArea,
+    self, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, EnvelopeCounts, RecordTail, Violations,
+    WaitingAction, WaitingArea,
 };
 
 /// Purpose of the batch attestation signatures.
@@ -48,11 +48,14 @@ pub const PURPOSE_BATCH_ATTEST: &[u8] = b"batch-attest";
 /// Purpose of the device's box-close signature.
 pub const PURPOSE_BOX_CLOSE: &[u8] = b"box-close";
 /// Bytes of a `BatchAttest` object at most, header included:
-/// 16 + (4 + 1214) + (4 + 6·(68 + 4691)) + 4691.
-pub const MAX_BATCH_ATTEST_LEN: usize = 34_483;
-/// Work buffer [`OpenBox::close_batch`] needs: seven hybrid signatures and
-/// the `BatchAttest` object.
-pub const BATCH_WORK_LEN: usize = 7 * HYBRID_SIG_LEN + MAX_BATCH_ATTEST_LEN;
+/// 16 + (4 + 1366) + (4 + 7·(68 + 4691)) + 4691.
+pub const MAX_BATCH_ATTEST_LEN: usize = 39_394;
+/// Work buffer [`OpenBox::close_batch`] needs: one hybrid signature per
+/// module and one for the device, then the `BatchAttest` object.
+pub const BATCH_WORK_LEN: usize = BATCH_SIG_REGION_LEN + MAX_BATCH_ATTEST_LEN;
+/// The signature region of the batch work buffer: the module slots, then
+/// the device slot.
+const BATCH_SIG_REGION_LEN: usize = (MAX_MODULES + 1) * HYBRID_SIG_LEN;
 /// Work buffer [`OpenBox::prepare_close`] needs: the body object and the
 /// device signature.
 pub const CLOSE_WORK_LEN: usize = MAX_BOX_CLOSE_BODY_LEN + HYBRID_SIG_LEN;
@@ -203,9 +206,9 @@ pub struct CloseInputs {
     pub without_record: u64,
     /// Physical envelopes in the spoiled/quarantine bag.
     pub spoiled_envelopes: u64,
-    /// Absentee profile: physical envelopes (required); in person: `None`
-    /// (required).
-    pub absentee_envelopes: Option<u64>,
+    /// Absentee profile: the envelope and sticker counts and the station's
+    /// envelope accounting (required); in person: `None` (required).
+    pub envelopes: Option<EnvelopeCounts>,
     /// Whether a `FallbackDeclared` event exists for this box.
     pub fallback_declared: bool,
     /// The sorted-set root of every record hash of the box, computed by the
@@ -250,6 +253,9 @@ pub struct CloseOutput<'w> {
 pub struct Totals {
     /// Cast records (journaled, not quarantined).
     pub records: u64,
+    /// Visits with at least one cast ballot. Until the unit groups ballots
+    /// into visits (ADR-0021), every cast record is its own visit.
+    pub visits: u64,
     /// Records attested in closed batches.
     pub attested: u64,
     /// Ballots spoiled by a challenge.
@@ -648,6 +654,7 @@ impl<'c> OpenBox<'c> {
         self.batch.count = self.batch.count.checked_add(1).ok_or(Error::Overflow)?;
         self.batch.last_record_bucket = time_bucket.get();
         self.totals.records = self.totals.records.checked_add(1).ok_or(Error::Overflow)?;
+        self.totals.visits = self.totals.visits.checked_add(1).ok_or(Error::Overflow)?;
         Ok(())
     }
 
@@ -666,6 +673,7 @@ impl<'c> OpenBox<'c> {
         *slot = Hash512::ZERO;
         self.batch.count = last;
         self.totals.records = self.totals.records.checked_sub(1).ok_or(Error::Overflow)?;
+        self.totals.visits = self.totals.visits.checked_sub(1).ok_or(Error::Overflow)?;
         self.count_quarantine()
     }
 
@@ -813,7 +821,8 @@ impl<'c> OpenBox<'c> {
 
     /// Asks every consenting module once for its signature over the final
     /// body and verifies it with the module's genesis key; the signatures
-    /// land in the first six slots of `sig_region`.
+    /// land in the module slots of `sig_region`, one per module in
+    /// configuration order.
     fn collect_batch_signatures(
         &self,
         ports: &mut [&mut dyn ModulePort],
@@ -890,7 +899,7 @@ impl<'c> OpenBox<'c> {
             return Err(Error::BufferTooSmall);
         }
         let (sig_region, out) = work
-            .split_at_mut_checked(7 * HYBRID_SIG_LEN)
+            .split_at_mut_checked(BATCH_SIG_REGION_LEN)
             .ok_or(Error::BufferTooSmall)?;
         let records_root = self.batch.root()?;
         let all_ranges = self.batch_ranges()?;
@@ -910,7 +919,7 @@ impl<'c> OpenBox<'c> {
         let body_bytes = body_buf.get(..body_len).ok_or(Error::BufferTooSmall)?;
         self.collect_batch_signatures(ports, consent, body_bytes, sig_region)?;
         let (module_chunks, device_chunk) = sig_region
-            .split_at_mut_checked(6 * HYBRID_SIG_LEN)
+            .split_at_mut_checked(MAX_MODULES * HYBRID_SIG_LEN)
             .ok_or(Error::BufferTooSmall)?;
         let device_slot: &mut [u8; HYBRID_SIG_LEN] =
             device_chunk.try_into().map_err(|_| Error::Capacity)?;
@@ -1035,6 +1044,7 @@ impl<'c> OpenBox<'c> {
         CloseFacts {
             paper: inputs.paper,
             records: self.totals.records,
+            visits: self.totals.visits,
             attested: self.totals.attested,
             open_batch_records: u64::from(self.batch.count),
             without_record: inputs.without_record,
@@ -1043,7 +1053,7 @@ impl<'c> OpenBox<'c> {
             spoiled_envelopes: inputs.spoiled_envelopes,
             module_final_counters: self.module_counters(),
             open_batches: u8::from(self.batch.count > 0),
-            absentee_envelopes: inputs.absentee_envelopes,
+            envelopes: inputs.envelopes,
             fallback_declared: inputs.fallback_declared,
             paper_incidents: self.paper_incidents,
         }
@@ -1078,7 +1088,7 @@ impl<'c> OpenBox<'c> {
         }
         self.check_time(time_bucket)?;
         let absentee = matches!(self.config.profile(), Profile::Absentee);
-        if inputs.absentee_envelopes.is_some() != absentee {
+        if inputs.envelopes.is_some() != absentee {
             return Err(Error::EnvelopeCountProfile);
         }
         if work.len() < CLOSE_WORK_LEN {
@@ -1097,6 +1107,9 @@ impl<'c> OpenBox<'c> {
                 without_record: inputs.without_record,
                 challenged: self.totals.challenged,
                 quarantined: self.totals.quarantined,
+                visits: self.totals.visits,
+                envelopes: inputs.envelopes.map_or(0, |e| e.envelopes),
+                stickers: inputs.envelopes.map_or(0, |e| e.stickers),
             },
             record_set_root: inputs.record_set_root,
             journal_head: self.journal_head,
@@ -1411,6 +1424,11 @@ impl<'c> OpenBox<'c> {
                 self.phase = Phase::Closed {
                     close_body: Hash512::ZERO,
                 };
+            }
+            // This version of the unit writes no visit entries (kinds 7 and
+            // 8, ADR-0021): a stream holding one is not its own.
+            JournalKind::VisitDecision | JournalKind::LabelPrinted => {
+                return Err(Error::JournalCorrupt);
             }
         }
         self.journal_head = object_hash(bytes);

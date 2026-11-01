@@ -80,7 +80,7 @@ pub use schema::share_package::{
     ChamberCode, MAX_CIPHERTEXT_LEN, MAX_ENTRIES, MAX_SECRETS, MemberShare, ShareEntry,
     SharePackage, Transport, pad_fields_valid, transport_code_valid,
 };
-pub use schema::slip::{MAX_SLIP_BODY_LEN, Slip, SlipBody};
+pub use schema::slip::{MAX_SLIP_BODY_LEN, MAX_TRACKING_CODES, Slip, SlipBody};
 pub use schema::util::{
     Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, MAX_CHUNKS, MAX_MODULES, ModuleCounter,
     ModuleCounters, ModuleIds, Scalars, TAG_LEN,

@@ -145,10 +145,12 @@ pub const KEM_CIPHERTEXT_LEN: usize = 1600;
 pub const MAX_MEMBER_SHARE_LEN: usize = member_share_len(MAX_SECRETS, true);
 /// Scratch bytes reserved per trustee: room for a KEM ciphertext.
 pub const SCRATCH_SLOT_LEN: usize = KEM_CIPHERTEXT_LEN + MAX_MEMBER_SHARE_LEN;
-/// Bytes of a `Slip` object at most, header included.
-pub const MAX_SLIP_LEN: usize = 4935;
-/// Bytes of a `ChallengeOpening` object at most, header included.
-pub const MAX_CHALLENGE_OPENING_LEN: usize = 7445;
+/// Bytes of a `Slip` object at most, header included: 16 + (4 + 676) +
+/// 4691, the body holding eight tracking codes (ADR-0021).
+pub const MAX_SLIP_LEN: usize = 5387;
+/// Bytes of a `ChallengeOpening` object at most, header included: 16 +
+/// (4 + 3094) + 4691, the body holding seven modules of eight scalars.
+pub const MAX_CHALLENGE_OPENING_LEN: usize = 7805;
 /// Bytes of a module record-signature message at most:
 /// `body_hash: Hash512 ‖ module_id: Ident<64> ‖ counter: u64`.
 pub const MODULE_RECORD_MESSAGE_LEN: usize = 64 + 4 + ityv_encoding::IDENT_MAX_STANDARD + 8;
@@ -1461,8 +1463,9 @@ impl<'c, 'b> Ballot<'c, '_, Durable<'b>> {
             self.config.election_id(),
             self.config.station_id(),
             time_bucket,
-            self.state.record_hash,
-        );
+            core::slice::from_ref(&self.state.record_hash),
+        )
+        .ok_or(Error::Capacity)?;
         let mut body_buf = [0u8; MAX_SLIP_BODY_LEN];
         let body_len = encode_object(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body, &mut body_buf)?;
         let body_bytes = body_buf.get(..body_len).ok_or(Error::BufferTooSmall)?;
@@ -1706,9 +1709,9 @@ mod tests {
     fn sizes_follow_the_member_share_formula() {
         assert_eq!(member_share_len(5, false), 222);
         assert_eq!(member_share_len(6, true), 278);
-        assert_eq!(MAX_MEMBER_SHARE_LEN, 1686);
-        assert_eq!(SCRATCH_SLOT_LEN, 3286);
-        assert_eq!(scratch_len(2), 2 * 3286);
+        assert_eq!(MAX_MEMBER_SHARE_LEN, 1942);
+        assert_eq!(SCRATCH_SLOT_LEN, 3542);
+        assert_eq!(scratch_len(2), 2 * 3542);
         assert_eq!(MODULE_RECORD_MESSAGE_LEN, 140);
         assert_eq!(KEM_CIPHERTEXT_LEN, 1600);
         assert_eq!(
@@ -1716,7 +1719,8 @@ mod tests {
             "BallotWork(..)"
         );
         // Stack guard: no ballot state carries a secret array or the proof;
-        // the work area (about 35 KB) lives with the caller.
+        // the work area (about 36 KB with seven modules) lives with the
+        // caller.
         assert!(core::mem::size_of::<BallotWork>() <= 36 * 1024);
         assert!(core::mem::size_of::<Ballot<'static, 'static, Committed>>() <= 512);
         assert!(core::mem::size_of::<Ballot<'static, 'static, Built<'static>>>() <= 256);

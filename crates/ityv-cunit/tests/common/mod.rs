@@ -70,8 +70,9 @@ pub(crate) struct ModuleSpec {
     pub(crate) neutral: bool,
 }
 
-/// The default module set: own modules for J, X, Y; neutral modules for A
-/// and C; none for N (KEM transport). Ascending by identifier.
+/// The default module set for two parties: own modules for P1, P2 and J;
+/// neutral modules for A and C; none for N (KEM transport). Ascending by
+/// identifier.
 pub(crate) const MODULES: [ModuleSpec; 5] = [
     ModuleSpec {
         id: b"mod-a",
@@ -89,21 +90,63 @@ pub(crate) const MODULES: [ModuleSpec; 5] = [
         neutral: false,
     },
     ModuleSpec {
-        id: b"mod-x",
-        chamber: Chamber::X,
+        id: b"mod-p1",
+        chamber: Chamber::P1,
         neutral: false,
     },
     ModuleSpec {
-        id: b"mod-y",
-        chamber: Chamber::Y,
+        id: b"mod-p2",
+        chamber: Chamber::P2,
+        neutral: false,
+    },
+];
+
+/// The largest module set: four parties with own modules, own modules for
+/// J, A and C (seven modules, ADR-0019 §7). Ascending by identifier.
+pub(crate) const MODULES_FOUR_PARTIES: [ModuleSpec; 7] = [
+    ModuleSpec {
+        id: b"mod-a",
+        chamber: Chamber::A,
+        neutral: false,
+    },
+    ModuleSpec {
+        id: b"mod-c",
+        chamber: Chamber::C,
+        neutral: false,
+    },
+    ModuleSpec {
+        id: b"mod-j",
+        chamber: Chamber::J,
+        neutral: false,
+    },
+    ModuleSpec {
+        id: b"mod-p1",
+        chamber: Chamber::P1,
+        neutral: false,
+    },
+    ModuleSpec {
+        id: b"mod-p2",
+        chamber: Chamber::P2,
+        neutral: false,
+    },
+    ModuleSpec {
+        id: b"mod-p3",
+        chamber: Chamber::P3,
+        neutral: false,
+    },
+    ModuleSpec {
+        id: b"mod-p4",
+        chamber: Chamber::P4,
         neutral: false,
     },
 ];
 
 pub(crate) const fn chamber_letter(chamber: Chamber) -> u8 {
     match chamber {
-        Chamber::X => b'x',
-        Chamber::Y => b'y',
+        Chamber::P1 => b'1',
+        Chamber::P2 => b'2',
+        Chamber::P3 => b'3',
+        Chamber::P4 => b'4',
         Chamber::J => b'j',
         Chamber::A => b'a',
         Chamber::C => b'c',
@@ -137,8 +180,9 @@ pub(crate) fn leak_bytes(bytes: Vec<u8>) -> &'static [u8] {
     Box::leak(bytes.into_boxed_slice())
 }
 
-/// Builds a world with the default modules, two trustees per chamber
-/// (thresholds 2-of-2 for X and Y, 1-of-2 elsewhere) and both styles.
+/// Builds a world with the default modules (two parties), two trustees per
+/// chamber taking part (thresholds 2-of-2 for the party chambers, 1-of-2
+/// elsewhere) and both styles.
 pub(crate) fn world(profile: Profile, voter_code: bool) -> World {
     world_with(profile, voter_code, &MODULES)
 }
@@ -176,7 +220,22 @@ pub(crate) fn world_with(profile: Profile, voter_code: bool, modules: &[ModuleSp
     world_full(profile, voter_code, modules, styles)
 }
 
-/// A world with the given modules and styles.
+/// The access structure of a world with `parties` party chambers: 2-of-2
+/// in every party chamber, 1-of-2 in J, A, C and N.
+pub(crate) fn access(parties: u8) -> AccessStructure {
+    let t22 = Threshold::new(2, 2).unwrap();
+    let t12 = Threshold::new(1, 2).unwrap();
+    AccessStructure::new(parties, [t22, t22, t22, t22, t12, t12, t12, t12]).unwrap()
+}
+
+/// The party count of a module set: its party modules, at least two.
+pub(crate) fn parties_of(modules: &[ModuleSpec]) -> u8 {
+    let n = modules.iter().filter(|m| m.chamber.is_party()).count();
+    u8::try_from(n.max(2)).unwrap()
+}
+
+/// A world with the given modules and styles; the party count follows
+/// from the modules ([`parties_of`]).
 pub(crate) fn world_full(
     profile: Profile,
     voter_code: bool,
@@ -184,8 +243,9 @@ pub(crate) fn world_full(
     styles: &'static [BallotStyle<'static>],
 ) -> World {
     let mut r = rng(7);
+    let access = access(parties_of(modules));
     let mut trustees = Vec::new();
-    for chamber in Chamber::ALL {
+    for chamber in Chamber::ALL.into_iter().filter(|&c| access.includes(c)) {
         for member_index in 0..2u8 {
             let id = leak_bytes(vec![
                 b't',
@@ -220,8 +280,6 @@ pub(crate) fn world_full(
         .iter()
         .map(|m| module_config(m.id, m.chamber, m.neutral))
         .collect();
-    let t22 = Threshold::new(2, 2).unwrap();
-    let t12 = Threshold::new(1, 2).unwrap();
     let parts = ConfigParts {
         election_id: ElectionId::new(b"E-2026").unwrap(),
         box_id: BoxId::new(b"BOX-1").unwrap(),
@@ -230,7 +288,7 @@ pub(crate) fn world_full(
         styles,
         modules: Box::leak(module_configs.into_boxed_slice()),
         trustees: Box::leak(configs.into_boxed_slice()),
-        access: AccessStructure::new([t22, t22, t12, t12, t12, t12]),
+        access,
         voter_code_enabled: voter_code,
     };
     let config = leak(ElectionConfig::new(parts).unwrap());

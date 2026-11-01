@@ -10,14 +10,16 @@ use crate::port::{JournalError, PortError};
 /// Which configuration rule was violated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigFault {
-    /// Modules are not strictly ascending by identifier, or more than six.
+    /// Modules are not strictly ascending by identifier, or more than seven.
     ModulesUnsorted,
-    /// X or Y has no own module, J, A or C has no module (own or neutral
-    /// delegation), N has one, or a chamber has two.
+    /// A party chamber taking part has no own module (or a neutral one), a
+    /// party chamber beyond n has a module, J, A or C has no module (own or
+    /// neutral delegation), N has one, or a chamber has two (ADR-0019 §7).
     ChamberModules,
     /// Trustees are not strictly ascending by identifier, or more than 64.
     TrusteesUnsorted,
-    /// A chamber's member indices are not exactly `0..n_c`.
+    /// A chamber's member indices are not exactly `0..n_c` (no members for
+    /// a party chamber beyond n).
     MemberIndices,
     /// A chamber's trustee count differs from its threshold's `n`.
     ThresholdCount,
@@ -31,7 +33,8 @@ pub enum ConfigFault {
 /// A box-close invariant of PROTOCOL.md §10.2 (VC-038).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Invariant {
-    /// `paper_count == record_count + no_record_count`.
+    /// In person: `paper_count == record_count + no_record_count`;
+    /// absentee: `paper_count == 0`.
     PaperCount,
     /// `record_count == attested_count + records in the open batch`.
     AttestedCount,
@@ -41,13 +44,19 @@ pub enum Invariant {
     ModuleCounters,
     /// `open_batches == 0`.
     OpenBatches,
-    /// Absentee profile: envelope count `== record_count`.
+    /// Absentee profile: `envelope_count == envelopes issued − empty
+    /// envelopes returned` (`IssuanceCount`).
     EnvelopeCount,
     /// `no_record_count > 0` without a `FallbackDeclared` event.
     FallbackDeclared,
     /// A record's paper went missing, or an imprinted paper matched no
     /// record, at a resume (PROTOCOL.md §7.3 step 7).
     PaperIncidents,
+    /// `visit_count ≤ record_count ≤ 8·visit_count` (ADR-0021).
+    VisitCount,
+    /// Absentee profile: `sticker_count == visit_count` (one label sticker
+    /// per visit).
+    StickerCount,
 }
 
 /// Why an operation failed.
@@ -127,7 +136,7 @@ pub enum Error {
     TimeRegression,
     /// Slips are printed only when the `VOTER_CODE` scope is active.
     VoterCodeDisabled,
-    /// The close inputs carry an envelope count for an in-person box, or
+    /// The close inputs carry envelope counts for an in-person box, or
     /// none for an absentee box.
     EnvelopeCountProfile,
     /// The close token belongs to another box.
@@ -173,9 +182,9 @@ impl From<ConfigFault> for Error {
 impl fmt::Display for ConfigFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::ModulesUnsorted => "modules not strictly ascending or more than six",
+            Self::ModulesUnsorted => "modules not strictly ascending or more than seven",
             Self::ChamberModules => {
-                "chamber modules violate X/Y own, J/A/C own or neutral, N none, one per chamber"
+                "chamber modules violate parties own, J/A/C own or neutral, N none, one per chamber"
             }
             Self::TrusteesUnsorted => "trustees not strictly ascending or more than 64",
             Self::MemberIndices => "member indices of a chamber are not 0..n",
@@ -189,14 +198,16 @@ impl fmt::Display for ConfigFault {
 impl fmt::Display for Invariant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::PaperCount => "paper_count != record_count + no_record_count",
+            Self::PaperCount => "paper_count != record_count + no_record_count (absentee: != 0)",
             Self::AttestedCount => "record_count != attested_count + open batch records",
             Self::SpoiledEnvelopes => "spoiled envelopes != challenge_count + quarantine_count",
             Self::ModuleCounters => "a module final counter != records + challenges + quarantines",
             Self::OpenBatches => "open_batches != 0",
-            Self::EnvelopeCount => "envelope count != record_count",
+            Self::EnvelopeCount => "envelope_count != envelopes issued - empty envelopes returned",
             Self::FallbackDeclared => "no_record_count > 0 without FallbackDeclared",
             Self::PaperIncidents => "a paper went missing or matched no record at a resume",
+            Self::VisitCount => "record_count outside visit_count..=8 * visit_count",
+            Self::StickerCount => "sticker_count != visit_count",
         })
     }
 }
@@ -248,7 +259,7 @@ impl fmt::Display for Error {
             Self::TimeRegression => f.write_str("time bucket earlier than the journal's last"),
             Self::VoterCodeDisabled => f.write_str("voter code scope is not active"),
             Self::EnvelopeCountProfile => {
-                f.write_str("envelope count presence disagrees with the profile")
+                f.write_str("envelope counts presence disagrees with the profile")
             }
             Self::ForeignCloseToken => f.write_str("close token belongs to another box"),
         }

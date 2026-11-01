@@ -14,7 +14,8 @@
 //! * the pad consumption and pad index of §9.4.3 (VC-034);
 //! * the module's batch-signing rule (VC-021);
 //! * the batch and scan-count triggers (§7.2.1, §7.8, VC-052);
-//! * every close invariant of §10.2 (VC-038);
+//! * every close invariant of §10.2 (VC-038), including the visit and
+//!   sticker counts of ADR-0021;
 //! * the resume decision for the waiting area (§7.3 step 7) against an
 //!   independently written table.
 //!
@@ -37,10 +38,10 @@
 use crate::error::Invariant;
 use crate::port::module_may_sign_batch;
 use crate::rules::{
-    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, PAD_KEY_BYTES, RecordTail,
-    SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, WaitingAction, WaitingArea, advance_mark, batch_due,
-    check_counter, close_verdict, option_in_range, pad_consumption, pad_index, scan_count_due,
-    waiting_area_action,
+    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, EnvelopeCounts, PAD_KEY_BYTES,
+    RecordTail, SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, WaitingAction, WaitingArea, advance_mark,
+    batch_due, check_counter, close_verdict, option_in_range, pad_consumption, pad_index,
+    scan_count_due, waiting_area_action,
 };
 
 /// The option bound accepts exactly the indices `0..=option_count − 1`.
@@ -169,13 +170,23 @@ fn scan_count_trigger_is_exact() {
 /// Every close invariant of VC-038, for two modules and symbolic counts,
 /// against the statement written out in 128-bit arithmetic.
 #[kani::proof]
-#[kani::unwind(10)]
+#[kani::unwind(12)] // the ten violation flags, plus slack
 fn close_verdict_is_exact() {
     let counters: [u64; 2] = kani::any();
-    let absentee: Option<u64> = kani::any();
+    let envelopes: Option<EnvelopeCounts> = if kani::any() {
+        Some(EnvelopeCounts {
+            envelopes: kani::any(),
+            stickers: kani::any(),
+            issued: kani::any(),
+            returned_empty: kani::any(),
+        })
+    } else {
+        None
+    };
     let facts = CloseFacts {
         paper: kani::any(),
         records: kani::any(),
+        visits: kani::any(),
         attested: kani::any(),
         open_batch_records: kani::any(),
         without_record: kani::any(),
@@ -184,16 +195,20 @@ fn close_verdict_is_exact() {
         spoiled_envelopes: kani::any(),
         module_final_counters: &counters,
         open_batches: kani::any(),
-        absentee_envelopes: absentee,
+        envelopes,
         fallback_declared: kani::any(),
         paper_incidents: kani::any(),
     };
     let v = close_verdict(&facts);
     let records = facts.records as u128;
     let consumed = records + facts.challenged as u128 + facts.quarantined as u128;
+    let paper_expected = match envelopes {
+        Some(_) => 0,
+        None => records + facts.without_record as u128,
+    };
     assert_eq!(
         v.contains(Invariant::PaperCount),
-        records + facts.without_record as u128 != facts.paper as u128
+        paper_expected != facts.paper as u128
     );
     assert_eq!(
         v.contains(Invariant::AttestedCount),
@@ -208,9 +223,18 @@ fn close_verdict_is_exact() {
         counters[0] as u128 != consumed || counters[1] as u128 != consumed
     );
     assert_eq!(v.contains(Invariant::OpenBatches), facts.open_batches != 0);
+    let visits = facts.visits as u128;
+    assert_eq!(
+        v.contains(Invariant::VisitCount),
+        visits > records || records > 8 * visits
+    );
     assert_eq!(
         v.contains(Invariant::EnvelopeCount),
-        matches!(absentee, Some(n) if n != facts.records)
+        matches!(envelopes, Some(e) if e.issued as i128 - e.returned_empty as i128 != e.envelopes as i128)
+    );
+    assert_eq!(
+        v.contains(Invariant::StickerCount),
+        matches!(envelopes, Some(e) if e.stickers != facts.visits)
     );
     assert_eq!(
         v.contains(Invariant::FallbackDeclared),
@@ -227,7 +251,9 @@ fn close_verdict_is_exact() {
         || v.contains(Invariant::OpenBatches)
         || v.contains(Invariant::EnvelopeCount)
         || v.contains(Invariant::FallbackDeclared)
-        || v.contains(Invariant::PaperIncidents);
+        || v.contains(Invariant::PaperIncidents)
+        || v.contains(Invariant::VisitCount)
+        || v.contains(Invariant::StickerCount);
     assert_eq!(v.is_empty(), !any);
 }
 

@@ -120,13 +120,34 @@ pub const fn scan_count_due(records_since: u64, last_attest_bucket: u64, now: u6
     }
 }
 
+/// Ballots in one visit at most (ADR-0021): `record_count ≤ 8·visit_count`.
+pub const MAX_VISIT_BALLOTS: u64 = 8;
+
+/// What people count at an out-of-district or overseas box's close, with
+/// the station's envelope accounting (PROTOCOL.md §10.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnvelopeCounts {
+    /// Return envelopes in the box (`envelope_count`).
+    pub envelopes: u64,
+    /// Label stickers on them, emergency marks not counted
+    /// (`sticker_count`).
+    pub stickers: u64,
+    /// Return envelopes issued (`IssuanceCount`).
+    pub issued: u64,
+    /// Empty return envelopes handed back (`IssuanceCount`).
+    pub returned_empty: u64,
+}
+
 /// Everything the close invariants of VC-038 compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CloseFacts<'a> {
-    /// Physical ballots counted by two clerks.
+    /// Physical ballots counted by two clerks (0 at an absentee box,
+    /// whose ballots stay inside their envelopes).
     pub paper: u64,
     /// Cast records (imprinted, not quarantined).
     pub records: u64,
+    /// Visits with at least one cast ballot.
+    pub visits: u64,
     /// Records attested in closed batches.
     pub attested: u64,
     /// Records in the batch still open at close.
@@ -143,8 +164,9 @@ pub struct CloseFacts<'a> {
     pub module_final_counters: &'a [u64],
     /// Batches still open.
     pub open_batches: u8,
-    /// Absentee profile: physical envelopes; `None` in person.
-    pub absentee_envelopes: Option<u64>,
+    /// Absentee profile: the envelope and sticker counts; `None` in
+    /// person.
+    pub envelopes: Option<EnvelopeCounts>,
     /// Whether a `FallbackDeclared` event exists for this box.
     pub fallback_declared: bool,
     /// Papers lost or unmatched at a resume (PROTOCOL.md §7.3 step 7).
@@ -153,7 +175,7 @@ pub struct CloseFacts<'a> {
 
 /// The set of violated close invariants, one flag per [`Invariant`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Violations([bool; 8]);
+pub struct Violations([bool; 10]);
 
 impl Violations {
     const fn index(invariant: Invariant) -> usize {
@@ -166,6 +188,8 @@ impl Violations {
             Invariant::EnvelopeCount => 5,
             Invariant::FallbackDeclared => 6,
             Invariant::PaperIncidents => 7,
+            Invariant::VisitCount => 8,
+            Invariant::StickerCount => 9,
         }
     }
 
@@ -203,12 +227,24 @@ fn sum(values: &[u64]) -> Option<u64> {
 /// arithmetic overflow in a sum counts as a violation of that invariant.
 #[must_use]
 pub fn close_verdict(facts: &CloseFacts<'_>) -> Violations {
-    let paper_ok = sum(&[facts.records, facts.without_record]) == Some(facts.paper);
+    // An absentee box's ballots stay in their envelopes: no paper count.
+    let paper_ok = if facts.envelopes.is_some() {
+        facts.paper == 0
+    } else {
+        sum(&[facts.records, facts.without_record]) == Some(facts.paper)
+    };
     let attested_ok = sum(&[facts.attested, facts.open_batch_records]) == Some(facts.records);
     let spoiled_ok = sum(&[facts.challenged, facts.quarantined]) == Some(facts.spoiled_envelopes);
     let consumed = sum(&[facts.records, facts.challenged, facts.quarantined]);
     let counters_ok = consumed.is_some_and(|c| facts.module_final_counters.iter().all(|&f| f == c));
-    let envelopes_ok = facts.absentee_envelopes.is_none_or(|n| n == facts.records);
+    // `visits ≤ records ≤ 8·visits`; the product saturates, which keeps
+    // the comparison exact because `records` is itself a `u64`.
+    let visits_ok = facts.visits <= facts.records
+        && facts.records <= facts.visits.saturating_mul(MAX_VISIT_BALLOTS);
+    let envelopes_ok = facts
+        .envelopes
+        .is_none_or(|e| e.issued.checked_sub(e.returned_empty) == Some(e.envelopes));
+    let stickers_ok = facts.envelopes.is_none_or(|e| e.stickers == facts.visits);
     let fallback_ok = facts.without_record == 0 || facts.fallback_declared;
     Violations::default()
         .with(Invariant::PaperCount, !paper_ok)
@@ -219,6 +255,8 @@ pub fn close_verdict(facts: &CloseFacts<'_>) -> Violations {
         .with(Invariant::EnvelopeCount, !envelopes_ok)
         .with(Invariant::FallbackDeclared, !fallback_ok)
         .with(Invariant::PaperIncidents, facts.paper_incidents != 0)
+        .with(Invariant::VisitCount, !visits_ok)
+        .with(Invariant::StickerCount, !stickers_ok)
 }
 
 /// What two clerks and two observers found in the waiting area after a

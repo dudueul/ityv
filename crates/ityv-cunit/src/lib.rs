@@ -22,7 +22,7 @@
 //! | module | contents | specification |
 //! |---|---|---|
 //! | [`config`] | the validated election configuration | ADR-0017 §2, §12 |
-//! | [`link`] | `Interpretation`, `ModuleIssue`, `JournalEntry` objects | ENCODING.md §8.19 |
+//! | [`link`] | `Interpretation`, `VisitEnd`, `ModuleIssue`, `JournalEntry` objects | ENCODING.md §8.19 |
 //! | [`port`] | host traits, the module batch-signing rule | ADR-0017 §3, §8 |
 //! | [`rng`] | the SHA3-512 counter-mode generator | ADR-0017 §12 |
 //! | [`ballot`] | per-ballot typestate and every per-ballot object | PROTOCOL.md §7.3–§7.7, §8, §9 |
@@ -58,10 +58,12 @@ pub use boxstate::{
 };
 pub use config::{BallotStyle, ConfigParts, ElectionConfig, ModuleConfig, Profile, TrusteeConfig};
 pub use error::{ConfigFault, Error, Invariant};
-pub use link::{Interpretation, JournalEntry, JournalKind, ModuleIssue, ModuleIssueParts};
+pub use link::{
+    Interpretation, JournalEntry, JournalKind, ModuleIssue, ModuleIssueParts, VisitEnd,
+};
 pub use port::{
     JournalError, JournalItem, JournalSink, JournalSource, ModulePort, PortError, Sealed,
     module_may_sign_batch,
 };
 pub use rng::DeviceRng;
-pub use rules::{RecordTail, WaitingAction, WaitingArea};
+pub use rules::{EnvelopeCounts, RecordTail, WaitingAction, WaitingArea};

@@ -27,11 +27,12 @@ use ityv_encoding::{
     Attestation, BatchAttest, BatchAttestBody, BatchAttestParts, BoxClose, BoxCloseBody,
     BoxCloseParts, BoxId, CloseCounts, ElectionId, ErrorKind, HEADER_LEN, Hash512,
     MAX_BATCH_BODY_LEN, MAX_BOX_CLOSE_BODY_LEN, MAX_SCAN_COUNT_BODY_LEN, MAX_SLIP_BODY_LEN,
-    ModuleBatchSig, ModuleCounter, ModuleCounters, ModuleId, ModuleIds, ModuleRange, ObserverId,
-    ObserverSig, OrgId, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE,
-    SCHEMA_BOX_CLOSE_BODY, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SLIP,
-    SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, ScanCountAttest, ScanCountAttestBody, SignerId, SignerRole,
-    Slip, SlipBody, StationId, TimeBucket, decode_object,
+    MAX_TRACKING_CODES, ModuleBatchSig, ModuleCounter, ModuleCounters, ModuleId, ModuleIds,
+    ModuleRange, ObserverId, ObserverSig, OrgId, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY,
+    SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_SCAN_COUNT_ATTEST,
+    SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_VERSION_1,
+    ScanCountAttest, ScanCountAttestBody, SignerId, SignerRole, Slip, SlipBody, StationId,
+    TimeBucket, decode_object,
 };
 use std::vec::Vec;
 
@@ -163,9 +164,9 @@ fn batch_attest_body_round_trip_and_rules() {
         kind_at(decode_batch_attest_body(&v)),
         (ErrorKind::InvariantViolation, refusals_at)
     );
-    // Seven ranges.
+    // Eight ranges (seven modules at most, ADR-0019).
     let mut v = bytes.clone();
-    v[ranges_at..ranges_at + 4].copy_from_slice(&7u32.to_be_bytes());
+    v[ranges_at..ranges_at + 4].copy_from_slice(&8u32.to_be_bytes());
     assert_eq!(
         kind_at(decode_batch_attest_body(&v)),
         (ErrorKind::CountExceedsMax, ranges_at)
@@ -185,11 +186,11 @@ fn batch_attest_body_round_trip_and_rules() {
     assert!(BatchAttestBody::new(&batch_parts(&ranges, foreign)).is_none());
     assert!(ModuleIds::new(&[mid(b"b"), mid(b"a")]).is_none());
     assert!(ModuleIds::new(&[mid(b"a"), mid(b"a")]).is_none());
-    assert!(ModuleIds::new(&[mid(b"a"); 7]).is_none());
+    assert!(ModuleIds::new(&[mid(b"a"); 8]).is_none());
     assert!(ModuleIds::new(&[]).unwrap().is_empty());
     assert!(!ModuleIds::new(&[mid(b"a")]).unwrap().is_empty());
     assert_eq!(ModuleIds::new(&[mid(b"a")]).unwrap().len(), 1);
-    let seven: Vec<ModuleRange<'_>> = (0..7u8)
+    let eight: Vec<ModuleRange<'_>> = (0..8u8)
         .map(|i| ModuleRange {
             module_id: ModuleId::new(match i {
                 0 => b"m0".as_slice(),
@@ -198,14 +199,18 @@ fn batch_attest_body_round_trip_and_rules() {
                 3 => b"m3",
                 4 => b"m4",
                 5 => b"m5",
-                _ => b"m6",
+                6 => b"m6",
+                _ => b"m7",
             })
             .unwrap(),
             counter_first: 1,
             counter_last: 1,
         })
         .collect();
-    assert!(BatchAttestBody::new(&batch_parts(&seven, ModuleIds::new(&[]).unwrap())).is_none());
+    assert!(BatchAttestBody::new(&batch_parts(&eight, ModuleIds::new(&[]).unwrap())).is_none());
+    assert!(
+        BatchAttestBody::new(&batch_parts(&eight[..7], ModuleIds::new(&[]).unwrap())).is_some()
+    );
 }
 
 /// Two refusals and two signers: the refusal array and the signature
@@ -382,8 +387,8 @@ fn batch_attest_round_trip_and_signer_set() {
         kind_at(decode_batch_attest(&v)),
         (ErrorKind::ValueOutOfRange, HEADER_LEN + 4 + count_at)
     );
-    // Maximal wrapper: six signers, no refusals.
-    let ids: [&[u8]; 6] = [b"m1", b"m2", b"m3", b"m4", b"m5", b"m6"];
+    // Maximal wrapper: seven signers, no refusals.
+    let ids: [&[u8]; 7] = [b"m1", b"m2", b"m3", b"m4", b"m5", b"m6", b"m7"];
     let six: Vec<ModuleRange<'_>> = ids
         .iter()
         .map(|id| ModuleRange {
@@ -406,7 +411,7 @@ fn batch_attest_round_trip_and_signer_set() {
     let back: BatchAttest<'_> =
         decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, &bytes6).unwrap();
     assert_eq!(back, event6);
-    assert_eq!(back.module_sigs().count(), 6);
+    assert_eq!(back.module_sigs().count(), 7);
 }
 
 fn scan_body() -> ScanCountAttestBody<'static> {
@@ -593,6 +598,9 @@ fn close_parts(counters: ModuleCounters<'static>) -> BoxCloseParts<'static> {
             without_record: 10,
             challenged: 3,
             quarantined: 1,
+            visits: 140,
+            envelopes: 0,
+            stickers: 0,
         },
         record_set_root: patterned64(0x60),
         journal_head: patterned64(0x61),
@@ -632,7 +640,7 @@ fn box_close_round_trip_and_rules() {
     .unwrap();
     let body = BoxCloseBody::new(&close_parts(counters));
     let body_bytes = encode_to_vec(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body);
-    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 48 + 192;
+    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 72 + 192;
     assert_eq!(
         body_bytes.len(),
         counters_at + 4 + 2 * (ident_len(b"mod-X") + 8) + 1 + 8
@@ -834,35 +842,84 @@ fn box_close_round_trip_and_rules() {
 
 #[test]
 fn slip_round_trip_and_rules() {
+    let codes = [patterned64(0x90), patterned64(0x92), patterned64(0x94)];
     let body = SlipBody::new(
         ElectionId::new(E).unwrap(),
         StationId::new(b"station-0007").unwrap(),
         TimeBucket::new(41),
-        patterned64(0x90),
-    );
+        &codes,
+    )
+    .unwrap();
     let body_bytes = encode_to_vec(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body);
-    assert_eq!(
-        body_bytes.len(),
-        HEADER_LEN + ident_len(E) + ident_len(b"station-0007") + 8 + 64
-    );
+    let codes_at = HEADER_LEN + ident_len(E) + ident_len(b"station-0007") + 8;
+    assert_eq!(body_bytes.len(), codes_at + 4 + 3 * 64);
+    assert_eq!(&body_bytes[codes_at..codes_at + 4], &3u32.to_be_bytes());
     let decoded: SlipBody<'_> =
         decode_object(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body_bytes).unwrap();
     assert_eq!(decoded, body);
     assert_eq!(decoded.election_id().as_bytes(), E);
     assert_eq!(decoded.station_id().as_bytes(), b"station-0007");
     assert_eq!(decoded.time_bucket().get(), 41);
-    assert_eq!(decoded.tracking_code(), &patterned64(0x90));
-    // Maximal body.
+    assert_eq!(decoded.tracking_codes(), &codes);
+    // One code per slip is the smallest; nine, none or a repeat is refused.
+    let one = SlipBody::new(
+        ElectionId::new(E).unwrap(),
+        StationId::new(b"s").unwrap(),
+        TimeBucket::new(1),
+        &codes[..1],
+    )
+    .unwrap();
+    assert_eq!(one.tracking_codes().len(), 1);
+    let nine: Vec<Hash512> = (0..9u8).map(patterned64).collect();
+    for bad in [&[][..], &nine[..], &[codes[0], codes[1], codes[0]][..]] {
+        assert!(
+            SlipBody::new(
+                ElectionId::new(E).unwrap(),
+                StationId::new(b"s").unwrap(),
+                TimeBucket::new(1),
+                bad
+            )
+            .is_none()
+        );
+    }
+    assert_eq!(MAX_TRACKING_CODES, 8);
+    // Maximal body: two 64-byte identifiers and eight codes.
     let long = [b'S'; 64];
+    let eight: Vec<Hash512> = (0..8u8).map(|i| Hash512([0xf0 | i; 64])).collect();
     let max = SlipBody::new(
         ElectionId::new(&long).unwrap(),
         StationId::new(&long).unwrap(),
         TimeBucket::new(u64::MAX),
-        Hash512([0xff; 64]),
-    );
+        &eight,
+    )
+    .unwrap();
     let max_bytes = encode_to_vec(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &max);
-    assert_eq!(max_bytes.len(), 224);
+    assert_eq!(max_bytes.len(), 676);
     assert!(max_bytes.len() <= MAX_SLIP_BODY_LEN);
+
+    // Decoder rules on the code array.
+    let mut v = body_bytes.clone();
+    v[codes_at..codes_at + 4].copy_from_slice(&0u32.to_be_bytes());
+    v.truncate(codes_at + 4);
+    let len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+    v[12..16].copy_from_slice(&len.to_be_bytes());
+    let err = decode_object::<SlipBody<'_>>(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &v).unwrap_err();
+    assert_eq!(
+        (err.kind(), err.offset()),
+        (ErrorKind::ValueOutOfRange, codes_at)
+    );
+    let mut v = body_bytes.clone();
+    v[codes_at..codes_at + 4].copy_from_slice(&9u32.to_be_bytes());
+    let err = decode_object::<SlipBody<'_>>(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &v).unwrap_err();
+    assert_eq!(
+        (err.kind(), err.offset()),
+        (ErrorKind::CountExceedsMax, codes_at)
+    );
+    let mut v = body_bytes.clone();
+    let third = codes_at + 4 + 2 * 64;
+    v.copy_within(codes_at + 4..codes_at + 4 + 64, third);
+    let err = decode_object::<SlipBody<'_>>(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &v).unwrap_err();
+    assert_eq!((err.kind(), err.offset()), (ErrorKind::Duplicate, third));
 
     let sig = patterned::<4691>(0x91);
     let slip = Slip::new(&body_bytes, &sig).unwrap();
@@ -876,7 +933,7 @@ fn slip_round_trip_and_rules() {
     let max_slip = Slip::new(&max_bytes, &sig).unwrap();
     assert_eq!(
         encode_to_vec(SCHEMA_SLIP, SCHEMA_VERSION_1, &max_slip).len(),
-        4935
+        5387
     );
 
     // Body error rebased, body too long for the field, signature truncated.
@@ -887,7 +944,7 @@ fn slip_round_trip_and_rules() {
         (ErrorKind::InvalidIdentByte, HEADER_LEN + 4 + HEADER_LEN + 4)
     );
     let mut v = bytes.clone();
-    v[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&257u32.to_be_bytes());
+    v[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&1025u32.to_be_bytes());
     assert_eq!(
         kind_at(decode_slip(&v)),
         (ErrorKind::LengthExceedsMax, HEADER_LEN)

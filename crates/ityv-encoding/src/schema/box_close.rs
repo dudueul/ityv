@@ -36,7 +36,8 @@ pub const MIN_OBSERVERS: usize = 2;
 
 /// The counts a box close reports (`paper_count`, `record_count`,
 /// `attested_count`, `no_record_count`, `challenge_count`,
-/// `quarantine_count` in ENCODING.md §8.16).
+/// `quarantine_count`, `visit_count`, `envelope_count`, `sticker_count` in
+/// ENCODING.md §8.16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CloseCounts {
     /// Physical ballots counted independently by two clerks.
@@ -51,6 +52,14 @@ pub struct CloseCounts {
     pub challenged: u64,
     /// Ballots quarantined.
     pub quarantined: u64,
+    /// Visits that cast at least one ballot (ADR-0021).
+    pub visits: u64,
+    /// Out-of-district boxes: physical return envelopes (0 in a polling
+    /// station box).
+    pub envelopes: u64,
+    /// Out-of-district boxes: label stickers on the envelopes, emergency
+    /// marks excluded (0 in a polling station box).
+    pub stickers: u64,
 }
 
 /// Unvalidated inputs for [`BoxCloseBody::new`].
@@ -167,7 +176,7 @@ impl Encode for BoxCloseBody<'_> {
         self.election_id
             .encoded_len()
             .saturating_add(self.box_id.encoded_len())
-            .saturating_add(48)
+            .saturating_add(72)
             .saturating_add(192)
             .saturating_add(self.module_counters.encoded_len())
             .saturating_add(1)
@@ -183,6 +192,9 @@ impl Encode for BoxCloseBody<'_> {
         w.write_u64(self.counts.without_record)?;
         w.write_u64(self.counts.challenged)?;
         w.write_u64(self.counts.quarantined)?;
+        w.write_u64(self.counts.visits)?;
+        w.write_u64(self.counts.envelopes)?;
+        w.write_u64(self.counts.stickers)?;
         self.record_set_root.encode(w)?;
         self.journal_head.encode(w)?;
         self.seal_digest.encode(w)?;
@@ -203,6 +215,9 @@ impl<'a> Decode<'a> for BoxCloseBody<'a> {
             without_record: r.read_u64()?,
             challenged: r.read_u64()?,
             quarantined: r.read_u64()?,
+            visits: r.read_u64()?,
+            envelopes: r.read_u64()?,
+            stickers: r.read_u64()?,
         };
         let record_set_root = Hash512::decode(r)?;
         let journal_head = Hash512::decode(r)?;

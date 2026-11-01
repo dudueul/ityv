@@ -195,7 +195,7 @@ proptest! {
     #[test]
     fn share_package_round_trip(
         e in ident_bytes(8), b in ident_bytes(8), points in prop::collection::vec(point(), 1..=2),
-        ids in sorted_ids(2), chambers in prop::collection::vec(1u8..=6, 2),
+        ids in sorted_ids(2), chambers in prop::collection::vec(1u8..=8, 2),
         pad in prop::collection::vec((any::<bool>(), any::<u32>(), any::<u64>()), 2),
         cts in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..=8), 2),
         tags in prop::collection::vec(any::<[u8; 16]>(), 2)
@@ -293,7 +293,7 @@ proptest! {
 
     #[test]
     fn box_close_round_trip(
-        e in ident_bytes(8), b in ident_bytes(8), counts in prop::collection::vec(any::<u64>(), 6),
+        e in ident_bytes(8), b in ident_bytes(8), counts in prop::collection::vec(any::<u64>(), 9),
         hashes in prop::collection::vec(hash64(), 3), ids in sorted_ids(2),
         values in prop::collection::vec(any::<u64>(), 1..=2), open in any::<u8>(), bucket in any::<u64>(),
         with_device in any::<bool>(), sig in any::<[u8; 32]>(), orgs in sorted_ids(2)
@@ -301,7 +301,7 @@ proptest! {
         let body = BoxCloseBody::new(&BoxCloseParts {
             election_id: ElectionId::new(&e).unwrap(),
             box_id: BoxId::new(&b).unwrap(),
-            counts: CloseCounts { paper: counts[0], records: counts[1], attested: counts[2], without_record: counts[3], challenged: counts[4], quarantined: counts[5] },
+            counts: CloseCounts { paper: counts[0], records: counts[1], attested: counts[2], without_record: counts[3], challenged: counts[4], quarantined: counts[5], visits: counts[6], envelopes: counts[7], stickers: counts[8] },
             record_set_root: Hash512(hashes[0]),
             journal_head: Hash512(hashes[1]),
             seal_digest: Hash512(hashes[2]),
@@ -330,9 +330,11 @@ proptest! {
 
     #[test]
     fn slip_round_trip(
-        e in ident_bytes(8), st in ident_bytes(8), bucket in any::<u64>(), code in hash64(), sig in any::<[u8; 32]>()
+        e in ident_bytes(8), st in ident_bytes(8), bucket in any::<u64>(), code in hash64(), n in 1usize..=8, sig in any::<[u8; 32]>()
     ) {
-        let body = SlipBody::new(ElectionId::new(&e).unwrap(), StationId::new(&st).unwrap(), TimeBucket::new(bucket), Hash512(code));
+        let codes: Vec<Hash512> = (0..n).map(|i| { let mut c = code; c[0] ^= u8::try_from(i).unwrap(); c[63] = 0x5a; Hash512(c) }).collect();
+        let body = SlipBody::new(ElectionId::new(&e).unwrap(), StationId::new(&st).unwrap(), TimeBucket::new(bucket), &codes).unwrap();
+        prop_assert_eq!(body.tracking_codes(), codes.as_slice());
         let bytes = encode_to_vec(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &body);
         let decoded: SlipBody<'_> = decode_object(SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
         prop_assert_eq!(decoded, body);

@@ -95,8 +95,8 @@ pub use otmac::{
 pub use pad::xor_in_place;
 pub use scalar::Scalar;
 pub use shares::{
-    AccessStructure, CHAMBER_COUNT, Chamber, MAX_MEMBERS, MemberId, MemberShares, Share, Threshold,
-    is_qualified, reconstruct, split,
+    AccessStructure, CHAMBER_COUNT, Chamber, MAX_MEMBERS, MAX_PARTIES, MIN_PARTIES, MemberId,
+    MemberShares, Share, Threshold, is_qualified, reconstruct, split,
 };
 pub use sig::{
     ArchiveSignature, ArchiveSigned, ArchiveSigningKey, ArchiveVerifyingKey, HybridSignature,
