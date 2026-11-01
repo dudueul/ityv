@@ -2,7 +2,7 @@
 # inherits the lint set below without exception (CONSTITUTION.md §1.1).
 [workspace]
 resolver = "3"
-members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit"]
+members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit", "crates/ityv-state"]
 
 [workspace.package]
 version = "0.1.0"

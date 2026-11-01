@@ -67,6 +67,10 @@
 | 보고 단위 | reporting unit | `reporting_unit` | 종이 개표 결과가 법령에 따라 공개되는 단위(선거일 투표구, 관내·관외 사전투표 단위 등). 암호 합계를 이 단위로 열고 `PaperCountReport`와 대조한다(PROTOCOL §11.2, §11.5, VC-075). |
 | 감사 사유 코드 | audit reason code | — | `SampleComparison`의 불일치 종류 0–6. 확정 판정 불일치(1·2)는 그 장치 전수 대조, `UNREADABLE`·`BLANK`인데 종이가 유효(3·4)는 비율 공개(PROTOCOL §12.3, VC-074). |
 | 늦은 마감 | late close | `LateBatchClose`, `LateBoxClose` | 멈췄던 장치를 입회 아래 되살려 저널에서 미결 배치·마감을 닫는 절차. |
+| 수동 마감 | manual close | `BoxCloseManual` | 장치 서명 없는 투표함 마감. 수록은 되지만 자동으로 `HOLD_REVIEW`이며, 사람이 센 수(종이·봉투·스티커)가 같은 `LateBoxClose`만 해소한다(ADR-0025). |
+| 보류 사유 | hold reason | `HoldReason` | `HOLD_REVIEW`를 일으킨 개별 사유. 사유는 쌓이기만 하고, 명세가 해소 이벤트로 정한 늦은 마감과 늦은 배치만 해당 사유를 지운다(ADR-0025). |
+| 승인 토큰 | capability | `Cap` | 승인 범위 하나의 연산 자격을 나타내는 값. 두 기관이 서명한 법적 승인 객체를 확인한 뒤 효력 기간 안에서만 만들어지며, 범위가 막는 연산은 이 값을 인자로 요구한다(CONSTITUTION §1.7, ADR-0025). |
+| 법적 결정 참조 | legal decision reference | `LegalDecisionRef` | 법정 권한 기관이 서명한 결정문 참조(스키마 0x000F). `LEGAL_CERTIFIED` 표시의 유일한 근거이며, 검증기는 이를 표시할 뿐 판정하지 않는다(VC-049). |
 | 비상 투입 | fallback deposit | `FallbackDeclared` | 스캐너와 예비 장치가 모두 없을 때 봉인된 비상 투입구로 기록 없이 받는 투표지. 마감의 `no_record_count`로 센다. |
 | 검증 사다리 | verification ladder | `V1`..`V5` | V1 속성·퍼징·변이, V2 Kani, V3 Verus 또는 Creusot, V4 TLA+·Tamarin, V5 독립 2차 구현. |
 | 연결 공개(분리망 주장 대신) | declared connectivity | `ConnectivityManifest` | 어떤 장비도 "분리돼 있다"고 주장하지 않고, 모든 연결의 방향·매체·상대·시간대를 genesis의 연결 목록에 적어 서로 다른 주체가 확인하게 하는 원칙(PROTOCOL §5.8, ADR-0022). |

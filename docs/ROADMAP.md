@@ -21,8 +21,10 @@
 - 정당 챔버 n개 반영(ADR-0019): `ityv-crypto` shares(챔버 P1–P4·J·A·C·N, 정당 챔버 전부 필수 접근구조), `ityv-encoding` ChamberCode·배열 상한(모듈 7, `MemberShare.shares` 58), `ityv-cunit` 모듈 상한 7과 필수 정당 모듈 검사. 문서는 반영됨, 코드는 같은 PR에서 맞춘다.
 - 소프트웨어 신원(ADR-0023): `ityv-encoding`에 `ReleaseManifestBody`·`ReleaseManifest`(0x0021·0x0022), `DeviceAttestationBody`·`DeviceAttestation`(0x0023·0x0024), `AttestationSummary`(0x0025), 링크 객체 `AttestChallenge`(0x0105). `ityv-cunit`에 `attest(challenge)` API: 주어진 증명 키로 서명만 하고 투표 상태(작업 영역, 저널, 배치, 카운터)를 읽거나 바꾸지 않으며, 열린 방문 중과 30초 안 재요청을 거부하는 typestate(VC-088). 재현 빌드 절차 문서와 CI의 이미지 해시 공개(VC-091).
 
-## M4 상태기계 `ityv-state`
-- typestate: 투표지, 투표함, 보관, 체크포인트, 분쟁. capability 게이트. trybuild 컴파일 실패 테스트.
+## M4 상태기계 `ityv-state` (산출 완료, ADR-0025)
+- 산출: `crates/ityv-state`. `auth`(법적 승인 객체의 두 서명 토큰 확인, 범위 전제와 단계 건너뛰기 금지, `Authorization::grant`만 만드는 `Cap<'a, S>`), `record`(`UNATTESTED`→`CAST_COMMITTED`, `CHALLENGED_SPOILED`·`QUARANTINED`, 수령 대조 다섯 결과, `SHARE_MISSING`·`TEST_BALLOT`, 집계 처분), `close`(VC-038 등식별 보류, 모듈 카운터 틈, 등록된 독립 서명자), `boxes`(`BallotBox<'a, S>` typestate: 개시·비상 투입·마감·수동 마감·늦은 마감·늦은 배치·개표·감사), `custody`(VC-040 인계 사슬과 봉인 변경), `issuance`(교부·참여 등식), `tally`(VC-057·VC-063 관문), `dispute`(두 기관 접수, 앞으로만 가는 상태와 법적 회부), `status`(상태 어휘, 공표 기한 반영, `LEGAL_CERTIFIED` 없는 `Status`와 `LegalReference`), `hold`(끈끈한 보류 사유). `no_std`, `alloc` 없음, 새 외부 의존성 없음. 스키마가 없는 이벤트(`BoxOpened`, `IssuanceCount`, `CustodyHandoff`, `DisputeEvent`, `LegalDecisionRef` 등)는 최소 입력 타입이며 M5 인코딩 과제다. 명세 공백 18건은 ADR-0025에 적었다.
+- 검증(2026-11-01): `ityv-state` 테스트 79개 통과(단위 48, 통합 20: 실제 하이브리드 서명으로 만든 마감·늦은 마감·법적 승인·법적 참조 객체, 속성 5, doctest 6 중 `compile_fail` 5), 워크스페이스 테스트 442개 통과. Kani 하네스 9개 전부 통과(가장 무거운 것은 512개 범위 집합의 전제 규칙, 43초). cargo-mutants 386개 중 잡힘 297·unviable 89·놓침 0·타임아웃 0(첫 실행의 놓침 4건은 서명 반쪽 변조, 감사 상태의 보류, 합집합 연산, 시험용 생성자 시험으로 해소). fmt, clippy(워크스페이스, 모든 타깃), rustdoc `-D warnings`, `thumbv7em-none-eabihf` 빌드, cargo-deny, cargo-vet 통과.
+- 남은 것: M5 인코딩 과제(위 객체들의 스키마와 서명 토큰화), ADR-0025의 명세 공백 해소, 시뮬레이터 토큰 타입(ITYV-BEH-162, M6).
 
 ## M5 공개 검증기 `ityv-verify`
 - 공개원장 전체 검증(체크포인트, 정형성 증명, 집계), 표본 검증 모드, 독립 2차 구현(V5)과 차분 테스트.

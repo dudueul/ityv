@@ -1,0 +1,30 @@
+[package]
+name = "ityv-state"
+description = "ityv election state machines: record statuses and tally disposition, ballot-box life cycle with close invariants and sticky holds, custody chain, disputes, the verifier status vocabulary and legal-scope capabilities; no_std, no alloc, no unsafe, no panics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+categories = ["no-std", "no-std::no-alloc"]
+keywords = ["election", "state-machine", "typestate", "no_std"]
+
+[lib]
+doctest = true
+
+# Only the sibling TCB crates. Signatures are verified by `ityv-crypto`; this
+# crate consumes its `Verified` tokens. Publication deadlines are computed by
+# `ityv-ledger`; this crate maps their outcome to states.
+[dependencies]
+ityv-encoding = { path = "../ityv-encoding", version = "=0.1.0" }
+ityv-crypto = { path = "../ityv-crypto", version = "=0.1.0" }
+ityv-ledger = { path = "../ityv-ledger", version = "=0.1.0" }
+
+[dev-dependencies]
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
+rand_chacha = { version = "=0.10.0", default-features = false }
+rand_core = { version = "=0.10.1", default-features = false }
+
+[lints]
+workspace = true
