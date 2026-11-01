@@ -17,6 +17,7 @@
 ## M3 커밋먼트 유닛 `ityv-cunit` (진행 중, ADR-0017)
 - `no_std`, 힙 없음. 투함 기록 생성, 투입 전 검증 공개, share 패키지, 일회용 패드 소비, 슬립 서명. 소거 성질 V3.
 - 1단계(완료, 2026-10-31): `ityv-encoding`에 공유 스키마 14개(0x0005·0x0006·0x0007·0x000A·0x000B·0x0012·0x0013·0x0015·0x0016·0x0017·0x0018·0x0019·0x001A·0x001B). 워크스페이스 테스트 203개, Kani 20개 하네스 통과(배열 필드 본문의 객체 수준 왕복은 도구 한계로 V1이 담당, crate README 참조), cargo-mutants 557개 중 놓침 0. 독립 리뷰 수정: 첫 위반 순서, 하한 개수의 오류 종류, 미공표 규칙의 명세 반영, 결측 거부 벡터, `MemberShare`의 `Copy` 제거. 2단계: `ityv-cunit`(링크 디코더 0x0101·0x0103, 표별 typestate, share 패키지와 패드·KEM 전송, 봉인 저널 0x0014, 배치·투표함 회계, 검증 공개, 슬립).
+- 정당 챔버 n개 반영(ADR-0019): `ityv-crypto` shares(챔버 P1–P4·J·A·C·N, 정당 챔버 전부 필수 접근구조), `ityv-encoding` ChamberCode·배열 상한(모듈 7, `MemberShare.shares` 58), `ityv-cunit` 모듈 상한 7과 필수 정당 모듈 검사. 문서는 반영됨, 코드는 같은 PR에서 맞춘다.
 
 ## M4 상태기계 `ityv-state`
 - typestate: 투표지, 투표함, 보관, 체크포인트, 분쟁. capability 게이트. trybuild 컴파일 실패 테스트.

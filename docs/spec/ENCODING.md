@@ -188,7 +188,7 @@ offset  size  field
 | 4 | `proof_system_id` | `u16` | 1(`or-rep:v1`). 그 외는 `ValueOutOfRange` |
 | 5 | `commitments` | `Array<Point, 8>` | 개수 = k ≥ 1. 0이면 `ValueOutOfRange`(개수 접두사 오프셋) |
 | 6 | `proof` | `Bytes<20483>` | PROTOCOL.md §7.5 증명 인코딩. 머리부 규칙을 디코더가 검사한다: `option_count ∈ 2..=64`, `chunk_count = ⌈option_count/9⌉`, 길이 = `3 + option_count·(chunk_count+2)·32`, `chunk_count` = 5의 개수. 위반은 `InvariantViolation`(이 필드 오프셋). 스칼라의 canonical 여부는 암호 크레이트가 검사한다 |
-| 7 | `module_counters` | `Array<{module_id: Ident<64>, counter: u64}, 6>` | `module_id` 오름차순, 중복 없음, 1개 이상(0이면 `ValueOutOfRange`) |
+| 7 | `module_counters` | `Array<{module_id: Ident<64>, counter: u64}, 7>` | `module_id` 오름차순, 중복 없음, 1개 이상(0이면 `ValueOutOfRange`) |
 | 8 | `share_package_hash` | `Hash512` | §8.10 객체의 §4 해시 |
 | 9 | `transport_flags` | `u8` | 비트0 KEM 대체 사용, 비트1 중립 모듈 위임. 다른 비트가 서 있으면 `ValueOutOfRange` |
 
@@ -198,7 +198,7 @@ offset  size  field
 |---|---|---|---|
 | 1 | `body` | `Bytes<22528>` | 인코딩된 `CastRecordBody` 객체 전체. §8.6 규칙으로 다시 디코딩한다. 추적코드 = 이 바이트의 §4 해시 |
 | 2 | `device_sig_ed25519` | `[u8; 64]` | 본문 바이트에 대한 기록 서명(purpose `cast-record`) |
-| 3 | `module_sigs` | `Array<{module_id: Ident<64>, ed25519: [u8; 64]}, 6>` | `module_id` 오름차순, 중복 없음, 본문의 `module_counters`와 같은 ID 집합이어야 한다(`InvariantViolation`). 메시지는 `body_hash ‖ module_id ‖ counter`(PROTOCOL.md §7.2.1) |
+| 3 | `module_sigs` | `Array<{module_id: Ident<64>, ed25519: [u8; 64]}, 7>` | `module_id` 오름차순, 중복 없음, 본문의 `module_counters`와 같은 ID 집합이어야 한다(`InvariantViolation`). 메시지는 `body_hash ‖ module_id ‖ counter`(PROTOCOL.md §7.2.1) |
 
 ### 8.8 `ChallengeOpeningBody` (`schema_id` 0x0006, `schema_version` 1)
 
@@ -211,7 +211,7 @@ offset  size  field
 | 5 | `option_index` | `u16` | `0..=m+1`. 인코딩 수준에서는 `<= 63`(선택지 상한)만 검사하며 초과는 `ValueOutOfRange`; m은 genesis가 정한다 |
 | 6 | `cast_id` | `Token192` | |
 | 7 | `rand` | `Array<Scalar, 8>` | 합산 난수 `r_0..r_{k−1}`, 개수 = k ≥ 1(0이면 `ValueOutOfRange`) |
-| 8 | `modules` | `Array<{module_id: Ident<64>, counter: u64, rand: Array<Scalar, 8>, cid: Token192}, 6>` | `module_id` 오름차순, 중복 없음, 각 `rand` 개수 = k |
+| 8 | `modules` | `Array<{module_id: Ident<64>, counter: u64, rand: Array<Scalar, 8>, cid: Token192}, 7>` | `module_id` 오름차순, 중복 없음, 각 `rand` 개수 = k |
 
 ### 8.9 `ChallengeOpening` (`schema_id` 0x0018, `schema_version` 1)
 
@@ -227,7 +227,7 @@ offset  size  field
 | 1 | `election_id` | `Ident<64>` | |
 | 2 | `box_id` | `Ident<64>` | |
 | 3 | `commitments` | `Array<Point, 8>` | 대응 기록의 커밋먼트(기록 해시는 이 객체의 해시에 의존하므로 넣을 수 없다). 개수 ≥ 1(0이면 `ValueOutOfRange`) |
-| 4 | `entries` | `Array<{trustee_id: Ident<64>, chamber: u8, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<4096>, tag: [u8; 16]}, 64>` | `trustee_id` 오름차순, 중복 없음. `chamber` 1 X, 2 Y, 3 J, 4 A, 5 C, 6 N. `transport` 0 패드(`ciphertext` = `MemberShare` ⊕ 패드, `tag` = Poly1305), 1 KEM(§9.6 배치, `pad_id = pad_index = 0`). 그 외 값은 `ValueOutOfRange` |
+| 4 | `entries` | `Array<{trustee_id: Ident<64>, chamber: u8, transport: u8, pad_id: u32, pad_index: u64, ciphertext: Bytes<4096>, tag: [u8; 16]}, 64>` | `trustee_id` 오름차순, 중복 없음. `chamber` 1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C, 8 N(ADR-0019). genesis 정당 명부에 없는 정당 챔버 코드는 검증기가 거부한다. `transport` 0 패드(`ciphertext` = `MemberShare` ⊕ 패드, `tag` = Poly1305), 1 KEM(§9.6 배치, `pad_id = pad_index = 0`). 그 외 값은 `ValueOutOfRange` |
 
 서명은 없다. 패키지는 서명된 투함 기록의 `share_package_hash`로 결속된다(PROTOCOL.md §9.3, ADR-0017 §2).
 
@@ -237,7 +237,7 @@ offset  size  field
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `shares` | `Array<Scalar, 50>` | 비밀 순서: 존재 모듈을 `module_id` 오름차순으로, 모듈마다 `r_{c,0..k−1}`; 그 뒤 `cast_id`; 관외·재외면 그 뒤 `env_label`. 개수 = 모듈 수 × k + 1(+1) ≥ 1(0이면 `ValueOutOfRange`) |
+| 1 | `shares` | `Array<Scalar, 58>` | 비밀 순서: 존재 모듈을 `module_id` 오름차순으로, 모듈마다 `r_{c,0..k−1}`; 그 뒤 `cast_id`; 관외·재외면 그 뒤 `env_label`. 개수 = 모듈 수 × k + 1(+1) ≥ 1(0이면 `ValueOutOfRange`). 상한 58 = 모듈 7 × 청크 8 + 2 |
 | 2 | `has_module` | `bool` | 구성원 챔버에 모듈이 있으면 1 |
 | 3 | `cid` | `Token192` | `has_module`이면 그 모듈의 `cid_c`, 아니면 전부 0 |
 | 4 | `lab` | `Option<Token192>` | 관외·재외이고 `has_module`이면 `lab_c`, 아니면 없음 |
@@ -254,8 +254,8 @@ offset  size  field
 | 3 | `batch_index` | `u32` | 투표함별 0부터 1씩 |
 | 4 | `record_count` | `u16` | `1..=64` |
 | 5 | `records_root` | `Hash512` | 기록 해시의 정렬 집합 root(PROTOCOL.md §5.3) |
-| 6 | `module_ranges` | `Array<{module_id: Ident<64>, counter_first: u64, counter_last: u64}, 6>` | `module_id` 오름차순, `counter_first <= counter_last` |
-| 7 | `module_refusals` | `Array<Ident<64>, 6>` | 오름차순, 중복 없음. 6의 `module_ranges`에 있는 ID만 허용(`InvariantViolation`) |
+| 6 | `module_ranges` | `Array<{module_id: Ident<64>, counter_first: u64, counter_last: u64}, 7>` | `module_id` 오름차순, `counter_first <= counter_last` |
+| 7 | `module_refusals` | `Array<Ident<64>, 7>` | 오름차순, 중복 없음. 6의 `module_ranges`에 있는 ID만 허용(`InvariantViolation`) |
 | 8 | `journal_head` | `Hash512` | 배치를 닫을 때의 저널 head |
 | 9 | `time_bucket` | `u64` | |
 
@@ -264,7 +264,7 @@ offset  size  field
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
 | 1 | `body` | `Bytes<2048>` | 인코딩된 `BatchAttestBody` 객체 전체 |
-| 2 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 6>` | 오름차순, 중복 없음. 본문의 `module_ranges` ID 중 `module_refusals`에 없는 것과 같은 집합 |
+| 2 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 7>` | 오름차순, 중복 없음. 본문의 `module_ranges` ID 중 `module_refusals`에 없는 것과 같은 집합 |
 | 3 | `device_sig` | `[u8; 4691]` | 하이브리드 서명(purpose `batch-attest`) |
 
 ### 8.14 `ScanCountAttestBody` (`schema_id` 0x0013, `schema_version` 1)
@@ -301,7 +301,7 @@ offset  size  field
 | 9 | `record_set_root` | `Hash512` | 기록 해시 정렬 집합의 root |
 | 10 | `journal_head` | `Hash512` | |
 | 11 | `seal_digest` | `Hash512` | |
-| 12 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 6>` | 오름차순, 중복 없음 |
+| 12 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 7>` | 오름차순, 중복 없음 |
 | 13 | `open_batches` | `u8` | |
 | 14 | `time_bucket` | `u64` | |
 
@@ -323,9 +323,9 @@ offset  size  field
 
 `Interpretation` (`schema_id` 0x0101): `election_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `option_index: u16`. 커밋먼트 유닛은 이 객체 외의 어떤 바이트도 해석 유닛에서 받지 않는다. `option_index > m+1`은 거부한다(m은 genesis의 투표양식에서).
 
-`ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 X, 2 Y, 3 J, 4 A, 5 C) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
+`ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C. N은 모듈이 없다) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
 
-`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감, 6 각인 완료) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 6>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`, 6은 각인을 마친 기록의 해시. `module_counters`는 그 항목이 소비한 카운터(1·2와 기록 전 격리 3) 또는 배치·마감 시점의 최고값(4·5)이다. 기록을 지목하는 격리(3)와 각인 완료(6)는 그 기록의 카운터를 되풀이할 뿐 새로 소비하지 않는다. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
+`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감, 6 각인 완료) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 7>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`, 6은 각인을 마친 기록의 해시. `module_counters`는 그 항목이 소비한 카운터(1·2와 기록 전 격리 3) 또는 배치·마감 시점의 최고값(4·5)이다. 기록을 지목하는 격리(3)와 각인 완료(6)는 그 기록의 카운터를 되풀이할 뿐 새로 소비하지 않는다. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
 
 ### 8.20 오류 보고 규칙
 

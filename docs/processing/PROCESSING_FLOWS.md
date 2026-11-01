@@ -11,26 +11,27 @@ sequenceDiagram
     participant V as 유권자
     participant I as 해석 유닛(불신)
     participant U as 커밋먼트 유닛(검증)
-    participant MX as 모듈 X
-    participant MY as 모듈 Y
+    participant M1 as 정당 모듈 P1
+    participant Mn as 정당 모듈 Pn
     participant MN as 모듈 J/A/C 또는 중립
     participant P as 각인기·슬립·라벨 프린터
     participant J as 봉인 저널
     participant L as 업링크(저장 후 전달)
     V->>I: 투표지 (가림 봉투에서 후드로)
     I->>U: Interpretation{ballot_style_id, option_index t} (단방향)
-    U->>MX: Issue(device_id)
-    MX-->>U: ModuleIssue{counter | r_X[k], cid_X, lab_X, tag_{X,i}…}
-    U->>MY: Issue(device_id)
-    MY-->>U: ModuleIssue{…}
+    U->>M1: Issue(device_id)
+    M1-->>U: ModuleIssue{counter | r_P1[k], cid_P1, lab_P1, tag_{P1,i}…}
+    U->>Mn: Issue(device_id)
+    Mn-->>U: ModuleIssue{…}
+    Note over M1,Mn: 정당 모듈은 2–4개이며 모두 필수. P2…Pn−1도 같은 순서로 응답
     U->>MN: Issue(device_id)
     MN-->>U: ModuleIssue{…}
-    Note over U: r_j = Σ r_c,j · cast_id = H(cid_X‖cid_Y‖…)[0..24] · env_label = H(lab_…)[0..24]
+    Note over U: r_j = Σ r_c,j · cast_id = H(cid_P1‖…‖cid_Pn‖…)[0..24] · env_label = H(lab_…)[0..24]
     Note over U: C_j = val_j(t)·G_val + cast_id·G_id + r_j·H · π = 1-of-(m+2) OR 증명 (§7.4, §7.5)
-    U->>MX: 챔버 X 구성원 평문 share → XOR
-    MX-->>U: ciphertext, Poly1305 tag
-    U->>MY: 챔버 Y 구성원 평문 share → XOR
-    MY-->>U: ciphertext, tag
+    U->>M1: 챔버 P1 구성원 평문 share → XOR
+    M1-->>U: ciphertext, Poly1305 tag
+    U->>Mn: 챔버 Pn 구성원 평문 share → XOR
+    Mn-->>U: ciphertext, tag
     U->>MN: 챔버 J/A/C 구성원 평문 share → XOR
     MN-->>U: ciphertext, tag
     Note over U: SharePackage(sealed) 서명 → 해시 → CastRecord(public) 서명 → 추적코드 = H(CastRecord)
@@ -62,11 +63,11 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     ID[신원 확인 유닛 불신] -- voter_id --> CU[카운터·가명 유닛 검증]
-    CU -- voter_id --> MX[모듈 X: PRF_X]
-    CU -- voter_id --> MY[모듈 Y: PRF_Y]
-    MX -- PRF_X(voter_id), sig --> CU
-    MY -- PRF_Y(voter_id), sig --> CU
-    CU -- "pseudonym = H(PRF_X ‖ PRF_Y)" --> EV[CheckinCounter: station, seq, pseudonym, time_bucket, style]
+    CU -- voter_id --> M1[정당 모듈 P1: PRF_P1]
+    CU -- voter_id --> Mn[정당 모듈 Pn: PRF_Pn, n은 2–4]
+    M1 -- PRF_P1(voter_id), sig --> CU
+    Mn -- PRF_Pn(voter_id), sig --> CU
+    CU -- "pseudonym = H(PRF_P1 ‖ … ‖ PRF_Pn)" --> EV[CheckinCounter: station, seq, pseudonym, time_bucket, style]
     EV --> UL[업링크]
     OBS[참관인 토큰 2 다른 조직] -- 50건마다 --> ATT[ObserverCountAttest: 누적 수]
     ATT --> UL
@@ -128,7 +129,7 @@ flowchart LR
 ```mermaid
 flowchart TB
     SC[TallyScope: 투표양식별 포함 집합 root, 제외 목록+사유] --> SUM
-    subgraph 신뢰기관 정족수 X·Y 포함 5챔버 이상
+    subgraph 신뢰기관 정족수 정당 챔버 전부와 J·A·C·N 중 셋 이상
       SUM[각 구성원: 포함 기록 share 합산] --> REC[선형 복원: R_j = Σ r_j, S = Σ cast_id]
     end
     REC --> AO[AggregateOpening: style, j, T_j, R_j, S, 서명들]
@@ -238,7 +239,7 @@ UNVERIFIED
 
 ## 9. 크기와 처리량 추정
 
-가정: 대통령 선거(후보 14, 인덱스 16 → 청크 k=2), 모듈 3개(X, Y, 중립), 챔버당 구성원 3명(18명), 전국 투함 기록 4,400만. 서명 크기: ML-DSA-87 4,627B, Ed25519 64B, SLH-DSA-SHAKE-256s 29,792B.
+가정: 대통령 선거(후보 14, 인덱스 16 → 청크 k=2), 정당 챔버 2개, 모듈 3개(P1, P2, 중립), 챔버당 구성원 3명(챔버 6개, 18명), 전국 투함 기록 4,400만. 서명 크기: ML-DSA-87 4,627B, Ed25519 64B, SLH-DSA-SHAKE-256s 29,792B.
 
 ### 9.1 공개 기록 1건
 | 필드 | 바이트 | 비고 |
@@ -263,6 +264,8 @@ UNVERIFIED
 | Poly1305 태그, ID, 패드 인덱스 | ≈ 56 | |
 | **패키지 항목** | **≈ 376** | 18명 × 376 ≈ 6.8 KB/기록 |
 | **패드 소비 b** | **384** | 평문 320 + MAC 키 32 + 모듈 태그 키 32 |
+
+정당 챔버가 넷이면 모듈 5개(P1–P4, 중립)에 구성원 24명이다. share 스칼라 384B, 평문 448B, 패드 소비 b = 512, 패키지 ≈ 24 × 504B ≈ 12.1KB/기록이고, 공개 기록은 §9.1의 모듈 5개 기준 표당 ≈ 3.3KB다.
 
 투표함 최대 2,500표 기준 구성원당 패드 0.96MB, 챔버당 3명이면 모듈당 2.9MB, `N_max` 2배 적용 시 5.8MB. 구성원 한 명이 전국 분을 보관하면 44M × 376B ≈ 16.5GB.
 
