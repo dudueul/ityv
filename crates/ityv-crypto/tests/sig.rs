@@ -22,10 +22,10 @@ use ityv_crypto::sig::{
 };
 use ityv_crypto::{
     ArchiveSignature, ArchiveSigningKey, ArchiveVerifyingKey, Error, HybridSignature,
-    HybridSigningKey, HybridVerifyingKey, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT_ARCHIVE,
-    PURPOSE_MODULE_RECORD, Purpose, RecordPurpose, RecordSignature, RecordSigningKey,
-    RecordVerifyingKey, sign_archive, sign_hybrid, sign_record, verify_archive, verify_hybrid,
-    verify_record,
+    HybridSigningKey, HybridVerifyingKey, PURPOSE_ATTEST_CHALLENGE, PURPOSE_ATTEST_SUMMARY,
+    PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT_ARCHIVE, PURPOSE_MODULE_RECORD, Purpose, RecordPurpose,
+    RecordSignature, RecordSigningKey, RecordVerifyingKey, sign_archive, sign_ed25519_half,
+    sign_hybrid, sign_record, verify_archive, verify_hybrid, verify_record,
 };
 use ityv_encoding::ErrorKind;
 
@@ -195,6 +195,42 @@ fn record_signature_known_answer() {
     assert_eq!(RecordPurpose::ModuleRecord.purpose(), PURPOSE_MODULE_RECORD);
     assert_eq!(PURPOSE_CHECKPOINT_ARCHIVE.as_bytes(), b"checkpoint-archive");
     assert_eq!(key.expose_seed(), counting32());
+}
+
+#[test]
+fn the_ed25519_half_of_a_hybrid_key_signs_the_attestation_purposes() {
+    let mut rng = rng(7);
+    let key = HybridSigningKey::generate(&mut rng);
+    let vk = key.verifying_key();
+    let half = RecordVerifyingKey::from_bytes(*vk.ed25519()).unwrap();
+    let summary = sign_ed25519_half(&key, RecordPurpose::AttestSummary, OBJ).unwrap();
+    // the same bytes as the Ed25519 half of a hybrid signature
+    let hybrid = sign_hybrid(&key, &PURPOSE_ATTEST_SUMMARY, OBJ, &mut rng).unwrap();
+    assert_eq!(summary.as_bytes(), hybrid.ed25519());
+    assert!(verify_record(&half, RecordPurpose::AttestSummary, OBJ, &summary).is_ok());
+    // the purposes are not interchangeable
+    let challenge = sign_ed25519_half(&key, RecordPurpose::AttestChallenge, OBJ).unwrap();
+    assert_ne!(challenge, summary);
+    for (purpose, sig) in [
+        (RecordPurpose::AttestChallenge, &summary),
+        (RecordPurpose::AttestSummary, &challenge),
+        (RecordPurpose::CastRecord, &summary),
+    ] {
+        assert_eq!(
+            verify_record(&half, purpose, OBJ, sig).unwrap_err(),
+            Error::SignatureInvalid
+        );
+    }
+    assert_eq!(
+        RecordPurpose::AttestChallenge.purpose(),
+        PURPOSE_ATTEST_CHALLENGE
+    );
+    assert_eq!(
+        RecordPurpose::AttestSummary.purpose(),
+        PURPOSE_ATTEST_SUMMARY
+    );
+    assert_eq!(PURPOSE_ATTEST_CHALLENGE.as_bytes(), b"attest-challenge");
+    assert_eq!(PURPOSE_ATTEST_SUMMARY.as_bytes(), b"attest-summary");
 }
 
 #[test]

@@ -100,9 +100,10 @@ pub use shares::{
 };
 pub use sig::{
     ArchiveSignature, ArchiveSigned, ArchiveSigningKey, ArchiveVerifyingKey, HybridSignature,
-    HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT,
-    PURPOSE_CHECKPOINT_ARCHIVE, PURPOSE_MODULE_RECORD, RecordPurpose, RecordSignature,
-    RecordSigned, RecordSigningKey, RecordVerifyingKey, sign_archive, sign_hybrid, sign_record,
-    verify_archive, verify_hybrid, verify_record,
+    HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_ATTEST_CHALLENGE,
+    PURPOSE_ATTEST_SUMMARY, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT, PURPOSE_CHECKPOINT_ARCHIVE,
+    PURPOSE_MODULE_RECORD, RecordPurpose, RecordSignature, RecordSigned, RecordSigningKey,
+    RecordVerifyingKey, sign_archive, sign_ed25519_half, sign_hybrid, sign_record, verify_archive,
+    verify_hybrid, verify_record,
 };
 pub use verified::Verified;

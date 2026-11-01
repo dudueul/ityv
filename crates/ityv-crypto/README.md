@@ -9,7 +9,7 @@ ityv의 다른 모든 크레이트는 암호를 이 크레이트를 통해서만
 | 모듈 | 내용 | 명세 |
 |---|---|---|
 | `hash` | 도메인 분리 SHA3-512: 객체 해시, 서명 다이제스트, Fiat-Shamir, 해시-투-그룹 | ENCODING.md §4 |
-| `sig` | 하이브리드 서명(ML-DSA-87 **그리고** Ed25519), 기록 서명(Ed25519, `cast-record`/`module-record` 전용), 보존 서명(SLH-DSA-SHAKE-256s, `checkpoint-archive` 전용) | PROTOCOL.md §3.1, §7.2.1 |
+| `sig` | 하이브리드 서명(ML-DSA-87 **그리고** Ed25519), 고전 서명(Ed25519 단독, `cast-record`/`module-record`와 현장 증명의 `attest-challenge`/`attest-summary` 전용; 요약 QR은 증명 키의 Ed25519 절반으로 `sign_ed25519_half`), 보존 서명(SLH-DSA-SHAKE-256s, `checkpoint-archive` 전용) | PROTOCOL.md §3.1, §7.2.1 |
 | `kem` | ML-KEM-1024 **그리고** X25519 결합 KEM, `ChaCha20-Poly1305` 봉인 | PROTOCOL.md §9.6 |
 | `commit` | 일반화 Pedersen 커밋먼트, 자릿수 묶음·해제, 합계 열기 | PROTOCOL.md §7.4, §11.2 |
 | `orproof` | 1-of-(m+2) OR 표현 증명(Σ-프로토콜, Fiat-Shamir). `prove_into`는 호출자의 `Proof`에 제자리로 써서 20 KB 임시값을 만들지 않고 `prove`는 그 얇은 포장이다(같은 난수 소비, 같은 바이트). `Proof::EMPTY`는 컴파일 시간 상수라 호출자 메모리(정적 영역, 작업 영역)에 둘 수 있다. 투표와 무관한 일은 한가한 시간에 미리 할 수 있다(P6): `ProofPrecomputation::precompute`가 `prove_into`와 같은 순서로 모든 난수를 뽑고 커밋먼트에 의존하지 않는 공표값 조각(`z_{b,x}·G_id + z_{b,j}·H`, `α·G_id + β_j·H`)을 압축해 두며(최대 약 37 KB), `prove_precomputed`는 공표값마다 압축 해제 한 번과 스칼라 곱 한 번만 하고 같은 생성기라면 `prove_into`와 바이트까지 같은 증명을 낸다. 미리 계산한 값은 한 번만 쓰이고 쓰자마자 지워진다 | PROTOCOL.md §7.5, ADR-0017 개정 15, ADR-0020 결정 8·11 |

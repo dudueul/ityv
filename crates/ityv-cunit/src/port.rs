@@ -18,6 +18,7 @@
 use core::fmt;
 
 use ityv_crypto::{HybridSignature, RecordSignature};
+use ityv_encoding::Hash512;
 
 /// Why a module port call failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -145,6 +146,37 @@ pub trait ModulePort {
     /// [`PortError::Refused`] if the module's rule rejects the body after
     /// all; other variants on link failure.
     fn sign_batch(&mut self, body: &[u8]) -> Result<HybridSignature, PortError>;
+
+    /// The module's statement for a field attestation of the device
+    /// `device_id` answering `challenge` (the field encoding of the
+    /// attestation's `challenge`, ENCODING.md §8.28): the module's own boot
+    /// measurements and its hybrid signature by its attestation key
+    /// (purpose `module-attestation`) over the field encodings of
+    /// `device_id ‖ challenge ‖ module_id ‖ build ‖ image_hash ‖
+    /// boot_count` (PROTOCOL.md §7.9 step 4). No counter or pad changes.
+    /// The unit verifies the signature with the module's genesis
+    /// attestation key.
+    ///
+    /// # Errors
+    /// [`PortError`] on link failure or refusal.
+    fn attest(
+        &mut self,
+        device_id: &[u8],
+        challenge: &[u8],
+    ) -> Result<ModuleAttestation, PortError>;
+}
+
+/// A chamber module's answer to [`ModulePort::attest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleAttestation {
+    /// The module image's build number.
+    pub build: u64,
+    /// The module image's hash, measured at the module's boot.
+    pub image_hash: Hash512,
+    /// The module's boot counter.
+    pub boot_count: u32,
+    /// The module's hybrid signature over its statement.
+    pub sig: HybridSignature,
 }
 
 /// The sealed journal's durable storage.

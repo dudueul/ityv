@@ -68,6 +68,10 @@ pub const SLHDSA_SIG_LEN: usize = 29792;
 pub const PURPOSE_CAST_RECORD: Purpose<'static> = Purpose::from_literal(b"cast-record");
 /// Purpose of a module signature on `(body_hash, module_id, counter)`.
 pub const PURPOSE_MODULE_RECORD: Purpose<'static> = Purpose::from_literal(b"module-record");
+/// Purpose of an observer's signature on an attestation challenge.
+pub const PURPOSE_ATTEST_CHALLENGE: Purpose<'static> = Purpose::from_literal(b"attest-challenge");
+/// Purpose of the Ed25519 signature on an attestation summary QR.
+pub const PURPOSE_ATTEST_SUMMARY: Purpose<'static> = Purpose::from_literal(b"attest-summary");
 /// Purpose of the SLH-DSA co-signature on an archival checkpoint.
 pub const PURPOSE_CHECKPOINT_ARCHIVE: Purpose<'static> =
     Purpose::from_literal(b"checkpoint-archive");
@@ -376,13 +380,20 @@ pub fn verify_hybrid<'a>(
 // Record (Ed25519 only)
 // ---------------------------------------------------------------------------
 
-/// The two purposes a classical-only record signature may carry.
+/// The purposes a classical-only (Ed25519) signature may carry
+/// (PROTOCOL.md Appendix B): the record signatures, whose quantum-safe
+/// cover is the batch attestation, and the attestation QR signatures,
+/// whose hybrid counterpart is the ledger event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordPurpose {
     /// Device signature on a cast record body hash.
     CastRecord,
     /// Module signature on `(body_hash, module_id, counter)`.
     ModuleRecord,
+    /// An observer's check key on an attestation challenge.
+    AttestChallenge,
+    /// The attestation key's Ed25519 half on an attestation summary.
+    AttestSummary,
 }
 
 impl RecordPurpose {
@@ -392,6 +403,8 @@ impl RecordPurpose {
         match self {
             Self::CastRecord => PURPOSE_CAST_RECORD,
             Self::ModuleRecord => PURPOSE_MODULE_RECORD,
+            Self::AttestChallenge => PURPOSE_ATTEST_CHALLENGE,
+            Self::AttestSummary => PURPOSE_ATTEST_SUMMARY,
         }
     }
 }
@@ -576,6 +589,23 @@ pub fn sign_record(
 ) -> Result<RecordSignature, Error> {
     let digest = signing_digest(&purpose.purpose(), obj);
     let bytes = <Active as Ed25519Backend>::sign(&key.seed, digest.as_bytes())?;
+    Ok(RecordSignature { bytes })
+}
+
+/// Deterministically signs the digest of `(purpose, obj)` with the Ed25519
+/// half of a hybrid key alone, for a classical-only purpose (an
+/// attestation summary QR). It verifies with [`verify_record`] under the
+/// hybrid verifying key's Ed25519 part.
+///
+/// # Errors
+/// [`Error::Backend`] if the backend rejects the inputs.
+pub fn sign_ed25519_half(
+    key: &HybridSigningKey,
+    purpose: RecordPurpose,
+    obj: &[u8],
+) -> Result<RecordSignature, Error> {
+    let digest = signing_digest(&purpose.purpose(), obj);
+    let bytes = <Active as Ed25519Backend>::sign(&key.ed25519_seed, digest.as_bytes())?;
     Ok(RecordSignature { bytes })
 }
 

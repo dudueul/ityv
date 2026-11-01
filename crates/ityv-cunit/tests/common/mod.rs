@@ -43,12 +43,15 @@ use ityv_cunit::link::{
     SCHEMA_VISIT_END, VisitEnd,
 };
 use ityv_cunit::port::{
-    JournalError, JournalItem, JournalSink, JournalSource, ModulePort, PortError, Sealed, Staged,
-    StagingPort, module_may_sign_batch, module_may_sign_record,
+    JournalError, JournalItem, JournalSink, JournalSource, ModuleAttestation, ModulePort,
+    PortError, Sealed, Staged, StagingPort, module_may_sign_batch, module_may_sign_record,
 };
 use ityv_cunit::rules::{PAD_MAC_KEY_OFFSET, PAD_PLAINTEXT_OFFSET, PAD_TAG_KEY_OFFSET};
 use ityv_cunit::visit::{Decision, VisitWork};
 use ityv_cunit::{Bound, Choice};
+use ityv_encoding::{
+    AttestationChallenge, Decode, Encode, Ident, ModuleStatementMessage, Reader, Writer,
+};
 use ityv_encoding::{
     BallotStyleId, BatchAttestBody, BoxId, ElectionId, Hash512, ModuleId, SCHEMA_BATCH_ATTEST_BODY,
     SCHEMA_VERSION_1, Scalar32, StationId, TimeBucket, Token192, TrusteeId, decode_object,
@@ -421,6 +424,10 @@ pub(crate) struct MockModule {
     pub(crate) flip_label: bool,
     pub(crate) extra_rand: bool,
     pub(crate) fail_issue: bool,
+    /// Calls to `attest`, and its misbehaviour switches.
+    pub(crate) attests: usize,
+    pub(crate) wrong_attest_key: bool,
+    pub(crate) refuse_attest: bool,
 }
 
 impl MockModule {
@@ -479,6 +486,9 @@ impl MockModule {
             extra_tag: false,
             flip_label: false,
             extra_rand: false,
+            attests: 0,
+            wrong_attest_key: false,
+            refuse_attest: false,
             fail_issue: false,
         }
     }
@@ -635,6 +645,62 @@ impl ModulePort for MockModule {
         self.pending.retain(|&c| c > range.counter_last);
         Ok(sig)
     }
+
+    fn attest(
+        &mut self,
+        device_id: &[u8],
+        challenge: &[u8],
+    ) -> Result<ModuleAttestation, PortError> {
+        self.attests += 1;
+        if self.refuse_attest {
+            return Err(PortError::Refused);
+        }
+        let mut r = Reader::new(challenge);
+        let challenge = AttestationChallenge::decode(&mut r).map_err(|_| PortError::Transport)?;
+        let (build, image_hash, boot_count) = module_boot(self.chamber_code);
+        let message = ModuleStatementMessage {
+            device_id: Ident::new(device_id, 64).ok_or(PortError::Transport)?,
+            challenge,
+            module_id: ModuleId::new(self.id).unwrap(),
+            build,
+            image_hash,
+            boot_count,
+        };
+        let mut bytes = vec![0u8; message.encoded_len()];
+        let mut w = Writer::new(&mut bytes);
+        message.encode(&mut w).map_err(|_| PortError::Transport)?;
+        let key = module_attestation_key(if self.wrong_attest_key {
+            b"someone-else"
+        } else {
+            self.id
+        });
+        let purpose = Purpose::new(b"module-attestation").unwrap();
+        let sig =
+            sign_hybrid(&key, &purpose, &bytes, &mut rng(7)).map_err(|_| PortError::Transport)?;
+        Ok(ModuleAttestation {
+            build,
+            image_hash,
+            boot_count,
+            sig,
+        })
+    }
+}
+
+/// A mock module's boot measurements: build, image hash, boot count.
+pub(crate) fn module_boot(chamber_code: u8) -> (u64, Hash512, u32) {
+    (
+        100 + u64::from(chamber_code),
+        Hash512([chamber_code; 64]),
+        3,
+    )
+}
+
+/// A module's attestation key (image-bound in real hardware).
+pub(crate) fn module_attestation_key(id: &[u8]) -> HybridSigningKey {
+    let seed = token_from(b"attest", &[id]);
+    let mut s32 = [0u8; 32];
+    s32[..24].copy_from_slice(&seed);
+    HybridSigningKey::from_seeds(s32, [11; 32])
 }
 
 /// Mock modules for every configured module.

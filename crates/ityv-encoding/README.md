@@ -66,14 +66,17 @@ assert_eq!(decoded, frame);
 | 0x0007 | `BoxCloseBody`, `BoxCloseParts`, `CloseCounts` | §8.16 | 마감 불변식(VC-038)은 인코딩 규칙이 아니다 |
 | 0x001A | `BoxClose`, `Attestation`, `SignerRole` | §8.17 | 장치 서명 선택, 사무원 2·참관인 2(조직 2) |
 | 0x0019 / 0x000A | `SlipBody` / `Slip` | §8.18 | 방문당 하나, 추적코드 1–8개(중복 없음) |
+| 0x0023 / 0x0024 | `DeviceAttestationBody` / `DeviceAttestation` | §8.28–§8.29 | 장치 종류 1–10, 도전 경로 1·2, 구성 요소 1–16개(식별자 순, 중복 없음), 모듈 진술 0–7개(같은 모듈 두 번 없음). 구성 해시는 다시 계산하지 않는다(검증기의 일) |
+| 0x0025 | `AttestationSummary` | §8.30 | 서명 대상은 1–7번 필드(`SummaryParts`) |
+| — | `ChallengeMessage`, `ModuleStatementMessage` | §4, §8.19, §8.28 | 헤더 없는 서명 입력(참관인 도전값, 모듈 진술) |
 
-0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103은 `ityv-cunit`가 구현한다(ENCODING §6).
+0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103·0x0104·0x0105는 `ityv-cunit`가 구현한다(ENCODING §6).
 
 **본문 + 서명 묶음 규칙(ADR-0017 §2).** 자기 서명을 담는 이벤트는 본문 객체와 래퍼 객체로 나뉜다. 래퍼의 `body` 필드는 인코딩된 본문 객체 바이트 전체(헤더 포함)이고 서명 메시지는 정확히 그 바이트다. 래퍼 디코더는 본문을 그 스키마의 규칙으로 다시 디코딩하며, 본문 안의 오류 오프셋은 바깥 객체 기준으로 옮겨 보고한다(헤더 16 + 길이 접두 4 + 안쪽 오프셋). 서명과 본문은 입력에서 빌려 쓰며 복사하지 않으므로 4,691바이트 서명이나 22KB 본문이 스택에 복제되지 않는다.
 
 **오류 종류와 오프셋(ENCODING §8.20).** 디코더는 필드를 읽는 즉시 그 필드의 규칙을 검사하고 첫 위반에서 멈춘다. 개수에 하한이 있는 배열은 하한 미달을 `ValueOutOfRange`(개수 접두사 오프셋)로 보고한다: `CastRecordBody`·`SharePackage`의 커밋먼트(1 이상), `ChallengeOpeningBody`의 `rand`(1 이상), `MemberShare`의 `shares`(1 이상), `CastRecordBody`의 `module_counters`(1 이상), `ScanCountAttest`의 `observer_sigs`(2 이상). 집합 수준 불변식은 배열 전체를 읽은 뒤 그 배열의 개수 접두사 오프셋에서 `InvariantViolation`으로 보고한다: `CastRecord`·`BatchAttest`의 서명자 집합 불일치(거부 모듈의 서명 포함), `BatchAttestBody`의 구간에 없는 거부 모듈, `ScanCountAttest`의 참관인 조직 다양성, `BoxClose`의 사무원 2·서로 다른 조직의 참관인 2. 배열 안의 위반(`NotSorted`·`Duplicate`·범위)이 먼저 발견되면 그것이 우선한다. 필드 하나의 규칙은 그 필드 오프셋에서 보고한다: 숫자 범위(`proof_system_id`, `option_index > 63`, `transport_flags`, `chamber`, `transport`, KEM 항목의 0 아닌 `pad_id`·`pad_index`, `record_count`, `counter_first > counter_last`, `role`)는 `ValueOutOfRange`, 증명 머리부 불일치(`option_count ∈ 2..=64`, `chunk_count = ⌈option_count/9⌉`, 길이 공식, `chunk_count` = 커밋먼트 수), 모듈별 `rand` 개수 불일치, `MemberShare`의 모듈 없는 경우 0 아닌 `cid`·`tag`나 존재하는 `lab`은 `InvariantViolation`이다. 생성자(`new`)는 같은 규칙을 검사하되 집합 수준 오류와 개수 하한 미달을 오프셋 0의 `InvariantViolation`으로(`Option`을 돌려주는 생성자는 `None`으로) 보고한다.
 
-**최대 길이(헤더 포함, 모듈 7개·챔버 8개·추적코드 8개 기준, ADR-0019·ADR-0021).** `CastRecordBody` 21,570 · `CastRecord` 22,582 · `ChallengeOpeningBody` 3,094 · `ChallengeOpening` 7,805 · `SharePackage` 269,088 · `MemberShare` 1,942 · `BatchAttestBody` 1,366 · `BatchAttest` 39,394 · `ScanCountAttestBody` 248 · `ScanCountAttest` 19,580 · `BoxCloseBody` 961 · `BoxClose` 44,301 · `SlipBody` 676 · `Slip` 5,387.
+**최대 길이(헤더 포함, 모듈 7개·챔버 8개·추적코드 8개 기준, ADR-0019·ADR-0021).** `CastRecordBody` 21,570 · `CastRecord` 22,582 · `ChallengeOpeningBody` 3,094 · `ChallengeOpening` 7,805 · `SharePackage` 269,088 · `MemberShare` 1,942 · `BatchAttestBody` 1,366 · `BatchAttest` 39,394 · `ScanCountAttestBody` 248 · `ScanCountAttest` 19,580 · `BoxCloseBody` 961 · `BoxClose` 44,301 · `SlipBody` 676 · `Slip` 5,387 · `DeviceAttestationBody` 37,063(구성 요소 16·모듈 7; 현장 증명 스키마의 변이 80개 중 잡힘 55, 빌드 불가 25, 놓침 0) · `DeviceAttestation` 41,774 · `AttestationSummary` 388.
 
 ## 검증
 

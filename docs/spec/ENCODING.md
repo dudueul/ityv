@@ -57,6 +57,8 @@ offset  size  field
 - 보존 서명(SLH-DSA-SHAKE-256s)도 같은 64바이트 다이제스트를 서명하며 `purpose`를 FIPS 205 컨텍스트 문자열로 넘긴다. Ed25519는 다이제스트만 서명한다(컨텍스트 없음).
 - 서명·키·암호문의 인코딩은 길이 접두사 없는 고정폭 `[u8; N]`이다(§2). 서명 묶음 `HybridSig`는 `mldsa87: [u8; 4627] ‖ ed25519: [u8; 64]`(4,691바이트), 보존 서명은 `[u8; 29792]`다.
 
+- 헤더 없는 필드 묶음: 다음 세 용도는 객체가 아니라 필드의 정규 인코딩(§2)을 헤더 없이 이어 붙인 바이트열을 위 서명 메시지의 `obj`로 쓴다. `attest-challenge`(Ed25519만): `election_id ‖ station_id ‖ observer_id ‖ nonce`(§8.19). `module-attestation`(하이브리드): `device_id ‖ challenge ‖ module_id ‖ build ‖ image_hash ‖ boot_count`(§8.28). `attest-summary`(Ed25519만): `AttestationSummary`의 1–7번 필드(§8.30). 필드 묶음은 해시하거나 공표하지 않으며 서명 입력으로만 쓴다.
+
 서로 다른 용도의 서명을 재사용할 수 없도록 `purpose`가 다르면 메시지가 다르다. 같은 객체를 다른 선거에 재생할 수 없도록 모든 객체 본문은 `election_id: Ident<64>`를 첫 필드로 가진다.
 
 ## 5. 정규성 규칙 요약
@@ -344,7 +346,7 @@ offset  size  field
 
 `VisitEnd` (`schema_id` 0x0104): `election_id: Ident<64>` ‖ `ballot_count: u8`(1 이상 8 이하). 해석 유닛이 한 방문의 투표지를 다 보낸 뒤 보낸다. 커밋먼트 유닛은 `ballot_count`가 직전 `VisitEnd` 이후 받은 `Interpretation` 수와 다르면 그 방문을 결정 없이 격리한다(PROTOCOL §7.3). 해석 유닛은 불신 부품이라 방문 경계를 잘못 알려도 생기는 일은 결정 화면이 둘로 나뉘거나 방문이 격리되는 것뿐이다.
 
-`AttestChallenge` (`schema_id` 0x0105): `election_id: Ident<64>` ‖ `observer_id: Ident<64>` ‖ `nonce: [u8; 32]` ‖ `challenge_sig: [u8; 64]`(참관인 확인 키의 Ed25519 서명, purpose `attest-challenge`, 서명 대상은 `election_id ‖ station_id ‖ observer_id ‖ nonce`; `station_id`는 커밋먼트 유닛이 자기 설정에서 채운다). 해석 유닛은 확인 카드의 QR만 이 객체로 옮기며 다른 필드를 만들 수 없다. 커밋먼트 유닛은 `observer_id`가 genesis의 자기 투표소 참관인 토큰 목록에 없거나, 서명이 틀리거나, 열린 방문이 있거나(마지막 `VisitEnd` 뒤 받은 `Interpretation`이 있거나 대기 구역에 투표지가 있음), 직전 증명 뒤 30초가 지나지 않았으면 이 객체를 버리고 투표 상태를 바꾸지 않는다(PROTOCOL §7.9, VC-088).
+`AttestChallenge` (`schema_id` 0x0105): `election_id: Ident<64>` ‖ `observer_id: Ident<64>` ‖ `nonce: [u8; 32]` ‖ `challenge_sig: [u8; 64]`(참관인 확인 키의 Ed25519 서명, purpose `attest-challenge`. 서명 대상은 `election_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `observer_id: Ident<64>` ‖ `nonce: [u8; 32]`의 정규 인코딩을 헤더 없이 이어 붙인 바이트열이며(§4 헤더 없는 필드 묶음) `station_id`는 커밋먼트 유닛이 자기 설정에서 채운다). 참관인 토큰도 같은 네 값을 넘기며 경로만 다르다(§8.28 `path`). 해석 유닛은 확인 카드의 QR만 이 객체로 옮기며 다른 필드를 만들 수 없다. 커밋먼트 유닛은 `observer_id`가 genesis의 자기 투표소 참관인 토큰 목록에 없거나, 서명이 틀리거나, 열린 방문이 있거나(마지막 `VisitEnd` 뒤 받은 `Interpretation`이 있거나 대기 구역에 투표지가 있음), 직전 증명 뒤 30초가 지나지 않았으면 이 객체를 버리고 투표 상태를 바꾸지 않는다(PROTOCOL §7.9, VC-088).
 
 `ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C. N은 모듈이 없다) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
 
@@ -463,15 +465,15 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 |---|---|---|---|
 | 1 | `election_id` | `Ident<64>` | |
 | 2 | `device_id` | `Ident<64>` | genesis에 등록된 장치 |
-| 3 | `device_class` | `u8` | §8.26의 값 |
-| 4 | `challenge` | `{path: u8, observer_id: Ident<64>, nonce: [u8; 32], challenge_sig: [u8; 64]}` | `path` 1 토큰, 2 확인 카드 |
+| 3 | `device_class` | `u8` | §8.26의 값(1–10). 커밋먼트 유닛은 2 |
+| 4 | `challenge` | `{path: u8, observer_id: Ident<64>, nonce: [u8; 32], challenge_sig: [u8; 64]}` | `path` 1 토큰, 2 확인 카드(그 밖은 거부) |
 | 5 | `time_bucket` | `u64` | |
 | 6 | `boot_count` | `u32` | OTP 부팅 횟수 |
-| 7 | `components` | `Array<{component_id: Ident<64>, version: Ident<32>, build: u64, image_hash: Hash512}, 16>` | 부팅 때 잰 값, `component_id` 바이트 순 |
+| 7 | `components` | `Array<{component_id: Ident<64>, version: Ident<32>, build: u64, image_hash: Hash512}, 16>` | 부팅 때 잰 값, 1개 이상, `component_id` 바이트 순(중복 없음) |
 | 8 | `bundle_hash` | `Hash512` | 7에서 §8.26 규칙으로 계산 |
-| 9 | `modules` | `Array<{module_id: Ident<64>, build: u64, image_hash: Hash512, boot_count: u32, sig: [u8; 4691]}, 7>` | 챔버 모듈마다 같은 `challenge`와 `device_id`에 대해 모듈 증명 키로 서명한 진술(purpose `module-attestation`), 챔버 코드 순. 모듈이 없는 장치는 0개 |
+| 9 | `modules` | `Array<{module_id: Ident<64>, build: u64, image_hash: Hash512, boot_count: u32, sig: [u8; 4691]}, 7>` | 챔버 모듈마다 같은 `challenge`와 `device_id`에 대해 모듈 증명 키로 하이브리드 서명한 진술(purpose `module-attestation`), 챔버 코드 순, 같은 모듈 두 번 없음. 모듈이 없는 장치는 0개. 서명 대상은 `device_id: Ident<64>` ‖ `challenge`(4번 필드의 인코딩) ‖ `module_id: Ident<64>` ‖ `build: u64` ‖ `image_hash: Hash512` ‖ `boot_count: u32`의 정규 인코딩을 헤더 없이 이어 붙인 바이트열이다(§4) |
 
-투표에 관한 값(기록 수, 선택, 투함 ID, 가명, 저널 head)은 담지 않는다.
+투표에 관한 값(기록 수, 선택, 투함 ID, 가명, 저널 head)은 담지 않는다. 디코더는 `bundle_hash`를 다시 계산하지 않는다(해시는 암호 크레이트의 일이다). 검증기가 7번에서 다시 계산해 대조한다. 가장 큰 본문(64바이트 식별자, 구성 요소 16, 모듈 7)은 헤더 포함 37,063바이트다.
 
 ### 8.29 `DeviceAttestation` (`schema_id` 0x0024, `schema_version` 1)
 
@@ -493,7 +495,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 5 | `boot_count` | `u32` | |
 | 6 | `bundle_hash` | `Hash512` | |
 | 7 | `body_hash` | `Hash512` | 같은 증명의 `DeviceAttestationBody` 해시(나중에 게시판 이벤트와 대조) |
-| 8 | `summary_sig` | `[u8; 64]` | 증명 키의 Ed25519 부분 서명, purpose `attest-summary` |
+| 8 | `summary_sig` | `[u8; 64]` | 증명 키의 Ed25519 부분 서명, purpose `attest-summary`. 서명 대상은 1–7번 필드의 정규 인코딩을 헤더 없이 이어 붙인 바이트열(§4) |
 
 전체 크기는 약 450바이트로 QR 하나에 들어간다.
 

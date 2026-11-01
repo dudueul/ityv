@@ -123,6 +123,12 @@ fn every_enum_displays_a_distinct_text() {
         Error::VoterCodeDisabled,
         Error::EnvelopeCountProfile,
         Error::ForeignCloseToken,
+        Error::AttestationSetup,
+        Error::UnknownObserver,
+        Error::ChallengeSignature,
+        Error::AttestTooSoon,
+        Error::ModuleStatement,
+        Error::BootMeasurements,
     ];
     let texts: std::vec::Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
     distinct_nonempty(&texts);

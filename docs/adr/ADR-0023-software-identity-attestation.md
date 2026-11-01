@@ -45,4 +45,4 @@ ADR-0022가 연결을 "분리돼 있다"는 말 대신 기록으로 확인하게
 
 - VC-085 릴리스 목록의 형식과 서명, VC-086 부트 ROM 검증·롤백 방지·이미지 결속 증명 키, VC-087 화면 상시 표시와 개시·마감 출력, VC-088 현장 증명의 도전값·간격·내용, VC-089 투표함별 개시·마감 증명, VC-090 불일치 처리, VC-091 재현 빌드와 `BUILD_MISMATCH`.
 - 인증 시험: 다른 이미지로 부팅했을 때 등록 키로 검증되는 서명이 나오지 않음, 롤백 거부, 확인 카드 외 바이트 거부, 열린 방문 중 도전값 거부.
-- M5 검증기 단계 12, M8 부트 ROM과 OTP 설계, `ityv-encoding`의 증명 본문 인코딩, `ityv-cunit`의 `attest(challenge)` API(제공된 키로 서명만 하고 투표 상태를 건드리지 않음).
+- M5 검증기 단계 12, M8 부트 ROM과 OTP 설계, `ityv-encoding`의 증명 본문 인코딩, `ityv-cunit`의 `attest(challenge)` API(제공된 키로 서명만 하고 투표 상태를 건드리지 않음). 구현(2026-11-01): `ityv-encoding`의 0x0023–0x0025와 헤더 없는 서명 입력, `ityv-cunit`의 `AttestChallenge`(0x0105)와 `attest::Attestor`(ADR-0017 개정 24).

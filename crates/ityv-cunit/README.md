@@ -1,6 +1,6 @@
 # ityv-cunit
 
-> English summary: The trusted core of the casting scanner's commitment unit (ADR-0017 with its amendments, ADR-0019, ADR-0021). A `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate that turns one voter's visit (one to eight interpreted ballots) into every object the scanner emits. Per ballot: the generalized Pedersen commitments and their 1-of-(m+2) OR proof, the share package for the trustees (each secret split over the per-party access structure, sealed per member through the chamber module's one-time pad or the hybrid KEM), the device and module record signatures (verified against genesis keys) and the tracking code. Per visit: each position's bound entry (journal kind 9: its record hash and the counters it consumed) made durable before the next ballot, so a resume always knows every consumed counter; the cast-or-check decision, which exists only once every position carries its device and module record signatures (VC-068); the positions' decision entries and the decision entry with one fsync, before any paper moves (VC-054); per position in order the imprint command and imprint entry, the imprint-failure quarantine, or the signed opening of a checked ballot; out of district one label sticker with every envelope label of the visit; one slip listing the visit's cast tracking codes under one signature. A position's finished record and share package go to a host staging port as soon as it is bound; the unit keeps their hashes and re-checks the staged bytes before journaling or publishing them, so a full eight-ballot visit adds about 26 KB to the 30 KB ballot work area. The crate also keeps the box state: counter high-water marks, the sealed journal chain, batch attestations, scan-count bodies, a fault latch on a journal mismatch, the box close with the VC-038 verdict, and resume from the journal after a power loss with the four-case rule of PROTOCOL §7.3, asking each module with the dry-run batch check whether the ballot in flight consumed a counter before its bound entry, so the close's counter equation holds after any resume. Ordering rules are types and compile-fail doctests.
+> English summary: The trusted core of the casting scanner's commitment unit (ADR-0017 with its amendments, ADR-0019, ADR-0021). A `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate that turns one voter's visit (one to eight interpreted ballots) into every object the scanner emits. Per ballot: the generalized Pedersen commitments and their 1-of-(m+2) OR proof, the share package for the trustees (each secret split over the per-party access structure, sealed per member through the chamber module's one-time pad or the hybrid KEM), the device and module record signatures (verified against genesis keys) and the tracking code. Per visit: each position's bound entry (journal kind 9: its record hash and the counters it consumed) made durable before the next ballot, so a resume always knows every consumed counter; the cast-or-check decision, which exists only once every position carries its device and module record signatures (VC-068); the positions' decision entries and the decision entry with one fsync, before any paper moves (VC-054); per position in order the imprint command and imprint entry, the imprint-failure quarantine, or the signed opening of a checked ballot; out of district one label sticker with every envelope label of the visit; one slip listing the visit's cast tracking codes under one signature. A position's finished record and share package go to a host staging port as soon as it is bound; the unit keeps their hashes and re-checks the staged bytes before journaling or publishing them, so a full eight-ballot visit adds about 26 KB to the 30 KB ballot work area. The crate also keeps the box state: counter high-water marks, the sealed journal chain, batch attestations, scan-count bodies, a fault latch on a journal mismatch, the box close with the VC-038 verdict, and resume from the journal after a power loss with the four-case rule of PROTOCOL §7.3, asking each module with the dry-run batch check whether the ballot in flight consumed a counter before its bound entry, so the close's counter equation holds after any resume. Between visits it answers observers' field attestation challenges (ADR-0023): it checks the observer's signature against the station's token list, asks every chamber module for its signed statement, and signs the attestation and its QR summary with the device's attestation key, without touching any ballot or box state. Ordering rules are types and compile-fail doctests.
 
 ## 무엇인가
 
@@ -9,13 +9,14 @@
 | 모듈 | 내용 | 명세 |
 |---|---|---|
 | `config` | genesis에서 호스트가 만드는 선거 구성: 투표양식(최대 4,096개, ID 오름차순, 이진 탐색), 모듈(챔버당 하나, 최대 7개; 정당 챔버 P1…Pn(2 ≤ n ≤ 4)은 자체 모듈만 쓰고 위임하지 않으며 n 밖의 정당 챔버는 모듈도 구성원도 없음, J·A·C는 자체 또는 중립 위임, N은 없음)과 모듈 공개키(Ed25519 기록 키, 하이브리드 배치 키), 신뢰기관 명부, 접근구조, `VOTER_CODE`. 투표함 단위 패드 소비 `b`를 검증 시 고정한다 | ADR-0017 §2, §12, 개정 1·10·16·17, ADR-0019 |
-| `link` | 해석 유닛 링크 `Interpretation`(0x0101)과 방문 끝 알림 `VisitEnd`(0x0104), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–9), 방문 결정 다이제스트 `visit_digest` | ENCODING.md §8.19, ADR-0021 |
-| `port` | 호스트 trait `ModulePort`(발급 `issue(k)`, 패드 봉인, 기록 서명, 배치 구간 확인 `check_batch`, 배치 서명)·`JournalSink`(내구 추가와 미뤄 쓰기)·`JournalSource`(재개 시 읽기)·`StagingPort`(방문의 기록·share 패키지 보관), 모듈의 서명 규칙 `module_may_sign_batch`(VC-021)·`module_may_sign_record`(카운터당 본문 하나, VC-068) | ADR-0017 §3, §7–§8, 개정 6·11·18 |
+| `link` | 해석 유닛 링크 `Interpretation`(0x0101)과 방문 끝 알림 `VisitEnd`(0x0104), 현장 증명 도전값 `AttestChallenge`(0x0105), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–9), 방문 결정 다이제스트 `visit_digest` | ENCODING.md §8.19, ADR-0021 |
+| `port` | 호스트 trait `ModulePort`(발급 `issue(k)`, 패드 봉인, 기록 서명, 배치 구간 확인 `check_batch`, 배치 서명, 현장 증명 진술 `attest`)·`JournalSink`(내구 추가와 미뤄 쓰기)·`JournalSource`(재개 시 읽기)·`StagingPort`(방문의 기록·share 패키지 보관), 모듈의 서명 규칙 `module_may_sign_batch`(VC-021)·`module_may_sign_record`(카운터당 본문 하나, VC-068) | ADR-0017 §3, §7–§8, 개정 6·11·18 |
 | `rng` | SHA3-512 카운터 모드 생성기 `DeviceRng`(표 생성기: 장치 시드와 모든 모듈의 비공개 기여로 시드, 작업 영역 안에서 재시드; 서명 생성기: 장치 시드) | ADR-0017 §12 |
 | `ballot` | 표 작업 영역 `BallotWork`, 위치별 typestate `Interpreted → Issued → Committed → Built → bind`, share 패키지·투함 기록 | PROTOCOL.md §7.3 1–5단계, §9, 개정 3–5·18 |
 | `visit` | 방문 작업 영역 `VisitWork`, 방문 typestate `ReadyVisit → DecidedVisit → ProcessedVisit`, 결정과 저널, 각인 명령, 확인 공개, 라벨 스티커, 슬립, 방문 포기 | PROTOCOL.md §7.3 6–11단계, §7.7, §8, ADR-0021, 개정 18 |
 | `boxstate` | `OpenBox`: 카운터 최고값, 저널 사슬, 배치 마감(`BatchAttest`), 스캔 카운터 본문, 고장 고정, 마감(`BoxCloseBody` + 장치 서명 + VC-038 판정 + 투표함에 묶인 토큰), `ClosedBox` | PROTOCOL.md §7.2.1, §7.8, §10.2, 개정 5–9·19·22 |
 | `resume` | 저널에서 투표함과 마지막 방문의 상태를 복원하고, 모듈에 묶이기 전 발급이 있었는지 묻고, 재개 판정대로 항목을 덧붙임 | PROTOCOL.md §7.3 재개, §7.8, VC-069, 개정 20·23 |
+| `attest` | 현장 증명 `Attestor`: 참관인 도전값 확인(토큰 목록, 서명, 열린 방문 없음, 30초 간격), 모듈 진술 확인, 증명 본문·`DeviceAttestation`·`AttestationSummary` 작성과 서명 | PROTOCOL.md §7.9, ENCODING.md §8.19·§8.28–§8.30, ADR-0023, VC-088, 개정 24 |
 | `rules` | 순수 규칙(Kani 대상): 선택지 범위, 카운터 최고값, 패드 소비·인덱스, 배치·스캔 카운터 시점, 마감 불변식, 재개 판정 `resume_plan` | §7.2, §7.3, VC-021, VC-034, VC-038, VC-052, VC-069 |
 
 보장하는 것:
@@ -33,6 +34,7 @@
 - 저널 head가 다르면 투표함은 고장 상태로 고정되어 새 표, 배치, 스캔 카운터, 마감 서명을 모두 거부한다(VC-056, 개정 7).
 - 마감은 프로필과 봉투 수를 대조하고(관외·재외는 봉투·스티커 수와 회송용 봉투 교부·빈 봉투 회수 수가 필수, 관내는 없음; `EnvelopeCountProfile`) VC-038 전체를 판정한다: 관내 `paper_count == record_count + no_record_count`, 관외·재외 `paper_count == 0`·`sticker_count == visit_count`·`envelope_count == 교부 − 빈 봉투 회수`, 모든 함에서 `visit_count ≤ record_count ≤ 8·visit_count`. `visit_count`는 넣은 표가 하나 이상 남은 방문 수다. 마감 토큰은 서명한 `BoxCloseBody`의 해시를 담아 그 투표함만 닫는다.
 - 방문 포기(`OpenBox::abandon_visit`): 결정 전이면(결정이 위치 항목 일부를 쓴 뒤 실패한 경우 포함) 묶인 위치마다 그 기록 해시로 격리(3, 묶음 항목의 카운터)하고, 이어서 묶이기 전의 진행 중인 표가 카운터를 소비했으면 기록 없는 격리(3, 해시 0, 소비 카운터)를 쓴다. 결정 후면 각인 안 된 넣는 표와(관외에서 스티커 항목이 없으면) 넣은 표 전부를 기록 해시로 격리한다. 카운터를 하나도 소비하지 않은 표는 유권자에게 돌려준다.
+- 현장 증명(VC-088): `Attestor::attest`는 모듈에 묻기 전에 도전값의 선거, 열린 방문 없음, 직전 증명 뒤 30초(호스트의 단조 초 값, 믿지 않으며 간격 제한에만 쓰고 어디에도 쓰지 않음), 참관인이 투표소 토큰 목록에 있음, 참관인 서명(`attest-challenge`, `election_id ‖ station_id ‖ observer_id ‖ nonce`)을 확인한다. 하나라도 어긋나면 아무 모듈도 묻지 않고 간격 시계도 그대로다. 모듈 진술은 genesis의 모듈 증명 키로 확인한 뒤에만 싣는다(`ModuleStatement`). 투표함은 읽기만 하며 증명에는 투표에 관한 값이 없다.
 - 증명·비밀분산의 난수는 장치 시드와 모든 모듈 기여로 시드된 생성기에서만 나오므로 장치 혼자도, 모듈 하나도 그 난수를 정하지 못한다. 증명 생성은 `ityv-crypto`의 상수 시간 `prove_into`다(참 선택지로 분기하지 않음).
 
 ## 작업 영역 계약
@@ -73,7 +75,7 @@
 - 투표함 마감의 `record_set_root`는 호스트가 저널에서 계산해 넘기고 유닛은 그 값에 서명한다(개정 9). 공개 검증기가 공표된 기록과 배치 root로 대조한다(VC-027).
 - 마지막 배치 뒤 검증 폐기·격리로만 소비된 카운터는 `BatchAttest`에 들어가지 않는다. `BoxClose`의 `module_counters`와 해당 항목이 그 구간을 덮는다(PROTOCOL.md §7.2.1).
 - 증명 생성의 사전 계산(P6, `ityv_crypto::ProofPrecomputation`)은 이 유닛에서 쓰지 않는다(ADR-0020 결정 11). 증명 난수는 모듈 기여로 시드되므로(개정 4, §12) 모듈 발급 전에는 뽑을 수 없고, 지연보다 보안을 택했다. 모듈이 다음 표의 기여를 미리 발급하는 방식은 M8에서 하드웨어 실측 뒤에 평가한다.
-- `AttestChallenge`(0x0105) 디코딩과 현장 증명 `attest` API(ADR-0023)는 다음 라운드다.
+- 현장 증명의 부팅 측정값(부팅 횟수, 이미지 목록)과 장치 증명 키는 호스트(부트 ROM)가 넘기는 대로 믿는다. 유닛이 확인하는 것은 목록의 형식(1–16개, 식별자 순)뿐이며, 측정의 정직성은 부트 ROM과 기기 고유 비밀에 달려 있다(PROTOCOL §7.9 7항, M8).
 - 장치 키 보관(HSM)과 모듈 펌웨어(M8), 링크 전송, fsync, 인쇄는 범위 밖이다.
 
 ## 유도와 해시 규칙
@@ -118,12 +120,13 @@
 6. 배치 마감의 `host_head`는 저장 매체에서 다시 읽은 값이어야 한다. `OpenBox::journal_head`를 그대로 넘기면 VC-056 검사가 무의미해진다.
 7. 시간 구간은 단조 비감소로 준다(역행은 `TimeRegression`). 서명 연산마다 새 32바이트 시드를 `Signer::new(key, seed)`로 준다.
 8. 다음 방문 전에 `batch_due`를 확인해 배치를 닫고, `scan_count_due`면 스캔 카운터 본문을 만들어 참관인 서명을 받는다. 마감 전에 열린 배치를 닫는다.
-9. 재개(`OpenBox::resume`)에는 구성 순서의 모듈 포트를 넘긴다(구간 확인만 하고 상태를 바꾸지 않는다). 돌아온 `ResumePlan`대로 종이를 옮기고(함·반환 트레이, 폐기 슈트, 격리 봉투, 유권자에게 돌려줌, 보류), `incident`면 사건 이벤트로 기록한다. 확인 위치가 공개 없이 폐기 슈트로 가면 그것도 사건 이벤트로 남긴다.
-10. 투표양식 목록은 ID 바이트 오름차순으로 넘긴다(최대 4,096개, 슬라이스를 빌림).
-11. 마감은 `prepare_close` 뒤 같은 투표함의 토큰으로 `into_closed`를 부른다. 판정이 비어 있지 않으면 `HOLD_REVIEW`다.
-12. `is_faulted()`가 참이면 장치를 교체한다.
+9. 현장 증명은 방문과 방문 사이에 `Attestor::attest`로 한다. 도전값 객체(확인 카드는 해석 유닛이, 토큰은 호스트가 같은 네 값으로 만든다)와 경로, 부트 ROM의 측정값, 단조 초 값, 시간 구간, 구성 순서의 모듈 포트, 장치 증명 키의 `Signer`, `ATTEST_WORK_LEN` 작업 버퍼를 넘긴다. 돌아온 `DeviceAttestation`은 다음 송신 슬롯에 공개 이벤트로, `AttestationSummary`는 슬립 프린터로 QR 인쇄한다.
+10. 재개(`OpenBox::resume`)에는 구성 순서의 모듈 포트를 넘긴다(구간 확인만 하고 상태를 바꾸지 않는다). 돌아온 `ResumePlan`대로 종이를 옮기고(함·반환 트레이, 폐기 슈트, 격리 봉투, 유권자에게 돌려줌, 보류), `incident`면 사건 이벤트로 기록한다. 확인 위치가 공개 없이 폐기 슈트로 가면 그것도 사건 이벤트로 남긴다.
+11. 투표양식 목록은 ID 바이트 오름차순으로 넘긴다(최대 4,096개, 슬라이스를 빌림).
+12. 마감은 `prepare_close` 뒤 같은 투표함의 토큰으로 `into_closed`를 부른다. 판정이 비어 있지 않으면 `HOLD_REVIEW`다.
+13. `is_faulted()`가 참이면 장치를 교체한다.
 
-버퍼 크기: 표 작업 영역 `BallotWork` 하나(30,264바이트), 방문 작업 영역 `VisitWork` 하나(24,304바이트), 빌드 scratch `scratch_len(신뢰기관 수)`(신뢰기관당 3,542바이트), share 패키지 ≤ 269,088(빌드 버퍼, 결정 때 패키지를 다시 읽는 버퍼, 재개 패키지 버퍼), 기록 본문 ≤ 21,570, 기록 ≤ 22,582, 배치 작업 `BATCH_WORK_LEN`(76,922), 마감 작업 `CLOSE_WORK_LEN`(5,715), 검증 공개 ≤ 7,805, 슬립 ≤ 5,387, 보관 공간 ≤ 위치 8 × (기록 + 패키지).
+버퍼 크기: 표 작업 영역 `BallotWork` 하나(30,264바이트), 방문 작업 영역 `VisitWork` 하나(24,304바이트), 빌드 scratch `scratch_len(신뢰기관 수)`(신뢰기관당 3,542바이트), share 패키지 ≤ 269,088(빌드 버퍼, 결정 때 패키지를 다시 읽는 버퍼, 재개 패키지 버퍼), 기록 본문 ≤ 21,570, 기록 ≤ 22,582, 배치 작업 `BATCH_WORK_LEN`(76,922), 마감 작업 `CLOSE_WORK_LEN`(5,715), 검증 공개 ≤ 7,805, 슬립 ≤ 5,387, 보관 공간 ≤ 위치 8 × (기록 + 패키지), 현장 증명 작업 `ATTEST_WORK_LEN`(119,856: 모듈 서명 7개, 본문, 증명 객체, 요약).
 
 ## 검증
 
@@ -144,12 +147,13 @@ cargo build --locked -p ityv-cunit --target thumbv7em-none-eabihf   # no_std 빌
 | `tests/styles.rs` | 4,096개 투표양식 구성에서 처음·가운데·마지막 투표양식 조회와 투표, 모르는 투표양식, 정렬 안 됨·중복·초과 거부, 구성 크기 |
 | `tests/link.rs` | 링크 객체 배치와 디코더(`VisitEnd`, 저널 종류 1–9, 최대 길이), 구성 규칙(정당 챔버 모듈 필수·위임 금지, n 밖의 정당 챔버, 모듈 8개 거부), 계수 규칙과 모듈 서명 규칙 예, 재개 판정의 경우별 표, 속성 테스트 |
 | `tests/surface.rs` | 표시 문자열, 비밀을 담은 값의 `Debug`, 접근자, 경계값 |
+| `tests/attest.rs` | 현장 증명: 확인 카드·토큰 경로, 본문의 모든 필드와 구성 해시 재계산, 챔버 코드 순 모듈 진술과 그 서명, 증명 키 서명과 요약의 Ed25519 절반 서명, 투표함·저널·카운터 불변, 추적코드·저널 head 없음; 30초 간격(경계, 시계 역행, 시계 끝); 모듈에 묻기 전의 거부(목록 밖 참관인, 다른 키·바뀐 바이트의 서명, 다른 선거, 깨진 객체, 열린 방문); 틀린 모듈 진술·모듈 거부·잘못된 측정 목록·작은 버퍼·포트 수; 설정 검사(관찰자 순서·중복·개수, 모듈 키 수, 장치 ID 길이); 도전값 링크 객체 |
 
-Kani 하네스(9개): 선택지 범위, 카운터 판정, 네 번의 발급에 걸친 카운터 최고값(되돌아가지 않고 같은 카운터를 두 번 받지 않음), 패드 소비·인덱스 산술, 모듈 배치 서명 규칙, 배치·스캔 카운터 시점, VC-038 판정 전체(투표지 사건, 방문·봉투·스티커 수 포함)를 128비트 산술로 독립 기술한 명제와 대조하고, 재개 판정이 위치 8개까지의 모든 입력과 모듈의 두 답에 대해 정의되며 경우마다 약속을 지킴(경우 4는 아무것도 쓰지 않고 보류, 경우 1은 격리되지 않은 묶인 위치와 그 종이를 모두 격리하고 모듈이 발급했으면 그 카운터를 싣고 소비 없는 묶이지 않은 종이만 돌려줌, 경우 2·3을 적용하면 넣는 위치가 모두 처리되고 관외에서 스티커 없이 넣은 기록이 남지 않음, 각인 덧붙임은 관내 맨 앞 각인 종이만)을 증명한다.
+Kani 하네스(10개): 현장 증명의 30초 간격 규칙(128비트로 독립 기술한 식과 대조), 선택지 범위, 카운터 판정, 네 번의 발급에 걸친 카운터 최고값(되돌아가지 않고 같은 카운터를 두 번 받지 않음), 패드 소비·인덱스 산술, 모듈 배치 서명 규칙, 배치·스캔 카운터 시점, VC-038 판정 전체(투표지 사건, 방문·봉투·스티커 수 포함)를 128비트 산술로 독립 기술한 명제와 대조하고, 재개 판정이 위치 8개까지의 모든 입력과 모듈의 두 답에 대해 정의되며 경우마다 약속을 지킴(경우 4는 아무것도 쓰지 않고 보류, 경우 1은 격리되지 않은 묶인 위치와 그 종이를 모두 격리하고 모듈이 발급했으면 그 카운터를 싣고 소비 없는 묶이지 않은 종이만 돌려줌, 경우 2·3을 적용하면 넣는 위치가 모두 처리되고 관외에서 스티커 없이 넣은 기록이 남지 않음, 각인 덧붙임은 관내 맨 앞 각인 종이만)을 증명한다.
 
 ### 변이 테스트 결과
 
-묶음 항목(ADR-0021 결정 10) 반영 후(2026-11-01), 바뀐 `visit.rs`·`resume.rs`·`rules.rs`·`ballot.rs`·`boxstate.rs`·`link.rs`를 한 번에 돌렸다(`-f`, `--timeout 300`): 변이 770개 중 잡힘 603, 빌드 불가 162, 놓침 5(31분). 둘은 시험이 엉뚱한 이유(시간 구간 역행)로 실패하던 손상 저널 시험을 고쳐 잡았고(위치 항목 뒤·격리 뒤의 묶음 항목, 묶인 위치 너머의 빈 위치 항목), 셋은 동치 변이라 코드에서 없앴다: 모듈에 묻기 전의 `first <= mark` 검사(구간 확인 하나로 충분), 이상 종이일 때 모든 종이를 격리로 바꾸는 중복 호출, 진행 중인 표 항목 수의 중복 조건. 해당 함수만 다시 돌린 결과 변이 43개 중 잡힘 36, 빌드 불가 7, 놓침 0. 방문 단위 투입 때(같은 날) `error.rs`·`config.rs`와 그 밖의 파일도 놓침 0이었고, 바뀌지 않은 `port.rs`·`rng.rs`는 그 결과가 그대로다. 빌드 불가는 대부분 비공개 타입의 값을 기본값으로 바꾸는 변이다. 알려진 동치 변이는 없다.
+묶음 항목(ADR-0021 결정 10) 반영 후(2026-11-01), 바뀐 `visit.rs`·`resume.rs`·`rules.rs`·`ballot.rs`·`boxstate.rs`·`link.rs`를 한 번에 돌렸다(`-f`, `--timeout 300`): 변이 770개 중 잡힘 603, 빌드 불가 162, 놓침 5(31분). 둘은 시험이 엉뚱한 이유(시간 구간 역행)로 실패하던 손상 저널 시험을 고쳐 잡았고(위치 항목 뒤·격리 뒤의 묶음 항목, 묶인 위치 너머의 빈 위치 항목), 셋은 동치 변이라 코드에서 없앴다: 모듈에 묻기 전의 `first <= mark` 검사(구간 확인 하나로 충분), 이상 종이일 때 모든 종이를 격리로 바꾸는 중복 호출, 진행 중인 표 항목 수의 중복 조건. 해당 함수만 다시 돌린 결과 변이 43개 중 잡힘 36, 빌드 불가 7, 놓침 0. 현장 증명(개정 24) 반영 후 `attest.rs`·`link.rs`·`error.rs`와 `boxstate.rs`의 서명 도우미를 돌렸다: 변이 235개 중 잡힘 122, 빌드 불가 70, 놓침 43이었고 놓친 것은 모두 `attest.rs`의 버퍼 길이 상수 식이었다(버퍼가 커지거나 작아져도 시험 입력에서는 결과가 같다). 길이마다 가장 긴 필드 묶음의 인코딩 길이와 정확한 값을 단위 테스트로 고정한 뒤 `attest.rs`를 다시 돌려 변이 103개 중 잡힘 79, 빌드 불가 24, 놓침 0. 방문 단위 투입 때(같은 날) `error.rs`·`config.rs`와 그 밖의 파일도 놓침 0이었고, 바뀌지 않은 `port.rs`·`rng.rs`는 그 결과가 그대로다. 빌드 불가는 대부분 비공개 타입의 값을 기본값으로 바꾸는 변이다. 알려진 동치 변이는 없다.
 
 ### `Drop` 소거의 시험
 

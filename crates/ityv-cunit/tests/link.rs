@@ -892,6 +892,11 @@ proptest! {
         let _ = decode_object::<ModuleIssue<'_>>(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &bytes);
         let _ = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &bytes);
         let _ = decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &bytes);
+        let _ = decode_object::<ityv_cunit::AttestChallenge<'_>>(
+            ityv_cunit::link::SCHEMA_ATTEST_CHALLENGE,
+            SCHEMA_VERSION_1,
+            &bytes,
+        );
     }
 
     #[test]

@@ -36,6 +36,7 @@
     clippy::missing_panics_doc
 )]
 
+use crate::attest::{ATTEST_SPACING_SECONDS, spaced};
 use crate::error::Invariant;
 use crate::port::module_may_sign_batch;
 use crate::rules::{
@@ -141,6 +142,25 @@ fn module_batch_rule_is_exact() {
     let expected =
         first <= last && (len as u128) == (last as u128) - (first as u128) + 1 && contiguous;
     assert_eq!(module_may_sign_batch(slice, first, last), expected);
+}
+
+/// The attestation spacing (PROTOCOL.md §7.9, VC-088): the first
+/// attestation is always allowed; after one at `last`, another only at
+/// `last + 30` or later by the host's clock, compared in 128 bits so a
+/// clock at its end allows nothing more.
+#[kani::proof]
+fn attestation_spacing_is_exact() {
+    let last: Option<u64> = kani::any();
+    let now: u64 = kani::any();
+    let expected = match last {
+        None => true,
+        Some(last) => {
+            let earliest = u128::from(last) + u128::from(ATTEST_SPACING_SECONDS);
+            earliest <= u128::from(u64::MAX) && u128::from(now) >= earliest
+        }
+    };
+    assert_eq!(spaced(last, now), expected);
+    assert_eq!(ATTEST_SPACING_SECONDS, 30);
 }
 
 /// A batch is due once it has no room left for a full visit (more than

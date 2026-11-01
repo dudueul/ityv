@@ -170,6 +170,23 @@ pub enum Error {
     NothingCast,
     /// The close token belongs to another box.
     ForeignCloseToken,
+    /// The attestation setup is malformed: a device identifier longer than
+    /// 64 bytes, observers not strictly ascending or too many, or not one
+    /// attestation key per configured module.
+    AttestationSetup,
+    /// The challenge's observer is not on the station's token list.
+    UnknownObserver,
+    /// The observer's challenge signature does not verify.
+    ChallengeSignature,
+    /// Less than 30 seconds (by the host's untrusted clock) since the last
+    /// attestation.
+    AttestTooSoon,
+    /// A module's attestation statement does not verify with its genesis
+    /// attestation key.
+    ModuleStatement,
+    /// The boot measurements do not form a valid component list (none,
+    /// more than sixteen, or not strictly ascending).
+    BootMeasurements,
 }
 
 impl From<ityv_encoding::Error> for Error {
@@ -306,6 +323,12 @@ impl fmt::Display for Error {
             Self::LabelPending => f.write_str("the label sticker is still owed"),
             Self::NothingCast => f.write_str("nothing of the visit is cast"),
             Self::ForeignCloseToken => f.write_str("close token belongs to another box"),
+            Self::AttestationSetup => f.write_str("attestation setup malformed"),
+            Self::UnknownObserver => f.write_str("observer not on the station's token list"),
+            Self::ChallengeSignature => f.write_str("challenge signature does not verify"),
+            Self::AttestTooSoon => f.write_str("less than 30 seconds since the last attestation"),
+            Self::ModuleStatement => f.write_str("module attestation statement does not verify"),
+            Self::BootMeasurements => f.write_str("boot measurements malformed"),
         }
     }
 }

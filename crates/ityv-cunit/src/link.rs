@@ -7,6 +7,9 @@
 //!   issue request; its private part never leaves the link.
 //! * [`VisitEnd`] (schema 0x0104): the interpretation unit's notice that a
 //!   voter's visit has ended (ADR-0021).
+//! * [`AttestChallenge`] (schema 0x0105): an observer's signed challenge,
+//!   read from a check card or handed over by an observer token
+//!   (ADR-0023).
 //! * [`JournalEntry`] (schema 0x0014): one link of the sealed journal.
 //!
 //! Decoders apply the fixed-width rules of ENCODING.md and report the
@@ -14,9 +17,9 @@
 
 use ityv_crypto::Sha3Hasher;
 use ityv_encoding::{
-    BallotStyleId, Decode, ElectionId, Encode, Error as EncodingError, ErrorKind, Hash512,
-    MAX_CHUNKS, ModuleCounters, ModuleId, Reader, Scalar32, SchemaId, TAG_LEN, TimeBucket,
-    Token192, Writer,
+    BallotStyleId, Decode, ED25519_SIG_LEN, ElectionId, Encode, Error as EncodingError, ErrorKind,
+    Hash512, MAX_CHUNKS, ModuleCounters, ModuleId, NONCE_LEN, ObserverId, Reader, Scalar32,
+    SchemaId, TAG_LEN, TimeBucket, Token192, Writer,
 };
 use zeroize::Zeroize;
 
@@ -26,6 +29,8 @@ pub const SCHEMA_INTERPRETATION: SchemaId = SchemaId::new(0x0101);
 pub const SCHEMA_MODULE_ISSUE: SchemaId = SchemaId::new(0x0103);
 /// Schema identifier of [`VisitEnd`].
 pub const SCHEMA_VISIT_END: SchemaId = SchemaId::new(0x0104);
+/// Schema identifier of [`AttestChallenge`].
+pub const SCHEMA_ATTEST_CHALLENGE: SchemaId = SchemaId::new(0x0105);
 /// Schema identifier of [`JournalEntry`].
 pub const SCHEMA_JOURNAL_ENTRY: SchemaId = SchemaId::new(0x0014);
 
@@ -45,6 +50,8 @@ pub const MAX_MODULE_ISSUE_LEN: usize = 16 + 68 + 1 + 8 + 260 + 24 + 25 + 132;
 pub const MAX_INTERPRETATION_LEN: usize = 16 + 68 + 68 + 2;
 /// Maximum encoded length of a `VisitEnd` object, header included.
 pub const MAX_VISIT_END_LEN: usize = 16 + 68 + 1;
+/// Maximum encoded length of an `AttestChallenge` object, header included.
+pub const MAX_ATTEST_CHALLENGE_LEN: usize = 16 + 68 + 68 + 32 + 64;
 /// Maximum encoded length of a `JournalEntry` object, header included:
 /// 16 + 64 + 1 + 64 + 64 + (4 + 7·76) + 8.
 pub const MAX_JOURNAL_ENTRY_LEN: usize = 16 + 64 + 1 + 64 + 64 + 536 + 8;
@@ -171,6 +178,97 @@ impl<'a> Decode<'a> for VisitEnd<'a> {
         Self::new(election_id, r.read_u8()?)
             .ok_or_else(|| EncodingError::new(ErrorKind::ValueOutOfRange, count_at))
     }
+}
+
+/// `AttestChallenge` (schema 0x0105): an observer's challenge for a field
+/// attestation (ENCODING.md §8.19, PROTOCOL.md §7.9). The check card's QR
+/// or the observer token supplies all four fields; `challenge_sig` is the
+/// observer's Ed25519 signature (purpose `attest-challenge`) over the
+/// field encodings of `election_id ‖ station_id ‖ observer_id ‖ nonce`,
+/// with the station taken from the unit's own configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AttestChallenge<'a> {
+    election_id: ElectionId<'a>,
+    observer_id: ObserverId<'a>,
+    nonce: &'a [u8; NONCE_LEN],
+    challenge_sig: &'a [u8; ED25519_SIG_LEN],
+}
+
+impl<'a> AttestChallenge<'a> {
+    /// Builds a challenge.
+    #[must_use]
+    pub const fn new(
+        election_id: ElectionId<'a>,
+        observer_id: ObserverId<'a>,
+        nonce: &'a [u8; NONCE_LEN],
+        challenge_sig: &'a [u8; ED25519_SIG_LEN],
+    ) -> Self {
+        Self {
+            election_id,
+            observer_id,
+            nonce,
+            challenge_sig,
+        }
+    }
+
+    /// The election.
+    #[must_use]
+    pub const fn election_id(&self) -> ElectionId<'a> {
+        self.election_id
+    }
+
+    /// The observer.
+    #[must_use]
+    pub const fn observer_id(&self) -> ObserverId<'a> {
+        self.observer_id
+    }
+
+    /// The observer's random value.
+    #[must_use]
+    pub const fn nonce(&self) -> &'a [u8; NONCE_LEN] {
+        self.nonce
+    }
+
+    /// The observer's signature.
+    #[must_use]
+    pub const fn challenge_sig(&self) -> &'a [u8; ED25519_SIG_LEN] {
+        self.challenge_sig
+    }
+}
+
+impl Encode for AttestChallenge<'_> {
+    fn encoded_len(&self) -> usize {
+        self.election_id
+            .encoded_len()
+            .saturating_add(self.observer_id.encoded_len())
+            .saturating_add(NONCE_LEN)
+            .saturating_add(ED25519_SIG_LEN)
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodingError> {
+        self.election_id.encode(w)?;
+        self.observer_id.encode(w)?;
+        w.write_array(self.nonce)?;
+        w.write_array(self.challenge_sig)
+    }
+}
+
+impl<'a> Decode<'a> for AttestChallenge<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, EncodingError> {
+        let election_id = ElectionId::decode(r)?;
+        let observer_id = ObserverId::decode(r)?;
+        let nonce = read_borrowed::<NONCE_LEN>(r)?;
+        let challenge_sig = read_borrowed::<ED25519_SIG_LEN>(r)?;
+        Ok(Self::new(election_id, observer_id, nonce, challenge_sig))
+    }
+}
+
+/// Reads exactly `N` bytes and borrows them as a fixed array.
+fn read_borrowed<'a, const N: usize>(r: &mut Reader<'a>) -> Result<&'a [u8; N], EncodingError> {
+    let at = r.position();
+    r.take(N)?
+        .try_into()
+        .map_err(|_| EncodingError::new(ErrorKind::UnexpectedEnd, at))
 }
 
 /// `ModuleIssue` (schema 0x0103): a module's per-ballot contribution. The

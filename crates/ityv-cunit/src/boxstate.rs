@@ -23,7 +23,8 @@
 use core::fmt;
 
 use ityv_crypto::{
-    HybridSignature, HybridSigningKey, Purpose, object_hash, sign_hybrid, verify_hybrid,
+    HybridSignature, HybridSigningKey, Purpose, RecordPurpose, RecordSignature, object_hash,
+    sign_hybrid, verify_hybrid,
 };
 use ityv_encoding::{
     BatchAttest, BatchAttestBody, BatchAttestParts, BoxCloseBody, BoxCloseParts, CloseCounts,
@@ -95,6 +96,16 @@ impl<'k> Signer<'k> {
     #[must_use]
     pub const fn new(key: &'k HybridSigningKey, seed: &'k [u8; 32]) -> Self {
         Self { key, seed }
+    }
+
+    /// Signs `body` under the classical-only `purpose` with the Ed25519
+    /// half of the key alone (an attestation summary QR).
+    pub(crate) fn sign_ed25519_half(
+        &self,
+        purpose: RecordPurpose,
+        body: &[u8],
+    ) -> Result<RecordSignature, Error> {
+        Ok(ityv_crypto::sign_ed25519_half(self.key, purpose, body)?)
     }
 
     /// Signs `body` under `purpose` into `out`.

@@ -7,6 +7,7 @@
 //! the signatures, so the signed message is exactly the body bytes
 //! (ADR-0017 §2).
 
+pub mod attestation;
 pub mod authorization;
 pub mod batch_attest;
 pub mod box_close;
@@ -74,3 +75,12 @@ pub const SCHEMA_BOX_CLOSE: SchemaId = SchemaId::new(0x001A);
 
 /// `ScanCountAttest` (ENCODING.md §8.15, `0x001B`).
 pub const SCHEMA_SCAN_COUNT_ATTEST: SchemaId = SchemaId::new(0x001B);
+
+/// `DeviceAttestationBody` (ENCODING.md §8.28, `0x0023`).
+pub const SCHEMA_DEVICE_ATTESTATION_BODY: SchemaId = SchemaId::new(0x0023);
+
+/// `DeviceAttestation` (ENCODING.md §8.29, `0x0024`).
+pub const SCHEMA_DEVICE_ATTESTATION: SchemaId = SchemaId::new(0x0024);
+
+/// `AttestationSummary` (ENCODING.md §8.30, `0x0025`).
+pub const SCHEMA_ATTESTATION_SUMMARY: SchemaId = SchemaId::new(0x0025);
