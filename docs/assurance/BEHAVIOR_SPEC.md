@@ -472,3 +472,5 @@
 | 268, 269, 315, 316 | `Error::Mismatch`(다른 상자·선거의 개시·기록·마감·인계) | |
 | 017, 140(보강) | 훼손·오배송 기록은 `POSTAL` 분쟁의 `LegalDecisionRef` 집계 효과로만 처분(`RecordEvent::LegalDecision`, `Exclusion::LegalExcluded`), 판정 전 `TallyScope` 금지(`TallyReadiness::legal_resolved`) | VC-099 |
 | 047, 100(보강) | 늦은 마감·늦은 배치의 24시간 기한(`Error::LateWindow`), 사람이 센 네 수 비교 | VC-100 |
+| —(VC-102) | `progress::BoxStream`·`CheckinStream`(장치 키 토큰, 슬롯 하나, 누계 단조, 개시 전·마감 뒤 거부, 마감 수 대조, 교체 이어받기; `tests/progress.rs` `box_stream_*`, `checkin_stream_rules`, Kani `progress_stream_rules_are_exact`) | ADR-0027. 행 번호 없는 새 규칙 |
+| —(VC-103) | `progress::StationProgress`(음수·과다는 두 슬롯, 바닥은 조용한 두 슬롯과 바깥 장수; 조건의 한 구간에 한 번; 현장 확인 판정과 기한; 정지; `tests/progress.rs` `evaluator_matches_reference`(독립 참조 평가기), `findings`, `check_window_and_identity`, Kani `progress_alarms_fire_once_per_run`, `progress_out_is_exact`) | ADR-0027. 경보는 기록 상태를 바꾸지 않음 |

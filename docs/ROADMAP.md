@@ -34,7 +34,7 @@
 - 연결 감사(ADR-0022): 연결 목록 형식과 TCB 장치 한 방향성 검사, `UplinkSession` 사슬 재계산과 장치 출처 객체 포함 검사, 참관인 캡처 대조 도구, 통신사 기록 대조 형식(VC-077..083).
 - 미러 모드(전체·증분 동기화, 검증 후 재공표), 체크포인트 교환과 분기 증거 생성, 유권자 앱의 2곳 대조와 지문 표시(PROTOCOL §5.7, ADR-0018).
 - 새 검증 조건: 관외 봉투·스티커·방문 수(VC-038), 방문당 슬립의 코드 목록(VC-070), 카운터 유닛 교체의 순번 연속(VC-073), 감사 사유 코드 1·2의 전수 대조 존재(VC-074), 보고 단위별 합계와 `PaperCountReport` 대조(VC-075), `DuplicateIdentification` 형식(VC-076).
-- 투표 진행 기록(ADR-0027): `ityv-encoding`에 `BoxProgressBody`·`CheckinProgressBody`·`ProgressTick`·`ProgressCheckBody`(0x002F–0x0032)와 genesis `StationProgressPolicy`, 시험 벡터. `ityv-state`에 진행 기록 토큰 확인, 누계 단조·슬롯 하나·마감 대조(VC-102), 경보 판정과 현장 확인·보류 처리(VC-103). `ityv-cunit`의 슬롯별 `BoxProgress` 생성. 검증기와 참관인 앱의 진행·경보 화면(`docs/ui/SCREENS.md` §6.2).
+- 투표 진행 기록(ADR-0027) 코드(완료, 2026-11-01): `ityv-encoding`의 `BoxProgressBody`·`CheckinProgressBody`·`ProgressTick`·`ProgressCheckBody`(0x002F–0x0032), genesis `StationProgressPolicy`, `UnitId`, 시험 벡터 4개. `ityv-state`의 `progress`(장치 흐름 `BoxStream`·`CheckinStream`: 토큰 확인, 슬롯 하나, 누계 단조, 마감 대조, 교체 이어받기; 평가기 `StationProgress`: 음수·과다·바닥 경보, 현장 확인 판정, `PROGRESS_UNRESOLVED`·`CARRY_OUT`과 교부 번호 대조 깃발, 정지). `ityv-cunit`의 `OpenBox::progress_tick`·`ClosedBox::closing_tick`. 검증: 워크스페이스 테스트 485개, Kani 새 하네스 7개(인코딩 4, 상태 3: `out` 정확성, 흐름 규칙, 경보는 조건의 한 구간에 한 번), 독립 참조 평가기와의 속성 테스트, cargo-mutants 놓침 0(`ityv-state` 전체 589개, 인코딩 바뀐 파일 213개, `ityv-cunit` 바뀐 파일 128개). 남은 것: 검증기와 참관인 앱의 진행·경보 화면(`docs/ui/SCREENS.md` §6.2), genesis `stations[]`와 `ObserverCountAttest`의 정규 형.
 
 ## M6 시뮬레이터 `tools/ityv-sim`
 - 합성 선거 생성, 공격 주입(표갈이, 중복, 롤백, 분기, 은닉 채널), 모든 HOLD 경로 재현.

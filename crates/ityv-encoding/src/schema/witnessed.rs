@@ -19,12 +19,13 @@ use crate::schema::events::{
     BoxOpenedBody, CustodyHandoffBody, DisputeEventBody, FallbackBody, ImprintAuditBody,
     IssuanceCountBody, LateBatchCloseBody, LegalDecisionRefBody, SealChangeBody,
 };
+use crate::schema::progress::ProgressCheckBody;
 use crate::schema::util::{HYBRID_SIG_LEN, ascending_by, read_fixed};
 use crate::schema::{
     SCHEMA_BOX_OPENED_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_SEAL_CHANGE_BODY,
-    SCHEMA_VERSION_1,
+    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_PROGRESS_CHECK_BODY,
+    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1,
 };
 use crate::writer::Writer;
 
@@ -41,7 +42,7 @@ pub const MIN_EVENT_CLERKS: usize = 2;
 pub const MIN_EVENT_OBSERVER_ORGS: usize = 2;
 
 /// The body schemas a `WitnessedEvent` may carry.
-pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 9] = [
+pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 10] = [
     SCHEMA_CUSTODY_HANDOFF_BODY,
     SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_LEGAL_DECISION_REF_BODY,
@@ -51,6 +52,7 @@ pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 9] = [
     SCHEMA_IMPRINT_AUDIT_BODY,
     SCHEMA_SEAL_CHANGE_BODY,
     SCHEMA_LATE_BATCH_CLOSE_BODY,
+    SCHEMA_PROGRESS_CHECK_BODY,
 ];
 
 /// The signature purpose of a body schema (PROTOCOL.md Appendix B), or
@@ -67,6 +69,7 @@ pub fn purpose_of(schema: SchemaId) -> Option<&'static [u8]> {
         0x002C => b"imprint-audit",
         0x002D => b"seal-change",
         0x002E => b"late-batch-close",
+        0x0032 => b"progress-check",
         _ => return None,
     };
     Some(purpose)
@@ -186,7 +189,7 @@ where
 /// * `BoxOpened`: the device once, two or more clerks, observers of two or
 ///   more organisations, nothing else;
 /// * `Fallback`, `IssuanceCount`, `ImprintAudit`, `SealChange`,
-///   `LateBatchClose`: two or more clerks and observers of two or more
+///   `LateBatchClose`, `ProgressCheck`: two or more clerks and observers of two or more
 ///   organisations, nothing else;
 /// * `CustodyHandoff`: exactly one sender and one receiver;
 /// * `DisputeEvent`: exactly the commission and the committee;
@@ -198,7 +201,7 @@ where
 {
     match schema.get() {
         0x0029 => clerks_and_observers(sigs, Some(EventRole::Device)),
-        0x002A..=0x002E => clerks_and_observers(sigs, None),
+        0x002A..=0x002E | 0x0032 => clerks_and_observers(sigs, None),
         0x0008 => exactly(sigs, &[EventRole::Sender, EventRole::Receiver]),
         0x000E => exactly(sigs, &[EventRole::Commission, EventRole::Committee]),
         0x000F => exactly(sigs, &[EventRole::Authority]),
@@ -219,6 +222,7 @@ fn validate_body(schema: SchemaId, bytes: &[u8]) -> Result<(), Error> {
         0x002C => decode_object::<ImprintAuditBody<'_>>(schema, v, bytes).map(drop),
         0x002D => decode_object::<SealChangeBody<'_>>(schema, v, bytes).map(drop),
         0x002E => decode_object::<LateBatchCloseBody<'_>>(schema, v, bytes).map(drop),
+        0x0032 => decode_object::<ProgressCheckBody<'_>>(schema, v, bytes).map(drop),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }

@@ -273,6 +273,10 @@ pub struct SignerId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RouteId<'a>(Ident<'a>);
 
+/// Identifier of a check-in unit (카운터·가명 유닛, PROTOCOL.md §6.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UnitId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -327,3 +331,4 @@ ident_newtype!(ObserverId);
 ident_newtype!(OrgId);
 ident_newtype!(SignerId);
 ident_newtype!(RouteId);
+ident_newtype!(UnitId);
