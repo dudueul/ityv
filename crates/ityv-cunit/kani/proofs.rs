@@ -126,7 +126,7 @@ fn scan_count_trigger_is_exact() {
 /// Every close invariant of VC-038, for two modules and symbolic counts,
 /// against the statement written out in 128-bit arithmetic.
 #[kani::proof]
-#[kani::unwind(4)]
+#[kani::unwind(9)]
 fn close_verdict_is_exact() {
     let counters: [u64; 2] = kani::any();
     let absentee: Option<u64> = kani::any();

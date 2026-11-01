@@ -687,7 +687,7 @@ fn every_close_invariant_is_reported_on_its_own() {
     let check = |inputs: CloseInputs, invariant: Invariant| {
         let verdict = ityv_cunit::rules::close_verdict(&b.close_facts(&inputs));
         assert!(verdict.contains(invariant), "{invariant:?}");
-        assert_eq!(verdict.bits().count_ones(), 1, "{invariant:?}");
+        assert_eq!(verdict.count(), 1, "{invariant:?}");
     };
     assert!(ityv_cunit::rules::close_verdict(&b.close_facts(&good)).is_empty());
     check(CloseInputs { paper: 3, ..good }, Invariant::PaperCount);
@@ -735,7 +735,7 @@ fn an_open_batch_and_a_module_gap_are_reported_at_close() {
     };
     let verdict = ityv_cunit::rules::close_verdict(&b.close_facts(&inputs));
     assert!(verdict.contains(Invariant::OpenBatches));
-    assert_eq!(verdict.bits().count_ones(), 1);
+    assert_eq!(verdict.count(), 1);
     // A module that skips a counter: the unit records the counter it saw,
     // refuses the ballot, the module refuses the batch (its pending list
     // has a gap), and the close reports the counter mismatch.
@@ -778,5 +778,5 @@ fn an_open_batch_and_a_module_gap_are_reported_at_close() {
     };
     let verdict = ityv_cunit::rules::close_verdict(&b.close_facts(&inputs));
     assert!(verdict.contains(Invariant::ModuleCounters));
-    assert_eq!(verdict.bits().count_ones(), 1);
+    assert_eq!(verdict.count(), 1);
 }

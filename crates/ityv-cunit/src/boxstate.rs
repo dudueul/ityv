@@ -491,7 +491,9 @@ impl<'c> OpenBox<'c> {
         let modules = self.config.modules();
         let first = modules.first().ok_or(Error::Capacity)?;
         let mut refused = [false; MAX_MODULES];
-        loop {
+        // Each round either ends the search or adds a refusing module, so
+        // at most one round per module plus the final one is needed.
+        for _round in 0..=MAX_MODULES {
             let mut refused_ids = [first.module_id(); MAX_MODULES];
             let mut n_refused = 0usize;
             for (module, &is_refused) in modules.iter().zip(&refused) {
@@ -540,6 +542,7 @@ impl<'c> OpenBox<'c> {
                 return Ok((len, signed));
             }
         }
+        Err(Error::Overflow)
     }
 
     /// Closes the open batch (PROTOCOL.md §7.2.1): checks the journal head

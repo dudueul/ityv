@@ -101,17 +101,12 @@ impl DeviceRng {
     }
 
     fn fill(&mut self, dst: &mut [u8]) {
-        let mut remaining = dst;
-        while !remaining.is_empty() {
+        for byte in dst.iter_mut() {
             if self.used >= self.block.len() {
                 self.refill();
             }
-            let available = self.block.get(self.used..).unwrap_or(&[]);
-            let take = available.len().min(remaining.len());
-            let (head, tail) = remaining.split_at_mut(take);
-            head.copy_from_slice(available.get(..take).unwrap_or(&[]));
-            self.used = self.used.saturating_add(take);
-            remaining = tail;
+            *byte = self.block.get(self.used).copied().unwrap_or(0);
+            self.used = self.used.saturating_add(1);
         }
     }
 }

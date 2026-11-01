@@ -672,7 +672,7 @@ fn counting_rule_examples() {
     assert!(!rules::scan_count_due(0, u64::MAX, u64::MAX));
     let v = rules::Violations::default();
     assert!(v.is_empty());
-    assert_eq!(v.bits(), 0);
+    assert_eq!(v.count(), 0);
 }
 
 #[test]

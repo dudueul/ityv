@@ -115,47 +115,46 @@ pub struct CloseFacts<'a> {
     pub fallback_declared: bool,
 }
 
-/// The set of violated close invariants.
+/// The set of violated close invariants, one flag per [`Invariant`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Violations(u8);
+pub struct Violations([bool; 7]);
 
 impl Violations {
-    const fn bit(invariant: Invariant) -> u8 {
+    const fn index(invariant: Invariant) -> usize {
         match invariant {
-            Invariant::PaperCount => 1,
-            Invariant::AttestedCount => 1 << 1,
-            Invariant::SpoiledEnvelopes => 1 << 2,
-            Invariant::ModuleCounters => 1 << 3,
-            Invariant::OpenBatches => 1 << 4,
-            Invariant::EnvelopeCount => 1 << 5,
-            Invariant::FallbackDeclared => 1 << 6,
+            Invariant::PaperCount => 0,
+            Invariant::AttestedCount => 1,
+            Invariant::SpoiledEnvelopes => 2,
+            Invariant::ModuleCounters => 3,
+            Invariant::OpenBatches => 4,
+            Invariant::EnvelopeCount => 5,
+            Invariant::FallbackDeclared => 6,
         }
     }
 
-    const fn with(self, invariant: Invariant, violated: bool) -> Self {
-        if violated {
-            Self(self.0 | Self::bit(invariant))
-        } else {
-            self
+    fn with(mut self, invariant: Invariant, violated: bool) -> Self {
+        if let Some(flag) = self.0.get_mut(Self::index(invariant)) {
+            *flag = violated;
         }
+        self
     }
 
     /// `true` if `invariant` is violated.
     #[must_use]
-    pub const fn contains(self, invariant: Invariant) -> bool {
-        self.0 & Self::bit(invariant) != 0
+    pub fn contains(self, invariant: Invariant) -> bool {
+        self.0.get(Self::index(invariant)).copied().unwrap_or(false)
     }
 
     /// `true` if no invariant is violated (the close is not `HOLD_REVIEW`).
     #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.0 == 0
+    pub fn is_empty(self) -> bool {
+        !self.0.iter().any(|&flag| flag)
     }
 
-    /// The raw bit set, one bit per [`Invariant`] in declaration order.
+    /// The number of violated invariants.
     #[must_use]
-    pub const fn bits(self) -> u8 {
-        self.0
+    pub fn count(self) -> usize {
+        self.0.iter().filter(|&&flag| flag).count()
     }
 }
 

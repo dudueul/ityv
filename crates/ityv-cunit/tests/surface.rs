@@ -331,3 +331,207 @@ fn batch_index_counts_closed_batches() {
         assert_eq!(b.batch_index(), expected);
     }
 }
+
+#[test]
+fn configuration_boundaries_are_exact() {
+    use ityv_crypto::{Chamber, OptionCount};
+    use ityv_cunit::config::{
+        BallotStyle, ConfigParts, ElectionConfig, ModuleConfig, TrusteeConfig,
+    };
+    use ityv_encoding::{BallotStyleId, ModuleId};
+    let w = world(Profile::InPerson, false);
+    let ok = ConfigParts {
+        election_id: w.config.election_id(),
+        box_id: w.config.box_id(),
+        station_id: w.config.station_id(),
+        profile: w.config.profile(),
+        styles: w.config.styles(),
+        modules: w.config.modules(),
+        trustees: w.config.trustees(),
+        access: *w.config.access(),
+        voter_code_enabled: false,
+    };
+    let fault = |parts: ConfigParts<'static>| match ElectionConfig::new(parts) {
+        Err(Error::Config(fault)) => fault,
+        other => panic!("expected a configuration fault, got {other:?}"),
+    };
+    // a duplicate module identifier is not strictly ascending
+    let modules = w.config.modules();
+    let mut dup = modules.to_vec();
+    dup[1] = ModuleConfig::new(modules[0].module_id(), modules[1].chamber(), false);
+    assert_eq!(
+        fault(ConfigParts {
+            modules: common::leak(dup).as_slice(),
+            ..ok
+        }),
+        ConfigFault::ModulesUnsorted
+    );
+    // six modules pass the capacity rule and fail the one-per-chamber rule
+    let six: std::vec::Vec<_> = (0..6u8)
+        .map(|i| {
+            let chamber = [
+                Chamber::A,
+                Chamber::C,
+                Chamber::J,
+                Chamber::J,
+                Chamber::X,
+                Chamber::Y,
+            ][usize::from(i)];
+            ModuleConfig::new(
+                ModuleId::new(common::leak_bytes(std::vec![b'm', b'0' + i])).unwrap(),
+                chamber,
+                false,
+            )
+        })
+        .collect();
+    assert_eq!(
+        fault(ConfigParts {
+            modules: common::leak(six).as_slice(),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // a duplicate trustee identifier
+    let trustees = w.config.trustees();
+    let mut dup = trustees.to_vec();
+    let t = trustees[0];
+    dup[1] = TrusteeConfig::new(
+        t.trustee_id(),
+        trustees[1].chamber(),
+        trustees[1].member_index(),
+        t.pad_id(),
+        t.kem_public_key(),
+    );
+    assert_eq!(
+        fault(ConfigParts {
+            trustees: common::leak(dup).as_slice(),
+            ..ok
+        }),
+        ConfigFault::TrusteesUnsorted
+    );
+    // member index n with index n−1 missing
+    let gap: std::vec::Vec<_> = trustees
+        .iter()
+        .map(|t| {
+            let index = if t.member_index() == 1 { 2 } else { 0 };
+            TrusteeConfig::new(
+                t.trustee_id(),
+                t.chamber(),
+                index,
+                t.pad_id(),
+                t.kem_public_key(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        fault(ConfigParts {
+            trustees: common::leak(gap).as_slice(),
+            ..ok
+        }),
+        ConfigFault::MemberIndices
+    );
+    // 64 trustees pass the capacity rule; 65 do not
+    let key = trustees[0].kem_public_key();
+    let many = |n: u8| -> &'static [TrusteeConfig<'static>] {
+        let v: std::vec::Vec<_> = (0..n)
+            .map(|i| {
+                let id = common::leak_bytes(std::vec![b't', b'0' + i / 10, b'0' + i % 10]);
+                TrusteeConfig::new(
+                    ityv_encoding::TrusteeId::new(id).unwrap(),
+                    Chamber::X,
+                    i,
+                    0,
+                    key,
+                )
+            })
+            .collect();
+        common::leak(v).as_slice()
+    };
+    assert_eq!(
+        fault(ConfigParts {
+            trustees: many(64),
+            ..ok
+        }),
+        ConfigFault::MemberIndices
+    );
+    assert_eq!(
+        fault(ConfigParts {
+            trustees: many(65),
+            ..ok
+        }),
+        ConfigFault::TrusteesUnsorted
+    );
+    // 64 styles are accepted
+    let styles: std::vec::Vec<_> = (0..64u8)
+        .map(|i| {
+            let id = common::leak_bytes(std::vec![b's', b'0' + i / 10, b'0' + i % 10]);
+            BallotStyle::new(
+                BallotStyleId::new(id).unwrap(),
+                OptionCount::new(4).unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        ElectionConfig::new(ConfigParts {
+            styles: common::leak(styles).as_slice(),
+            ..ok
+        })
+        .is_ok()
+    );
+    // neutral flags
+    assert!(modules.iter().any(|m| !m.is_neutral()));
+    assert!(modules.iter().any(ModuleConfig::is_neutral));
+}
+
+#[test]
+fn chamber_code_five_is_a_module_chamber() {
+    use ityv_cunit::link::{
+        MAX_MODULE_ISSUE_LEN, ModuleIssue, ModuleIssueParts, SCHEMA_MODULE_ISSUE,
+    };
+    use ityv_encoding::{ModuleId, Scalar32, Token192, encode_object};
+    let rand = [Scalar32([1; 32])];
+    let issue = ModuleIssue::new(&ModuleIssueParts {
+        module_id: ModuleId::new(b"mod-c").unwrap(),
+        chamber: 5,
+        counter: 1,
+        rand: &rand,
+        cid: Token192([2; 24]),
+        lab: None,
+        tags: &[],
+    })
+    .unwrap();
+    let mut out = [0u8; MAX_MODULE_ISSUE_LEN];
+    let len = encode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &issue, &mut out).unwrap();
+    let parsed: ModuleIssue<'_> =
+        decode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &out[..len]).unwrap();
+    assert_eq!(parsed.chamber(), 5);
+    assert!(parsed.tags().is_empty());
+}
+
+#[test]
+fn scan_count_accepts_the_bucket_of_the_last_entry_and_verdicts_report_violations() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(4));
+    let mut work = std::vec![0u8; 512];
+    assert!(b.scan_count_body(tb(4), &mut work).is_ok());
+    let counters = [1u64];
+    let facts = ityv_cunit::rules::CloseFacts {
+        paper: 1,
+        records: 0,
+        attested: 0,
+        open_batch_records: 0,
+        without_record: 0,
+        challenged: 0,
+        quarantined: 0,
+        spoiled_envelopes: 0,
+        module_final_counters: &counters,
+        open_batches: 0,
+        absentee_envelopes: None,
+        fallback_declared: false,
+    };
+    let v = ityv_cunit::rules::close_verdict(&facts);
+    assert!(!v.is_empty());
+    assert_eq!(v.count(), 2);
+    assert!(v.contains(Invariant::PaperCount));
+    assert!(v.contains(Invariant::ModuleCounters));
+}
