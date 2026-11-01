@@ -102,6 +102,16 @@ pub enum Error {
     Overflow,
     /// A chamber code or index outside the fixed capacities.
     Capacity,
+    /// A ballot is already in flight; the scanner handles one at a time.
+    BallotInFlight,
+    /// No ballot is in flight.
+    NoBallotInFlight,
+    /// The ballot is not the one in flight (it was quarantined or replaced).
+    StaleBallot,
+    /// A time bucket is earlier than the last journaled one.
+    TimeRegression,
+    /// Slips are printed only when the `VOTER_CODE` scope is active.
+    VoterCodeDisabled,
 }
 
 impl From<ityv_encoding::Error> for Error {
@@ -144,7 +154,9 @@ impl fmt::Display for ConfigFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::ModulesUnsorted => "modules not strictly ascending or more than six",
-            Self::ChamberModules => "chamber module assignment violates X/Y mandatory, N none, one per chamber",
+            Self::ChamberModules => {
+                "chamber module assignment violates X/Y mandatory, N none, one per chamber"
+            }
             Self::TrusteesUnsorted => "trustees not strictly ascending or more than 64",
             Self::MemberIndices => "member indices of a chamber are not 0..n",
             Self::ThresholdCount => "trustee count of a chamber differs from its threshold n",
@@ -185,19 +197,30 @@ impl fmt::Display for Error {
             Self::WrongModule => f.write_str("module issue names another module"),
             Self::WrongChamber => f.write_str("module issue names another chamber"),
             Self::CounterGap => f.write_str("module counter is not the previous plus one"),
-            Self::ChunkCountMismatch => f.write_str("module randomness count differs from chunk count"),
-            Self::LabelPresence => f.write_str("envelope label presence disagrees with the profile"),
+            Self::ChunkCountMismatch => {
+                f.write_str("module randomness count differs from chunk count")
+            }
+            Self::LabelPresence => {
+                f.write_str("envelope label presence disagrees with the profile")
+            }
             Self::TagCount => f.write_str("module tag count differs from the member count"),
             Self::PadIdMismatch => f.write_str("pad identifier differs from the trustee's"),
             Self::PadIndexMismatch => f.write_str("pad index is not counter times the consumption"),
             Self::RecordSignature => f.write_str("module record signature unavailable"),
-            Self::JournalMismatch => f.write_str("journal head differs from the host's re-read head"),
+            Self::JournalMismatch => {
+                f.write_str("journal head differs from the host's re-read head")
+            }
             Self::BatchEmpty => f.write_str("batch is empty"),
             Self::BatchFull => f.write_str("batch holds 64 records"),
             Self::BoxClosed => f.write_str("box is closed"),
             Self::InvalidPurpose => f.write_str("purpose literal rejected"),
             Self::Overflow => f.write_str("arithmetic bound exceeded"),
             Self::Capacity => f.write_str("fixed capacity exceeded"),
+            Self::BallotInFlight => f.write_str("a ballot is already in flight"),
+            Self::NoBallotInFlight => f.write_str("no ballot is in flight"),
+            Self::StaleBallot => f.write_str("ballot is not the one in flight"),
+            Self::TimeRegression => f.write_str("time bucket earlier than the journal's last"),
+            Self::VoterCodeDisabled => f.write_str("voter code scope is not active"),
         }
     }
 }

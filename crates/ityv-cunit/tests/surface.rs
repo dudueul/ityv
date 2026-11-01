@@ -1,0 +1,333 @@
+//! The small public surfaces: debug and display text, accessors, and every
+//! operation refused after close.
+// Integration-test crate: outside the TCB. Tests express "this must hold"
+// with unwrap/expect/panic/indexing and small arithmetic on test sizes,
+// so these lints are relaxed for this file only (CONSTITUTION.md §1.1).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::too_many_lines,
+    clippy::missing_panics_doc,
+    clippy::many_single_char_names
+)]
+
+mod common;
+
+use std::collections::BTreeSet;
+use std::format;
+use std::string::String;
+
+use common::{Buffers, MemJournal, STYLE_SMALL, interpretation, mocks, ports, world};
+use ityv_cunit::boxstate::{BATCH_WORK_LEN, CLOSE_WORK_LEN, CloseInputs, OpenBox};
+use ityv_cunit::config::Profile;
+use ityv_cunit::error::{ConfigFault, Invariant};
+use ityv_cunit::{Error, JournalError, PortError};
+use ityv_encoding::{
+    BoxCloseBody, CastRecord, CastRecordBody, Hash512, SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD,
+    SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, TimeBucket, decode_object,
+};
+
+const SEED: [u8; 32] = [11; 32];
+
+fn tb(n: u64) -> TimeBucket {
+    TimeBucket::new(n)
+}
+
+fn distinct_nonempty(texts: &[String]) {
+    assert!(texts.iter().all(|t| !t.is_empty()));
+    let set: BTreeSet<&String> = texts.iter().collect();
+    assert_eq!(set.len(), texts.len(), "{texts:?}");
+}
+
+#[test]
+fn every_enum_displays_a_distinct_text() {
+    distinct_nonempty(
+        &[
+            ConfigFault::ModulesUnsorted,
+            ConfigFault::ChamberModules,
+            ConfigFault::TrusteesUnsorted,
+            ConfigFault::MemberIndices,
+            ConfigFault::ThresholdCount,
+            ConfigFault::Styles,
+            ConfigFault::SecretCapacity,
+        ]
+        .map(|f| format!("{f}")),
+    );
+    distinct_nonempty(
+        &[
+            Invariant::PaperCount,
+            Invariant::AttestedCount,
+            Invariant::SpoiledEnvelopes,
+            Invariant::ModuleCounters,
+            Invariant::OpenBatches,
+            Invariant::EnvelopeCount,
+            Invariant::FallbackDeclared,
+        ]
+        .map(|i| format!("{i}")),
+    );
+    distinct_nonempty(
+        &[
+            PortError::Exhausted,
+            PortError::Refused,
+            PortError::Transport,
+            PortError::BufferTooSmall,
+        ]
+        .map(|e| format!("{e}")),
+    );
+    distinct_nonempty(&[JournalError::NotDurable, JournalError::Full].map(|e| format!("{e}")));
+    let errors = [
+        Error::Encoding(ityv_encoding::Error::new(
+            ityv_encoding::ErrorKind::BadMagic,
+            0,
+        )),
+        Error::Crypto(ityv_crypto::Error::InvalidPoint),
+        Error::Ledger(ityv_ledger::Error::Capacity),
+        Error::Port(PortError::Exhausted),
+        Error::Journal(JournalError::Full),
+        Error::Config(ConfigFault::Styles),
+        Error::BufferTooSmall,
+        Error::WrongElection,
+        Error::UnknownBallotStyle,
+        Error::OptionOutOfRange,
+        Error::PortCount,
+        Error::WrongModule,
+        Error::WrongChamber,
+        Error::CounterGap,
+        Error::ChunkCountMismatch,
+        Error::LabelPresence,
+        Error::TagCount,
+        Error::PadIdMismatch,
+        Error::PadIndexMismatch,
+        Error::RecordSignature,
+        Error::JournalMismatch,
+        Error::BatchEmpty,
+        Error::BatchFull,
+        Error::BoxClosed,
+        Error::InvalidPurpose,
+        Error::Overflow,
+        Error::Capacity,
+        Error::BallotInFlight,
+        Error::NoBallotInFlight,
+        Error::StaleBallot,
+        Error::TimeRegression,
+        Error::VoterCodeDisabled,
+    ];
+    let texts: std::vec::Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
+    distinct_nonempty(&texts);
+    // wrapped errors show the inner text
+    assert!(
+        format!("{}", Error::Config(ConfigFault::Styles))
+            .contains(&format!("{}", ConfigFault::Styles))
+    );
+    assert!(format!("{}", Error::Port(PortError::Exhausted)).contains("pad exhausted"));
+    assert!(format!("{}", Error::Journal(JournalError::Full)).contains("full"));
+    let e: &dyn core::error::Error = &Error::BoxClosed;
+    assert!(e.source().is_none());
+}
+
+#[test]
+fn ballots_debug_print_only_the_ticket() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w, 1);
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .unwrap();
+    let text = format!("{ballot:?}");
+    assert!(text.starts_with("Ballot"));
+    assert!(text.contains("ticket: 1"));
+    let issued = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+    let text = format!("{issued:?}");
+    assert!(text.contains("ticket: 1"));
+    assert!(!text.contains("rand"));
+    assert!(!text.contains("cid"));
+}
+
+#[test]
+fn built_and_durable_accessors_expose_the_written_objects() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w, 1);
+    let mut j = MemJournal::default();
+    let mut bufs = Buffers::new(&w);
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .unwrap();
+    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+    let ballot = ballot.commit(&b).unwrap();
+    let ballot = ballot
+        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let body = ballot.body_bytes().to_vec();
+    let record = ballot.record_bytes().to_vec();
+    let _: CastRecordBody<'_> =
+        decode_object(SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, &body).unwrap();
+    let parsed: CastRecord<'_> =
+        decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, &record).unwrap();
+    assert_eq!(parsed.body_bytes(), body.as_slice());
+    assert_eq!(ballot.tracking_code(), &ityv_crypto::object_hash(&body));
+    let durable = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
+    assert_eq!(durable.record_bytes(), record.as_slice());
+    assert_eq!(durable.tracking_code(), &ityv_crypto::object_hash(&body));
+    durable.imprinted(&mut b).unwrap();
+    assert_eq!(b.config().election_id().as_bytes(), b"E-2026");
+}
+
+#[test]
+fn a_close_with_an_open_batch_reports_it_in_the_body() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w, 1);
+    let mut j = MemJournal::default();
+    let mut bufs = Buffers::new(&w);
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .unwrap();
+    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+    let ballot = ballot.commit(&b).unwrap();
+    let ballot = ballot
+        .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+        .unwrap();
+    let code = *ballot.tracking_code();
+    ballot
+        .cast(&mut b, &mut j, tb(1))
+        .unwrap()
+        .imprinted(&mut b)
+        .unwrap();
+    let inputs = CloseInputs {
+        paper: 1,
+        without_record: 0,
+        spoiled_envelopes: 0,
+        absentee_envelopes: None,
+        fallback_declared: false,
+        record_set_root: ityv_ledger::merkle::sorted_set_root(&[code]).unwrap(),
+        seal_digest: Hash512([1; 64]),
+    };
+    let mut work = std::vec![0u8; CLOSE_WORK_LEN];
+    let out = b
+        .prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(2), &mut work)
+        .unwrap();
+    assert!(out.verdict.contains(Invariant::OpenBatches));
+    let body: BoxCloseBody<'_> =
+        decode_object(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, out.body).unwrap();
+    assert_eq!(body.open_batches(), 1);
+    assert_eq!(body.counts().records, 1);
+    assert_eq!(body.counts().attested, 0);
+    assert_eq!(body.time_bucket(), tb(2));
+    assert_eq!(body.seal_digest(), &Hash512([1; 64]));
+    let token = out.token;
+    // nothing else is accepted once the close entry is written
+    let head = *b.journal_head();
+    let mut bw = std::vec![0u8; BATCH_WORK_LEN];
+    assert_eq!(
+        b.close_batch(
+            &head,
+            &mut ports(&mut m),
+            &w.device_hybrid,
+            &SEED,
+            &mut j,
+            tb(2),
+            &mut bw
+        )
+        .unwrap_err(),
+        Error::BoxClosed
+    );
+    let mut sw = std::vec![0u8; 512];
+    assert_eq!(
+        b.scan_count_body(tb(2), &mut sw).unwrap_err(),
+        Error::BoxClosed
+    );
+    let closed = b.into_closed(token);
+    assert_eq!(closed.config().box_id().as_bytes(), b"BOX-1");
+}
+
+#[test]
+fn close_needs_room_and_no_ballot_in_flight() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut j = MemJournal::default();
+    let inputs = CloseInputs {
+        paper: 0,
+        without_record: 0,
+        spoiled_envelopes: 0,
+        absentee_envelopes: None,
+        fallback_declared: false,
+        record_set_root: Hash512::ZERO,
+        seal_digest: Hash512::ZERO,
+    };
+    let mut small = std::vec![0u8; 100];
+    assert_eq!(
+        b.prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(1), &mut small)
+            .unwrap_err(),
+        Error::BufferTooSmall
+    );
+    let _ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+        .unwrap();
+    let mut work = std::vec![0u8; CLOSE_WORK_LEN];
+    assert_eq!(
+        b.prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(1), &mut work)
+            .unwrap_err(),
+        Error::BallotInFlight
+    );
+    b.quarantine_in_flight(&mut j, tb(1)).unwrap();
+    let out = b
+        .prepare_close(&inputs, &w.device_hybrid, &SEED, &mut j, tb(1), &mut work)
+        .unwrap();
+    assert!(out.verdict.is_empty());
+    assert_eq!(j.entries.len(), 1);
+}
+
+#[test]
+fn work_buffer_sizes_are_exact() {
+    assert_eq!(ityv_cunit::boxstate::MAX_BATCH_ATTEST_LEN, 34_483);
+    assert_eq!(BATCH_WORK_LEN, 7 * 4691 + 34_483);
+    assert_eq!(BATCH_WORK_LEN, 67_320);
+    assert_eq!(CLOSE_WORK_LEN, 1024 + 4691);
+    assert_eq!(ityv_cunit::ballot::MAX_MEMBER_SHARE_LEN, 1686);
+    assert_eq!(ityv_cunit::ballot::SCRATCH_SLOT_LEN, 1600 + 1686);
+    assert_eq!(ityv_cunit::link::MAX_MODULE_ISSUE_LEN, 534);
+    assert_eq!(ityv_cunit::link::MAX_INTERPRETATION_LEN, 154);
+    assert_eq!(ityv_cunit::link::MAX_JOURNAL_ENTRY_LEN, 677);
+}
+
+#[test]
+fn batch_index_counts_closed_batches() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w, 1);
+    let mut j = MemJournal::default();
+    assert_eq!(b.batch_index(), 0);
+    for expected in 1..=2u32 {
+        let mut bufs = Buffers::new(&w);
+        let ballot = b
+            .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1))
+            .unwrap();
+        let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+        let ballot = ballot.commit(&b).unwrap();
+        let ballot = ballot
+            .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+            .unwrap();
+        ballot
+            .cast(&mut b, &mut j, tb(1))
+            .unwrap()
+            .imprinted(&mut b)
+            .unwrap();
+        let head = *b.journal_head();
+        let mut work = std::vec![0u8; BATCH_WORK_LEN];
+        b.close_batch(
+            &head,
+            &mut ports(&mut m),
+            &w.device_hybrid,
+            &SEED,
+            &mut j,
+            tb(1),
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(b.batch_index(), expected);
+    }
+}

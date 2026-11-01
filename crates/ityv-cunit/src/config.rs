@@ -12,12 +12,19 @@
 //! module; N never has one and always receives KEM transport.
 
 use ityv_crypto::{AccessStructure, Chamber, HybridKemPublicKey, OptionCount};
-use ityv_encoding::{BallotStyleId, BoxId, ChamberCode, ElectionId, MAX_SECRETS, ModuleId, StationId, TrusteeId};
+use ityv_encoding::{
+    BallotStyleId, BoxId, ChamberCode, ElectionId, MAX_SECRETS, ModuleId, StationId, TrusteeId,
+};
 
 use crate::error::{ConfigFault, Error};
 
 /// Maximum number of modules (one per chamber with a module).
 pub const MAX_MODULES: usize = 6;
+
+// Five chambers can hold a module (N never does) and a style has at most
+// eight chunks, so a member receives at most 5·8 + 2 = 42 secrets: every
+// valid configuration fits the fifty-share `MemberShare` capacity.
+const _: () = assert!(5 * ityv_crypto::MAX_CHUNKS + 2 <= MAX_SECRETS);
 /// Maximum number of trustees over all chambers.
 pub const MAX_TRUSTEES: usize = 64;
 /// Maximum number of ballot styles a box may receive.
@@ -245,7 +252,10 @@ impl<'a> ElectionConfig<'a> {
         Ok(())
     }
 
-    fn check_trustees(trustees: &[TrusteeConfig<'_>], access: &AccessStructure) -> Result<(), ConfigFault> {
+    fn check_trustees(
+        trustees: &[TrusteeConfig<'_>],
+        access: &AccessStructure,
+    ) -> Result<(), ConfigFault> {
         if trustees.len() > MAX_TRUSTEES || !ascending(trustees, |t| t.trustee_id.as_bytes()) {
             return Err(ConfigFault::TrusteesUnsorted);
         }
@@ -279,10 +289,6 @@ impl<'a> ElectionConfig<'a> {
                 .any(|b| b.id.as_bytes() == a.id.as_bytes())
             {
                 return Err(ConfigFault::Styles);
-            }
-            let secrets = secret_count(parts.modules.len(), a.chunk_count(), parts.profile);
-            if secrets > MAX_SECRETS {
-                return Err(ConfigFault::SecretCapacity);
             }
         }
         Ok(())
@@ -366,7 +372,11 @@ impl<'a> ElectionConfig<'a> {
     /// (`modules × k + 1`, plus one for the envelope label).
     #[must_use]
     pub fn secret_count(&self, style: &BallotStyle<'_>) -> usize {
-        secret_count(self.parts.modules.len(), style.chunk_count(), self.parts.profile)
+        secret_count(
+            self.parts.modules.len(),
+            style.chunk_count(),
+            self.parts.profile,
+        )
     }
 
     /// Whether any configured module is neutral (sets `transport_flags`

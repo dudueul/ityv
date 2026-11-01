@@ -258,6 +258,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ityv-cunit"
+version = "0.1.0"
+dependencies = [
+ "ityv-crypto",
+ "ityv-encoding",
+ "ityv-ledger",
+ "proptest",
+ "rand_chacha",
+ "rand_core",
+ "zeroize",
+]
+
+[[package]]
 name = "ityv-encoding"
 version = "0.1.0"
 dependencies = [

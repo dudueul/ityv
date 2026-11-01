@@ -53,6 +53,17 @@ impl DeviceRng {
         }
     }
 
+    /// Creates a generator whose key is the digest of `hasher`, which the
+    /// caller has already fed with a label and the seed material.
+    pub(crate) fn from_hasher(hasher: Sha3Hasher) -> Self {
+        Self {
+            key: hasher.finish(),
+            counter: 0,
+            block: [0u8; 64],
+            used: 64,
+        }
+    }
+
     /// The signing generator for the device: seeded from `device_seed`
     /// only. Use one per operation that needs hedged signing.
     #[must_use]

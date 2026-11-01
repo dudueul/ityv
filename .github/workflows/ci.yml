@@ -72,6 +72,7 @@ jobs:
       - run: cargo build --locked -p ityv-encoding --target thumbv7em-none-eabihf
       - run: cargo build --locked -p ityv-crypto --target thumbv7em-none-eabihf
       - run: cargo build --locked -p ityv-ledger --target thumbv7em-none-eabihf
+      - run: cargo build --locked -p ityv-cunit --target thumbv7em-none-eabihf
 
   deny:
     name: cargo-deny (licenses, advisories, sources)
@@ -107,7 +108,7 @@ jobs:
       # the job; the local runs record every harness well under a minute.
       - uses: model-checking/kani-github-action@v1.1
         with:
-          args: -p ityv-encoding -p ityv-crypto -p ityv-ledger -Z unstable-options --harness-timeout 10m
+          args: -p ityv-encoding -p ityv-crypto -p ityv-ledger -p ityv-cunit -Z unstable-options --harness-timeout 10m
 
   mutants:
     name: cargo-mutants (V1, advisory until the suite is complete)
@@ -115,7 +116,7 @@ jobs:
     continue-on-error: true
     strategy:
       matrix:
-        crate: [ityv-encoding, ityv-crypto, ityv-ledger]
+        crate: [ityv-encoding, ityv-crypto, ityv-ledger, ityv-cunit]
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: dtolnay/rust-toolchain@master

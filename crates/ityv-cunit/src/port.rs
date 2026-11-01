@@ -131,7 +131,11 @@ pub trait JournalSink {
 /// contiguous range `counter_first..=counter_last`, in order, with no gap
 /// and nothing outside the range.
 #[must_use]
-pub fn module_may_sign_batch(pending_counters: &[u64], counter_first: u64, counter_last: u64) -> bool {
+pub fn module_may_sign_batch(
+    pending_counters: &[u64],
+    counter_first: u64,
+    counter_last: u64,
+) -> bool {
     if counter_first > counter_last {
         return false;
     }
@@ -141,11 +145,13 @@ pub fn module_may_sign_batch(pending_counters: &[u64], counter_first: u64, count
     else {
         return false;
     };
-    if u64::try_from(pending_counters.len()).map_or(true, |n| n != span) {
+    if u64::try_from(pending_counters.len()).ok() != Some(span) {
         return false;
     }
-    pending_counters
-        .iter()
-        .enumerate()
-        .all(|(i, &c)| u64::try_from(i).ok().and_then(|i| counter_first.checked_add(i)) == Some(c))
+    pending_counters.iter().enumerate().all(|(i, &c)| {
+        u64::try_from(i)
+            .ok()
+            .and_then(|i| counter_first.checked_add(i))
+            == Some(c)
+    })
 }

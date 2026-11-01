@@ -50,7 +50,11 @@ impl<'a> Interpretation<'a> {
     /// Builds an interpretation. The option bound against the ballot style
     /// is checked when the unit accepts it, not here.
     #[must_use]
-    pub const fn new(election_id: ElectionId<'a>, ballot_style_id: BallotStyleId<'a>, option_index: u16) -> Self {
+    pub const fn new(
+        election_id: ElectionId<'a>,
+        ballot_style_id: BallotStyleId<'a>,
+        option_index: u16,
+    ) -> Self {
         Self {
             election_id,
             ballot_style_id,
@@ -242,7 +246,9 @@ impl core::fmt::Debug for ModuleIssue<'_> {
 
 impl Encode for ModuleIssue<'_> {
     fn encoded_len(&self) -> usize {
-        let rand = usize::from(self.rand_count).saturating_mul(32).saturating_add(4);
+        let rand = usize::from(self.rand_count)
+            .saturating_mul(32)
+            .saturating_add(4);
         let tags = usize::from(self.tag_count)
             .saturating_mul(TAG_LEN)
             .saturating_add(4);
