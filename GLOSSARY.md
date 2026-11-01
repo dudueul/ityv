@@ -66,6 +66,12 @@
 | 연결 공개(분리망 주장 대신) | declared connectivity | `ConnectivityManifest` | 어떤 장비도 "분리돼 있다"고 주장하지 않고, 모든 연결의 방향·매체·상대·시간대를 genesis의 연결 목록에 적어 서로 다른 주체가 확인하게 하는 원칙(PROTOCOL §5.8, ADR-0022). |
 | 단방향 장치 | one-way device link | — | 수신 소자 없이 송신기만 있는 광 포트. 스캐너와 카운터·가명 유닛의 유일한 바깥 연결이며, 들어오는 경로가 물리적으로 없다. |
 | 관찰 탭 | observer tap | — | 투표소 게이트웨이의 장치 쪽과 바깥 회선 쪽에 있는 수동 분기 장치. 참관인과 등록 감시 단체가 자기 기록 장치를 붙여 프레임을 받아 두고 공개 사슬과 맞춰 본다. 회선에 아무것도 넣을 수 없다. |
+| 릴리스 목록 | release manifest | `ReleaseManifest` | 선거에 쓰는 모든 펌웨어 이미지의 버전·빌드·소스·툴체인·해시·문구 표 해시와 구성 해시. 독립 빌더 셋 이상이 재현해 서명하고 genesis에 고정한다(PROTOCOL §4.6). |
+| 소프트웨어 지문 | software fingerprint | — | 이미지 해시나 구성 해시의 앞 20바이트를 Base32 32자로 적은 값. 신원 줄에는 앞 16자를 보인다. |
+| 신원 줄 | identity line | — | 모든 장치 화면 맨 아래에 늘 있는 줄: 프로그램 이름, 버전, 빌드, 지문 앞 16자, "소프트웨어 확인". 장치 자신의 주장이며 증명은 현장 증명이 한다(`docs/ui/SCREENS.md`). |
+| 현장 증명 | on-site attestation | `DeviceAttestation` | 참관인이 만든 신선한 도전값에 대해, 실행 이미지에 결속된 증명 키로 장치가 서명한 소프트웨어 진술. 요약은 QR로 인쇄해 그 자리에서 확인한다(PROTOCOL §7.9). |
+| 증명 키 | attestation key | — | 부트 ROM이 기기 고유 비밀과 실행 이미지 해시에서 유도하는 키. 다른 이미지로 부팅하면 다른 키가 나온다. |
+| 확인 카드 | challenge card | `AttestChallenge` | 참관인 앱이 난수와 서명을 QR로 인쇄한 카드. 스캐너가 읽고 되돌려 준다. 투표지가 아니다(`BALLOT_LAYOUT.md` §14). |
 | 고정 크기 프레임 | fixed-size frame | `UplinkFrame` | 10분 슬롯마다 정해진 수만큼 보내는 본문 1,048,576바이트짜리 송신 단위. 보낼 것이 없으면 0으로 채워 트래픽 모양이 아무 정보도 담지 않게 한다. |
 | 세 출처 대조 | three-source reconciliation | `CarrierReconciliation` | 참관인 탭 캡처, 통신사 회선 기록, 게이트웨이 `UplinkSession`을 서로 맞춰 보는 선거 뒤 감사. |
 | 정규 인코딩 | canonical encoding | `ityv-encoding` | 재귀 없는 고정폭 이진 형식. 모든 서명·해시 대상 객체의 유일한 바이트 표현. |

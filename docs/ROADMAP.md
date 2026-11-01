@@ -19,12 +19,14 @@
 - 1단계(완료, 2026-10-31): `ityv-encoding`에 공유 스키마 14개(0x0005·0x0006·0x0007·0x000A·0x000B·0x0012·0x0013·0x0015·0x0016·0x0017·0x0018·0x0019·0x001A·0x001B). 워크스페이스 테스트 203개, Kani 20개 하네스 통과(배열 필드 본문의 객체 수준 왕복은 도구 한계로 V1이 담당, crate README 참조), cargo-mutants 557개 중 놓침 0. 독립 리뷰 수정: 첫 위반 순서, 하한 개수의 오류 종류, 미공표 규칙의 명세 반영, 결측 거부 벡터, `MemberShare`의 `Copy` 제거. 2단계: `ityv-cunit`(링크 디코더 0x0101·0x0103, 표별 typestate, share 패키지와 패드·KEM 전송, 봉인 저널 0x0014, 배치·투표함 회계, 검증 공개, 슬립).
 - 방문 단위 투입 반영(ADR-0021): `ityv-cunit` 방문 흐름(작업 영역 최대 8, `VisitEnd` 링크 객체 0x0104 디코더, 모든 위치의 장치·모듈 기록 서명 뒤에만 결정을 받는 typestate, 위치별 넣기·확인 결정, 저널 종류 7 방문 결정·8 라벨 출력과 그 순서, §7.3의 재개 판정 네 경우, 방문당 라벨 스티커와 슬립), `ityv-encoding`(`SlipBody.tracking_codes: Array<Hash512, 8>`와 `Slip.body` 상한 1024, `BoxCloseBody`의 `visit_count`·`envelope_count`·`sticker_count`), 마감 검사(관외 `sticker_count == visit_count`, 봉투 수와 교부 회계, `visit_count ≤ record_count ≤ 8·visit_count`), 모듈 측 "카운터당 본문 하나" 규칙의 참조 구현과 시험. Kani: 결정 입력이 모든 위치의 서명 뒤에만 가능함. 문서는 반영됨, 코드는 같은 PR에서 맞춘다.
 - 정당 챔버 n개 반영(ADR-0019): `ityv-crypto` shares(챔버 P1–P4·J·A·C·N, 정당 챔버 전부 필수 접근구조), `ityv-encoding` ChamberCode·배열 상한(모듈 7, `MemberShare.shares` 58), `ityv-cunit` 모듈 상한 7과 필수 정당 모듈 검사. 문서는 반영됨, 코드는 같은 PR에서 맞춘다.
+- 소프트웨어 신원(ADR-0023): `ityv-encoding`에 `ReleaseManifestBody`·`ReleaseManifest`(0x0021·0x0022), `DeviceAttestationBody`·`DeviceAttestation`(0x0023·0x0024), `AttestationSummary`(0x0025), 링크 객체 `AttestChallenge`(0x0105). `ityv-cunit`에 `attest(challenge)` API: 주어진 증명 키로 서명만 하고 투표 상태(작업 영역, 저널, 배치, 카운터)를 읽거나 바꾸지 않으며, 열린 방문 중과 30초 안 재요청을 거부하는 typestate(VC-088). 재현 빌드 절차 문서와 CI의 이미지 해시 공개(VC-091).
 
 ## M4 상태기계 `ityv-state`
 - typestate: 투표지, 투표함, 보관, 체크포인트, 분쟁. capability 게이트. trybuild 컴파일 실패 테스트.
 
 ## M5 공개 검증기 `ityv-verify`
 - 게시판 전체 검증(체크포인트, 정형성 증명, 집계), 표본 검증 모드, 독립 2차 구현(V5)과 차분 테스트.
+- 소프트웨어 신원(ADR-0023): 릴리스 목록 서명·구성 해시 재계산, `DeviceAttestation`·`AttestationSummary` 검증, 투표함별 개시·마감 증명 확인, 참관인 앱의 오프라인 QR 확인과 결과 화면(`docs/ui/SCREENS.md` §6)(VC-085..091).
 - 연결 감사(ADR-0022): 연결 목록 형식과 TCB 장치 한 방향성 검사, `UplinkSession` 사슬 재계산과 장치 출처 객체 포함 검사, 참관인 캡처 대조 도구, 통신사 기록 대조 형식(VC-077..083).
 - 미러 모드(전체·증분 동기화, 검증 후 재공표), 체크포인트 교환과 분기 증거 생성, 유권자 앱의 2곳 대조와 지문 표시(PROTOCOL §5.7, ADR-0018).
 - 새 검증 조건: 관외 봉투·스티커·방문 수(VC-038), 방문당 슬립의 코드 목록(VC-070), 카운터 유닛 교체의 순번 연속(VC-073), 감사 사유 코드 1·2의 전수 대조 존재(VC-074), 보고 단위별 합계와 `PaperCountReport` 대조(VC-075), `DuplicateIdentification` 형식(VC-076).
@@ -39,6 +41,7 @@
 
 ## M8 장치
 - 카운터·가명 유닛, 봉인 모듈 인터페이스, 하드웨어 선정과 인증 계획(P0-02).
+- 소프트웨어 신원 장비(ADR-0023): 부트 ROM과 OTP(릴리스 키 해시, 단조 빌드 하한, 부팅 횟수, 고유 비밀) 설계와 인증, 이미지 결속 증명 키 유도, 확인 카드 판독과 반환, 신원 줄·상세 화면·문구 표 해시, 분해 표본의 플래시 직접 판독 절차.
 - 연결 감사 장비(ADR-0022): 수신 소자 없는 광 송신 포트와 역방향 시험, 게이트웨이 참조 설계(프레임 사슬, `UplinkSession` 서명), 관찰 탭의 수동성 인증, 고정 일정 송신기(프레임 생성·채움·이어 보내기·따라잡기), 분해 검사 절차서, 무선 점검 절차와 기준.
 - `docs/hardware/DEVICES.md` §8의 실측(사이클·스택, 급지·겹침·걸림률, 1,000만 위치 판독 시험, 각인 노화, 전원·재개 1,000회, 패드 카드 잔류, 부하 보정, 견적), 해석 유닛 인증 항목(VC-071), 패드 카드와 본체 재발급 절차(VC-072), 방문 하나를 끝낼 배터리.
 

@@ -78,7 +78,7 @@ offset  size  field
 | `schema_id` | 이름 | 깊이 | 비고 |
 |---|---|---|---|
 | 0x0001 | `LedgerFrame` | 1 | 장부 프레임 헤더: seq, prev_hash, event_hash |
-| 0x0002 | `Genesis` | 3 | 명부·키·경로·법적 승인. 버전 3에서 `connectivity_manifest_hash: Hash512` 추가(ADR-0022) |
+| 0x0002 | `Genesis` | 4 | 명부·키·경로·법적 승인. 버전 3에서 `connectivity_manifest_hash: Hash512` 추가(ADR-0022), 버전 4에서 `release_manifest_hash: Hash512`와 장치·모듈 증명 공개키, 참관인 토큰별 확인 키(Ed25519) 추가(ADR-0023) |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
@@ -109,9 +109,15 @@ offset  size  field
 | 0x001E | `UplinkSessionBody` | 1 | 게이트웨이 세션 본문: 링크별 프레임 수·사슬 head(§8.23) |
 | 0x001F | `UplinkSession` | 1 | 세션 본문 바이트 + 게이트웨이 하이브리드 서명 + 참관인 서명(§8.24) |
 | 0x0020 | `ParticipationSet` | 1 | 투표 종료 뒤 투표소별 정렬 가명 목록. 순번·시간 없음(§8.25, PROTOCOL §6.5) |
+| 0x0021 | `ReleaseManifestBody` | 1 | 릴리스 목록 본문: 이미지별 버전·빌드·소스·툴체인·이미지 해시·문구 표 해시, 구성별 해시(§8.26, ADR-0023) |
+| 0x0022 | `ReleaseManifest` | 1 | 본문 바이트 + 빌더 서명 3 이상 + 인증기관·위원회 서명(§8.27) |
+| 0x0023 | `DeviceAttestationBody` | 1 | 현장 증명 본문: 도전값, 부팅 횟수, 측정 해시, 모듈 진술(§8.28) |
+| 0x0024 | `DeviceAttestation` | 1 | 본문 바이트 + 증명 키 하이브리드 서명(§8.29) |
+| 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
+| 0x0105 | `AttestChallenge` | 1 | 확인 카드의 도전값을 해석 유닛이 커밋먼트 유닛으로 넘기는 링크 객체(§8.19, ADR-0023) |
 
 필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 §8이 가지며, 구현은 조직 경계를 넘는 객체는 `ityv-encoding`, 크레이트 내부 객체는 그 크레이트(비고에 표기; 0x0010·0x0011은 `ityv-ledger`)다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다. 0x0100–0x01FF는 장치 링크 객체 범위다. 0x0102는 커밋먼트 유닛 → 모듈 발급 요청에 남겨 둔다.
 
@@ -336,6 +342,8 @@ offset  size  field
 
 `VisitEnd` (`schema_id` 0x0104): `election_id: Ident<64>` ‖ `ballot_count: u8`(1 이상 8 이하). 해석 유닛이 한 방문의 투표지를 다 보낸 뒤 보낸다. 커밋먼트 유닛은 `ballot_count`가 직전 `VisitEnd` 이후 받은 `Interpretation` 수와 다르면 그 방문을 결정 없이 격리한다(PROTOCOL §7.3). 해석 유닛은 불신 부품이라 방문 경계를 잘못 알려도 생기는 일은 결정 화면이 둘로 나뉘거나 방문이 격리되는 것뿐이다.
 
+`AttestChallenge` (`schema_id` 0x0105): `election_id: Ident<64>` ‖ `observer_id: Ident<64>` ‖ `nonce: [u8; 32]` ‖ `challenge_sig: [u8; 64]`(참관인 확인 키의 Ed25519 서명, purpose `attest-challenge`, 서명 대상은 `election_id ‖ station_id ‖ observer_id ‖ nonce`; `station_id`는 커밋먼트 유닛이 자기 설정에서 채운다). 해석 유닛은 확인 카드의 QR만 이 객체로 옮기며 다른 필드를 만들 수 없다. 커밋먼트 유닛은 `observer_id`가 genesis의 자기 투표소 참관인 토큰 목록에 없거나, 서명이 틀리거나, 열린 방문이 있거나(마지막 `VisitEnd` 뒤 받은 `Interpretation`이 있거나 대기 구역에 투표지가 있음), 직전 증명 뒤 30초가 지나지 않았으면 이 객체를 버리고 투표 상태를 바꾸지 않는다(PROTOCOL §7.9, VC-088).
+
 `ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C. N은 모듈이 없다) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
 
 `JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감, 6 각인 완료, 7 방문 결정, 8 라벨 출력) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 7>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`, 6은 각인을 마친 기록의 해시, 7은 방문 결정 다이제스트 `SHA3-512("ityv:visit:v1" ‖ 0x00 ‖ n: u8 ‖ (kind_i: u8 ‖ record_hash_i)…)`(바로 앞의 위치 항목 n개, 위치 순), 8은 그 방문의 결정 다이제스트(라벨 값은 저널에 남기지 않는다). 7·8의 `share_package_hash`는 0이고 `module_counters`는 비어 있다. 한 방문의 항목은 위치 항목(1·2) n개, 방문 결정(7), 처리 항목(6·3), 관외면 라벨 출력(8) 순이다(PROTOCOL §7.3, VC-069). `module_counters`는 그 항목이 소비한 카운터(1·2와 기록 전 격리 3) 또는 배치·마감 시점의 최고값(4·5)이다. 기록을 지목하는 격리(3)와 각인 완료(6)는 그 기록의 카운터를 되풀이할 뿐 새로 소비하지 않는다. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
@@ -421,4 +429,69 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 6 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 4>` | 정당 모듈 P1…Pn 각각의 하이브리드 서명(챔버 코드 순, 정확히 n개), purpose `participation-set`, 서명 대상은 필드 1–4의 인코딩 |
 
 최대 크기는 약 4.2MB로, 연결 감사의 프레임 1개(§8.22)를 넘으면 같은 일정의 연속 프레임으로 나간다(PROTOCOL §5.8).
+
+### 8.26 `ReleaseManifestBody` (`schema_id` 0x0021, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `release_id` | `Ident<64>` | |
+| 3 | `images` | `Array<ImageEntry, 128>` | `component_id` 바이트 순, 중복 없음 |
+| 4 | `bundles` | `Array<BundleEntry, 32>` | `bundle_id` 바이트 순, 중복 없음 |
+| 5 | `release_keys` | `Array<{key_id: Ident<64>, role: u8, pk: [u8; 2624]}, 16>` | 빌더(role 1)·인증기관(2)·위원회(3) 하이브리드 공개키. 장치 OTP에 넣는 키의 원본 |
+
+`ImageEntry`: `component_id: Ident<64>` ‖ `device_class: u8`(1 해석 유닛, 2 커밋먼트 유닛, 3 챔버 모듈, 4 카운터·가명 유닛, 5 신원 확인 단말, 6 투표소 게이트웨이, 7 각인기 제어기, 8 슬립·라벨 프린터 제어기, 9 개표소 분류기 확장, 10 참관인·유권자 앱) ‖ `supplier_id: Ident<64>` ‖ `version: Ident<32>`(의미 버전 문자열) ‖ `build: u64`(≥ 1, 같은 `component_id`의 이전 릴리스보다 큼) ‖ `source_commit: Ident<64>`(16진 커밋 해시) ‖ `toolchain_id: Ident<64>` ‖ `image_hash: Hash512` ‖ `ui_strings_hash: Hash512`(화면 문구 표의 해시, 화면이 없으면 0).
+
+`BundleEntry`: `bundle_id: Ident<64>` ‖ `bundle_name: Ident<64>`(신원 줄의 프로그램 이름) ‖ `version: Ident<32>` ‖ `build: u64` ‖ `components: Array<Ident<64>, 16>`(바이트 순) ‖ `bundle_hash: Hash512`(= `SHA3-512("ityv:bundle:v1" ‖ 0x00 ‖ image_hash_1 ‖ …)`, 구성 요소 ID 바이트 순. 디코더는 재계산해 다르면 거부).
+
+**소프트웨어 지문 표기.** 이미지 해시나 구성 해시의 앞 20바이트를 Base32(RFC 4648 알파벳, 대문자, 채움 없음)로 적은 32자. 신원 줄에는 앞 16자를 넷씩 넷으로, 상세 화면과 출력물에는 32자를 넷씩 여덟으로 보인다. 체크포인트 지문(PROTOCOL §5.7)과 같은 표기다.
+
+### 8.27 `ReleaseManifest` (`schema_id` 0x0022, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<131072>` | 인코딩된 `ReleaseManifestBody` 객체 전체 |
+| 2 | `builder_sigs` | `Array<{key_id: Ident<64>, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | 3개 이상, `key_id` 오름차순, `org_id` 서로 다름, purpose `release-build` |
+| 3 | `cert_sig` | `[u8; 4691]` | 인증기관, purpose `release-cert` |
+| 4 | `committee_sig` | `[u8; 4691]` | 독립검증위원회, purpose `release-cert` |
+
+### 8.28 `DeviceAttestationBody` (`schema_id` 0x0023, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `device_id` | `Ident<64>` | genesis에 등록된 장치 |
+| 3 | `device_class` | `u8` | §8.26의 값 |
+| 4 | `challenge` | `{path: u8, observer_id: Ident<64>, nonce: [u8; 32], challenge_sig: [u8; 64]}` | `path` 1 토큰, 2 확인 카드 |
+| 5 | `time_bucket` | `u64` | |
+| 6 | `boot_count` | `u32` | OTP 부팅 횟수 |
+| 7 | `components` | `Array<{component_id: Ident<64>, version: Ident<32>, build: u64, image_hash: Hash512}, 16>` | 부팅 때 잰 값, `component_id` 바이트 순 |
+| 8 | `bundle_hash` | `Hash512` | 7에서 §8.26 규칙으로 계산 |
+| 9 | `modules` | `Array<{module_id: Ident<64>, build: u64, image_hash: Hash512, boot_count: u32, sig: [u8; 4691]}, 7>` | 챔버 모듈마다 같은 `challenge`와 `device_id`에 대해 모듈 증명 키로 서명한 진술(purpose `module-attestation`), 챔버 코드 순. 모듈이 없는 장치는 0개 |
+
+투표에 관한 값(기록 수, 선택, 투함 ID, 가명, 저널 head)은 담지 않는다.
+
+### 8.29 `DeviceAttestation` (`schema_id` 0x0024, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<40960>` | 인코딩된 `DeviceAttestationBody` 객체 전체 |
+| 2 | `attestation_sig` | `[u8; 4691]` | 장치 증명 키 하이브리드 서명, purpose `device-attestation` |
+
+### 8.30 `AttestationSummary` (`schema_id` 0x0025, `schema_version` 1)
+
+현장 QR용. 장부 이벤트가 아니며 슬립 프린터로 인쇄한다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `device_id` | `Ident<64>` | |
+| 2 | `observer_id` | `Ident<64>` | |
+| 3 | `nonce` | `[u8; 32]` | 도전값 |
+| 4 | `time_bucket` | `u64` | |
+| 5 | `boot_count` | `u32` | |
+| 6 | `bundle_hash` | `Hash512` | |
+| 7 | `body_hash` | `Hash512` | 같은 증명의 `DeviceAttestationBody` 해시(나중에 게시판 이벤트와 대조) |
+| 8 | `summary_sig` | `[u8; 64]` | 증명 키의 Ed25519 부분 서명, purpose `attest-summary` |
+
+전체 크기는 약 450바이트로 QR 하나에 들어간다.
 
