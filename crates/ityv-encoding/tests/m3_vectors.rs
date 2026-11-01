@@ -670,6 +670,7 @@ fn vector_close_body() -> BoxCloseBody<'static> {
             visits: 140,
             envelopes: 0,
             stickers: 0,
+            spoil_envelopes: 4,
         },
         record_set_root: patterned64(0x60),
         journal_head: patterned64(0x61),
@@ -685,7 +686,7 @@ fn vector_close_body() -> BoxCloseBody<'static> {
 fn box_close_vectors() {
     let body = vector_close_body();
     let bytes = encode_to_vec(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body);
-    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 72 + 192;
+    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 80 + 192;
     let y_at = counters_at + 4 + ident_len(b"mod-X") + 8;
     let mut v = std::vec![valid("clean close", bytes.clone())];
     let mut b = bytes.clone();

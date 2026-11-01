@@ -18,7 +18,7 @@
 //! records wait for a legal decision that this crate cannot make (VC-049,
 //! ITYV-BEH-140).
 
-use ityv_encoding::BallotStyleId;
+use ityv_encoding::{BallotStyleId, CaptureProfile};
 
 use crate::error::Error;
 
@@ -43,6 +43,18 @@ pub enum Profile {
     /// `RECEIPT_SCAN` (home and ship voting): the receiving commission's
     /// scanner makes the records; no pre-cast challenge, no slip.
     ReceiptScan,
+}
+
+impl Profile {
+    /// The profile the genesis names (`GenesisBox.profile`).
+    #[must_use]
+    pub const fn from_capture(profile: CaptureProfile) -> Self {
+        match profile {
+            CaptureProfile::InPerson => Self::InPerson,
+            CaptureProfile::Absentee => Self::Absentee,
+            CaptureProfile::ReceiptScan => Self::ReceiptScan,
+        }
+    }
 }
 
 /// The receipt-resolution outcome of an out-of-district record (§10.6
@@ -90,6 +102,14 @@ pub enum RecordEvent {
     ShareMissing,
     /// The receipt-resolution procedure classified the record.
     Receipt(Receipt),
+    /// A legal decision on a damaged or wrong-district record: count it
+    /// (`include`) or exclude it (`LEGAL_EXCLUDED`). The caller takes the
+    /// effect from a [`crate::status::LegalReference`] whose dispute names
+    /// the record.
+    LegalDecision {
+        /// Whether the record is counted.
+        include: bool,
+    },
 }
 
 /// The status-vocabulary name of a record's primary state.
@@ -135,9 +155,9 @@ impl RecordStatus {
 
 /// Why a record is excluded from the tally scope.
 ///
-/// The first six are the exclusion reasons of PROTOCOL.md §11.1;
-/// `ReceivedLate` is the exclusion of §10.6 step 6, which §11.1 does not
-/// list (ADR-0025, spec gap 2).
+/// The exclusion reasons of PROTOCOL.md §11.1, in the order in which the
+/// tally scope cites them: a record with several reasons is excluded with
+/// the first (VC-042).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Exclusion {
     /// `TEST_BALLOT` (VC-055).
@@ -150,6 +170,9 @@ pub enum Exclusion {
     CastNotReceived,
     /// `RECEIVED_LATE`: excluded by the statutory arrival deadline.
     ReceivedLate,
+    /// `LEGAL_EXCLUDED`: a damaged or wrong-district record that a legal
+    /// decision excludes (§10.6 step 6, `TallyEffect::Exclude`).
+    LegalExcluded,
     /// `SHARE_MISSING`.
     ShareMissing,
     /// `UNATTESTED`.
@@ -166,9 +189,9 @@ pub enum Disposition {
     /// Out-of-district record not yet resolved against the envelopes; the
     /// tally scope waits for the receipt resolution (§11.1).
     PendingReceipt,
-    /// `RECEIVED_DAMAGED` or `WRONG_DISTRICT`: the district is under
-    /// review and the law decides (§10.6 step 6). No machine transition
-    /// resolves it.
+    /// `RECEIVED_DAMAGED` or `WRONG_DISTRICT` without a legal decision: the
+    /// district is under review and the law decides (§10.6 step 6). Only a
+    /// `LegalDecisionRef` with a tally effect resolves it.
     PendingLegal,
 }
 
@@ -180,6 +203,7 @@ pub struct RecordState {
     attested: bool,
     share_missing: bool,
     test: bool,
+    legal: Option<bool>,
 }
 
 impl RecordState {
@@ -194,6 +218,7 @@ impl RecordState {
             attested: false,
             share_missing: false,
             test,
+            legal: None,
         }
     }
 
@@ -213,7 +238,22 @@ impl RecordState {
             attested,
             share_missing,
             test,
+            legal: None,
         }
+    }
+
+    /// The same state with a legal decision, for unit tests and Kani
+    /// harnesses only.
+    #[cfg(any(test, kani))]
+    pub(crate) const fn with_legal(self, legal: Option<bool>) -> Self {
+        Self { legal, ..self }
+    }
+
+    /// The legal decision on a damaged or wrong-district record: `Some`
+    /// with whether it is counted.
+    #[must_use]
+    pub const fn legal_decision(self) -> Option<bool> {
+        self.legal
     }
 
     /// The box's collection profile.
@@ -345,16 +385,30 @@ impl RecordState {
                     refused
                 }
             }
+            RecordEvent::LegalDecision { include } => {
+                let awaits = matches!(
+                    self.primary,
+                    Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict)
+                );
+                if awaits && self.legal.is_none() {
+                    Ok(Self {
+                        legal: Some(include),
+                        ..self
+                    })
+                } else {
+                    refused
+                }
+            }
         }
     }
 
     /// The record's tally disposition.
     ///
-    /// Precedence: a test ballot is excluded first (VC-055); then the
-    /// primary-state exclusions; then `SHARE_MISSING`, then `UNATTESTED`;
-    /// only a record that every exclusion would admit can be pending. When
-    /// several reasons hold, §11.1 does not say which one the tally scope
-    /// cites (ADR-0025, spec gap 3).
+    /// Precedence (PROTOCOL.md §11.1, the order of [`Exclusion`]): a test
+    /// ballot is excluded first (VC-055); then the primary-state
+    /// exclusions, a legal exclusion among them; then `SHARE_MISSING`, then
+    /// `UNATTESTED`; only a record that every exclusion would admit can be
+    /// pending. The tally scope cites the first reason that holds.
     ///
     /// `UNATTESTED` is final only after the late-close window
     /// ([`crate::tally::admit_tally_scope`], VC-057).
@@ -374,9 +428,11 @@ impl RecordState {
             Primary::Receipt(Receipt::Late) => {
                 return Disposition::Exclude(Exclusion::ReceivedLate);
             }
-            Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict) => {
-                Some(Disposition::PendingLegal)
-            }
+            Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict) => match self.legal {
+                Some(false) => return Disposition::Exclude(Exclusion::LegalExcluded),
+                Some(true) => None,
+                None => Some(Disposition::PendingLegal),
+            },
             Primary::Receipt(Receipt::Received) => None,
             Primary::Cast => {
                 if matches!(self.profile, Profile::Absentee) {
@@ -622,6 +678,74 @@ mod tests {
             apply(cast, RecordEvent::Challenged).status(),
             RecordStatus::ChallengedSpoiled
         );
+    }
+
+    #[test]
+    fn legal_decisions() {
+        let cast = RecordState::new(Profile::Absentee, false);
+        let committed = apply(cast, RecordEvent::BatchAttested);
+        for receipt in [Receipt::Damaged, Receipt::WrongDistrict] {
+            let waiting = apply(committed, RecordEvent::Receipt(receipt));
+            assert_eq!(waiting.disposition(), Disposition::PendingLegal);
+            assert_eq!(waiting.legal_decision(), None);
+            let counted = apply(waiting, RecordEvent::LegalDecision { include: true });
+            assert_eq!(counted.legal_decision(), Some(true));
+            assert_eq!(counted.disposition(), Disposition::Include);
+            let excluded = apply(waiting, RecordEvent::LegalDecision { include: false });
+            assert_eq!(
+                excluded.disposition(),
+                Disposition::Exclude(Exclusion::LegalExcluded)
+            );
+            // Decided once; the decision does not change the status name.
+            for include in [true, false] {
+                let event = RecordEvent::LegalDecision { include };
+                assert_eq!(
+                    counted.apply(event),
+                    Err(Error::RecordTransition {
+                        from: Primary::Receipt(receipt),
+                        event
+                    })
+                );
+            }
+            assert_eq!(counted.status(), waiting.status());
+            // A legal exclusion comes before SHARE_MISSING and UNATTESTED.
+            let early = apply(
+                apply(cast, RecordEvent::Receipt(receipt)),
+                RecordEvent::LegalDecision { include: false },
+            );
+            assert_eq!(
+                apply(early, RecordEvent::ShareMissing).disposition(),
+                Disposition::Exclude(Exclusion::LegalExcluded)
+            );
+            // A counted record still needs its batch and its shares.
+            let counted_early = apply(
+                apply(cast, RecordEvent::Receipt(receipt)),
+                RecordEvent::LegalDecision { include: true },
+            );
+            assert_eq!(
+                counted_early.disposition(),
+                Disposition::Exclude(Exclusion::Unattested)
+            );
+        }
+        // No decision applies to any other record.
+        let event = RecordEvent::LegalDecision { include: true };
+        for receipt in [Receipt::Received, Receipt::Late, Receipt::NotReceived] {
+            assert!(
+                apply(committed, RecordEvent::Receipt(receipt))
+                    .apply(event)
+                    .is_err()
+            );
+        }
+        assert!(committed.apply(event).is_err());
+        let built = RecordState::from_parts(
+            Profile::Absentee,
+            Primary::Receipt(Receipt::Damaged),
+            true,
+            false,
+            false,
+        )
+        .with_legal(Some(true));
+        assert_eq!(built.disposition(), Disposition::Include);
     }
 
     #[test]

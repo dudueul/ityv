@@ -293,7 +293,7 @@ proptest! {
 
     #[test]
     fn box_close_round_trip(
-        e in ident_bytes(8), b in ident_bytes(8), counts in prop::collection::vec(any::<u64>(), 9),
+        e in ident_bytes(8), b in ident_bytes(8), counts in prop::collection::vec(any::<u64>(), 10),
         hashes in prop::collection::vec(hash64(), 3), ids in sorted_ids(2),
         values in prop::collection::vec(any::<u64>(), 1..=2), open in any::<u8>(), bucket in any::<u64>(),
         with_device in any::<bool>(), sig in any::<[u8; 32]>(), orgs in sorted_ids(2)
@@ -301,7 +301,7 @@ proptest! {
         let body = BoxCloseBody::new(&BoxCloseParts {
             election_id: ElectionId::new(&e).unwrap(),
             box_id: BoxId::new(&b).unwrap(),
-            counts: CloseCounts { paper: counts[0], records: counts[1], attested: counts[2], without_record: counts[3], challenged: counts[4], quarantined: counts[5], visits: counts[6], envelopes: counts[7], stickers: counts[8] },
+            counts: CloseCounts { paper: counts[0], records: counts[1], attested: counts[2], without_record: counts[3], challenged: counts[4], quarantined: counts[5], visits: counts[6], envelopes: counts[7], stickers: counts[8], spoil_envelopes: counts[9] },
             record_set_root: Hash512(hashes[0]),
             journal_head: Hash512(hashes[1]),
             seal_digest: Hash512(hashes[2]),

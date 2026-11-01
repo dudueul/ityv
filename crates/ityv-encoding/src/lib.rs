@@ -46,8 +46,8 @@ pub use envelope::{
 pub use error::{Error, Kind as ErrorKind};
 pub use primitives::{
     BallotStyleId, BoxId, Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident, KeysetId,
-    LedgerId, ModuleId, ObserverId, OrgId, Point32, Scalar32, SchemaId, Seq, SignerId, StationId,
-    TimeBucket, Token192, TreeSize, TrusteeId,
+    LedgerId, ModuleId, ObserverId, OrgId, Point32, RouteId, Scalar32, SchemaId, Seq, SignerId,
+    StationId, TimeBucket, Token192, TreeSize, TrusteeId,
 };
 pub use reader::Reader;
 pub use schema::attestation::{
@@ -77,6 +77,18 @@ pub use schema::challenge::{
     MAX_OPTION_INDEX, ModuleOpening,
 };
 pub use schema::checkpoint::{CheckpointBody, CheckpointParts};
+pub use schema::events::{
+    BoxOpenedBody, BoxOpenedParts, CustodyHandoffBody, CustodyHandoffParts, DisputeAction,
+    DisputeEventBody, DisputeEventParts, DisputeType, EnvelopeIssuance, FallbackBody, FallbackKind,
+    FallbackParts, FallbackReason, ImprintAuditBody, ImprintAuditParts, IssuanceCountBody,
+    IssuanceCountParts, LateBatchCloseBody, LateBatchCloseParts, LateBatchReason,
+    LegalDecisionRefBody, LegalDecisionRefParts, LegalOutcome, MarkerRange, SealChangeBody,
+    SealChangeParts, SealChangeReason, TallyEffect,
+};
+pub use schema::genesis::{
+    CaptureProfile, CustodyRoute, GenesisBox, MAX_ROUTE_STOPS, MIN_ROUTE_STOPS, RosterRole,
+    RosterSigner,
+};
 pub use schema::ledger_frame::LedgerFrame;
 pub use schema::scan_count::{
     MAX_OBSERVER_SIGS, MAX_SCAN_COUNT_BODY_LEN, MIN_OBSERVER_SIGS, ObserverSig, ScanCountAttest,
@@ -88,15 +100,22 @@ pub use schema::share_package::{
 };
 pub use schema::slip::{MAX_SLIP_BODY_LEN, MAX_TRACKING_CODES, Slip, SlipBody};
 pub use schema::util::{
-    Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, MAX_CHUNKS, MAX_MODULES, ModuleCounter,
-    ModuleCounters, ModuleIds, Scalars, TAG_LEN,
+    Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, HYBRID_VK_LEN, MAX_CHUNKS, MAX_MODULES,
+    ModuleCounter, ModuleCounters, ModuleIds, Scalars, TAG_LEN,
+};
+pub use schema::witnessed::{
+    EventRole, EventSig, MAX_EVENT_SIGS, MAX_WITNESSED_BODY_LEN, MIN_EVENT_CLERKS,
+    MIN_EVENT_OBSERVER_ORGS, WITNESSED_BODY_SCHEMAS, WitnessedEvent, purpose_of, roles_satisfied,
 };
 pub use schema::{
     SCHEMA_ATTESTATION_SUMMARY, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE,
-    SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY, SCHEMA_CHALLENGE_OPENING,
-    SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_CHECKPOINT_BODY, SCHEMA_DEVICE_ATTESTATION,
-    SCHEMA_DEVICE_ATTESTATION_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_LEGAL_AUTHORIZATION,
-    SCHEMA_MEMBER_SHARE, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY,
-    SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_VERSION_1,
+    SCHEMA_BOX_CLOSE_BODY, SCHEMA_BOX_OPENED_BODY, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY,
+    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_CHECKPOINT_BODY,
+    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DEVICE_ATTESTATION, SCHEMA_DEVICE_ATTESTATION_BODY,
+    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
+    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEDGER_FRAME,
+    SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_MEMBER_SHARE,
+    SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_SEAL_CHANGE_BODY,
+    SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT,
 };
 pub use writer::Writer;

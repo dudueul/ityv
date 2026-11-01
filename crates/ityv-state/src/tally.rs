@@ -1,11 +1,13 @@
 //! Gates of the cryptographic tally (PROTOCOL.md §11.1, §11.2).
 //!
-//! Both gates require the `CRYPTO_TALLY_AID` capability (VC-007). A tally
-//! scope is recorded only after every box of the ballot style is closed,
-//! after the receipt resolution when there are out-of-district records, and
-//! after the late-close window, so that `UNATTESTED` is final (VC-057). An
-//! aggregate opening is recorded only after its tally scope is in a witness
-//! checkpoint (VC-063).
+//! Both gates require the `CRYPTO_TALLY_AID` capability (VC-007) of the
+//! same election. A tally scope is recorded only after every box of the
+//! ballot style is closed, after the receipt resolution when there are
+//! out-of-district records, after a legal decision with a tally effect for
+//! every damaged or wrong-district record (VC-099), and after the
+//! late-close window counted from the last close of the ballot style, so
+//! that `UNATTESTED` is final (VC-057). An aggregate opening is recorded
+//! only after its tally scope is in a witness checkpoint (VC-063).
 
 use ityv_encoding::{ElectionId, TimeBucket};
 
@@ -24,7 +26,11 @@ pub struct TallyReadiness {
     /// The receipt resolution is recorded, or there are no out-of-district
     /// records.
     pub receipts_resolved: bool,
-    /// The bucket of the last box close.
+    /// Every record awaiting the law (`RECEIVED_DAMAGED`,
+    /// `WRONG_DISTRICT`) has a legal decision with a tally effect, or there
+    /// is none ([`crate::record::Disposition::PendingLegal`]).
+    pub legal_resolved: bool,
+    /// The bucket of the last box close of the ballot style.
     pub last_close: TimeBucket,
     /// The current bucket.
     pub now: TimeBucket,
@@ -34,8 +40,9 @@ pub struct TallyReadiness {
 ///
 /// # Errors
 /// [`Error::Mismatch`] if the capability belongs to another election,
-/// [`Error::TallyPremature`] if a box is open, the receipts are unresolved
-/// or the late-close window has not passed; [`Error::Overflow`].
+/// [`Error::TallyPremature`] if a box is open, the receipts are
+/// unresolved, a record still waits for the law, or the late-close window
+/// has not passed; [`Error::Overflow`].
 pub fn admit_tally_scope(
     cap: &Cap<'_, CryptoTallyAid>,
     election_id: ElectionId<'_>,
@@ -47,7 +54,11 @@ pub fn admit_tally_scope(
         .get()
         .checked_add(LATE_CLOSE_WINDOW)
         .ok_or(Error::Overflow)?;
-    if readiness.boxes_closed && readiness.receipts_resolved && readiness.now.get() > deadline {
+    if readiness.boxes_closed
+        && readiness.receipts_resolved
+        && readiness.legal_resolved
+        && readiness.now.get() > deadline
+    {
         Ok(())
     } else {
         Err(Error::TallyPremature)
@@ -99,6 +110,7 @@ mod tests {
         let ready = TallyReadiness {
             boxes_closed: true,
             receipts_resolved: true,
+            legal_resolved: true,
             last_close: TimeBucket::new(100),
             now: TimeBucket::new(100 + LATE_CLOSE_WINDOW + 1),
         };
@@ -125,6 +137,14 @@ mod tests {
         };
         assert_eq!(
             admit_tally_scope(&cap, e1, &unresolved),
+            Err(Error::TallyPremature)
+        );
+        let undecided = TallyReadiness {
+            legal_resolved: false,
+            ..ready
+        };
+        assert_eq!(
+            admit_tally_scope(&cap, e1, &undecided),
             Err(Error::TallyPremature)
         );
         let overflow = TallyReadiness {

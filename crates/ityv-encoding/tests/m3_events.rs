@@ -601,6 +601,7 @@ fn close_parts(counters: ModuleCounters<'static>) -> BoxCloseParts<'static> {
             visits: 140,
             envelopes: 0,
             stickers: 0,
+            spoil_envelopes: 0,
         },
         record_set_root: patterned64(0x60),
         journal_head: patterned64(0x61),
@@ -640,7 +641,7 @@ fn box_close_round_trip_and_rules() {
     .unwrap();
     let body = BoxCloseBody::new(&close_parts(counters));
     let body_bytes = encode_to_vec(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body);
-    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 72 + 192;
+    let counters_at = HEADER_LEN + ident_len(E) + ident_len(BOX) + 80 + 192;
     assert_eq!(
         body_bytes.len(),
         counters_at + 4 + 2 * (ident_len(b"mod-X") + 8) + 1 + 8

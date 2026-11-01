@@ -449,24 +449,26 @@
 | 017, 140, 141, 212, 279 | 훼손·오배송은 `PendingLegal`로 남고 기계 전이가 처분하지 않음, 미해결 분쟁은 `OpenDispute` 보류(`record`, `dispute`, Kani `record_machine`) | 분쟁·중복은 사건이지 무효가 아님 |
 | 019, 151, 264, 324 | `tests/boxes.rs` `clean_life_cycle`(실제 하이브리드 서명의 마감, 인계, 개표, 감사) | |
 | 023, 041, 043, 075, 091, 157, 158, 174, 175, 217, 270, 318 | `close::count_verdict`의 등식별 보류(`close::tests`, `tests/boxes.rs` `close_holds`, Kani `count_verdict_is_exact`, 속성 테스트) | 명세(§10.2)대로 거부가 아니라 수록 후 `HOLD_REVIEW` |
-| 025, 082, 104, 220, 221, 266, 320, 321, 323 | `close::check_witnesses`(등록 여부, 중복 서명자, 사무원 2·서로 다른 조직 참관인 2) | |
+| 025, 082, 104, 220, 221, 266, 320, 321, 323 | `close::check_witness_set`(등록 여부, 중복 서명자, 사무원 2·서로 다른 조직 참관인 2)과 `close::check_witnesses`·마감의 `CloseTokens`(서명마다 등록 키의 토큰, 키 반쪽 중복 금지; `tests/boxes.rs` `close_signature_binding`, `shared_key_halves_count_once`) | VC-098 |
 | 026, 028, 034, 046, 048, 055, 084, 222 | `boxes` typestate와 `compile_fail` doctest(마감된 상자에 기록, 재개봉) | |
-| 031, 080, 099, 172, 329 | 개시 `SealMismatch`, 인계 `CustodySealUnexplained`(`SealChange` 없을 때) | 명세(§10.3)대로 보류 |
+| 031, 080, 099, 172, 329 | 개시 `SealMismatch`, 인계 `CustodySealUnexplained`(`SealChange` 없을 때), 훼손 사유의 `SealBroken`(`custody::tests::a_broken_seal_holds_even_when_announced`) | 명세(§10.1, §10.3)대로 보류 |
 | 033 | — | M5: 예고되지 않은 개함은 개시 일정 입력이 필요 |
 | 035 | 어떤 판정도 시각을 입력으로 쓰지 않음(늦은 마감 기한만 구간 산술) | |
-| 037, 081, 325, 328 | `custody` 양쪽 서명·수신자 연속성(`custody::tests::refusals`) | 서명 바이트 검증은 M5(스키마 0x0008) |
+| 037, 081, 325, 328 | `custody` 송신자·수신자 서명의 토큰과 등록 키, 본문 해시 사슬, 수신자 연속성(`tests/boxes.rs` `custody_signatures`, `custody::tests::refusals`) | VC-040 |
 | 042, 092, 173 | `ImprintAudit` 보류(`tests/boxes.rs` `custody_and_counting_holds`), 참여 등식(`issuance`) | |
 | 047, 100, 317 | 마감 장치 서명 토큰 결속(`tests/boxes.rs` `close_signature_binding`), 수동 마감 보류, 늦은 마감의 서명 요구 | |
 | 063, 101 | `tests/proptests.rs` | |
 | 077, 152, 170, 216 | `StatusReport::count_only` | |
-| 083 | — | M5: 이벤트 색인 |
-| 089 | — | 명세 공백(ADR-0025 공백 7) |
+| 083 | — | 명세 결정(PROTOCOL §14 3항, VC-101). 확인은 M5 검증기의 장부 색인 |
+| 089 | `issuance::issuance_verdict`의 `IssuanceStockMismatch`(용지 재고 등식; Kani `issuance_verdict_is_exact`, 속성 테스트) | PROTOCOL §10.2 |
 | 090 | `issuance::issuance_verdict`(Kani `issuance_verdict_is_exact`) | |
-| 132, 133, 135, 136, 137, 138 | `dispute`(두 기관 접수, `OPEN`으로만 시작, 기술 해결 뒤 법적 회부), `LegalReference::from_signed` | |
+| 132, 133, 135, 136, 137, 138 | `dispute`(두 기관이 서명한 `DisputeEvent`, `OPEN`으로만 시작, 접수 해시로 이어지는 상태 변경, 기술 해결 뒤 법적 회부; `tests/auth.rs` `disputes_need_both_bodies`, `dispute_status_changes_are_signed`), `LegalReference::from_signed`(본문 디코딩, 결과·집계 효과) | VC-098 |
 | 150 | `PAPER_AUDITED`는 표본 대조 종료가 있어야 함(`status`) | |
 | 162 | `Verified` 토큰과 `Authorization`의 비공개 생성자(시험용 생성자는 `cfg(test, kani)`) | 시뮬레이터 토큰 타입은 M6 |
 | 165, 178 | `Status`에 `LEGAL_CERTIFIED` 없음(`compile_fail` doctest) | VC-049 |
 | 171, 326, 327, 330, 331 | `custody`(순번, 이전 인계, 경로, 다른 상자), 인계 미완 개표 `CustodyIncomplete` | |
 | 030 | — | M5: 카세트 이벤트(§10.5) |
-| 267 | — | M5: 참관인 서명 검증 |
+| 267 | `sig::check_event`(참관인 서명마다 등록 키의 토큰) | VC-098 |
 | 268, 269, 315, 316 | `Error::Mismatch`(다른 상자·선거의 개시·기록·마감·인계) | |
+| 017, 140(보강) | 훼손·오배송 기록은 `POSTAL` 분쟁의 `LegalDecisionRef` 집계 효과로만 처분(`RecordEvent::LegalDecision`, `Exclusion::LegalExcluded`), 판정 전 `TallyScope` 금지(`TallyReadiness::legal_resolved`) | VC-099 |
+| 047, 100(보강) | 늦은 마감·늦은 배치의 24시간 기한(`Error::LateWindow`), 사람이 센 네 수 비교 | VC-100 |

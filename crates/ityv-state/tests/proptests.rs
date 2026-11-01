@@ -15,9 +15,9 @@
 
 use ityv_encoding::{CloseCounts, Scope, ScopeSet};
 use ityv_state::{
-    CountFacts, Disposition, DisputeEvent, DisputeStatus, EnvelopeIssuance, Evidence, Exclusion,
-    HoldReason, HoldSet, IssuanceCount, IssuanceTotals, Observed, Outcome, Primary, Profile,
-    Receipt, RecordEvent, RecordState, Status, Step, count_verdict, evaluate, issuance_verdict,
+    CountFacts, Disposition, EnvelopeIssuance, Evidence, Exclusion, HoldReason, HoldSet, Observed,
+    Outcome, Primary, Profile, Receipt, RecordEvent, RecordState, Status, Step, count_verdict,
+    evaluate,
 };
 use proptest::prelude::*;
 
@@ -45,7 +45,8 @@ fn record_event() -> impl Strategy<Value = RecordEvent> {
         Just(RecordEvent::Challenged),
         Just(RecordEvent::Quarantined),
         Just(RecordEvent::ShareMissing),
-        receipt().prop_map(RecordEvent::Receipt)
+        receipt().prop_map(RecordEvent::Receipt),
+        any::<bool>().prop_map(|include| RecordEvent::LegalDecision { include })
     ]
 }
 
@@ -57,12 +58,12 @@ fn count() -> impl Strategy<Value = u64> {
 fn close_counts() -> impl Strategy<Value = CloseCounts> {
     (
         (count(), count(), count(), count(), count()),
-        (count(), count(), count(), count()),
+        (count(), count(), count(), count(), count()),
     )
         .prop_map(
             |(
                 (paper, records, attested, without_record, challenged),
-                (quarantined, visits, envelopes, stickers),
+                (quarantined, visits, envelopes, stickers, spoil_envelopes),
             )| {
                 CloseCounts {
                     paper,
@@ -74,6 +75,7 @@ fn close_counts() -> impl Strategy<Value = CloseCounts> {
                     visits,
                     envelopes,
                     stickers,
+                    spoil_envelopes,
                 }
             },
         )
@@ -118,7 +120,7 @@ fn reference_holds(f: &CountFacts) -> HoldSet {
     if f.open_batches != 0 {
         h = h.with(HoldReason::OpenBatches);
     }
-    if w(c.challenged) + w(c.quarantined) != w(f.spoil_envelopes) {
+    if w(c.challenged) + w(c.quarantined) != w(c.spoil_envelopes) {
         h = h.with(HoldReason::SpoilEnvelopeMismatch);
     }
     if !(w(c.visits) <= w(c.records) && w(c.records) <= 8 * w(c.visits)) {
@@ -148,6 +150,11 @@ fn reference_disposition(state: RecordState) -> Disposition {
             return Disposition::Exclude(Exclusion::CastNotReceived);
         }
         Primary::Receipt(Receipt::Late) => return Disposition::Exclude(Exclusion::ReceivedLate),
+        Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict)
+            if state.legal_decision() == Some(false) =>
+        {
+            return Disposition::Exclude(Exclusion::LegalExcluded);
+        }
         _ => {}
     }
     if state.is_share_missing() {
@@ -157,7 +164,11 @@ fn reference_disposition(state: RecordState) -> Disposition {
         return Disposition::Exclude(Exclusion::Unattested);
     }
     match state.primary() {
-        Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict) => Disposition::PendingLegal,
+        Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict)
+            if state.legal_decision().is_none() =>
+        {
+            Disposition::PendingLegal
+        }
         Primary::Cast if state.profile() == Profile::Absentee => Disposition::PendingReceipt,
         _ => Disposition::Include,
     }
@@ -202,7 +213,6 @@ proptest! {
         counts in close_counts(),
         open_batches in prop_oneof![4 => Just(0u8), 1 => any::<u8>()],
         observed in (count(), count(), count()),
-        spoil_envelopes in count(),
         fallback_declared in any::<bool>(),
         envelopes in proptest::option::of((count(), count())),
         consistent in any::<bool>(),
@@ -212,7 +222,6 @@ proptest! {
             counts,
             open_batches,
             observed: Observed { records: observed.0, challenged: observed.1, attested: observed.2 },
-            spoil_envelopes,
             fallback_declared,
             envelopes: envelopes.map(|(issued, returned_empty)| EnvelopeIssuance { issued, returned_empty }),
         };
@@ -224,71 +233,6 @@ proptest! {
             };
         }
         prop_assert_eq!(count_verdict(&facts), reference_holds(&facts));
-    }
-
-    #[test]
-    fn issuance_matches_reference(
-        issued in count(), voter_spoiled in count(), returned in count(),
-        records in count(), without_record in count(), challenged in count(),
-        quarantined in count(), checkin in proptest::option::of(count()),
-    ) {
-        let issuance = IssuanceCount {
-            election_id: ityv_encoding::ElectionId::new(b"E").unwrap(),
-            station_id: ityv_encoding::StationId::new(b"S").unwrap(),
-            issued,
-            voter_spoiled,
-            returned,
-            unused: 0,
-            envelopes: None,
-            witnesses: &[],
-        };
-        let totals = IssuanceTotals { records, without_record, challenged, quarantined };
-        let holds = issuance_verdict(&issuance, &totals, checkin);
-        let w = |x: u64| i128::from(x);
-        let accounted = w(records) + w(without_record) + w(challenged) + w(quarantined)
-            + w(voter_spoiled) + w(returned);
-        prop_assert_eq!(holds.contains(HoldReason::IssuanceMismatch), accounted != w(issued));
-        let expected = checkin.is_some_and(|c| w(issued) - w(voter_spoiled) - w(challenged) != w(c));
-        prop_assert_eq!(holds.contains(HoldReason::ParticipationMismatch), expected);
-        prop_assert!(holds.len() <= 2);
-    }
-
-    #[test]
-    fn dispute_sequences(events in proptest::collection::vec(
-        prop_oneof![
-            Just(DisputeEvent::Investigate),
-            Just(DisputeEvent::ResolveTechnical),
-            Just(DisputeEvent::ReferLegal)
-        ],
-        0..8,
-    )) {
-        // Rank of each status: transitions only move forward.
-        let rank = |s: DisputeStatus| match s {
-            DisputeStatus::Open => 0,
-            DisputeStatus::Investigating => 1,
-            DisputeStatus::ResolvedTechnical => 2,
-            DisputeStatus::ReferredLegal => 3,
-        };
-        let filing = ityv_state::DisputeFiling {
-            election_id: common::election(),
-            dispute_type: ityv_state::DisputeType::Other,
-            box_id: None,
-            record_hash: None,
-            evidence_hash: ityv_encoding::Hash512::ZERO,
-            commission_signed: true,
-            committee_signed: true,
-        };
-        let auth = common_auth();
-        let cap = auth.grant::<ityv_state::PublicBoard>(ityv_encoding::Day::new(100)).unwrap();
-        let mut dispute = ityv_state::Dispute::file(&filing, &cap).unwrap();
-        prop_assert_eq!(dispute.status(), DisputeStatus::Open);
-        for event in events {
-            if let Ok(next) = dispute.apply(event) {
-                prop_assert!(rank(next.status()) > rank(dispute.status()));
-                prop_assert!(next.status() != DisputeStatus::Open);
-                dispute = next;
-            }
-        }
     }
 
     #[test]
@@ -349,9 +293,3 @@ proptest! {
         }
     }
 }
-
-fn common_auth() -> ityv_state::Authorization<'static> {
-    common::signed_authorization(ScopeSet::from_slice(&[Scope::PublicBoard]))
-}
-
-mod common;

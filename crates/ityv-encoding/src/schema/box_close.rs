@@ -4,8 +4,9 @@
 //!
 //! `BoxCloseBody` field order: `election_id`, `box_id`, `paper_count`,
 //! `record_count`, `attested_count`, `no_record_count`, `challenge_count`,
-//! `quarantine_count`, `record_set_root`, `journal_head`, `seal_digest`,
-//! `module_counters`, `open_batches`, `time_bucket`. `BoxClose` field
+//! `quarantine_count`, `visit_count`, `envelope_count`, `sticker_count`,
+//! `spoil_envelope_count`, `record_set_root`, `journal_head`,
+//! `seal_digest`, `module_counters`, `open_batches`, `time_bucket`. `BoxClose` field
 //! order: `body`, `device_sig`, `attestations`.
 //!
 //! The close invariants of PROTOCOL.md §10.2 (VC-038) are not encoding
@@ -60,6 +61,9 @@ pub struct CloseCounts {
     /// Out-of-district boxes: label stickers on the envelopes, emergency
     /// marks excluded (0 in a polling station box).
     pub stickers: u64,
+    /// Envelopes in the spoil and quarantine bag, counted by people
+    /// (`challenge_count + quarantine_count` when nothing is missing).
+    pub spoil_envelopes: u64,
 }
 
 /// Unvalidated inputs for [`BoxCloseBody::new`].
@@ -176,7 +180,7 @@ impl Encode for BoxCloseBody<'_> {
         self.election_id
             .encoded_len()
             .saturating_add(self.box_id.encoded_len())
-            .saturating_add(72)
+            .saturating_add(80)
             .saturating_add(192)
             .saturating_add(self.module_counters.encoded_len())
             .saturating_add(1)
@@ -195,6 +199,7 @@ impl Encode for BoxCloseBody<'_> {
         w.write_u64(self.counts.visits)?;
         w.write_u64(self.counts.envelopes)?;
         w.write_u64(self.counts.stickers)?;
+        w.write_u64(self.counts.spoil_envelopes)?;
         self.record_set_root.encode(w)?;
         self.journal_head.encode(w)?;
         self.seal_digest.encode(w)?;
@@ -218,6 +223,7 @@ impl<'a> Decode<'a> for BoxCloseBody<'a> {
             visits: r.read_u64()?,
             envelopes: r.read_u64()?,
             stickers: r.read_u64()?,
+            spoil_envelopes: r.read_u64()?,
         };
         let record_set_root = Hash512::decode(r)?;
         let journal_head = Hash512::decode(r)?;

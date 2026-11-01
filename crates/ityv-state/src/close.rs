@@ -3,20 +3,27 @@
 //!
 //! The device side checks the same invariants before it signs
 //! (`ityv-cunit`); this module checks what the ledger shows: the counts of
-//! the `BoxCloseBody`, the records, challenges and batch attestations
-//! observed for the box, and the physical counts people report. A violated
-//! invariant does not refuse the close: the close is recorded and the box
-//! is `HOLD_REVIEW` (§10.2).
+//! the `BoxCloseBody` (the human count of the spoil and quarantine bag
+//! included), and the records, challenges and batch attestations observed
+//! for the box. A violated invariant does not refuse the close: the close
+//! is recorded and the box is `HOLD_REVIEW` (§10.2).
+//!
+//! Human signers are bound to the roster: each signature on an event needs
+//! a verification token from the key the genesis registers for that
+//! person, role and organisation, and no two signers may share a key half
+//! (VC-016, VC-098).
 
+use ityv_crypto::{HybridSigned, HybridVerifyingKey, Verified};
 use ityv_encoding::{
-    Attestation, BoxClose, CloseCounts, MAX_ATTESTATIONS, MIN_CLERKS, MIN_OBSERVERS,
-    ModuleCounters, ModuleId, OrgId, SignerId, SignerRole,
+    BoxClose, CloseCounts, EventRole, MAX_ATTESTATIONS, MIN_CLERKS, MIN_OBSERVERS, ModuleCounters,
+    ModuleIds, OrgId, RosterRole, SignerId, SignerRole,
 };
 
 use crate::error::Error;
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::EnvelopeIssuance;
 use crate::record::Profile;
+use crate::sig::{Signed, check_event, check_pairs};
 
 /// Ballots in one visit at most (ADR-0021): `record_count ≤ 8·visit_count`.
 pub const MAX_VISIT_BALLOTS: u64 = 8;
@@ -52,10 +59,6 @@ pub struct CountFacts {
     pub open_batches: u8,
     /// What the ledger shows for the box.
     pub observed: Observed,
-    /// Physical envelopes in the spoil and quarantine bag. The
-    /// `BoxCloseBody` has no such field; the caller supplies the human
-    /// count (ADR-0025, M5 encoding task).
-    pub spoil_envelopes: u64,
     /// Whether a `FallbackDeclared` event exists for the box.
     pub fallback_declared: bool,
     /// Out-of-district box: the station's return-envelope accounting from
@@ -67,15 +70,16 @@ pub struct CountFacts {
 /// An overflowing sum counts as a violation of its invariant.
 ///
 /// * In person and receipt scan: `paper == records + without_record`,
-///   `envelopes == 0`, `stickers == 0`. The receipt-scan box follows the
-///   in-person rules (ADR-0025, spec gap 4).
+///   `envelopes == 0`, `stickers == 0`. A receipt-scan box follows the
+///   in-person rules (PROTOCOL.md §10.2).
 /// * Out of district: `paper == 0`, `stickers == visits`, `envelopes ==
 ///   issued − returned_empty` (missing issuance:
 ///   [`HoldReason::IssuanceMissing`]).
 /// * `attested ≤ records`, and `attested == records` when no batch is open
 ///   (`record_count == attested_count + open batch records`).
 /// * `open_batches == 0`.
-/// * `spoil_envelopes == challenged + quarantined`.
+/// * `spoil_envelopes == challenged + quarantined` (the human count of the
+///   spoil and quarantine bag, `spoil_envelope_count`).
 /// * `visits ≤ records ≤ 8·visits`.
 /// * `without_record > 0` only with a `FallbackDeclared`.
 /// * The reported records, challenges and attested records equal what the
@@ -110,7 +114,7 @@ pub fn count_verdict(facts: &CountFacts) -> HoldSet {
     } else {
         c.attested <= c.records
     };
-    let spoil_ok = c.challenged.checked_add(c.quarantined) == Some(facts.spoil_envelopes);
+    let spoil_ok = c.challenged.checked_add(c.quarantined) == Some(c.spoil_envelopes);
     // `visits ≤ records ≤ 8·visits`; the product saturates, which keeps the
     // comparison exact because `records` is itself a u64.
     let visits_ok =
@@ -132,12 +136,14 @@ pub fn count_verdict(facts: &CountFacts) -> HoldSet {
 
 /// Returns `true` if the close's module counters name exactly the modules
 /// opened in the box and each final counter equals `records + challenged +
-/// quarantined` (no gap, VC-038).
+/// quarantined` (no gap, VC-038). The quarantine count is checked only
+/// through this identity and the spoil-bag count: quarantines have no
+/// public event of their own (PROTOCOL.md §10.2).
 #[must_use]
 pub fn modules_gap_free(
     counts: &CloseCounts,
     counters: &ModuleCounters<'_>,
-    opened: &[ModuleId<'_>],
+    opened: &ModuleIds<'_>,
 ) -> bool {
     let Some(consumed) = counts
         .records
@@ -149,66 +155,83 @@ pub fn modules_gap_free(
     counters.len() == opened.len()
         && opened
             .iter()
-            .all(|module| counters.get(*module) == Some(consumed))
+            .all(|module| counters.get(module) == Some(consumed))
 }
 
-/// A registered signer: a clerk or an observer whose appointment the
-/// genesis references (PROTOCOL.md §4.5, VC-009).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A registered signer: a clerk, an observer or a custodian whose
+/// appointment the genesis references (PROTOCOL.md §4.5, VC-009), with
+/// the key the genesis registers (`RosterSigner`, ENCODING.md §8.43).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RosterEntry<'a> {
     /// The signer.
     pub signer_id: SignerId<'a>,
     /// The registered role.
-    pub role: SignerRole,
+    pub role: RosterRole,
     /// The registered organisation.
+    pub org_id: OrgId<'a>,
+    /// The registered hybrid verifying key.
+    pub key: &'a HybridVerifyingKey,
+}
+
+/// A signer as an event names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Named<'a> {
+    /// The signer.
+    pub signer_id: SignerId<'a>,
+    /// The role the event names.
+    pub role: RosterRole,
+    /// The organisation the event names.
     pub org_id: OrgId<'a>,
 }
 
-/// Checks a set of human attestations: every signer is registered with the
-/// stated role and organisation, no signer appears twice, and there are at
-/// least two clerks and observers from at least two organisations (VC-016,
-/// VC-038; two people of one organisation are one independent observer,
-/// ITYV-BEH-025).
+/// The key `roster` registers for `id` in `role` and `org`.
 ///
-/// What it does not prove: that the signatures are valid (M5 verifies them
-/// against the appointment keys).
+/// # Errors
+/// [`Error::NotRegistered`] if no entry matches all three.
+pub fn roster_key<'r>(
+    roster: &'r [RosterEntry<'r>],
+    id: SignerId<'_>,
+    role: RosterRole,
+    org: OrgId<'_>,
+) -> Result<&'r HybridVerifyingKey, Error> {
+    roster
+        .iter()
+        .find(|r| {
+            r.signer_id.as_bytes() == id.as_bytes()
+                && r.role == role
+                && r.org_id.as_bytes() == org.as_bytes()
+        })
+        .map(|r| r.key)
+        .ok_or(Error::NotRegistered)
+}
+
+/// Checks the shape of a set of human signers: every signer is registered
+/// with the stated role and organisation, no signer appears twice, only
+/// clerks and observers sign, and there are at least two clerks and
+/// observers from at least two organisations (VC-016, VC-038; two people
+/// of one organisation are one independent observer, ITYV-BEH-025).
+///
+/// What it does not prove: that anyone signed. [`check_witnesses`] and
+/// the box methods bind each signature to a verification token.
 ///
 /// # Errors
 /// [`Error::NotRegistered`] for an unregistered signer, role or
-/// organisation; [`Error::SignersShort`] for a repeated signer or too few
-/// independent signers.
-pub fn check_witnesses(
-    witnesses: &[Attestation<'_>],
-    roster: &[RosterEntry<'_>],
-) -> Result<(), Error> {
+/// organisation, or a custodian; [`Error::SignersShort`] for a repeated
+/// signer or too few independent signers.
+pub fn check_witness_set(witnesses: &[Named<'_>], roster: &[RosterEntry<'_>]) -> Result<(), Error> {
     check_witness_iter(|| witnesses.iter().copied(), roster)
-}
-
-/// [`check_witnesses`] over the attestations of a `BoxClose`.
-pub(crate) fn check_close_witnesses(
-    close: &BoxClose<'_>,
-    roster: &[RosterEntry<'_>],
-) -> Result<(), Error> {
-    check_witness_iter(|| close.attestations(), roster)
 }
 
 fn check_witness_iter<'w, I, F>(witnesses: F, roster: &[RosterEntry<'_>]) -> Result<(), Error>
 where
     F: Fn() -> I,
-    I: Iterator<Item = Attestation<'w>>,
+    I: Iterator<Item = Named<'w>>,
 {
     let mut clerks = 0usize;
     let mut orgs: [Option<&[u8]>; MAX_ATTESTATIONS] = [None; MAX_ATTESTATIONS];
     let mut distinct = 0usize;
     for (index, a) in witnesses().enumerate() {
-        let registered = roster.iter().any(|r| {
-            r.signer_id.as_bytes() == a.signer_id.as_bytes()
-                && r.role == a.role
-                && r.org_id.as_bytes() == a.org_id.as_bytes()
-        });
-        if !registered {
-            return Err(Error::NotRegistered);
-        }
+        roster_key(roster, a.signer_id, a.role, a.org_id)?;
         let repeated = witnesses()
             .take(index)
             .any(|b| b.signer_id.as_bytes() == a.signer_id.as_bytes());
@@ -216,8 +239,8 @@ where
             return Err(Error::SignersShort);
         }
         match a.role {
-            SignerRole::Clerk => clerks = clerks.saturating_add(1),
-            SignerRole::Observer => {
+            RosterRole::Clerk => clerks = clerks.saturating_add(1),
+            RosterRole::Observer => {
                 let org = a.org_id.as_bytes();
                 let seen = orgs.iter().take(distinct).flatten().any(|o| *o == org);
                 if !seen {
@@ -227,6 +250,7 @@ where
                     distinct = distinct.saturating_add(1);
                 }
             }
+            RosterRole::Custodian => return Err(Error::NotRegistered),
         }
     }
     if clerks >= MIN_CLERKS && distinct >= MIN_OBSERVERS {
@@ -236,22 +260,111 @@ where
     }
 }
 
+/// The roster role a clerk-or-observer event signature names, if any.
+const fn witness_role(role: EventRole) -> Option<RosterRole> {
+    match role {
+        EventRole::Clerk => Some(RosterRole::Clerk),
+        EventRole::Observer => Some(RosterRole::Observer),
+        EventRole::Commission
+        | EventRole::Committee
+        | EventRole::Sender
+        | EventRole::Receiver
+        | EventRole::Authority
+        | EventRole::Device => None,
+    }
+}
+
+/// Checks a clerk-and-observer event: the shape of its human signers
+/// ([`check_witness_set`]) and a matching token for every signature, from
+/// the key the roster registers. A device signature is required exactly
+/// when `device` is given, and must come from that key.
+///
+/// # Errors
+/// As [`check_witness_set`], [`Error::NotRegistered`] for a signer in
+/// another role or a missing or unexpected device signature, and the
+/// errors of [`crate::sig::check_event`].
+pub fn check_witnesses(
+    signed: &Signed<'_>,
+    roster: &[RosterEntry<'_>],
+    device: Option<&HybridVerifyingKey>,
+) -> Result<(), Error> {
+    let event = signed.event;
+    let humans = || {
+        event.sigs().filter_map(|s| {
+            witness_role(s.role).map(|role| Named {
+                signer_id: s.signer_id,
+                role,
+                org_id: s.org_id,
+            })
+        })
+    };
+    check_witness_iter(humans, roster)?;
+    let devices = event.sigs().filter(|s| s.role == EventRole::Device).count();
+    if devices != usize::from(device.is_some()) {
+        return Err(Error::NotRegistered);
+    }
+    check_event(signed, |s| match (witness_role(s.role), s.role) {
+        (Some(role), _) => roster_key(roster, s.signer_id, role, s.org_id),
+        (None, EventRole::Device) => device.ok_or(Error::NotRegistered),
+        (None, _) => Err(Error::NotRegistered),
+    })
+}
+
+const fn close_role(role: SignerRole) -> RosterRole {
+    match role {
+        SignerRole::Clerk => RosterRole::Clerk,
+        SignerRole::Observer => RosterRole::Observer,
+    }
+}
+
+/// Checks the human attestations of a `BoxClose`: their shape and one
+/// token per attestation (purpose `purpose`, the close body bytes, the
+/// attestation's signature bytes, the registered key), with no two signers
+/// sharing a key half.
+pub(crate) fn check_close_witnesses(
+    close: &BoxClose<'_>,
+    tokens: &[Verified<HybridSigned<'_>>],
+    roster: &[RosterEntry<'_>],
+    purpose: &[u8],
+) -> Result<(), Error> {
+    let named = || {
+        close.attestations().map(|a| Named {
+            signer_id: a.signer_id,
+            role: close_role(a.role),
+            org_id: a.org_id,
+        })
+    };
+    check_witness_iter(named, roster)?;
+    let pairs = close.attestations().map(|a| {
+        roster_key(roster, a.signer_id, close_role(a.role), a.org_id).map(|key| (a.sig, key))
+    });
+    check_pairs(
+        close.body_bytes(),
+        purpose,
+        tokens,
+        close.attestations().count(),
+        pairs,
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::boxed::Box;
+
+    use ityv_crypto::{HybridSigningKey, HybridVerifyingKey};
     use ityv_encoding::{
-        Attestation, CloseCounts, HYBRID_SIG_LEN, ModuleCounter, ModuleCounters, ModuleId, OrgId,
-        SignerId, SignerRole,
+        CloseCounts, ModuleCounter, ModuleCounters, ModuleId, ModuleIds, OrgId, RosterRole,
+        SignerId,
     };
 
     use super::{
-        CountFacts, Observed, RosterEntry, check_witnesses, count_verdict, modules_gap_free,
+        CountFacts, Named, Observed, RosterEntry, check_witness_set, count_verdict,
+        modules_gap_free, roster_key,
     };
     use crate::error::Error;
     use crate::hold::{HoldReason, HoldSet};
     use crate::issuance::EnvelopeIssuance;
     use crate::record::Profile;
-
-    static SIG: [u8; HYBRID_SIG_LEN] = [0; HYBRID_SIG_LEN];
 
     fn counts() -> CloseCounts {
         CloseCounts {
@@ -264,6 +377,7 @@ mod tests {
             visits: 4,
             envelopes: 0,
             stickers: 0,
+            spoil_envelopes: 2,
         }
     }
 
@@ -277,7 +391,6 @@ mod tests {
                 challenged: 1,
                 attested: 10,
             },
-            spoil_envelopes: 2,
             fallback_declared: true,
             envelopes: None,
         }
@@ -325,9 +438,9 @@ mod tests {
         f.counts.stickers = 1;
         assert_eq!(count_verdict(&f), only(HoldReason::StickerVisitMismatch));
         let mut f = facts();
-        f.spoil_envelopes = 3;
+        f.counts.spoil_envelopes = 3;
         assert_eq!(count_verdict(&f), only(HoldReason::SpoilEnvelopeMismatch));
-        f.spoil_envelopes = 1;
+        f.counts.spoil_envelopes = 1;
         assert_eq!(count_verdict(&f), only(HoldReason::SpoilEnvelopeMismatch));
         let mut f = facts();
         f.counts.challenged = u64::MAX;
@@ -434,52 +547,60 @@ mod tests {
         let b = ModuleId::new(b"M-B").unwrap();
         let c = ModuleId::new(b"M-C").unwrap();
         let entry = |module_id, counter| ModuleCounter { module_id, counter };
+        let ab = ModuleIds::new(&[a, b]).unwrap();
         let good = ModuleCounters::new(&[entry(a, 12), entry(b, 12)]).unwrap();
-        assert!(modules_gap_free(&counts(), &good, &[a, b]));
+        assert!(modules_gap_free(&counts(), &good, &ab));
         let gap = ModuleCounters::new(&[entry(a, 12), entry(b, 11)]).unwrap();
-        assert!(!modules_gap_free(&counts(), &gap, &[a, b]));
+        assert!(!modules_gap_free(&counts(), &gap, &ab));
         let extra = ModuleCounters::new(&[entry(a, 12), entry(b, 12), entry(c, 12)]).unwrap();
-        assert!(!modules_gap_free(&counts(), &extra, &[a, b]));
+        assert!(!modules_gap_free(&counts(), &extra, &ab));
         let missing = ModuleCounters::new(&[entry(a, 12)]).unwrap();
-        assert!(!modules_gap_free(&counts(), &missing, &[a, b]));
+        assert!(!modules_gap_free(&counts(), &missing, &ab));
         let other = ModuleCounters::new(&[entry(a, 12), entry(c, 12)]).unwrap();
-        assert!(!modules_gap_free(&counts(), &other, &[a, b]));
+        assert!(!modules_gap_free(&counts(), &other, &ab));
         let mut overflow = counts();
         overflow.quarantined = u64::MAX;
-        assert!(!modules_gap_free(&overflow, &good, &[a, b]));
+        assert!(!modules_gap_free(&overflow, &good, &ab));
         let mut overflow = counts();
         overflow.challenged = u64::MAX;
-        assert!(!modules_gap_free(&overflow, &good, &[a, b]));
+        assert!(!modules_gap_free(&overflow, &good, &ab));
     }
 
-    fn person(id: &'static [u8], role: SignerRole, org: &'static [u8]) -> RosterEntry<'static> {
+    fn key(seed: u8) -> &'static HybridVerifyingKey {
+        Box::leak(Box::new(
+            HybridSigningKey::from_seeds([seed; 32], [seed.wrapping_add(1); 32]).verifying_key(),
+        ))
+    }
+
+    fn person(id: &'static [u8], role: RosterRole, org: &'static [u8]) -> RosterEntry<'static> {
         RosterEntry {
             signer_id: SignerId::new(id).unwrap(),
             role,
             org_id: OrgId::new(org).unwrap(),
+            key: key(id.first().copied().unwrap_or(0)),
         }
     }
 
-    fn attest(entry: RosterEntry<'static>) -> Attestation<'static> {
-        Attestation {
+    fn named(entry: RosterEntry<'static>) -> Named<'static> {
+        Named {
             signer_id: entry.signer_id,
             role: entry.role,
             org_id: entry.org_id,
-            sig: &SIG,
         }
     }
 
     #[test]
     fn witnesses() {
-        let c1 = person(b"c1", SignerRole::Clerk, b"NEC");
-        let c2 = person(b"c2", SignerRole::Clerk, b"NEC");
-        let o1 = person(b"o1", SignerRole::Observer, b"PARTY-A");
-        let o2 = person(b"o2", SignerRole::Observer, b"PARTY-B");
-        let o3 = person(b"o3", SignerRole::Observer, b"PARTY-A");
-        let roster = [c1, c2, o1, o2, o3];
+        let c1 = person(b"c1", RosterRole::Clerk, b"NEC");
+        let c2 = person(b"c2", RosterRole::Clerk, b"NEC");
+        let o1 = person(b"o1", RosterRole::Observer, b"PARTY-A");
+        let o2 = person(b"o2", RosterRole::Observer, b"PARTY-B");
+        let o3 = person(b"o3", RosterRole::Observer, b"PARTY-A");
+        let k1 = person(b"k1", RosterRole::Custodian, b"POLICE");
+        let roster = [c1, c2, o1, o2, o3, k1];
         let check = |set: &[RosterEntry<'static>]| {
-            let attestations: std::vec::Vec<_> = set.iter().map(|e| attest(*e)).collect();
-            check_witnesses(&attestations, &roster)
+            let named: std::vec::Vec<_> = set.iter().map(|e| named(*e)).collect();
+            check_witness_set(&named, &roster)
         };
         assert_eq!(check(&[c1, c2, o1, o2]), Ok(()));
         assert_eq!(check(&[c1, c2, o1, o3, o2]), Ok(()));
@@ -488,12 +609,14 @@ mod tests {
         assert_eq!(check(&[c1, c1, o1, o2]), Err(Error::SignersShort));
         assert_eq!(check(&[c1, c2, o1, o1, o2]), Err(Error::SignersShort));
         assert_eq!(check(&[]), Err(Error::SignersShort));
+        // A custodian does not witness a box event.
+        assert_eq!(check(&[c1, c2, o1, o2, k1]), Err(Error::NotRegistered));
         // Registered with another role or organisation.
-        let wrong_role = person(b"c1", SignerRole::Observer, b"NEC");
+        let wrong_role = person(b"c1", RosterRole::Observer, b"NEC");
         assert_eq!(check(&[wrong_role, c2, o1, o2]), Err(Error::NotRegistered));
-        let wrong_org = person(b"o3", SignerRole::Observer, b"PARTY-C");
+        let wrong_org = person(b"o3", RosterRole::Observer, b"PARTY-C");
         assert_eq!(check(&[c1, c2, o1, wrong_org]), Err(Error::NotRegistered));
-        let stranger = person(b"x", SignerRole::Clerk, b"NEC");
+        let stranger = person(b"x", RosterRole::Clerk, b"NEC");
         assert_eq!(
             check(&[c1, c2, o1, o2, stranger]),
             Err(Error::NotRegistered)
@@ -502,12 +625,21 @@ mod tests {
         let many: std::vec::Vec<RosterEntry<'static>> =
             [&b"p1"[..], b"p2", b"p3", b"p4", b"p5", b"p6", b"p7", b"p8"]
                 .iter()
-                .map(|id| person(id, SignerRole::Observer, id))
+                .map(|id| person(id, RosterRole::Observer, id))
                 .collect();
         let mut roster_many = std::vec![c1, c2];
         roster_many.extend(many.iter().copied());
-        let mut set: std::vec::Vec<_> = std::vec![attest(c1), attest(c2)];
-        set.extend(many.iter().map(|e| attest(*e)));
-        assert_eq!(check_witnesses(&set, &roster_many), Ok(()));
+        let mut set: std::vec::Vec<_> = std::vec![named(c1), named(c2)];
+        set.extend(many.iter().map(|e| named(*e)));
+        assert_eq!(check_witness_set(&set, &roster_many), Ok(()));
+        // The registered key is found by all three of id, role, organisation.
+        assert_eq!(
+            roster_key(&roster, c1.signer_id, RosterRole::Clerk, c1.org_id),
+            Ok(c1.key)
+        );
+        assert_eq!(
+            roster_key(&roster, c1.signer_id, RosterRole::Observer, c1.org_id),
+            Err(Error::NotRegistered)
+        );
     }
 }

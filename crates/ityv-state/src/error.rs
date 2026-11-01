@@ -49,12 +49,10 @@ pub enum Error {
     SignatureSigner,
     /// A signature is present but no verification token covers it.
     Unverified,
-    /// The authorization object does not decode.
+    /// An object does not decode as the schema the operation takes.
     Decode,
     /// The input belongs to another election, box or dispute type.
     Mismatch,
-    /// An identifier appears twice where it must be unique.
-    Duplicate,
     /// The operation does not exist for the box's collection profile (a
     /// challenge in a receipt-scan box, a receipt outside the
     /// out-of-district profile, PROTOCOL.md §17).
@@ -81,13 +79,14 @@ pub enum Error {
     /// A custody handoff leaves the route fixed in the genesis, or the
     /// route has fewer than two stops (VC-040).
     CustodyRoute,
-    /// A custody handoff or seal change lacks a party's signature.
-    CustodyUnsigned,
     /// A seal change does not start from the chain's current seal.
     CustodySeal,
     /// A late box close for a box not closed manually, or without a device
     /// signature.
     LateClose,
+    /// A late box close or late batch close more than 24 hours (96 time
+    /// buckets) after the close (PROTOCOL.md §7.2.1, §10.2).
+    LateWindow,
     /// A batch would attest more records than the ledger shows for the box.
     BatchExceedsRecords,
     /// A dispute was not received by both the election commission and the
@@ -118,7 +117,6 @@ impl core::fmt::Display for Error {
             Self::Unverified => f.write_str("signature present but not verified"),
             Self::Decode => f.write_str("object does not decode"),
             Self::Mismatch => f.write_str("belongs to another election, box or type"),
-            Self::Duplicate => f.write_str("identifier appears twice"),
             Self::Profile => f.write_str("not available for this collection profile"),
             Self::NotRegistered => f.write_str("signer, device or module not registered"),
             Self::SignersShort => f.write_str("too few independent signers"),
@@ -128,9 +126,9 @@ impl core::fmt::Display for Error {
             Self::CustodyPrevious => f.write_str("custody handoff does not chain"),
             Self::CustodySameOrganisation => f.write_str("custody handoff within one organisation"),
             Self::CustodyRoute => f.write_str("custody handoff off the route"),
-            Self::CustodyUnsigned => f.write_str("custody event not signed by both parties"),
             Self::CustodySeal => f.write_str("seal change does not start from the current seal"),
             Self::LateClose => f.write_str("late box close not applicable"),
+            Self::LateWindow => f.write_str("late close after the 24-hour window"),
             Self::BatchExceedsRecords => f.write_str("batch exceeds the records of the box"),
             Self::DisputeFiling => f.write_str("dispute not received by both bodies"),
             Self::TallyPremature => f.write_str("tally event before its preconditions"),
@@ -174,7 +172,6 @@ mod tests {
             Error::Unverified,
             Error::Decode,
             Error::Mismatch,
-            Error::Duplicate,
             Error::Profile,
             Error::NotRegistered,
             Error::SignersShort,
@@ -185,9 +182,9 @@ mod tests {
             Error::CustodyPrevious,
             Error::CustodySameOrganisation,
             Error::CustodyRoute,
-            Error::CustodyUnsigned,
             Error::CustodySeal,
             Error::LateClose,
+            Error::LateWindow,
             Error::BatchExceedsRecords,
             Error::DisputeFiling,
             Error::TallyPremature,

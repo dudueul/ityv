@@ -40,14 +40,14 @@
 )]
 
 use ityv_encoding::{
-    BoxId, CloseCounts, Day, ElectionId, Hash512, OrgId, Scope, ScopeSet, SignerId, StationId,
-    TimeBucket,
+    BoxId, CloseCounts, CustodyHandoffParts, Day, ElectionId, Hash512, IssuanceCountParts, OrgId,
+    Scope, ScopeSet, SignerId, StationId, TimeBucket,
 };
 
-use crate::auth::{Authorization, BallotMark, PublicBoard, check_scope_rules, stage};
+use crate::auth::{Authorization, BallotMark, check_scope_rules, stage};
 use crate::close::{CountFacts, Observed, count_verdict};
-use crate::custody::{Actor, CustodyChain, CustodyHandoff};
-use crate::dispute::{Dispute, DisputeEvent, DisputeFiling, DisputeStatus, DisputeType};
+use crate::custody::CustodyChain;
+use crate::dispute::{Dispute, DisputeEvent, DisputeStatus, DisputeType};
 use crate::error::Error;
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict};
@@ -88,13 +88,20 @@ fn any_primary() -> Primary {
 }
 
 fn any_event() -> RecordEvent {
-    match kani::any::<u8>() % 5 {
+    match kani::any::<u8>() % 6 {
         0 => RecordEvent::BatchAttested,
         1 => RecordEvent::Challenged,
         2 => RecordEvent::Quarantined,
         3 => RecordEvent::ShareMissing,
+        4 => RecordEvent::LegalDecision {
+            include: kani::any(),
+        },
         _ => RecordEvent::Receipt(any_receipt()),
     }
+}
+
+fn any_legal() -> Option<bool> {
+    if kani::any() { Some(kani::any()) } else { None }
 }
 
 // Identifiers are built at compile time, so no harness unwinds the
@@ -151,8 +158,8 @@ fn hold_set_is_sticky() {
 }
 
 /// The scope rule over every scope set: `PUBLIC_BOARD` under every higher
-/// stage, `TRUSTEE_BODY` under stages 2 and 3, `BALLOT_MARK` under
-/// `VOTER_CODE`.
+/// stage, `TRUSTEE_BODY` under stages 2 and 3, every stage-2 scope under
+/// `VOTER_CODE`, and `CRYPTO_TALLY_AID` under `RLA`.
 #[kani::proof]
 #[kani::unwind(12)]
 fn scope_rules_are_exact() {
@@ -161,6 +168,7 @@ fn scope_rules_are_exact() {
     let has = |s| set.contains(s);
     let mut above0 = false;
     let mut above1 = false;
+    let mut stage2_complete = true;
     for s in Scope::ALL {
         if has(s) && stage(s) >= 1 {
             above0 = true;
@@ -168,10 +176,14 @@ fn scope_rules_are_exact() {
         if has(s) && stage(s) >= 2 {
             above1 = true;
         }
+        if stage(s) == 2 && !has(s) {
+            stage2_complete = false;
+        }
     }
     let expected = (!above0 || has(Scope::PublicBoard))
         && (!above1 || has(Scope::TrusteeBody))
-        && (!has(Scope::VoterCode) || has(Scope::BallotMark));
+        && (!has(Scope::VoterCode) || stage2_complete)
+        && (!has(Scope::Rla) || has(Scope::CryptoTallyAid));
     assert_eq!(check_scope_rules(set).is_ok(), expected);
 }
 
@@ -204,6 +216,7 @@ fn count_verdict_is_exact() {
         visits: kani::any(),
         envelopes: kani::any(),
         stickers: kani::any(),
+        spoil_envelopes: kani::any(),
     };
     let facts = CountFacts {
         profile: any_profile(),
@@ -214,7 +227,6 @@ fn count_verdict_is_exact() {
             challenged: kani::any(),
             attested: kani::any(),
         },
-        spoil_envelopes: kani::any(),
         fallback_declared: kani::any(),
         envelopes: if kani::any() {
             Some(EnvelopeIssuance {
@@ -259,7 +271,7 @@ fn count_verdict_is_exact() {
     assert_eq!(h.contains(HoldReason::OpenBatches), facts.open_batches != 0);
     assert_eq!(
         h.contains(HoldReason::SpoilEnvelopeMismatch),
-        w(c.challenged) + w(c.quarantined) != w(facts.spoil_envelopes)
+        w(c.challenged) + w(c.quarantined) != w(c.spoil_envelopes)
     );
     assert_eq!(
         h.contains(HoldReason::VisitBounds),
@@ -277,19 +289,22 @@ fn count_verdict_is_exact() {
     );
 }
 
-/// The issuance and participation identities on arbitrary counts.
+/// The stock, issuance and participation identities on arbitrary counts.
 #[kani::proof]
 fn issuance_verdict_is_exact() {
-    let issuance = IssuanceCount {
+    let parts = IssuanceCountParts {
         election_id: election(),
         station_id: STATION,
+        stock_received: kani::any(),
         issued: kani::any(),
         voter_spoiled: kani::any(),
         returned: kani::any(),
         unused: kani::any(),
+        printer_waste: kani::any(),
         envelopes: None,
-        witnesses: &[],
+        time_bucket: TimeBucket::new(0),
     };
+    let issuance = IssuanceCount::unsigned(parts);
     let totals = IssuanceTotals {
         records: kani::any(),
         without_record: kani::any(),
@@ -299,19 +314,23 @@ fn issuance_verdict_is_exact() {
     let checkin: Option<u64> = if kani::any() { Some(kani::any()) } else { None };
     let h = issuance_verdict(&issuance, &totals, checkin);
     let w = |x: u64| x as i128;
+    assert_eq!(
+        h.contains(HoldReason::IssuanceStockMismatch),
+        w(parts.issued) + w(parts.unused) + w(parts.printer_waste) != w(parts.stock_received)
+    );
     let accounted = w(totals.records)
         + w(totals.without_record)
         + w(totals.challenged)
         + w(totals.quarantined)
-        + w(issuance.voter_spoiled)
-        + w(issuance.returned);
+        + w(parts.voter_spoiled)
+        + w(parts.returned);
     assert_eq!(
         h.contains(HoldReason::IssuanceMismatch),
-        accounted != w(issuance.issued)
+        accounted != w(parts.issued)
     );
     let participation_bad = match checkin {
         None => false,
-        Some(c) => w(issuance.issued) - w(issuance.voter_spoiled) - w(totals.challenged) != w(c),
+        Some(c) => w(parts.issued) - w(parts.voter_spoiled) - w(totals.challenged) != w(c),
     };
     assert_eq!(
         h.contains(HoldReason::ParticipationMismatch),
@@ -330,7 +349,8 @@ fn record_machine() {
         kani::any(),
         kani::any(),
         kani::any(),
-    );
+    )
+    .with_legal(any_legal());
     let event = any_event();
     match state.apply(event) {
         Ok(next) => {
@@ -349,6 +369,17 @@ fn record_machine() {
             if matches!(event, RecordEvent::Receipt(_)) {
                 assert_eq!(state.profile(), Profile::Absentee);
             }
+            if let RecordEvent::LegalDecision { include } = event {
+                assert!(matches!(
+                    state.primary(),
+                    Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict)
+                ));
+                assert_eq!(state.legal_decision(), None);
+                assert_eq!(next.legal_decision(), Some(include));
+                assert_eq!(next.primary(), state.primary());
+            } else {
+                assert_eq!(next.legal_decision(), state.legal_decision());
+            }
         }
         Err(Error::Profile) => {
             assert!(matches!(
@@ -366,22 +397,28 @@ fn record_machine() {
         Err(_) => panic!("no other error"),
     }
     let d = state.disposition();
+    let awaits_law = matches!(
+        state.primary(),
+        Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict)
+    );
     if d == Disposition::Include {
         assert!(state.is_attested() && !state.is_share_missing() && !state.is_test());
-        assert!(matches!(
-            state.primary(),
-            Primary::Cast | Primary::Receipt(Receipt::Received)
-        ));
+        assert!(
+            matches!(
+                state.primary(),
+                Primary::Cast | Primary::Receipt(Receipt::Received)
+            ) || (awaits_law && state.legal_decision() == Some(true))
+        );
         assert!(!(state.profile() == Profile::Absentee && state.primary() == Primary::Cast));
     }
     if state.is_test() {
         assert_eq!(d, Disposition::Exclude(Exclusion::TestBallot));
     }
     if d == Disposition::PendingLegal {
-        assert!(matches!(
-            state.primary(),
-            Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict)
-        ));
+        assert!(awaits_law && state.legal_decision().is_none());
+    }
+    if d == Disposition::Exclude(Exclusion::LegalExcluded) {
+        assert!(awaits_law && state.legal_decision() == Some(false) && !state.is_test());
     }
 }
 
@@ -390,27 +427,7 @@ fn record_machine() {
 #[kani::proof]
 #[kani::unwind(4)]
 fn dispute_moves_forward() {
-    let auth = Authorization::unsigned(
-        election(),
-        ScopeSet::empty().with(Scope::PublicBoard),
-        Day::new(0),
-        Day::new(0),
-    );
-    let Ok(cap) = auth.grant::<PublicBoard>(Day::new(0)) else {
-        panic!("granted")
-    };
-    let filing = DisputeFiling {
-        election_id: election(),
-        dispute_type: DisputeType::Other,
-        box_id: None,
-        record_hash: None,
-        evidence_hash: Hash512::ZERO,
-        commission_signed: true,
-        committee_signed: true,
-    };
-    let Ok(mut dispute) = Dispute::file(&filing, &cap) else {
-        panic!("filed")
-    };
+    let mut dispute = Dispute::unsigned(election(), DisputeType::Other);
     let rank = |s: DisputeStatus| match s {
         DisputeStatus::Open => 0u8,
         DisputeStatus::Investigating => 1,
@@ -517,8 +534,9 @@ static ORGS: [OrgId<'static>; 4] = [
 ];
 
 /// The first custody link is accepted exactly with index 1, the zero
-/// previous hash, both signatures, two organisations, and the first leg of
-/// the route `ORG-A → ORG-B → ORG-C`.
+/// previous hash, two organisations, and the first leg of the route
+/// `ORG-A → ORG-B → ORG-C` (the link rules; the signatures are bound to
+/// the roster by `CustodyChain::handoff`, tested with real keys in V1).
 #[kani::proof]
 #[kani::unwind(66)]
 fn custody_first_link_is_exact() {
@@ -539,39 +557,25 @@ fn custody_first_link_is_exact() {
     kani::assume(from_org < 4 && to_org < 4);
     let index: u32 = kani::any();
     let zero_previous: bool = kani::any();
-    let sender_signed: bool = kani::any();
-    let receiver_signed: bool = kani::any();
-    let handoff = CustodyHandoff {
+    let handoff = CustodyHandoffParts {
         election_id: ELECTION,
         box_id: BOX,
         index,
-        from: Actor {
-            id: SIGNER,
-            org: ORGS[from_org],
-        },
-        to: Actor {
-            id: SIGNER,
-            org: ORGS[to_org],
-        },
-        hash: Hash512([1; 64]),
-        previous: if zero_previous {
+        from_signer: SIGNER,
+        from_org: ORGS[from_org],
+        to_signer: SIGNER,
+        to_org: ORGS[to_org],
+        previous_handoff_hash: if zero_previous {
             Hash512::ZERO
         } else {
             Hash512([2; 64])
         },
         seal_digest: Hash512::ZERO,
-        paper_count: 5,
+        count: 5,
         time_bucket: TimeBucket::new(0),
-        sender_signed,
-        receiver_signed,
     };
-    let result = chain.handoff(&handoff);
-    let expected = index == 1
-        && zero_previous
-        && sender_signed
-        && receiver_signed
-        && from_org == 0
-        && to_org == 1;
+    let result = chain.link(&handoff, Hash512([1; 64]));
+    let expected = index == 1 && zero_previous && from_org == 0 && to_org == 1;
     assert_eq!(result.is_ok(), expected);
     assert_eq!(chain.handoffs(), u32::from(expected));
     assert!(chain.holds().is_empty());

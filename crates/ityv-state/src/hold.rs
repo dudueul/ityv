@@ -80,11 +80,16 @@ pub enum HoldReason {
     PublicationLate = 26,
     /// A box under review contributes to the verifier's status.
     BoxUnderReview = 27,
+    /// A seal change reports a seal found broken (§10.3, reason code 1).
+    SealBroken = 28,
+    /// The station's paper stock does not add up: `stock_received ≠
+    /// issued + unused + printer_waste` (§10.2, ITYV-BEH-089).
+    IssuanceStockMismatch = 29,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -113,6 +118,8 @@ impl HoldReason {
         Self::SplitView,
         Self::PublicationLate,
         Self::BoxUnderReview,
+        Self::SealBroken,
+        Self::IssuanceStockMismatch,
     ];
 
     /// The reason's code.

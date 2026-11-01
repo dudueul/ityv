@@ -441,3 +441,187 @@ fn record_count_range_is_exact() {
         record_count != 0 && record_count < 65
     );
 }
+
+use crate::primitives::{OrgId, SignerId};
+use crate::schema::events::{
+    CustodyHandoffBody, CustodyHandoffParts, DisputeAction, DisputeEventBody, DisputeEventParts,
+    DisputeType, FallbackBody, FallbackKind, FallbackParts, FallbackReason, LateBatchReason,
+    LegalOutcome, SealChangeReason, TallyEffect,
+};
+use crate::schema::genesis::{CaptureProfile, RosterRole};
+use crate::schema::witnessed::EventRole;
+
+static E1: ElectionId<'static> = match ElectionId::new(b"E") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static B1: BoxId<'static> = match BoxId::new(b"B") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static S1: SignerId<'static> = match SignerId::new(b"S") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static ORG_A: OrgId<'static> = match OrgId::new(b"A") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static ORG_B: OrgId<'static> = match OrgId::new(b"B") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+/// Every one-byte code of the M5 event schemas decodes exactly to the
+/// value whose code it is, and nothing else decodes.
+#[kani::proof]
+fn event_codes_are_exact() {
+    let code: u8 = kani::any();
+    let role = EventRole::from_code(code);
+    assert_eq!(role.is_some(), (1..=8).contains(&code));
+    if let Some(r) = role {
+        assert_eq!(r.code(), code);
+    }
+    let checks = [
+        (DisputeType::from_code(code).map(DisputeType::code), 1..=8),
+        (
+            DisputeAction::from_code(code).map(DisputeAction::code),
+            1..=4,
+        ),
+        (LegalOutcome::from_code(code).map(LegalOutcome::code), 1..=5),
+        (TallyEffect::from_code(code).map(TallyEffect::code), 0..=2),
+        (FallbackKind::from_code(code).map(FallbackKind::code), 1..=2),
+        (
+            FallbackReason::from_code(code).map(FallbackReason::code),
+            0..=4,
+        ),
+        (
+            SealChangeReason::from_code(code).map(SealChangeReason::code),
+            1..=5,
+        ),
+        (
+            LateBatchReason::from_code(code).map(LateBatchReason::code),
+            1..=4,
+        ),
+        (
+            CaptureProfile::from_code(code).map(CaptureProfile::code),
+            1..=3,
+        ),
+        (RosterRole::from_code(code).map(RosterRole::code), 1..=3),
+    ];
+    for (decoded, range) in checks {
+        assert_eq!(decoded.is_some(), range.contains(&code));
+        if let Some(back) = decoded {
+            assert_eq!(back, code);
+        }
+    }
+}
+
+/// A custody handoff body is built exactly when the index is at least 1,
+/// the previous hash is zero exactly for index 1, and the organisations
+/// differ.
+#[kani::proof]
+fn custody_handoff_rules_are_exact() {
+    let index: u32 = kani::any();
+    let zero_previous: bool = kani::any();
+    let same_org: bool = kani::any();
+    let parts = CustodyHandoffParts {
+        election_id: E1,
+        box_id: B1,
+        index,
+        from_signer: S1,
+        from_org: ORG_A,
+        to_signer: S1,
+        to_org: if same_org { ORG_A } else { ORG_B },
+        previous_handoff_hash: if zero_previous {
+            Hash512([0; 64])
+        } else {
+            Hash512([1; 64])
+        },
+        seal_digest: Hash512([2; 64]),
+        count: kani::any(),
+        time_bucket: TimeBucket::new(kani::any()),
+    };
+    let expected = index >= 1 && (index == 1) == zero_previous && !same_org;
+    assert_eq!(CustodyHandoffBody::new(&parts).is_ok(), expected);
+}
+
+/// A dispute event body is built exactly when the filing hash is zero
+/// exactly for a filing, the result hash is nonzero exactly for the two
+/// resolutions, and a record is named only with its box.
+#[kani::proof]
+fn dispute_event_rules_are_exact() {
+    let action = match kani::any::<u8>() % 4 {
+        0 => DisputeAction::Filed,
+        1 => DisputeAction::Investigating,
+        2 => DisputeAction::ResolvedTechnical,
+        _ => DisputeAction::ReferredLegal,
+    };
+    let zero_filing: bool = kani::any();
+    let zero_result: bool = kani::any();
+    let with_box: bool = kani::any();
+    let with_record: bool = kani::any();
+    let parts = DisputeEventParts {
+        election_id: E1,
+        action,
+        dispute_type: DisputeType::Other,
+        box_id: if with_box { Some(B1) } else { None },
+        record_hash: if with_record {
+            Some(Hash512([3; 64]))
+        } else {
+            None
+        },
+        evidence_hash: Hash512([4; 64]),
+        filing_hash: if zero_filing {
+            Hash512([0; 64])
+        } else {
+            Hash512([5; 64])
+        },
+        result_hash: if zero_result {
+            Hash512([0; 64])
+        } else {
+            Hash512([6; 64])
+        },
+        time_bucket: TimeBucket::new(0),
+    };
+    let filed = action == DisputeAction::Filed;
+    let resolved = matches!(
+        action,
+        DisputeAction::ResolvedTechnical | DisputeAction::ReferredLegal
+    );
+    let expected = filed == zero_filing && resolved != zero_result && (with_box || !with_record);
+    assert_eq!(DisputeEventBody::new(&parts).is_ok(), expected);
+}
+
+/// A fallback body is built exactly when the reason is `NotApplicable`
+/// exactly for an end and a marker range runs forward.
+#[kani::proof]
+fn fallback_rules_are_exact() {
+    let ended: bool = kani::any();
+    let reason_code: u8 = kani::any();
+    let Some(reason) = FallbackReason::from_code(reason_code) else {
+        return;
+    };
+    let first: u64 = kani::any();
+    let last: u64 = kani::any();
+    let with_markers: bool = kani::any();
+    let parts = FallbackParts {
+        election_id: E1,
+        box_id: B1,
+        kind: if ended {
+            FallbackKind::Ended
+        } else {
+            FallbackKind::Declared
+        },
+        reason,
+        statement_hash: Hash512([7; 64]),
+        markers: if with_markers {
+            Some(crate::schema::events::MarkerRange { first, last })
+        } else {
+            None
+        },
+        time_bucket: TimeBucket::new(0),
+    };
+    let expected = ended == (reason_code == 0) && (!with_markers || first <= last);
+    assert_eq!(FallbackBody::new(&parts).is_ok(), expected);
+}

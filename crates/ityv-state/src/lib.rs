@@ -20,6 +20,7 @@
 //! | [`dispute`] | Dispute life cycle | §13, VC-048, VC-049 |
 //! | [`status`] | The verifier status vocabulary | §14, VC-049, VC-050 |
 //! | [`hold`] | Sticky `HOLD_REVIEW` reasons | §10.2, §14 |
+//! | [`sig`] | Binding verification tokens to an event's signatures | §3.1, VC-006, VC-016, VC-098 |
 //! | [`error`] | Typed refusals | — |
 //!
 //! Properties that hold by construction:
@@ -39,11 +40,17 @@
 //!   vocabulary has no such variant, and a [`status::LegalReference`] comes
 //!   only from a verified signature of a legal authority.
 //!
+//! * Every signature an event carries is matched to a `Verified` token for
+//!   the same purpose, bytes and signature, from the key the genesis
+//!   registers for that signer and role; no two signers of one event share
+//!   a key half ([`sig`]).
+//!
 //! What this crate does **not** prove: that a signature is valid (it
-//! consumes `ityv-crypto`'s `Verified` tokens, or flags set by the caller
-//! where no canonical object exists yet, listed in ADR-0025), that an
-//! object is well formed (`ityv-encoding`), that a ledger is consistent
-//! (`ityv-ledger`), or anything about paper the inputs do not report.
+//! consumes `ityv-crypto`'s `Verified` tokens), that an object is well
+//! formed (`ityv-encoding`), that a ledger is consistent (`ityv-ledger`),
+//! that the keys it is given are the genesis's (the caller passes them from
+//! the verified genesis, [`boxes::BoxSpec::check_genesis`]), or anything
+//! about paper the inputs do not report.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -59,6 +66,7 @@ pub mod error;
 pub mod hold;
 pub mod issuance;
 pub mod record;
+pub mod sig;
 pub mod status;
 pub mod tally;
 
@@ -74,16 +82,15 @@ pub use auth::{
     prerequisites, stage,
 };
 pub use boxes::{
-    Audited, BallotBox, BoxOpening, BoxSpec, Closed, Counted, Fallback, FallbackEvent,
-    ImprintAudit, LateBatchClose, Open, PURPOSE_BOX_CLOSE, PURPOSE_LATE_BOX_CLOSE, PhysicalCounts,
-    Provisioned, Transition,
+    Audited, BallotBox, BoxSpec, CloseTokens, Closed, Counted, Fallback, Open, PURPOSE_BOX_CLOSE,
+    PURPOSE_LATE_BOX_CLOSE, Provisioned, Transition,
 };
 pub use close::{
-    CountFacts, MAX_VISIT_BALLOTS, Observed, RosterEntry, check_witnesses, count_verdict,
-    modules_gap_free,
+    CountFacts, MAX_VISIT_BALLOTS, Named, Observed, RosterEntry, check_witness_set,
+    check_witnesses, count_verdict, modules_gap_free, roster_key,
 };
-pub use custody::{Actor, CustodyChain, CustodyHandoff, ReasonCode, SealChange};
-pub use dispute::{Dispute, DisputeEvent, DisputeFiling, DisputeStatus, DisputeType};
+pub use custody::CustodyChain;
+pub use dispute::{Bodies, Dispute, DisputeEvent, DisputeStatus, DisputeType};
 pub use error::Error;
 pub use hold::{HoldReason, HoldSet};
 pub use issuance::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict};
@@ -91,6 +98,7 @@ pub use record::{
     Disposition, Exclusion, Primary, Profile, Receipt, RecordEvent, RecordState, RecordStatus,
     TEST_STYLE_PREFIX, is_test_style,
 };
+pub use sig::{Signed, check_event, halves_differ};
 pub use status::{
     Evidence, LegalReference, Outcome, PURPOSE_LEGAL_DECISION, Publication, Status, StatusReport,
     Step, evaluate,

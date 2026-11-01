@@ -1,6 +1,6 @@
 //! The dispute life cycle (PROTOCOL.md §13).
 //!
-//! A dispute is filed only with the receipt signatures of both the election
+//! A dispute is filed only with the signatures of both the election
 //! commission and the Independent Verification Committee (ITYV-BEH-135),
 //! always starts `OPEN` (ITYV-BEH-133), and moves forward only:
 //!
@@ -11,82 +11,32 @@
 //!  └──refer_legal───────────┴──────────────────────────────────────────────▶ REFERRED_LEGAL
 //! ```
 //!
-//! A technical resolution can still be appealed to the legal track
-//! (ITYV-BEH-136, ITYV-BEH-138). `REFERRED_LEGAL` is final for the
-//! machine: the legal decision enters only as a `LegalDecisionRef`
-//! ([`crate::status::LegalReference`]), and no machine transition produces
-//! `LEGAL_CERTIFIED` or invalidates a record (VC-049, ITYV-BEH-140,
-//! ITYV-BEH-279).
+//! Every step is a `DisputeEvent` (`DisputeEventBody`, schema `0x000E`)
+//! signed by both bodies, whose keys share no half (VC-006, VC-098). A
+//! later event names the filing by the object hash of its body and repeats
+//! its type and target. A technical resolution can still be appealed to the
+//! legal track (ITYV-BEH-136, ITYV-BEH-138). `REFERRED_LEGAL` is final for
+//! the machine and stays unresolved for it: the legal decision enters only
+//! as a `LegalDecisionRef` ([`crate::status::LegalReference`]), shown next
+//! to the status, and no machine transition produces `LEGAL_CERTIFIED` or
+//! invalidates a record (VC-049, ITYV-BEH-140, ITYV-BEH-279).
 //!
 //! An inclusion dispute (`INCLUSION_MISSING`) exists only from stage 3 and
-//! takes the `VOTER_CODE` capability; every other type takes
-//! `PUBLIC_BOARD` (§17).
-//!
-//! `DisputeEvent` (schema `0x000E`) has no canonical encoding yet; the
-//! filing is a minimal typed input (ADR-0025).
+//! takes the `VOTER_CODE` capability; every other type takes `PUBLIC_BOARD`
+//! from stage 0 (§17).
 
-use ityv_encoding::{BoxId, ElectionId, Hash512, Scope};
+use ityv_crypto::HybridVerifyingKey;
+use ityv_crypto::hash::object_hash;
+use ityv_encoding::{
+    BoxId, DisputeAction, DisputeEventBody, DisputeEventParts, ElectionId, EventRole, Hash512,
+    SCHEMA_DISPUTE_EVENT_BODY, Scope,
+};
+
+pub use ityv_encoding::DisputeType;
 
 use crate::auth::{Cap, PublicBoard, VoterCode};
 use crate::error::Error;
-
-/// The dispute types of §13.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum DisputeType {
-    /// `INCLUSION_MISSING`: a slip's tracking code is not on the board.
-    InclusionMissing = 1,
-    /// `COUNT_MISMATCH`.
-    CountMismatch = 2,
-    /// `CUSTODY`.
-    Custody = 3,
-    /// `CHALLENGE_FAIL`.
-    ChallengeFail = 4,
-    /// `POSTAL`.
-    Postal = 5,
-    /// `OTHER`.
-    Other = 6,
-    /// `SPLIT_VIEW` (VC-065).
-    SplitView = 7,
-    /// `BUILD_MISMATCH` (VC-091).
-    BuildMismatch = 8,
-}
-
-impl DisputeType {
-    /// Every type in code order.
-    pub const ALL: [Self; 8] = [
-        Self::InclusionMissing,
-        Self::CountMismatch,
-        Self::Custody,
-        Self::ChallengeFail,
-        Self::Postal,
-        Self::Other,
-        Self::SplitView,
-        Self::BuildMismatch,
-    ];
-
-    /// The wire code.
-    #[must_use]
-    pub const fn code(self) -> u8 {
-        self as u8
-    }
-
-    /// Returns the type with wire code `code`, if defined.
-    #[must_use]
-    pub const fn from_code(code: u8) -> Option<Self> {
-        match code {
-            1 => Some(Self::InclusionMissing),
-            2 => Some(Self::CountMismatch),
-            3 => Some(Self::Custody),
-            4 => Some(Self::ChallengeFail),
-            5 => Some(Self::Postal),
-            6 => Some(Self::Other),
-            7 => Some(Self::SplitView),
-            8 => Some(Self::BuildMismatch),
-            _ => None,
-        }
-    }
-}
+use crate::sig::{Signed, check_event, halves_differ};
 
 /// The dispute statuses of §13.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,23 +76,14 @@ pub enum DisputeEvent {
     ReferLegal,
 }
 
-/// A dispute filing (minimal input).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DisputeFiling<'a> {
-    /// The election.
-    pub election_id: ElectionId<'a>,
-    /// The type.
-    pub dispute_type: DisputeType,
-    /// The box concerned, if any.
-    pub box_id: Option<BoxId<'a>>,
-    /// The record concerned, if any.
-    pub record_hash: Option<Hash512>,
-    /// Hash of the evidence (the original is restricted).
-    pub evidence_hash: Hash512,
-    /// Whether the election commission's receipt signature verified.
-    pub commission_signed: bool,
-    /// Whether the committee's receipt signature verified.
-    pub committee_signed: bool,
+/// The keys the genesis registers for the two bodies that sign every
+/// dispute event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bodies<'k> {
+    /// The election commission (선관위).
+    pub commission: &'k HybridVerifyingKey,
+    /// The Independent Verification Committee (독립검증위원회).
+    pub committee: &'k HybridVerifyingKey,
 }
 
 /// A dispute.
@@ -153,23 +94,67 @@ pub struct Dispute<'a> {
     box_id: Option<BoxId<'a>>,
     record_hash: Option<Hash512>,
     evidence_hash: Hash512,
+    filing_hash: Hash512,
     status: DisputeStatus,
 }
 
+/// Checks both bodies' signatures on a dispute event.
+fn check_bodies(signed: &Signed<'_>, bodies: &Bodies<'_>) -> Result<(), Error> {
+    if !halves_differ(bodies.commission, bodies.committee) {
+        return Err(Error::SignatureSigner);
+    }
+    // The envelope admits a dispute event only with exactly one commission
+    // and one committee signature (`ityv_encoding::roles_satisfied`).
+    check_event(signed, |s| match s.role {
+        EventRole::Commission => Ok(bodies.commission),
+        EventRole::Committee => Ok(bodies.committee),
+        EventRole::Clerk
+        | EventRole::Observer
+        | EventRole::Sender
+        | EventRole::Receiver
+        | EventRole::Authority
+        | EventRole::Device => Err(Error::NotRegistered),
+    })
+}
+
+fn decode<'a>(signed: &Signed<'a>) -> Result<DisputeEventParts<'a>, Error> {
+    let body: DisputeEventBody<'a> = signed
+        .event
+        .body(SCHEMA_DISPUTE_EVENT_BODY)
+        .map_err(|_| Error::Decode)?;
+    Ok(*body.parts())
+}
+
 impl<'a> Dispute<'a> {
-    fn filed(filing: &DisputeFiling<'a>, election_id: ElectionId<'_>) -> Result<Self, Error> {
-        if filing.election_id.as_bytes() != election_id.as_bytes() {
+    fn filed(
+        signed: &Signed<'a>,
+        bodies: &Bodies<'_>,
+        election_id: ElectionId<'_>,
+        inclusion: bool,
+    ) -> Result<Self, Error> {
+        let p = decode(signed)?;
+        if p.election_id.as_bytes() != election_id.as_bytes() {
             return Err(Error::Mismatch);
         }
-        if !(filing.commission_signed && filing.committee_signed) {
+        if !matches!(p.action, DisputeAction::Filed) {
             return Err(Error::DisputeFiling);
         }
+        match (
+            inclusion,
+            matches!(p.dispute_type, DisputeType::InclusionMissing),
+        ) {
+            (false, true) => return Err(Error::ScopeMissing(Scope::VoterCode)),
+            (true, false) => return Err(Error::Mismatch),
+            (false, false) | (true, true) => {}
+        }
+        check_bodies(signed, bodies)?;
         Ok(Self {
-            election_id: filing.election_id,
-            kind: filing.dispute_type,
-            box_id: filing.box_id,
-            record_hash: filing.record_hash,
-            evidence_hash: filing.evidence_hash,
+            election_id: p.election_id,
+            kind: p.dispute_type,
+            box_id: p.box_id,
+            record_hash: p.record_hash,
+            evidence_hash: p.evidence_hash,
+            filing_hash: object_hash(signed.event.body_bytes()),
             status: DisputeStatus::Open,
         })
     }
@@ -177,37 +162,83 @@ impl<'a> Dispute<'a> {
     /// Files a dispute of any type but `INCLUSION_MISSING`.
     ///
     /// # Errors
-    /// [`Error::ScopeMissing`] with `VOTER_CODE` for an inclusion dispute
-    /// (use [`Self::file_inclusion`]), [`Error::Mismatch`] if the
-    /// capability belongs to another election, [`Error::DisputeFiling`]
-    /// unless both bodies signed the receipt.
-    pub fn file(filing: &DisputeFiling<'a>, cap: &Cap<'_, PublicBoard>) -> Result<Self, Error> {
-        if matches!(filing.dispute_type, DisputeType::InclusionMissing) {
-            return Err(Error::ScopeMissing(Scope::VoterCode));
-        }
-        Self::filed(filing, cap.election_id())
+    /// [`Error::Decode`] if the event is not a dispute event,
+    /// [`Error::Mismatch`] if the capability belongs to another election,
+    /// [`Error::DisputeFiling`] unless it is a filing (the envelope admits
+    /// only one signature of each body), [`Error::ScopeMissing`] with
+    /// `VOTER_CODE` for an inclusion
+    /// dispute (use [`Self::file_inclusion`]), [`Error::SignatureSigner`]
+    /// if the two bodies' keys share a half, and the errors of
+    /// [`check_event`].
+    pub fn file(
+        signed: &Signed<'a>,
+        bodies: &Bodies<'_>,
+        cap: &Cap<'_, PublicBoard>,
+    ) -> Result<Self, Error> {
+        Self::filed(signed, bodies, cap.election_id(), false)
     }
 
     /// Files an inclusion dispute (stage 3, VC-048).
     ///
     /// # Errors
-    /// [`Error::Mismatch`] for another type or another election,
-    /// [`Error::DisputeFiling`] unless both bodies signed the receipt.
+    /// As [`Self::file`]; [`Error::Mismatch`] for another type.
     pub fn file_inclusion(
-        filing: &DisputeFiling<'a>,
+        signed: &Signed<'a>,
+        bodies: &Bodies<'_>,
         cap: &Cap<'_, VoterCode>,
     ) -> Result<Self, Error> {
-        if !matches!(filing.dispute_type, DisputeType::InclusionMissing) {
-            return Err(Error::Mismatch);
-        }
-        Self::filed(filing, cap.election_id())
+        Self::filed(signed, bodies, cap.election_id(), true)
     }
 
-    /// Applies a status change.
+    /// Applies a signed status change.
+    ///
+    /// # Errors
+    /// [`Error::Decode`] if the event is not a dispute event,
+    /// [`Error::Mismatch`] if it names another filing or changes the
+    /// election, type, target or evidence, [`Error::DisputeFiling`] for a
+    /// second filing, the signature errors of [`Self::file`], and
+    /// [`Error::DisputeTransition`] if the change does not apply.
+    pub fn record(self, signed: &Signed<'_>, bodies: &Bodies<'_>) -> Result<Self, Error> {
+        let p = decode(signed)?;
+        let same = p.election_id.as_bytes() == self.election_id.as_bytes()
+            && p.filing_hash == self.filing_hash
+            && p.dispute_type == self.kind
+            && p.box_id.map(|b| b.as_bytes()) == self.box_id.map(|b| b.as_bytes())
+            && p.record_hash == self.record_hash
+            && p.evidence_hash == self.evidence_hash;
+        if !same {
+            return Err(Error::Mismatch);
+        }
+        let event = match p.action {
+            DisputeAction::Filed => return Err(Error::DisputeFiling),
+            DisputeAction::Investigating => DisputeEvent::Investigate,
+            DisputeAction::ResolvedTechnical => DisputeEvent::ResolveTechnical,
+            DisputeAction::ReferredLegal => DisputeEvent::ReferLegal,
+        };
+        check_bodies(signed, bodies)?;
+        self.apply(event)
+    }
+
+    /// An open dispute without signatures, for unit tests and Kani
+    /// harnesses only.
+    #[cfg(any(test, kani))]
+    pub(crate) const fn unsigned(election_id: ElectionId<'a>, kind: DisputeType) -> Self {
+        Self {
+            election_id,
+            kind,
+            box_id: None,
+            record_hash: None,
+            evidence_hash: Hash512::ZERO,
+            filing_hash: Hash512([1; 64]),
+            status: DisputeStatus::Open,
+        }
+    }
+
+    /// The transition rule (no signature).
     ///
     /// # Errors
     /// [`Error::DisputeTransition`] if the change does not apply.
-    pub const fn apply(self, event: DisputeEvent) -> Result<Self, Error> {
+    pub(crate) const fn apply(self, event: DisputeEvent) -> Result<Self, Error> {
         let next = match (self.status, event) {
             (DisputeStatus::Open, DisputeEvent::Investigate) => DisputeStatus::Investigating,
             (
@@ -273,6 +304,13 @@ impl<'a> Dispute<'a> {
         &self.evidence_hash
     }
 
+    /// The object hash of the filing body, by which later events and a
+    /// `LegalDecisionRef` name the dispute.
+    #[must_use]
+    pub const fn filing_hash(&self) -> &Hash512 {
+        &self.filing_hash
+    }
+
     /// The status.
     #[must_use]
     pub const fn status(&self) -> DisputeStatus {
@@ -281,8 +319,9 @@ impl<'a> Dispute<'a> {
 
     /// Whether the dispute keeps the verifier in `HOLD_REVIEW` (§14 step
     /// 9). Only a technical resolution ends that; a dispute referred to the
-    /// legal track stays unresolved for the machine, whose status never
-    /// becomes `LEGAL_CERTIFIED` (ADR-0025, spec gap 8).
+    /// legal track stays unresolved for the machine whatever the court
+    /// decides, and the machine status never becomes `LEGAL_CERTIFIED`
+    /// (PROTOCOL.md §13).
     #[must_use]
     pub const fn is_unresolved(&self) -> bool {
         !matches!(self.status, DisputeStatus::ResolvedTechnical)
@@ -291,37 +330,10 @@ impl<'a> Dispute<'a> {
 
 #[cfg(test)]
 mod tests {
-    use ityv_encoding::{BoxId, Day, ElectionId, Hash512, Scope, ScopeSet};
+    use ityv_encoding::ElectionId;
 
-    use super::{Dispute, DisputeEvent, DisputeFiling, DisputeStatus, DisputeType};
-    use crate::auth::{Authorization, PublicBoard, VoterCode};
+    use super::{Dispute, DisputeEvent, DisputeStatus, DisputeType};
     use crate::error::Error;
-
-    fn auth() -> Authorization<'static> {
-        Authorization::unsigned(
-            ElectionId::new(b"E1").unwrap(),
-            ScopeSet::from_slice(&[
-                Scope::PublicBoard,
-                Scope::TrusteeBody,
-                Scope::BallotMark,
-                Scope::VoterCode,
-            ]),
-            Day::new(0),
-            Day::new(9),
-        )
-    }
-
-    fn filing(dispute_type: DisputeType) -> DisputeFiling<'static> {
-        DisputeFiling {
-            election_id: ElectionId::new(b"E1").unwrap(),
-            dispute_type,
-            box_id: Some(BoxId::new(b"B1").unwrap()),
-            record_hash: Some(Hash512([3; 64])),
-            evidence_hash: Hash512([4; 64]),
-            commission_signed: true,
-            committee_signed: true,
-        }
-    }
 
     #[test]
     fn codes() {
@@ -340,61 +352,31 @@ mod tests {
         assert_eq!(DisputeStatus::ReferredLegal.name(), "REFERRED_LEGAL");
     }
 
-    #[test]
-    fn filing_rules() {
-        let a = auth();
-        let board = a.grant::<PublicBoard>(Day::new(1)).unwrap();
-        let code = a.grant::<VoterCode>(Day::new(1)).unwrap();
-        for t in DisputeType::ALL {
-            let f = filing(t);
-            if t == DisputeType::InclusionMissing {
-                assert_eq!(
-                    Dispute::file(&f, &board),
-                    Err(Error::ScopeMissing(Scope::VoterCode))
-                );
-                let d = Dispute::file_inclusion(&f, &code).unwrap();
-                assert_eq!(d.status(), DisputeStatus::Open);
-                assert_eq!(d.dispute_type(), t);
-            } else {
-                assert_eq!(Dispute::file_inclusion(&f, &code), Err(Error::Mismatch));
-                let d = Dispute::file(&f, &board).unwrap();
-                assert_eq!(d.status(), DisputeStatus::Open);
-                assert!(d.is_unresolved());
-                assert_eq!(d.election_id(), f.election_id);
-                assert_eq!(d.box_id(), f.box_id);
-                assert_eq!(d.record_hash(), f.record_hash.as_ref());
-                assert_eq!(d.evidence_hash(), &f.evidence_hash);
+    proptest::proptest! {
+        /// Random event sequences only move forward and never reopen.
+        #[test]
+        fn sequences(events in proptest::collection::vec(0u8..3, 0..8)) {
+            let rank = |s: DisputeStatus| match s {
+                DisputeStatus::Open => 0,
+                DisputeStatus::Investigating => 1,
+                DisputeStatus::ResolvedTechnical => 2,
+                DisputeStatus::ReferredLegal => 3,
+            };
+            let mut dispute =
+                Dispute::unsigned(ElectionId::new(b"E1").unwrap(), DisputeType::Other);
+            for code in events {
+                let event = match code {
+                    0 => DisputeEvent::Investigate,
+                    1 => DisputeEvent::ResolveTechnical,
+                    _ => DisputeEvent::ReferLegal,
+                };
+                if let Ok(next) = dispute.apply(event) {
+                    proptest::prop_assert!(rank(next.status()) > rank(dispute.status()));
+                    proptest::prop_assert!(next.status() != DisputeStatus::Open);
+                    dispute = next;
+                }
             }
         }
-        for (commission, committee) in [(false, true), (true, false), (false, false)] {
-            let f = DisputeFiling {
-                commission_signed: commission,
-                committee_signed: committee,
-                ..filing(DisputeType::Other)
-            };
-            assert_eq!(Dispute::file(&f, &board), Err(Error::DisputeFiling));
-            let f = DisputeFiling {
-                dispute_type: DisputeType::InclusionMissing,
-                ..f
-            };
-            assert_eq!(
-                Dispute::file_inclusion(&f, &code),
-                Err(Error::DisputeFiling)
-            );
-        }
-        let elsewhere = DisputeFiling {
-            election_id: ElectionId::new(b"E2").unwrap(),
-            ..filing(DisputeType::Other)
-        };
-        assert_eq!(Dispute::file(&elsewhere, &board), Err(Error::Mismatch));
-        let elsewhere = DisputeFiling {
-            dispute_type: DisputeType::InclusionMissing,
-            ..elsewhere
-        };
-        assert_eq!(
-            Dispute::file_inclusion(&elsewhere, &code),
-            Err(Error::Mismatch)
-        );
     }
 
     #[test]
@@ -415,9 +397,8 @@ mod tests {
             (ReferredLegal, ResolveTechnical, None),
             (ReferredLegal, ReferLegal, None),
         ];
-        let a = auth();
-        let board = a.grant::<PublicBoard>(Day::new(1)).unwrap();
-        let open = Dispute::file(&filing(DisputeType::Custody), &board).unwrap();
+        let open = Dispute::unsigned(ElectionId::new(b"E1").unwrap(), DisputeType::Custody);
+        assert!(open.is_unresolved());
         for (from, event, to) in table {
             let path: &[DisputeEvent] = match from {
                 Open => &[],

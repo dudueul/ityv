@@ -14,11 +14,14 @@ pub mod box_close;
 pub mod cast_record;
 pub mod challenge;
 pub mod checkpoint;
+pub mod events;
+pub mod genesis;
 pub mod ledger_frame;
 pub mod scan_count;
 pub mod share_package;
 pub mod slip;
 pub mod util;
+pub mod witnessed;
 
 use crate::primitives::SchemaId;
 
@@ -84,3 +87,33 @@ pub const SCHEMA_DEVICE_ATTESTATION: SchemaId = SchemaId::new(0x0024);
 
 /// `AttestationSummary` (ENCODING.md §8.30, `0x0025`).
 pub const SCHEMA_ATTESTATION_SUMMARY: SchemaId = SchemaId::new(0x0025);
+
+/// `CustodyHandoffBody` (ENCODING.md §6, `0x0008`).
+pub const SCHEMA_CUSTODY_HANDOFF_BODY: SchemaId = SchemaId::new(0x0008);
+
+/// `DisputeEventBody` (ENCODING.md §6, `0x000E`).
+pub const SCHEMA_DISPUTE_EVENT_BODY: SchemaId = SchemaId::new(0x000E);
+
+/// `LegalDecisionRefBody` (ENCODING.md §6, `0x000F`).
+pub const SCHEMA_LEGAL_DECISION_REF_BODY: SchemaId = SchemaId::new(0x000F);
+
+/// `WitnessedEvent` (ENCODING.md §6, `0x0028`).
+pub const SCHEMA_WITNESSED_EVENT: SchemaId = SchemaId::new(0x0028);
+
+/// `BoxOpenedBody` (ENCODING.md §6, `0x0029`).
+pub const SCHEMA_BOX_OPENED_BODY: SchemaId = SchemaId::new(0x0029);
+
+/// `FallbackBody` (ENCODING.md §6, `0x002A`).
+pub const SCHEMA_FALLBACK_BODY: SchemaId = SchemaId::new(0x002A);
+
+/// `IssuanceCountBody` (ENCODING.md §6, `0x002B`).
+pub const SCHEMA_ISSUANCE_COUNT_BODY: SchemaId = SchemaId::new(0x002B);
+
+/// `ImprintAuditBody` (ENCODING.md §6, `0x002C`).
+pub const SCHEMA_IMPRINT_AUDIT_BODY: SchemaId = SchemaId::new(0x002C);
+
+/// `SealChangeBody` (ENCODING.md §6, `0x002D`).
+pub const SCHEMA_SEAL_CHANGE_BODY: SchemaId = SchemaId::new(0x002D);
+
+/// `LateBatchCloseBody` (ENCODING.md §6, `0x002E`).
+pub const SCHEMA_LATE_BATCH_CLOSE_BODY: SchemaId = SchemaId::new(0x002E);

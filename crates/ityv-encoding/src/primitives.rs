@@ -269,6 +269,10 @@ pub struct OrgId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SignerId<'a>(Ident<'a>);
 
+/// Identifier of a custody route in the genesis (PROTOCOL.md §4.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RouteId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -322,3 +326,4 @@ ident_newtype!(TrusteeId);
 ident_newtype!(ObserverId);
 ident_newtype!(OrgId);
 ident_newtype!(SignerId);
+ident_newtype!(RouteId);

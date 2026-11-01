@@ -979,6 +979,7 @@ impl<'c> OpenBox<'c> {
                 visits: self.totals.visits,
                 envelopes: inputs.envelopes.map_or(0, |e| e.envelopes),
                 stickers: inputs.envelopes.map_or(0, |e| e.stickers),
+                spoil_envelopes: inputs.spoiled_envelopes,
             },
             record_set_root: inputs.record_set_root,
             journal_head: self.journal_head,

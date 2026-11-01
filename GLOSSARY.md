@@ -67,7 +67,11 @@
 | 보고 단위 | reporting unit | `reporting_unit` | 종이 개표 결과가 법령에 따라 공개되는 단위(선거일 투표구, 관내·관외 사전투표 단위 등). 암호 합계를 이 단위로 열고 `PaperCountReport`와 대조한다(PROTOCOL §11.2, §11.5, VC-075). |
 | 감사 사유 코드 | audit reason code | — | `SampleComparison`의 불일치 종류 0–6. 확정 판정 불일치(1·2)는 그 장치 전수 대조, `UNREADABLE`·`BLANK`인데 종이가 유효(3·4)는 비율 공개(PROTOCOL §12.3, VC-074). |
 | 늦은 마감 | late close | `LateBatchClose`, `LateBoxClose` | 멈췄던 장치를 입회 아래 되살려 저널에서 미결 배치·마감을 닫는 절차. |
-| 수동 마감 | manual close | `BoxCloseManual` | 장치 서명 없는 투표함 마감. 수록은 되지만 자동으로 `HOLD_REVIEW`이며, 사람이 센 수(종이·봉투·스티커)가 같은 `LateBoxClose`만 해소한다(ADR-0025). |
+| 수동 마감 | manual close | `BoxCloseManual` | 장치 서명 없는 투표함 마감. 수록은 되지만 자동으로 `HOLD_REVIEW`이며, 마감 뒤 24시간 안에 사람이 센 수(종이·봉투·스티커·폐기 봉투)가 같은 `LateBoxClose`만 해소한다(ADR-0025, VC-100). |
+| 서명 이벤트 봉투 | witnessed event | `WitnessedEvent` | 사람이 서명하는 장부 이벤트(개시, 비상 투입, 교부 회계, 각인 판독, 인계, 봉인 변경, 늦은 배치 마감, 분쟁, 법적 결정)의 공통 형식. 본문 객체 바이트와 역할이 붙은 하이브리드 서명들을 담는다(스키마 0x0028). |
+| 서명 결속 | signature binding | `sig::check_event` | 이벤트의 서명마다 검증 토큰을 받아 purpose·본문 바이트·서명 바이트·genesis가 그 사람·역할·조직에 등록한 키가 모두 맞는지 보는 확인. 한 이벤트의 서명자 키는 어느 반쪽도 겹칠 수 없다(VC-098). |
+| 보관 담당자 | custodian | `RosterRole::Custodian` | 투표함을 옮기거나 받는 사람(경찰, 우정, 개표소 직원). genesis 명부에 등록되며 인계에만 서명한다. |
+| 법적 제외 | legal exclusion | `LEGAL_EXCLUDED` | 훼손·오배송 기록을 법적 결정이 집계에서 뺀 제외 사유. 결정의 집계 효과(포함·제외)로만 정해지고 기계는 판정하지 않는다(VC-099). |
 | 보류 사유 | hold reason | `HoldReason` | `HOLD_REVIEW`를 일으킨 개별 사유. 사유는 쌓이기만 하고, 명세가 해소 이벤트로 정한 늦은 마감과 늦은 배치만 해당 사유를 지운다(ADR-0025). |
 | 승인 토큰 | capability | `Cap` | 승인 범위 하나의 연산 자격을 나타내는 값. 두 기관이 서명한 법적 승인 객체를 확인한 뒤 효력 기간 안에서만 만들어지며, 범위가 막는 연산은 이 값을 인자로 요구한다(CONSTITUTION §1.7, ADR-0025). |
 | 법적 결정 참조 | legal decision reference | `LegalDecisionRef` | 법정 권한 기관이 서명한 결정문 참조(스키마 0x000F). `LEGAL_CERTIFIED` 표시의 유일한 근거이며, 검증기는 이를 표시할 뿐 판정하지 않는다(VC-049). |

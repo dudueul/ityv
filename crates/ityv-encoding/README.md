@@ -69,6 +69,17 @@ assert_eq!(decoded, frame);
 | 0x0023 / 0x0024 | `DeviceAttestationBody` / `DeviceAttestation` | §8.28–§8.29 | 장치 종류 1–10, 도전 경로 1·2, 구성 요소 1–16개(식별자 순, 중복 없음), 모듈 진술 0–7개(같은 모듈 두 번 없음). 구성 해시는 다시 계산하지 않는다(검증기의 일) |
 | 0x0025 | `AttestationSummary` | §8.30 | 서명 대상은 1–7번 필드(`SummaryParts`) |
 | — | `ChallengeMessage`, `ModuleStatementMessage` | §4, §8.19, §8.28 | 헤더 없는 서명 입력(참관인 도전값, 모듈 진술) |
+| 0x0008 | `CustodyHandoffBody`, `CustodyHandoffParts` | §8.33 | 순번 1부터, 이전 해시는 첫 인계만 0, 두 조직이 다름 |
+| 0x000E | `DisputeEventBody`, `DisputeEventParts`, `DisputeAction`, `DisputeType` | §8.34 | 접수 해시는 접수만 0, 결과 해시는 해결·회부만 0 아님, 기록은 투표함과 함께 |
+| 0x000F | `LegalDecisionRefBody`, `LegalDecisionRefParts`, `LegalOutcome`, `TallyEffect` | §8.35 | 대상 분쟁 해시 0 아님 |
+| 0x0029 | `BoxOpenedBody`, `BoxOpenedParts` | §8.36 | |
+| 0x002A | `FallbackBody`, `FallbackParts`, `FallbackKind`, `FallbackReason`, `MarkerRange` | §8.37 | 사유 0은 종료일 때만, 표지 범위는 앞으로 |
+| 0x002B | `IssuanceCountBody`, `IssuanceCountParts`, `EnvelopeIssuance` | §8.38 | 등식은 인코딩 규칙이 아니다 |
+| 0x002C | `ImprintAuditBody`, `ImprintAuditParts` | §8.39 | |
+| 0x002D | `SealChangeBody`, `SealChangeParts`, `SealChangeReason` | §8.40 | 새 봉인 해시는 앞과 다름 |
+| 0x002E | `LateBatchCloseBody`, `LateBatchCloseParts`, `LateBatchReason` | §8.41 | 배치 본문 해시 0 아님 |
+| 0x0028 | `WitnessedEvent`, `EventSig`, `EventRole` | §8.42 | 위 본문 9종의 봉투. 서명자 오름차순, 본문별 역할 조합(`roles_satisfied`), purpose는 `purpose_of` |
+| — | `GenesisBox`, `CustodyRoute`, `RosterSigner`, `CaptureProfile`, `RosterRole` | §8.43 | genesis(0x0002) 안의 필드형. 경로는 2–8곳이고 이웃이 다름, 임명 해시 0 아님 |
 
 0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103·0x0104·0x0105는 `ityv-cunit`가 구현한다(ENCODING §6).
 

@@ -17,6 +17,9 @@ use crate::writer::Writer;
 /// Length of one hybrid signature (`mldsa87[4627] ‖ ed25519[64]`).
 pub const HYBRID_SIG_LEN: usize = 4691;
 
+/// Length of one hybrid verifying key (`mldsa87[2592] ‖ ed25519[32]`).
+pub const HYBRID_VK_LEN: usize = 2624;
+
 /// Length of one Ed25519 signature.
 pub const ED25519_SIG_LEN: usize = 64;
 
@@ -399,7 +402,13 @@ pub struct ModuleIds<'a> {
 }
 
 impl<'a> ModuleIds<'a> {
-    /// Builds the set; `None` unless strictly ascending and at most six.
+    /// The empty set.
+    pub const EMPTY: Self = Self {
+        items: [None; MAX_MODULES],
+        count: 0,
+    };
+
+    /// Builds the set; `None` unless strictly ascending and at most seven.
     #[must_use]
     pub fn new(ids: &[ModuleId<'a>]) -> Option<Self> {
         if ids.len() > MAX_MODULES {

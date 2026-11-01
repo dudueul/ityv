@@ -53,12 +53,15 @@ pub const fn stage(scope: Scope) -> u8 {
 
 /// The scopes that `scope` presupposes.
 ///
-/// Stages are not skipped (`LEGAL_ANNEX.md` §3.3 rule 3): every scope above
-/// stage 0 requires `PUBLIC_BOARD`, every scope above stage 1 requires
-/// `TRUSTEE_BODY`, and `VOTER_CODE` requires `BALLOT_MARK` and
-/// `TRUSTEE_BODY` (VC-008). Stage 2 has several scopes; the specification
-/// names only `BALLOT_MARK` as the prerequisite of stage 3, so the other
-/// stage-2 scopes are not required (ADR-0025, spec gap 1).
+/// Stages are not skipped (`LEGAL_ANNEX.md` §3.3 rule 3, VC-008): every
+/// scope above stage 0 requires `PUBLIC_BOARD`, every scope above stage 1
+/// requires `TRUSTEE_BODY`, and `VOTER_CODE` requires every stage-2 scope
+/// (`BALLOT_MARK`, `CRYPTO_TALLY_AID`, `RLA`, `OBSERVER_ACCESS`,
+/// `DEPLOY_AUTH`, `STAGE_GATE`): stage 3 begins only on a complete stage 2.
+/// `RLA` also requires `CRYPTO_TALLY_AID`, because the audit draws its
+/// sample from the tally scope's included records (PROTOCOL.md §12.1), so
+/// the status ladder `CRYPTO_TALLY_VERIFIED → PAPER_AUDITED` is never
+/// skipped.
 #[must_use]
 pub const fn prerequisites(scope: Scope) -> ScopeSet {
     let board = ScopeSet::empty().with(Scope::PublicBoard);
@@ -68,11 +71,17 @@ pub const fn prerequisites(scope: Scope) -> ScopeSet {
         Scope::TrusteeBody => board,
         Scope::BallotMark
         | Scope::CryptoTallyAid
-        | Scope::Rla
         | Scope::ObserverAccess
         | Scope::DeployAuth
         | Scope::StageGate => trustees,
-        Scope::VoterCode => trustees.with(Scope::BallotMark),
+        Scope::Rla => trustees.with(Scope::CryptoTallyAid),
+        Scope::VoterCode => trustees
+            .with(Scope::BallotMark)
+            .with(Scope::CryptoTallyAid)
+            .with(Scope::Rla)
+            .with(Scope::ObserverAccess)
+            .with(Scope::DeployAuth)
+            .with(Scope::StageGate),
     }
 }
 
@@ -312,9 +321,14 @@ mod tests {
             .iter()
             .any(|s| *s != Scope::PublicBoard && has(*s));
         let above1 = Scope::ALL.iter().any(|s| stage(*s) >= 2 && has(*s));
+        let stage2_complete = Scope::ALL
+            .iter()
+            .filter(|s| stage(**s) == 2)
+            .all(|s| has(*s));
         (!above0 || has(Scope::PublicBoard))
             && (!above1 || has(Scope::TrusteeBody))
-            && (!has(Scope::VoterCode) || has(Scope::BallotMark))
+            && (!has(Scope::VoterCode) || stage2_complete)
+            && (!has(Scope::Rla) || has(Scope::CryptoTallyAid))
     }
 
     #[test]
@@ -333,7 +347,6 @@ mod tests {
         for scope in [
             Scope::BallotMark,
             Scope::CryptoTallyAid,
-            Scope::Rla,
             Scope::ObserverAccess,
             Scope::DeployAuth,
             Scope::StageGate,
@@ -344,8 +357,25 @@ mod tests {
             );
         }
         assert_eq!(
+            prerequisites(Scope::Rla),
+            ScopeSet::from_slice(&[
+                Scope::PublicBoard,
+                Scope::TrusteeBody,
+                Scope::CryptoTallyAid
+            ])
+        );
+        assert_eq!(
             prerequisites(Scope::VoterCode),
-            ScopeSet::from_slice(&[Scope::PublicBoard, Scope::TrusteeBody, Scope::BallotMark])
+            ScopeSet::from_slice(&[
+                Scope::PublicBoard,
+                Scope::TrusteeBody,
+                Scope::BallotMark,
+                Scope::CryptoTallyAid,
+                Scope::Rla,
+                Scope::ObserverAccess,
+                Scope::DeployAuth,
+                Scope::StageGate,
+            ])
         );
     }
 
@@ -390,6 +420,34 @@ mod tests {
             Err(Error::ScopePrerequisite {
                 scope: Scope::Rla,
                 requires: Scope::TrusteeBody
+            })
+        );
+        assert_eq!(
+            check_scope_rules(ScopeSet::from_slice(&[
+                Scope::PublicBoard,
+                Scope::TrusteeBody,
+                Scope::Rla
+            ])),
+            Err(Error::ScopePrerequisite {
+                scope: Scope::Rla,
+                requires: Scope::CryptoTallyAid
+            })
+        );
+        // Stage 3 on a partial stage 2.
+        assert_eq!(
+            check_scope_rules(ScopeSet::from_slice(&[
+                Scope::PublicBoard,
+                Scope::TrusteeBody,
+                Scope::BallotMark,
+                Scope::CryptoTallyAid,
+                Scope::Rla,
+                Scope::ObserverAccess,
+                Scope::DeployAuth,
+                Scope::VoterCode
+            ])),
+            Err(Error::ScopePrerequisite {
+                scope: Scope::VoterCode,
+                requires: Scope::StageGate
             })
         );
     }

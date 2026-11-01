@@ -86,14 +86,14 @@ offset  size  field
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
 | 0x0006 | `ChallengeOpeningBody` | 1 | 투입 전 검증 공개값 본문(§8.8) |
 | 0x0007 | `BoxCloseBody` | 1 | 마감 본문: 수량, 봉인 해시, 저널 head(§8.16) |
-| 0x0008 | `CustodyHandoff` | 1 | 인계·인수, 봉인, 이전 인계 해시 |
+| 0x0008 | `CustodyHandoffBody` | 1 | 인계 본문: 순번, 송신·수신자, 이전 인계 해시, 봉인, 수량(§8.33). 서명은 `WitnessedEvent`(0x0028) |
 | 0x0009 | `CheckinCounter` | 1 | 확인 카운터 이벤트(`restricted`, PROTOCOL §6.3) |
 | 0x000A | `Slip` | 1 | 슬립 본문 바이트 + 장치 하이브리드 서명(§8.18) |
 | 0x000B | `SharePackage` | 1 | 신뢰기관별 암호화 share 묶음(§8.10, 공개하지 않음) |
 | 0x000C | `ReceiptMark` | 1 | 관외 수령 라벨 목록 |
 | 0x000D | `AuditSeed` | 1 | 표본 추출 시드 추첨 절차 |
-| 0x000E | `DisputeEvent` | 1 | 분쟁 접수·처리 |
-| 0x000F | `LegalDecisionRef` | 1 | 법정 결정 참조 |
+| 0x000E | `DisputeEventBody` | 1 | 분쟁 접수·처리 본문(§8.34). 서명은 `WitnessedEvent` |
+| 0x000F | `LegalDecisionRefBody` | 1 | 법적 결정 참조 본문: 결정 기관, 결정문 해시, 대상 분쟁, 결과, 집계 효과(§8.35). 서명은 `WitnessedEvent` |
 | 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
 | 0x0011 | `WitnessMemory` | 1 | 증인 도구가 영속화하는 마지막 서명 기억(§8.5, ADR-0016 §4). 장부 이벤트가 아니다 |
 | 0x0012 | `BatchAttestBody` | 1 | 배치 증명 본문(§8.12) |
@@ -118,6 +118,13 @@ offset  size  field
 | 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
 | 0x0026 | `ModuleProvisioned` | 1 | 모듈 발급 기록: 본체·패드 카드 ID, KEM 공개키, 챔버 엔트로피 약속, 보안 칩 여부, 정당 PRF 키 확인값(§8.31, ADR-0024) |
 | 0x0027 | `PartyKeyCeremony` | 1 | 정당 열쇠 생성 절차 기록. 키 자료 없음(§8.32, ADR-0024) |
+| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025) |
+| 0x0029 | `BoxOpenedBody` | 1 | 투표함 개시 본문(§8.36) |
+| 0x002A | `FallbackBody` | 1 | `FallbackDeclared`·`FallbackEnded` 본문(§8.37) |
+| 0x002B | `IssuanceCountBody` | 1 | 투표소 교부 회계 본문(§8.38) |
+| 0x002C | `ImprintAuditBody` | 1 | 개표소 각인 판독 결과 본문(§8.39) |
+| 0x002D | `SealChangeBody` | 1 | 봉인 변경 본문(§8.40) |
+| 0x002E | `LateBatchCloseBody` | 1 | 늦은 배치 마감 본문(§8.41) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -317,14 +324,15 @@ offset  size  field
 | 9 | `visit_count` | `u64` | 넣은 표가 하나 이상인 방문 수(ADR-0021) |
 | 10 | `envelope_count` | `u64` | 관외·재외 함의 회송 봉투 실물 수. 투표소 함은 0 |
 | 11 | `sticker_count` | `u64` | 관외·재외 함의 라벨 스티커 수(비상 표지 제외). 투표소 함은 0 |
-| 12 | `record_set_root` | `Hash512` | 기록 해시 정렬 집합의 root |
-| 13 | `journal_head` | `Hash512` | |
-| 14 | `seal_digest` | `Hash512` | |
-| 15 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 7>` | 오름차순, 중복 없음 |
-| 16 | `open_batches` | `u8` | |
-| 17 | `time_bucket` | `u64` | |
+| 12 | `spoil_envelope_count` | `u64` | 폐기·격리 봉투 실물 수(사무원 2인이 센다). 기대값 `challenge_count + quarantine_count`(VC-038) |
+| 13 | `record_set_root` | `Hash512` | 기록 해시 정렬 집합의 root |
+| 14 | `journal_head` | `Hash512` | |
+| 15 | `seal_digest` | `Hash512` | |
+| 16 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 7>` | 오름차순, 중복 없음 |
+| 17 | `open_batches` | `u8` | |
+| 18 | `time_bucket` | `u64` | 마감 구간. 늦은 마감 기한(24시간, 96구간)은 이 값부터 센다 |
 
-세 필드(9–11)가 더해져 본문이 24바이트 늘지만 `BoxClose.body`의 상한(`Bytes<1024>`) 안이다. 수량 규칙(`visit_count ≤ record_count ≤ 8·visit_count`, 관외·재외 함의 `paper_count` 0과 `sticker_count == visit_count`)은 PROTOCOL §10.2가 정하며 디코더가 아니라 마감 검사와 검증기가 확인한다.
+네 필드(9–12)가 더해져 본문이 32바이트 늘지만 `BoxClose.body`의 상한(`Bytes<1024>`) 안이다. 수량 규칙(`visit_count ≤ record_count ≤ 8·visit_count`, 관외·재외 함의 `paper_count` 0과 `sticker_count == visit_count`)은 PROTOCOL §10.2가 정하며 디코더가 아니라 마감 검사와 검증기가 확인한다.
 
 ### 8.17 `BoxClose` (`schema_id` 0x001A, `schema_version` 1)
 
@@ -536,3 +544,159 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 7 | `prf_key_check` | `[u8; 32]` | 이 정당 모든 확인 모듈의 `ModuleProvisioned`와 같아야 함(VC-093) |
 | 8 | `time_bucket` | `u64` | |
 | 9 | `signatures` | `Array<{actor_id: Ident<64>, sig: [u8; 4691]}, 16>` | 위원회, 참석 정당 구성원, 서로 다른 조직의 참관인 2 이상. purpose `party-key`. 서명 대상은 필드 1–8의 인코딩 |
+
+### 8.33–8.43 사람이 서명하는 이벤트와 genesis 항목 (M5 1단계, ADR-0025)
+
+> English summary: the human-signed ledger events get canonical bodies (0x0008, 0x000E, 0x000F, 0x0029–0x002E) and one common envelope, `WitnessedEvent` (0x0028), that carries the body object bytes and role-tagged hybrid signatures; every signature covers exactly the body bytes under the body's purpose. The decoder enforces each body's rules and the signer roles each body needs; `ityv-state` binds every signature to a verification token from the key the genesis registers. Three genesis entry types (`GenesisBox`, `CustodyRoute`, `RosterSigner`) fix the encoding of the expected boxes, custody routes and the signer roster inside `Genesis` (0x0002).
+
+모든 본문은 `election_id: Ident<64>`가 첫 필드이고, 서명은 `WitnessedEvent`(§8.42)가 싣는다. 서명 메시지는 본문 객체 바이트이며 purpose는 본문마다 하나다(아래 표). 수량은 디코더가 서로 비교하지 않는다. 어긋난 수량도 수록되고 `ityv-state`가 보류로 판정한다(PROTOCOL §10.2).
+
+| schema | 본문 | purpose | 서명자(역할) |
+|---|---|---|---|
+| 0x0008 | `CustodyHandoffBody` | `handoff` | 송신자 1, 수신자 1 |
+| 0x000E | `DisputeEventBody` | `dispute` | 선관위 1, 위원회 1 |
+| 0x000F | `LegalDecisionRefBody` | `legal-decision` | 결정 기관 1 |
+| 0x0029 | `BoxOpenedBody` | `box-open` | 장치 1, 사무원 2 이상, 서로 다른 조직 참관인 2 이상 |
+| 0x002A | `FallbackBody` | `fallback` | 사무원 2 이상, 서로 다른 조직 참관인 2 이상 |
+| 0x002B | `IssuanceCountBody` | `issuance-count` | 같음 |
+| 0x002C | `ImprintAuditBody` | `imprint-audit` | 같음 |
+| 0x002D | `SealChangeBody` | `seal-change` | 같음 |
+| 0x002E | `LateBatchCloseBody` | `late-batch-close` | 같음 |
+
+#### 8.33 `CustodyHandoffBody` (0x0008)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | 투표함 또는 용기 |
+| 3 | `index` | `u32` | 1부터(`ValueOutOfRange`) |
+| 4 | `from_signer` | `Ident<64>` | 송신자 |
+| 5 | `from_org` | `Ident<64>` | |
+| 6 | `to_signer` | `Ident<64>` | 수신자 |
+| 7 | `to_org` | `Ident<64>` | `from_org`와 달라야 함(`InvariantViolation`, VC-040) |
+| 8 | `previous_handoff_hash` | `Hash512` | 앞 인계 본문의 객체 해시. `index == 1`이면 0, 아니면 0이 아님(`InvalidPreviousHash`) |
+| 9 | `seal_digest` | `Hash512` | 인계 때 봉인 번호 목록의 해시 |
+| 10 | `count` | `u64` | 넘긴 투표지 수. 관외·재외 함은 회송 봉투 수 |
+| 11 | `time_bucket` | `u64` | |
+
+#### 8.34 `DisputeEventBody` (0x000E)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `action` | `u8` | 1 접수, 2 조사, 3 기술 해결, 4 법적 회부 |
+| 3 | `dispute_type` | `u8` | 1–8(PROTOCOL §13). 뒤 이벤트는 접수와 같은 값 |
+| 4 | `box_id` | `Option<Ident<64>>` | |
+| 5 | `record_hash` | `Option<Hash512>` | `box_id` 없이 있을 수 없음(`InvariantViolation`) |
+| 6 | `evidence_hash` | `Hash512` | 원본은 `restricted` |
+| 7 | `filing_hash` | `Hash512` | 접수 본문의 객체 해시. 접수(1)일 때만 0(`InvalidPreviousHash`) |
+| 8 | `result_hash` | `Hash512` | 처리 결과 문서 해시. 3·4일 때만 0이 아님(`InvariantViolation`) |
+| 9 | `time_bucket` | `u64` | |
+
+#### 8.35 `LegalDecisionRefBody` (0x000F)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `authority_id` | `Ident<64>` | 결정 기관 |
+| 3 | `decision_doc_hash` | `Hash512` | 결정문 해시 |
+| 4 | `dispute_hash` | `Hash512` | 대상 분쟁 접수 본문의 객체 해시. 0이 아님(`InvalidPreviousHash`) |
+| 5 | `outcome` | `u8` | 1 인용, 2 일부 인용, 3 기각, 4 각하, 5 기타(결정문 참조) |
+| 6 | `tally_effect` | `u8` | 0 집계 영향 없음, 1 그 기록을 포함, 2 그 기록을 `LEGAL_EXCLUDED`로 제외(PROTOCOL §10.6 6항, §11.1) |
+| 7 | `decided_day` | `u64` | 결정일 |
+
+#### 8.36 `BoxOpenedBody` (0x0029)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `modules` | `Array<Ident<64>, 7>` | 붙인 챔버 모듈, 오름차순, 중복 없음(2단계 전에는 빈 배열) |
+| 4 | `seal_digest` | `Hash512` | 확인한 봉인 번호 목록의 해시 |
+| 5 | `seals_match` | `bool` | 봉인 번호가 모두 발급 기록과 같은가 |
+| 6 | `initial_count` | `u64` | 개시 때 들어 있던 수(정상이면 0) |
+| 7 | `time_bucket` | `u64` | |
+
+봉인 불일치와 0이 아닌 초기 수량은 거부가 아니라 보류로 연다(PROTOCOL §10.1).
+
+#### 8.37 `FallbackBody` (0x002A)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `kind` | `u8` | 1 `FallbackDeclared`, 2 `FallbackEnded` |
+| 4 | `reason` | `u8` | 선언: 1 스캐너 고장, 2 전원, 3 모듈 고장, 4 기타(진술). 종료: 0. 이 대응이 아니면 `InvariantViolation` |
+| 5 | `statement_hash` | `Hash512` | 참관인 진술 해시 |
+| 6 | `markers` | `Option<{first: u64, last: u64}>` | 관외·재외 함의 비상 표지 일련번호 범위, `first ≤ last` |
+| 7 | `time_bucket` | `u64` | |
+
+#### 8.38 `IssuanceCountBody` (0x002B)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `stock_received` | `u64` | 받은 투표용지 수(사전 인쇄분 또는 현장 인쇄용 백지) |
+| 4 | `issued` | `u64` | 교부 수(재교부 포함) |
+| 5 | `voter_spoiled` | `u64` | 유권자가 훼손해 재교부한 수 |
+| 6 | `returned` | `u64` | 쓰지 않고 반납한 수 |
+| 7 | `unused` | `u64` | 교부하지 않은 수 |
+| 8 | `printer_waste` | `u64` | 인쇄 실패로 봉인 보관한 용지 수 |
+| 9 | `envelopes` | `Option<{issued: u64, returned_empty: u64}>` | 관외 투표소의 회송용 봉투 교부 수와 빈 봉투 회수 수 |
+| 10 | `time_bucket` | `u64` | |
+
+등식(`stock_received = issued + unused + printer_waste` 등)은 `ityv-state`가 판정한다(PROTOCOL §10.2).
+
+#### 8.39 `ImprintAuditBody` (0x002C)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `unimprinted` | `u64` | 각인 없는 투표지 수 |
+| 4 | `duplicate_cast_ids` | `u64` | 중복 `cast_id` 수 |
+| 5 | `time_bucket` | `u64` | |
+
+#### 8.40 `SealChangeBody` (0x002D)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `reason` | `u8` | 1 훼손 발견 후 재봉인(언제나 보류), 2 참관 점검 뒤 재봉인, 3 용기 교체·합침, 4 법원·선관위 명령에 따른 개봉, 5 기타(진술) |
+| 4 | `previous_seal_digest` | `Hash512` | |
+| 5 | `new_seal_digest` | `Hash512` | 앞 값과 달라야 함(`InvariantViolation`) |
+| 6 | `statement_hash` | `Hash512` | 서명자 진술 해시 |
+| 7 | `time_bucket` | `u64` | |
+
+#### 8.41 `LateBatchCloseBody` (0x002E)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `batch_body_hash` | `Hash512` | 닫는 `BatchAttestBody` 객체의 해시. 0이 아님(`InvalidPreviousHash`) |
+| 4 | `reason` | `u8` | 1 장치 재기동, 2 전원 복구, 3 모듈 교체, 4 기타(진술) |
+| 5 | `time_bucket` | `u64` | 마감 후 96구간 안이어야 받는다(PROTOCOL §7.2.1) |
+
+#### 8.42 `WitnessedEvent` (0x0028)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<2048>` | 위 표의 본문 객체 전체. 다른 스키마는 `SchemaMismatch` |
+| 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
+
+본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
+
+#### 8.43 genesis 항목 (`Genesis` 0x0002의 필드형)
+
+자체 스키마 ID가 없는 필드형이다. genesis 본문 안에 정렬 배열로 들어가고 genesis 해시가 고정한다.
+
+`GenesisBox`(`expected_boxes[]`): `box_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `profile: u8`(1 투표소, 2 관외·재외, 3 수령 스캐너) ‖ `route_id: Ident<64>` ‖ `device_key: [u8; 2624]`(하이브리드 공개키, ML-DSA-87 2592 ‖ Ed25519 32) ‖ `modules: Array<Ident<64>, 7>`(오름차순).
+
+`CustodyRoute`(`custody_routes[]`): `route_id: Ident<64>` ‖ `count_at_origin: bool` ‖ `stops: Array<Ident<64>, 8>`(조직 순서, 2개 이상, 이웃한 두 조직이 같으면 `InvariantViolation`).
+
+`RosterSigner`(서명자 명부): `signer_id: Ident<64>` ‖ `role: u8`(1 사무원, 2 참관인, 3 보관 담당자) ‖ `org_id: Ident<64>` ‖ `station_id: Option<Ident<64>>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님, VC-009).
+
+시험 벡터는 `crates/ityv-encoding/vectors/`의 `custody_handoff_body.txt`, `dispute_event_body.txt`, `legal_decision_ref_body.txt`, `box_opened_body.txt`, `fallback_body.txt`, `issuance_count_body.txt`, `imprint_audit_body.txt`, `seal_change_body.txt`, `late_batch_close_body.txt`, `witnessed_event.txt`다.

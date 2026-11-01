@@ -35,7 +35,10 @@
 //! a board not published within 24 hours is `HOLD_REVIEW`.
 
 use ityv_crypto::{HybridSigned, HybridVerifyingKey, Verified};
-use ityv_encoding::{Scope, ScopeSet};
+use ityv_encoding::{
+    LegalDecisionRefBody, LegalDecisionRefParts, LegalOutcome, SCHEMA_LEGAL_DECISION_REF_BODY,
+    SCHEMA_VERSION_1, Scope, ScopeSet, TallyEffect, decode_object,
+};
 use ityv_ledger::{Breach, Error as LedgerError, Status as LedgerStatus};
 
 use crate::dispute::Dispute;
@@ -341,16 +344,19 @@ pub fn evaluate(evidence: &Evidence) -> StatusReport {
     }
 }
 
-/// A `LegalDecisionRef` whose authority signature verified. The verifier
-/// displays it next to its own status as `LEGAL_CERTIFIED`; it never
-/// derives it (VC-049).
+/// A `LegalDecisionRef` (`LegalDecisionRefBody`, schema `0x000F`) whose
+/// authority signature verified. The verifier displays it next to its own
+/// status as `LEGAL_CERTIFIED`; it never derives it (VC-049), and it does
+/// not change the dispute's machine status (PROTOCOL.md §13).
 ///
-/// What it does not prove: what the decision says. Schema `0x000F` has no
-/// canonical encoding yet, so the object bytes stay opaque until M5
-/// decodes them (ADR-0025).
+/// What it does not prove: that the authority is the one the law empowers
+/// for this dispute (the caller passes the key from the verified genesis or
+/// appointment, M5), or that the decision document says what the body
+/// summarises.
 #[derive(Debug, Clone, Copy)]
 pub struct LegalReference<'a> {
     object: &'a [u8],
+    body: LegalDecisionRefParts<'a>,
     authority: &'a HybridVerifyingKey,
 }
 
@@ -359,11 +365,12 @@ impl<'a> LegalReference<'a> {
     pub const NAME: &'static str = "LEGAL_CERTIFIED";
 
     /// Accepts a verified signature of `authority` with purpose
-    /// `legal-decision`.
+    /// `legal-decision` over a canonical `LegalDecisionRefBody`.
     ///
     /// # Errors
     /// [`Error::SignatureObject`] for another purpose,
-    /// [`Error::SignatureSigner`] for another key.
+    /// [`Error::SignatureSigner`] for another key, [`Error::Decode`] if the
+    /// object is not a `LegalDecisionRefBody`.
     pub fn from_signed(
         signed: &Verified<HybridSigned<'a>>,
         authority: &HybridVerifyingKey,
@@ -375,8 +382,15 @@ impl<'a> LegalReference<'a> {
         if token.key() != authority {
             return Err(Error::SignatureSigner);
         }
+        let body: LegalDecisionRefBody<'a> = decode_object(
+            SCHEMA_LEGAL_DECISION_REF_BODY,
+            SCHEMA_VERSION_1,
+            token.object(),
+        )
+        .map_err(|_| Error::Decode)?;
         Ok(Self {
             object: token.object(),
+            body: *body.parts(),
             authority: token.key(),
         })
     }
@@ -385,6 +399,31 @@ impl<'a> LegalReference<'a> {
     #[must_use]
     pub const fn object(&self) -> &'a [u8] {
         self.object
+    }
+
+    /// The decoded decision reference.
+    #[must_use]
+    pub const fn body(&self) -> &LegalDecisionRefParts<'a> {
+        &self.body
+    }
+
+    /// The outcome.
+    #[must_use]
+    pub const fn outcome(&self) -> LegalOutcome {
+        self.body.outcome
+    }
+
+    /// The effect on the tally scope of the record the dispute names.
+    #[must_use]
+    pub const fn tally_effect(&self) -> TallyEffect {
+        self.body.tally_effect
+    }
+
+    /// Whether the decision concerns `dispute` (names its filing).
+    #[must_use]
+    pub fn concerns(&self, dispute: &Dispute<'_>) -> bool {
+        &self.body.dispute_hash == dispute.filing_hash()
+            && self.body.election_id.as_bytes() == dispute.election_id().as_bytes()
     }
 
     /// The authority's key.
