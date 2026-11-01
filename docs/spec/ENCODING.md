@@ -80,7 +80,7 @@ offset  size  field
 | `schema_id` | 이름 | 깊이 | 비고 |
 |---|---|---|---|
 | 0x0001 | `LedgerFrame` | 1 | 장부 프레임 헤더: seq, prev_hash, event_hash |
-| 0x0002 | `Genesis` | 4 | 명부·키·경로·법적 승인. 버전 3에서 `connectivity_manifest_hash: Hash512` 추가(ADR-0022), 버전 4에서 `release_manifest_hash: Hash512`와 장치·모듈 증명 공개키, 참관인 토큰별 확인 키(Ed25519) 추가(ADR-0023) |
+| 0x0002 | `Genesis` | 5 | 명부·키·경로·법적 승인. 버전 3에서 `connectivity_manifest_hash: Hash512` 추가(ADR-0022), 버전 4에서 `release_manifest_hash: Hash512`와 장치·모듈 증명 공개키, 참관인 토큰별 확인 키(Ed25519) 추가(ADR-0023), 버전 5에서 `progress_policies[]` 추가(§8.48, ADR-0027) |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
@@ -125,6 +125,10 @@ offset  size  field
 | 0x002C | `ImprintAuditBody` | 1 | 개표소 각인 판독 결과 본문(§8.39) |
 | 0x002D | `SealChangeBody` | 1 | 봉인 변경 본문(§8.40) |
 | 0x002E | `LateBatchCloseBody` | 1 | 늦은 배치 마감 본문(§8.41) |
+| 0x002F | `BoxProgressBody` | 1 | 투표함 진행 기록 본문: 슬롯, 투입 장수 누계, 상태(§8.44, ADR-0027) |
+| 0x0030 | `CheckinProgressBody` | 1 | 투표소 진행 기록 본문: 슬롯, 본인 확인·교부·훼손 회수·반납 누계, 상태(§8.45) |
+| 0x0031 | `ProgressTick` | 1 | 진행 기록 본문 바이트 + 장치 하이브리드 서명(§8.46) |
+| 0x0032 | `ProgressCheckBody` | 1 | 진행 경보의 현장 확인 본문(§8.47). 서명은 `WitnessedEvent` |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -562,6 +566,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 0x002C | `ImprintAuditBody` | `imprint-audit` | 같음 |
 | 0x002D | `SealChangeBody` | `seal-change` | 같음 |
 | 0x002E | `LateBatchCloseBody` | `late-batch-close` | 같음 |
+| 0x0032 | `ProgressCheckBody` | `progress-check` | 같음 |
 
 #### 8.33 `CustodyHandoffBody` (0x0008)
 
@@ -700,3 +705,62 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 `RosterSigner`(서명자 명부): `signer_id: Ident<64>` ‖ `role: u8`(1 사무원, 2 참관인, 3 보관 담당자) ‖ `org_id: Ident<64>` ‖ `station_id: Option<Ident<64>>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님, VC-009).
 
 시험 벡터는 `crates/ityv-encoding/vectors/`의 `custody_handoff_body.txt`, `dispute_event_body.txt`, `legal_decision_ref_body.txt`, `box_opened_body.txt`, `fallback_body.txt`, `issuance_count_body.txt`, `imprint_audit_body.txt`, `seal_change_body.txt`, `late_batch_close_body.txt`, `witnessed_event.txt`다.
+
+### 8.44–8.48 투표 진행 기록 (ADR-0027)
+
+> English summary: per-slot progress ticks from the commitment unit (`BoxProgressBody`) and the check-in unit (`CheckinProgressBody`), each carried in a `ProgressTick` with the device's hybrid signature; the on-site check after an alarm (`ProgressCheckBody`, in a `WitnessedEvent`); and the per-station alarm limit fixed in genesis (`StationProgressPolicy`). Ticks carry cumulative station- or box-level totals only.
+
+진행 기록 본문에는 아래 필드 말고 아무것도 없다. 특히 투표양식별 내역, 기록 해시, 가명, 순번, 저널 head, `time_bucket`이 없다(PROTOCOL §7.10 2항, VC-102). 누계끼리의 비교와 경보는 디코더가 아니라 `ityv-state`와 검증기가 한다.
+
+#### 8.44 `BoxProgressBody` (0x002F)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | |
+| 3 | `slot` | `u64` | 선거 epoch 기준 10분 슬롯 번호(ADR-0022) |
+| 4 | `sheets_in` | `u64` | 기록 + 검증 폐기 + 격리 누계 |
+| 5 | `state` | `u8` | 1 투입 중, 2 비상 투입 중, 3 마감. 그 밖은 `InvariantViolation` |
+
+#### 8.45 `CheckinProgressBody` (0x0030)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `unit_id` | `Ident<64>` | 카운터·가명 유닛 ID(예비 유닛이면 예비 ID) |
+| 4 | `slot` | `u64` | |
+| 5 | `checkins` | `u64` | 본인 확인 인원 누계 |
+| 6 | `issued` | `u64` | 교부 장수 누계(재교부 포함) |
+| 7 | `spoiled` | `u64` | 훼손 회수 장수 누계. `spoiled ≤ issued` |
+| 8 | `returned` | `u64` | 반납 장수 누계. `spoiled + returned ≤ issued`(넘으면 `InvariantViolation`) |
+| 9 | `state` | `u8` | 1 확인 중, 2 교체 뒤, 3 마감 |
+
+#### 8.46 `ProgressTick` (0x0031)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<512>` | `BoxProgressBody` 또는 `CheckinProgressBody` 객체 전체. 다른 스키마는 `SchemaMismatch` |
+| 2 | `sig` | `[u8; 4691]` | 장치 하이브리드 서명. 메시지는 본문 객체 바이트, purpose는 `BoxProgressBody`면 `box-progress`, `CheckinProgressBody`면 `checkin-progress` |
+
+서명 키와 장치의 결속(커밋먼트 유닛은 genesis `GenesisBox.device_key`, 카운터·가명 유닛은 genesis `stations[]`의 유닛 공개키)은 `ityv-state`가 검증 토큰으로 확인한다.
+
+#### 8.47 `ProgressCheckBody` (0x0032)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `alarm_slot` | `u64` | 경보가 성립한 슬롯 |
+| 4 | `alarm` | `u8` | 1 음수, 2 과다, 3 바닥 |
+| 5 | `holding` | `u64` | 투표지를 든 사람 수(기표소 안과 대기 줄) |
+| 6 | `finding` | `u8` | 1 현장 인원으로 설명됨, 2 반출 확인, 3 입력 누락 정정, 4 설명 안 됨 |
+| 7 | `carried_out` | `u64` | 판정 2면 1 이상, 그 밖에는 0(어기면 `InvariantViolation`) |
+| 8 | `statement_hash` | `Hash512` | 서명자 진술 해시 |
+| 9 | `time_bucket` | `u64` | |
+
+#### 8.48 `StationProgressPolicy` (`Genesis` 0x0002의 필드형, `progress_policies[]`)
+
+`station_id: Ident<64>` ‖ `booth_count: u16`(1 이상) ‖ `limit_sheets: u32`(1 이상). `station_id` 오름차순, 중복 없음. 기본값은 `limit_sheets = booth_count × 2 × 한 방문의 최대 장수`이고, 다른 값이면 위원회가 사유를 genesis 근거 문서에 적는다.
+
+시험 벡터는 `box_progress_body.txt`, `checkin_progress_body.txt`, `progress_tick.txt`, `progress_check_body.txt`로 같은 디렉터리에 둔다(M5 2단계).
