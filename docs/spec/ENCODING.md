@@ -85,7 +85,7 @@ offset  size  field
 | 0x0006 | `ChallengeOpeningBody` | 1 | 투입 전 검증 공개값 본문(§8.8) |
 | 0x0007 | `BoxCloseBody` | 1 | 마감 본문: 수량, 봉인 해시, 저널 head(§8.16) |
 | 0x0008 | `CustodyHandoff` | 1 | 인계·인수, 봉인, 이전 인계 해시 |
-| 0x0009 | `CheckinCounter` | 1 | 확인 카운터 이벤트 |
+| 0x0009 | `CheckinCounter` | 1 | 확인 카운터 이벤트(`restricted`, PROTOCOL §6.3) |
 | 0x000A | `Slip` | 1 | 슬립 본문 바이트 + 장치 하이브리드 서명(§8.18) |
 | 0x000B | `SharePackage` | 1 | 신뢰기관별 암호화 share 묶음(§8.10, 공개하지 않음) |
 | 0x000C | `ReceiptMark` | 1 | 관외 수령 라벨 목록 |
@@ -108,6 +108,7 @@ offset  size  field
 | 0x001D | `UplinkFrame` | 1 | 고정 크기 송신 프레임. 장부 이벤트가 아닌 전송 단위(§8.22) |
 | 0x001E | `UplinkSessionBody` | 1 | 게이트웨이 세션 본문: 링크별 프레임 수·사슬 head(§8.23) |
 | 0x001F | `UplinkSession` | 1 | 세션 본문 바이트 + 게이트웨이 하이브리드 서명 + 참관인 서명(§8.24) |
+| 0x0020 | `ParticipationSet` | 1 | 투표 종료 뒤 투표소별 정렬 가명 목록. 순번·시간 없음(§8.25, PROTOCOL §6.5) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -405,4 +406,19 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 1 | `body` | `Bytes<2048>` | 인코딩된 `UplinkSessionBody` 객체 전체 |
 | 2 | `gateway_sig` | `[u8; 4691]` | 하이브리드 서명(purpose `uplink-session`) |
 | 3 | `observer_sigs` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, capture_hash: Hash512, sig: [u8; 4691]}, 4>` | 0개 이상, `observer_id` 오름차순, 중복 없음. `capture_hash`는 그 참관인이 받아 둔 캡처 파일의 SHA3-512. purpose `uplink-session` |
+
+### 8.25 `ParticipationSet` (`schema_id` 0x0020, `schema_version` 1)
+
+투표 종료 뒤 카운터·가명 유닛이 투표소마다 하나 만든다. 가명 다중집합의 유일한 공개 형태다(PROTOCOL §6.5, VC-084). 순번과 시간 필드는 없다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | genesis에 등록된 값 |
+| 3 | `count` | `u32` | 0..=65536, `pseudonyms` 개수와 같음 |
+| 4 | `pseudonyms` | `Array<Hash512, 65536>` | 바이트 사전순 비내림차순. 같은 가명은 나온 횟수만큼 반복(중복 투표를 드러내기 위함) |
+| 5 | `counter_sig` | `[u8; 4691]` | 카운터·가명 유닛 하이브리드 서명, purpose `participation-set`, 서명 대상은 필드 1–4의 인코딩 |
+| 6 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 4>` | 정당 모듈 P1…Pn 각각의 하이브리드 서명(챔버 코드 순, 정확히 n개), purpose `participation-set`, 서명 대상은 필드 1–4의 인코딩 |
+
+최대 크기는 약 4.2MB로, 연결 감사의 프레임 1개(§8.22)를 넘으면 같은 일정의 연속 프레임으로 나간다(PROTOCOL §5.8).
 
