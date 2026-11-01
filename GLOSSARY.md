@@ -63,4 +63,9 @@
 | 늦은 마감 | late close | `LateBatchClose`, `LateBoxClose` | 멈췄던 장치를 입회 아래 되살려 저널에서 미결 배치·마감을 닫는 절차. |
 | 비상 투입 | fallback deposit | `FallbackDeclared` | 스캐너와 예비 장치가 모두 없을 때 봉인된 비상 투입구로 기록 없이 받는 투표지. 마감의 `no_record_count`로 센다. |
 | 검증 사다리 | verification ladder | `V1`..`V5` | V1 속성·퍼징·변이, V2 Kani, V3 Verus 또는 Creusot, V4 TLA+·Tamarin, V5 독립 2차 구현. |
+| 연결 공개(분리망 주장 대신) | declared connectivity | `ConnectivityManifest` | 어떤 장비도 "분리돼 있다"고 주장하지 않고, 모든 연결의 방향·매체·상대·시간대를 genesis의 연결 목록에 적어 서로 다른 주체가 확인하게 하는 원칙(PROTOCOL §5.8, ADR-0022). |
+| 단방향 장치 | one-way device link | — | 수신 소자 없이 송신기만 있는 광 포트. 스캐너와 카운터·가명 유닛의 유일한 바깥 연결이며, 들어오는 경로가 물리적으로 없다. |
+| 관찰 탭 | observer tap | — | 투표소 게이트웨이의 장치 쪽과 바깥 회선 쪽에 있는 수동 분기 장치. 참관인과 등록 감시 단체가 자기 기록 장치를 붙여 프레임을 받아 두고 공개 사슬과 맞춰 본다. 회선에 아무것도 넣을 수 없다. |
+| 고정 크기 프레임 | fixed-size frame | `UplinkFrame` | 10분 슬롯마다 정해진 수만큼 보내는 본문 1,048,576바이트짜리 송신 단위. 보낼 것이 없으면 0으로 채워 트래픽 모양이 아무 정보도 담지 않게 한다. |
+| 세 출처 대조 | three-source reconciliation | `CarrierReconciliation` | 참관인 탭 캡처, 통신사 회선 기록, 게이트웨이 `UplinkSession`을 서로 맞춰 보는 선거 뒤 감사. |
 | 정규 인코딩 | canonical encoding | `ityv-encoding` | 재귀 없는 고정폭 이진 형식. 모든 서명·해시 대상 객체의 유일한 바이트 표현. |

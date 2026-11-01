@@ -1,6 +1,6 @@
 # ityv 프로토콜 명세 v0.1 / Protocol Specification v0.1
 
-> English summary: Normative specification of the ityv protocol: actors and trust, identifiers and encoding, hybrid signatures, genesis and the legal gate, the evidence ledger and public board with witness checkpoints, the pseudonymous participation ledger, cast-record generation by the split casting scanner with chamber-supplied sealed modules, pre-cast challenge, chamber-structured secret sharing with one-time-pad transport (primary) and hybrid KEM fallback, box close and custody, aggregate-only tally, record-first risk-limiting audit, disputes, the public verifier, destruction and retention, and a security argument. Status: research draft; nothing here is certified; release remains NO_GO.
+> English summary: Normative specification of the ityv protocol: actors and trust, identifiers and encoding, hybrid signatures, genesis and the legal gate, the evidence ledger and public board with witness checkpoints, open mirrors and declared, auditable connectivity (no air-gap claims), the pseudonymous participation ledger, cast-record generation by the split casting scanner with chamber-supplied sealed modules, pre-cast challenge, chamber-structured secret sharing with one-time-pad transport (primary) and hybrid KEM fallback, box close and custody, aggregate-only tally, record-first risk-limiting audit, disputes, the public verifier, destruction and retention, and a security argument. Status: research draft; nothing here is certified; release remains NO_GO.
 
 상태: 초안 v0.1 (2026-10-30). 규범적 문장은 "해야 한다/하지 않는다"로 쓴다. 용어는 `GLOSSARY.md`를 따르고, 결정 근거는 `docs/adr/`에 있다. 바이트 형식은 `docs/spec/ENCODING.md`를 따른다.
 
@@ -26,6 +26,7 @@
 | 공개 검증자 | 게시판 전체 검증 | 1곳 이상 정직 | 선관위 서버 응답 |
 | 우정사업본부·운송사 | 관외 봉투 운송 | 없음 | 수량, 봉인 |
 | 장치(해석 유닛, 신원 확인 단말) | 이미지 해석, 신원 확인 | 없음 | 모든 것 |
+| 투표소 게이트웨이, 통신사 | 프레임 중계, 회선 | 없음 | 모든 것. 숨기거나 늦출 수만 있고, 장치가 서명한 프레임은 위조하지 못한다(§5.8) |
 | 커밋먼트 유닛, 카운터·가명 유닛 | 암호 기록 생성 | 검증된 펌웨어의 명세 준수 | 하드웨어 변조(측정 부팅·봉인으로 보완) |
 | 챔버 모듈 | 난수, 일회용 패드, 가명 PRF | 각 모듈은 자기 챔버가 공급. 서로 다른 챔버 모듈이 공모하지 않음 | 단일 모듈 |
 
@@ -72,6 +73,7 @@
 - `trustee_roster`: 챔버별 구성원(`trustee_id`, 챔버 코드, 조직, 공개키, `k_c`, `n_c`). 챔버 코드: P1…Pn(정당 챔버, 2 ≤ n ≤ 4), J, A, C, N.
 - `party_roster`: 정당 챔버 명부. 항목마다 챔버 코드, 정당 이름, genesis 시점 의석 수, 자격 근거(직전 국회의원선거의 비례대표 득표율과 지역구 의석, 출처 문서의 해시). 자격과 순서는 ADR-0019를 따른다: genesis 시점에 국회 의석을 가진 정당 가운데 직전 선거에서 비례대표 의석 배분 기준(득표율 3% 이상 또는 지역구 5석 이상)을 넘은 정당을 의석 순으로 넷까지, 둘이 안 되면 의석 순 상위 둘. 검증기는 형식(2 ≤ n ≤ 4, 코드 P1…Pn이 빈틈없이 이어짐, 의석 내림차순)과, `trustee_roster`에 모든 정당 챔버가 있고 `expected_boxes`·`stations`의 모듈 목록에 모든 정당 모듈이 있음을 확인한다(VC-067). genesis 이후의 합당·해산은 챔버를 바꾸지 않는다.
 - `custody_routes[]`: 경로별 인계 순서(조직 역할 열거), `COUNT_AT_ORIGIN` 여부.
+- `connectivity_manifest_hash`: 연결 목록 `ConnectivityManifest`(스키마 0x001C, `ENCODING.md` §8.21)의 해시. 목록 본문은 genesis와 함께 공표한다(§5.8, VC-077).
 - `appointments[]`: 임명 이벤트 해시 목록(§4.5).
 - `legal_authorization`: §4.4.
 
@@ -127,6 +129,20 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 6. **비밀과 보존.** 미러가 받는 것은 `public` 등급뿐이다. 커밋먼트는 무조건적으로 숨기고(§16) 기록에는 시간·순번·유권자 정보가 없으며 투표함 기록은 정렬 집합으로 공개되므로(VC-001, VC-027), 미러를 영원히 보관하거나 아무리 자주 받아도 선택이 드러나지 않는다. 자주 받는 미러가 얻는 시간 정보는 공표 단위(배치) 수준으로, 누구나 얻을 수 있는 것과 같다. 그래서 미러 보관에는 기한이 없고 §15의 파기 대상도 아니다. `restricted`·`sealed` 자료는 미러 대상이 아니다.
 7. **감시.** CT 모니터가 자기 도메인의 인증서를 지켜보듯, 정당·후보·시민단체·언론·개인은 미러 위에서 자기 관심 대상을 지켜본다. 예: 자기 지역 투표함의 마감 수량과 불변식(VC-038), 마감 뒤에 나타난 기록(VC-039), 기한 위반과 그 `PublicationBreach` 기록의 유무, 사라지거나 바뀐 프레임(일관성 증명 실패), `TallyScope` 제외 목록과 사유(VC-042), 가명 중복 수(VC-018). 감시는 §14의 검증기를 그대로 쓰고 결과 공표에는 상태 어휘만 쓴다.
 
+### 5.8 연결 공개와 감사
+이 시스템은 어떤 장비도 "분리돼 있다"고 주장하지 않으며, 분리를 보안의 근거로 쓰지 않는다(ADR-0022). 정확성은 종이와 공개 검증이, 비밀은 스캐너가 누가 넣었는지 모르는 구조와 챔버 접근구조가 지킨다. 남는 위험, 곧 숨은 연결로 스캐너가 읽은 순서를 빼내는 경우는 연결을 모두 선언하고 서로 믿지 않는 주체들이 확인하는 감사로 막는다.
+
+1. **연결 목록.** genesis는 `ConnectivityManifest`를 고정한다. 장치 종류, 투표소 게이트웨이, 관찰 탭, 중앙 시스템(장부 수집, 게시판 공표, 증인, 신뢰기관 수신)의 포트마다 방향(없음·내보내기만·받기만·양방향), 매체, 상대, 사용 시간대, 슬롯당 프레임 수, 실어 나르는 객체 종류, 프레임 서명 키를 적는다. TCB 장치(커밋먼트 유닛, 카운터·가명 유닛, 챔버 모듈, 해석 유닛)에는 무선이 없고 바깥에서 들어오는 경로가 없어야 한다. 양방향은 사전투표 신원 확인 단말의 명부 전용회선, 게이트웨이의 바깥 회선, 중앙 시스템에만 허용한다. 목록에 없는 연결은 존재 자체가 위반이다(VC-077).
+2. **투표소 장치의 바깥 포트.** 스캐너와 카운터·가명 유닛의 바깥 포트는 수신 소자가 없는 광 송신기 하나이며 게이트웨이의 수광부로만 이어진다. 정비 포트는 genesis 이후 봉인하고 개시 때 봉인 번호를 대조한다(§10.1). 해석 유닛은 커밋먼트 유닛으로 가는 광커플러 외에 연결이 없다. 챔버 모듈은 장치 안 버스 외에 연결이 없다. 선거일 신원 확인 단말은 연결이 없고, 사전투표 신원 확인 단말은 통합선거인명부 전용회선과만 양방향으로 연결되며 카운터·가명 유닛에는 광커플러로 한 방향으로만 넘긴다.
+3. **고정 크기·고정 일정 프레임.** 장치는 선거 epoch 기준 10분 슬롯마다 연결 목록에 적힌 수의 `UplinkFrame`(0x001D)을 보낸다(스캐너 16개, 카운터·가명 유닛 4개). 본문은 1,048,576바이트로 고정이고, 쓰지 않는 자리는 0으로 채운다. 프레임은 장치가 내보내는 바이트 흐름의 연속 구간이며 정규 객체만 담는다. 보낼 것이 슬롯 용량을 넘으면 다음 슬롯의 같은 자리로 이어진다. 게이트웨이가 프레임 누락을 기록한 장애 뒤와 투표함 마감 때만 연결 목록의 따라잡기 수(슬롯당 64개)를 쓴다. 투표함 개시 전과 마감 처리 후에는 프레임을 보내지 않는다(VC-078).
+4. **전송 단위.** 기록과 share 패키지는 닫힌 배치 단위로, 배치 안에서는 기록 해시 순서로만 보낸다. 배치 소속은 `BatchAttest`로 원래 공개된다. 카운터·가명 유닛은 투표 중에는 참관인 서명 누적 수(`ObserverCountAttest`)만 보내고, 가명이 든 `CheckinCounter`는 투표 종료 뒤 투표소별로 가명 순으로 정렬해 보낸다(§6.1, §6.5). 어떤 객체도 공표 규칙보다 이른 시점이나 세밀한 순서로 나가지 않는다(VC-079). 한 방향 링크에는 수신 확인이 없으므로 닫힌 배치는 닫힌 슬롯과 다음 슬롯에 두 번 보내고, 마감 때 투표함 전체를 다시 보낸다. 그래도 빠진 것은 봉인된 장치를 개표소로 옮겨 입회 아래 같은 링크로 다시 보낸다.
+5. **게이트웨이의 세션 기록.** 게이트웨이는 신뢰하지 않는다. 받은 프레임을 링크별로 `h_i = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ h_{i−1} ‖ frame_hash_i)`로 묶고(`h_0`은 `link_id_hash`로 시작), 한 시간마다 중간 기록을, 마감 때 최종 기록을 `UplinkSession`(0x001F)으로 하이브리드 서명해 장부에 올린다. 탭 기록을 가진 참관인은 캡처 파일 해시와 함께 같은 세션에 서명할 수 있다. 장부에 오른 모든 장치 출처 객체는 어떤 세션의 프레임 안에 있어야 한다(VC-080).
+6. **관찰 탭.** 게이트웨이의 장치 쪽과 바깥 회선 쪽에 수동 탭을 하나씩 둔다. 탭은 송신 소자가 없는 광 분기기와 수동 회선 탭이며 인증 대상이다. 참여 정당이 지정한 참관인, 위원회에 등록한 감시 단체, 지정 공개 검증자는 자기 기록 장치를 붙일 수 있다(GOVERNANCE §6.1). 탭이 보는 것은 회선이 원래 나르는 것, 곧 공표 단위로 정렬된 공개 객체와 봉인된 share 패키지뿐이다. 사전투표 명부 전용회선에는 개인정보가 흐르므로 탭을 두지 않는다.
+7. **세 출처 대조.** 선거 뒤 참관인 캡처, 통신사의 회선 접속 기록(접속 구간, 상대 주소, 구간별 바이트 수), `UplinkSession`을 맞춰 본다. 프레임 수와 해시, 바이트 수, 접속 구간이 모두 맞아야 한다. 명부 전용회선은 통신사 기록으로 연결 목록의 사용 시간대(사전투표 기간)를 확인한다. 결과는 `CarrierReconciliation`으로 남긴다(VC-081).
+8. **무선 점검과 분해 검사.** 참관인은 개시·정오·마감 때 휴대용 무선 탐지기로 장치 주변을 점검하고 결과를 `RfCheck`로 남긴다. 선거 뒤 공개 시드(§12.1과 같은 방식, 별도 라벨)로 뽑은 장치 표본을 독립 시험기관이 분해해 숨은 무선, 숨은 저장 장치, 목록에 없는 포트, 펌웨어 해시를 확인하고 `TeardownReport`로 공개한다. 표본 크기와 점검 빈도는 `policy_hash`에 고정한다(VC-082).
+9. **중앙 쪽.** 장부 수집 서버와 게시판 공표 서버는 공표를 위해 인터넷에 연결돼 있으며 그렇게 선언한다. 무결성은 증인 서명과 미러(§5.4, §5.7)가 지킨다. 증인은 체크포인트 후보를 받고 서명을 돌려주기 위해 연결한다. 신뢰기관 구성원은 HSM을 오프라인으로 두고 패키지를 어떤 경로로든 받을 수 있으며, 어떤 경로를 쓰는지 연결 목록에 선언한다.
+10. **위반.** 목록에 없는 연결, TCB 장치의 들어오는 경로나 무선, 일정·크기를 벗어난 프레임, 정규 객체가 아닌 바이트, 세 출처의 불일치, 설명되지 않는 송신, 분해에서 나온 숨은 장치는 `ConnectivityIncident`(위원회와 서로 다른 조직의 참관인 2 서명)가 된다. 해당 장치·게이트웨이 구간 투표함의 전자 층은 `HOLD_REVIEW`이고, 커밋먼트 유닛이 연루되면 §12.5의 전수 대조 대상이다. 종이 개표는 영향을 받지 않는다(VC-083).
+
 ## 6. 유권자 확인과 참여 장부
 
 ### 6.1 명부 동결
@@ -171,6 +187,8 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 - **챔버 모듈**(챔버 공급): 챔버마다 하나. 정당 모듈 P1…Pn은 모두 필수이며 절대 위임하지 않는다. J·A·C는 자체 모듈을 두거나 독립검증위원회가 공급하는 중립 모듈에 위임할 수 있다(위임은 그 세 챔버의 share 기밀이 한 모듈에 집중됨을 뜻하며 공개 상태로 표기한다). N(선관위)은 모듈을 두지 않고 KEM 대체 경로를 쓴다. 모듈은 최대 7개(정당 4, J·A·C)다. 모듈의 기능: 난수 기여, 투함 ID·봉투 라벨 기여, 자기 챔버 구성원의 일회용 패드 보관과 XOR, 일회성 MAC 키 공급, 카운터 서명.
 
 투표양식 범위: 선거일 투표소의 스캐너는 그 투표소에 배정된 투표양식만 받는다. 사전투표소의 스캐너는 관내·관외 모두 전국 어느 선거구의 유권자든 받으므로 그 선거의 모든 투표양식을 받는다(지방선거에서 약 2,300개). 커밋먼트 유닛 설정은 `ballot_style_id` 바이트 순으로 정렬된 표로 투표양식 4,096개까지 담으며, 표에 없는 투표양식의 `Interpretation`은 거부한다.
+
+바깥 연결: 스캐너에서 바깥으로 나가는 것은 커밋먼트 유닛과 호스트를 거친 광 송신기 하나뿐이며 수신 소자가 없다. 무선은 없고 정비 포트는 봉인한다. 연결은 §5.8과 연결 목록을 따른다.
 
 ### 7.2 모듈 발급 절차와 일괄 증명
 커밋먼트 유닛은 표마다 존재하는 모든 모듈에 `Issue(device_id, k)`(k는 그 표의 투표양식의 청크 수)를 요청하고, 모듈 c는 `ModuleIssue`를 돌려준다. 유닛은 모듈별 카운터의 최고값을 기억하며, 그 값 이하의 카운터는 거부하고 기억을 바꾸지 않는다(재사용 금지).
@@ -263,7 +281,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 슬립은 방문당 하나다(ADR-0021). `SlipBody`(스키마 0x0019): `election_id`, `station_id`, `time_bucket`, `tracking_codes: Array<Hash512, 8>`(그 방문에서 넣은 표의 추적코드, 위치 순, 1–8개). 확인해 폐기한 표의 코드는 넣지 않는다(그 코드는 확인 인쇄물에 있다). `Slip`(스키마 0x000A) = 본문 바이트 + `device_sig`(purpose `slip`, 하이브리드)(`ENCODING.md` §8.18). 하이브리드 서명은 방문당 한 번이라 7장 선거에서도 ML-DSA-87 서명이 한 번이다. Ed25519 부분은 본문과 함께 첫 QR에, ML-DSA-87 부분(4,627바이트)은 이어지는 QR 둘에 나눠 인쇄한다. 인쇄 형식은 `docs/ballot/`에 있다. 분쟁 접수 시 두 서명을 모두 검증하고 목록의 코드마다 포함을 확인한다(VC-070). 슬립은 선택에 관한 정보를 담지 않으며, 같은 추적코드를 가진 기록이 게시판에 있는지만 확인할 수 있다. 슬립은 한 유권자의 기록 여러 건을 묶어 보여 주지만, 기록에는 선택이 없고 표본 열기는 비공개이므로(§12.3) 슬립을 남에게 보여 줘도 선택은 증명되지 않는다.
 
 ### 7.8 봉인 저널과 투표함 집합
-커밋먼트 유닛은 기록 해시와 share 패키지를 순서대로 담은 해시 체인 저널(`JournalEntry`, 스키마 0x0014, `ENCODING.md` §8.19; 항목 종류: 기록, 검증 폐기, 격리, 배치 마감, 투표함 마감, 각인 완료, 방문 결정, 라벨 출력)을 fsync하며 유지한다. 업링크는 방문 결정 항목(종류 7)으로 닫힌 방문의 기록과 `ChallengeOpening`만 보낸다. 저널은 `sealed` 등급이며 투함 순서를 드러내므로 공개하지 않는다. 투표함 마감 시 공개되는 것은 기록 해시를 바이트 사전순으로 정렬한 **집합**과 그 Merkle root뿐이다(VC-027). 저널은 모든 구성원의 `ShareReceipt`가 확인된 뒤 파기 의식까지 보관한다.
+커밋먼트 유닛은 기록 해시와 share 패키지를 순서대로 담은 해시 체인 저널(`JournalEntry`, 스키마 0x0014, `ENCODING.md` §8.19; 항목 종류: 기록, 검증 폐기, 격리, 배치 마감, 투표함 마감, 각인 완료, 방문 결정, 라벨 출력)을 fsync하며 유지한다. 업링크는 방문 결정 항목(종류 7)으로 닫힌 방문의 기록과 `ChallengeOpening`만 보낸다. 저널은 `sealed` 등급이며 투함 순서를 드러내므로 공개하지 않는다. 투표함 마감 시 공개되는 것은 기록 해시를 바이트 사전순으로 정렬한 **집합**과 그 Merkle root뿐이다(VC-027). 저널은 모든 구성원의 `ShareReceipt`가 확인된 뒤 파기 의식까지 보관한다. 저널 내용을 바깥으로 보내는 경로와 단위는 §5.8을 따른다(닫힌 배치 단위, 기록 해시 순서, VC-079).
 
 업로드 전 저널 되감기를 막기 위해 50건마다 또는 2시간마다(먼저 오는 쪽) 서로 다른 조직의 참관인 둘이 토큰으로 `ScanCountAttest` 이벤트를 공동 서명한다(본문 `ScanCountAttestBody` 0x0013: `election_id`, `box_id`, 누적 기록 수, 검증 수, 격리 수, 저널 head, `time_bucket`; 이벤트 0x001B = 본문 바이트 + 참관인 서명, purpose `scan-count`, `ENCODING.md` §8.14·§8.15). 마감 시 `BoxClose`의 수량과 저널 head는 마지막 `ScanCountAttest`와 단조 연속이어야 한다(VC-052). 유닛은 방문을 처리하는 중(첫 투표지의 해석부터 그 방문의 모든 위치가 투입·검증·격리로 끝날 때까지)에는 `ScanCountAttestBody`를 만들지 않는다.
 
@@ -458,6 +476,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 8. 감사: 시드 재계산, 표본 재계산, 표본마다 `SampleOpening` 프레임과 `SampleComparison`의 존재와 서명(공개 검증기), `SampleOpening` 재구성(열람 권한이 있는 검증기)(VC-045..047). 사유 코드 1·2가 나온 장치마다 전수 대조 기록이 있는지(VC-074).
 9. 분쟁: 미해결 분쟁 목록.
 10. 분기 감시: 교환으로 받은 체크포인트들과 자기 사본 사이의 분기 검사와, 추적코드 확인 때의 2곳 대조(§5.7 3·4항, VC-065, VC-066).
+11. 연결: genesis의 연결 목록 형식과 TCB 장치의 한 방향성, `UplinkSession` 링크별 사슬 재계산과 세션 연속성, 장부의 장치 출처 객체가 모두 세션 프레임 안에 있는지, 참관인 캡처를 받은 경우 바이트 단위 대조, `CarrierReconciliation`·`RfCheck`·`TeardownReport`의 존재와 서명, 미해결 `ConnectivityIncident`(VC-077..083).
 
 출력 상태는 상태 어휘만 쓴다. 1–5가 통과하면 `LOG_CONSISTENT`, 4의 완전성까지 통과하면 `SOURCE_COMPLETENESS_CHECKED`, 7까지 통과하면 `CRYPTO_TALLY_VERIFIED`, 8의 `SampleComparison`이 규칙상 종료되면 `PAPER_AUDITED`. 미해결 분쟁, 분기 증거, 어떤 실패도 `HOLD_REVIEW`. `LEGAL_CERTIFIED`는 `LegalDecisionRef`가 있을 때 그 참조를 표시할 뿐 검증기가 판정하지 않는다(VC-049). 상태는 서로 바꿔 표시할 수 없다(VC-050).
 
@@ -481,6 +500,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | 배치 마감 전 창의 피해는 유계다 | 기록마다 Ed25519, 배치마다 하이브리드, 저널 fsync, 늦은 마감, `UNATTESTED` 공개 | 고전 공격자는 창을 이용할 수 없음 | 양자 공격자가 15분 안에 개입해도 잃는 것은 최대 64건의 양자내성 증명뿐이며 표·비밀·법적 결과는 무관(`docs/spec/FAILURE_CASES.md`) |
 | 1인 1표가 외부에서 검증된다 | 가명 다중집합 공개, 참관인 공동 서명 카운터 | 서로 다른 정당의 참관인이 함께 공모하지 않음 | 신원 확인 유닛의 본인 확인 품질 |
 | 누락된 투표함이 없다 | genesis 예상 투표함과 마감 1:1 | genesis 작성의 정직성(위원회·증인 서명) | genesis 자체가 틀리면 실물 재고 감사만이 잡음 |
+| 숨은 연결이 비밀을 깨지 않는다 | 분리를 주장하지 않고 모든 연결을 목록에 선언, TCB 장치의 수신 소자 없는 광 송신기, 고정 크기·고정 일정 프레임, 게이트웨이 세션 사슬, 관찰 탭·통신사 기록·세션의 세 출처 대조, 무선 점검, 공개 시드 분해 표본(§5.8) | 세 출처를 만드는 주체(게이트웨이 운영자, 통신사, 참관인) 가운데 하나 이상이 정직함 | 인증된 장치 안에 숨긴 무선이 무선 점검과 분해 표본을 모두 피하는 경우. 깨지는 것은 그 장치의 비밀이며 정확성은 그대로다 |
 
 ## 17. 수집 프로필과 단계별 동작
 
@@ -503,6 +523,13 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | `LedgerFrame` | 0x0001 | 장부 운영자 | public | §5.1 |
 | `SignedCheckpoint`(본문 `CheckpointBody` 0x0004 포함) | 0x0010 | 증인 정족수 | public | §5.4 |
 | `PublicationBreach` | — | 위원회 | public | §5.5 |
+| `ConnectivityManifest` | 0x001C | genesis 서명자 | public | §5.8 |
+| `UplinkFrame` | 0x001D | 장치(프레임 키, Ed25519) | 전송 단위(장부 이벤트 아님, 탭 캡처 대상) | §5.8 |
+| `UplinkSession`(본문 0x001E) | 0x001F | 게이트웨이(하이브리드), 참관인(선택) | public | §5.8 |
+| `ConnectivityIncident` | — | 위원회, 참관인 2(다른 조직) | public | §5.8 |
+| `RfCheck` | — | 참관인, 사무원 | public | §5.8 |
+| `CarrierReconciliation` | — | 위원회, 참관인 2(다른 조직) | public | §5.8 |
+| `TeardownReport` | — | 독립 시험기관, 위원회 | public | §5.8 |
 | `RollFreeze`, `RollAmendment` | — | 선관위, 위원회 | public | §6.1 |
 | `CheckinCounter` | 0x0009 | 카운터·가명 유닛, 정당 모듈 P1…Pn | public | §6.3 |
 | `ObserverCountAttest` | — | 참관인 2(다른 조직) | public | §6.3 |
@@ -542,8 +569,8 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 ## 부록 B. 서명 purpose
 
-`genesis`, `legal-auth`, `appointment`, `checkpoint`, `checkpoint-archive`(SLH-DSA 포함), `checkin`, `observer-count`, `cast-record`, `slip`, `challenge`, `box-open`, `box-close`, `handoff`, `seal-change`, `video-anchor`, `postal-batch`, `receipt-mark`, `receipt-resolution`, `tally-scope`, `aggregate-opening`, `audit-freeze`, `audit-seed`, `sample-opening`, `sample-comparison`, `dispute`, `legal-decision`, `destruction`, `share-receipt`, `module-provisioned`, `scanner-quarantine`, `publication-breach`, `scan-count`, `batch-attest`, `module-record`, `late-batch-close`, `late-box-close`, `fallback`, `issuance-count`, `imprint-audit`, `module-incident`, `checkin-swap`, `duplicate-identification`, `paper-count`.
+`genesis`, `legal-auth`, `appointment`, `checkpoint`, `checkpoint-archive`(SLH-DSA 포함), `checkin`, `observer-count`, `cast-record`, `slip`, `challenge`, `box-open`, `box-close`, `handoff`, `seal-change`, `video-anchor`, `postal-batch`, `receipt-mark`, `receipt-resolution`, `tally-scope`, `aggregate-opening`, `audit-freeze`, `audit-seed`, `sample-opening`, `sample-comparison`, `dispute`, `legal-decision`, `destruction`, `share-receipt`, `module-provisioned`, `scanner-quarantine`, `publication-breach`, `scan-count`, `batch-attest`, `module-record`, `late-batch-close`, `late-box-close`, `fallback`, `issuance-count`, `imprint-audit`, `module-incident`, `checkin-swap`, `duplicate-identification`, `paper-count`, `uplink-frame`(Ed25519만), `uplink-session`, `connectivity-incident`, `rf-check`, `carrier-reconcile`, `teardown`.
 
 ## 부록 C. 검증 조건 목록
 
-VC-001 투함 기록에 시간·순번·유권자 정보 없음 · VC-002 하이브리드 서명 둘 다 검증 · VC-003 알고리즘 협상 없음 · VC-004 미등록 키 무효 · VC-005 genesis 핀 일치 · VC-006 법적 승인 두 서명 · VC-007 승인 범위 없이 해당 객체 생성 불가 · VC-008 범위 전제 조건 · VC-009 임명 이벤트 참조 · VC-010 찢어진 꼬리 격리 · VC-011 Merkle 증명 알고리즘 · VC-012 증인 서명 전 확인 사항 · VC-013 같은 seq 이중 서명 금지 · VC-014 정족수·다양성 · VC-015 `voter_id` 소거 · VC-016 참관인 공동 서명 · VC-017 가명은 모든 정당 모듈 필요 · VC-018 참여 장부 공개 검증 · VC-019 가명·신원과 투함 ID·추적코드 분리 · VC-020 커밋먼트 유닛 소거 · VC-021 카운터 틈 공개 · VC-022 모듈 태그 검사 · VC-023 각인 실패 격리 · VC-024 자릿수 상한 · VC-025 OR 증명 검증 · VC-026 canonical 스칼라·점 · VC-027 투표함 기록은 정렬 집합으로만 공개 · VC-028 검증 공개값 재구성 · VC-029 폐기 봉투 수 일치 · VC-030 검증 실패 장치 격리·전수 대조 · VC-031 접근구조 밖 집합은 정보 없음 · VC-032 패키지 해시 결속 · VC-033 패드·해시 미게시 · VC-034 패드 구간 1회 사용·소거 · VC-035 선관위 부품에 패드 없음 · VC-036 share 수신 대조 · VC-037 미등록 장치 개시 불가 · VC-038 마감 불변식 · VC-039 마감 후 기록 금지 · VC-040 인계 조직 상이·경로 준수 · VC-041 라벨 복원 소거 · VC-042 제외 근거 · VC-043 합계 열기 등식 · VC-044 불일치 국소화 · VC-045 시드 구성 · VC-046 표본 재계산 · VC-047 표본 열기 재구성 · VC-048 포함 분쟁 절차 · VC-049 `LEGAL_CERTIFIED` 기계 생성 금지 · VC-050 상태 혼용 금지 · VC-051 파기 증명 · VC-052 스캔 카운터 참관 앵커와 마감의 단조 연속 · VC-053 모든 기록은 정확히 하나의 BatchAttest에 포함되고 카운터 구간이 틈 없이 이어짐 · VC-054 저널 영속화 전 각인·투입 금지 · VC-055 시험용 투표양식의 집계·참여 장부 제외 · VC-056 배치 서명 전 저널·메모리 대조 · VC-057 `UNATTESTED` 분류·제외·늦은 마감 복귀 · VC-058 은닉 채널 검사는 기록당 챔버 기여 하나만 복원 · VC-059 감사 표본 열기는 비공개 열람, 공개는 대조 결과만 · VC-060 관외 수령 분류와 봉투·라벨·기록 수량 등식 · VC-061 실시간 명부 조회·표시 실패 시 교부하지 않음 · VC-062 장치에 선택별 누계·직전 선택·순서 없음 · VC-063 `TallyScope` 체크포인트 포함 전 share 합 제출 금지 · VC-064 게시판은 가입·식별 없이 같은 조건으로 공표, 보관·재공표 제한 없음 · VC-065 분기 증거(같은 seq 다른 본문, 같은 크기 다른 root, 일관성 증명 실패)와 그 이후 `HOLD_REVIEW` · VC-066 추적코드 확인은 독립 미러 2곳 또는 공표 지문과 대조 후에만 `LOG_CONSISTENT` · VC-067 genesis 정당 명부 형식(2 ≤ n ≤ 4, P1…Pn 연속, 의석순)과 모든 정당 챔버·모듈의 존재 · VC-068 방문 결정은 그 방문의 모든 기록이 장치·모듈 기록 서명으로 결속된 뒤에만 받고, 모듈은 한 카운터에 본문 해시 하나만 서명 · VC-069 방문 저널 순서(위치 항목, 방문 결정, 각인, 라벨 출력)와 재개 판정 · VC-070 슬립은 방문에서 넣은 표의 추적코드 목록(1–8)이며 분쟁 시 코드마다 확인 · VC-071 해석 유닛은 일련번호 바코드를 해독하지 않고 판독 전 지우며 영속 저장소 없음, 판정 규칙·임계값은 `policy_hash`에 고정 · VC-072 패드는 패드 카드에만, 카드는 파기 의식에서 0 덮기 후 파쇄, 본체 재발급 시 소거·변조 검사·펌웨어 측정 · VC-073 카운터·가명 유닛 교체 시 투표소 순번 연속 · VC-074 감사 사유 코드 1·2(확정 판정 불일치)가 나온 장치는 전수 대조 · VC-075 보고 단위별 종이 대조(후보마다 종이 ≥ 암호 확정, 총수 등식) · VC-076 중복 가명 조사는 영장과 모든 정당 모듈이 있을 때만, 결정문의 가명과 일치한 명부 항목만 출력.
+VC-001 투함 기록에 시간·순번·유권자 정보 없음 · VC-002 하이브리드 서명 둘 다 검증 · VC-003 알고리즘 협상 없음 · VC-004 미등록 키 무효 · VC-005 genesis 핀 일치 · VC-006 법적 승인 두 서명 · VC-007 승인 범위 없이 해당 객체 생성 불가 · VC-008 범위 전제 조건 · VC-009 임명 이벤트 참조 · VC-010 찢어진 꼬리 격리 · VC-011 Merkle 증명 알고리즘 · VC-012 증인 서명 전 확인 사항 · VC-013 같은 seq 이중 서명 금지 · VC-014 정족수·다양성 · VC-015 `voter_id` 소거 · VC-016 참관인 공동 서명 · VC-017 가명은 모든 정당 모듈 필요 · VC-018 참여 장부 공개 검증 · VC-019 가명·신원과 투함 ID·추적코드 분리 · VC-020 커밋먼트 유닛 소거 · VC-021 카운터 틈 공개 · VC-022 모듈 태그 검사 · VC-023 각인 실패 격리 · VC-024 자릿수 상한 · VC-025 OR 증명 검증 · VC-026 canonical 스칼라·점 · VC-027 투표함 기록은 정렬 집합으로만 공개 · VC-028 검증 공개값 재구성 · VC-029 폐기 봉투 수 일치 · VC-030 검증 실패 장치 격리·전수 대조 · VC-031 접근구조 밖 집합은 정보 없음 · VC-032 패키지 해시 결속 · VC-033 패드·해시 미게시 · VC-034 패드 구간 1회 사용·소거 · VC-035 선관위 부품에 패드 없음 · VC-036 share 수신 대조 · VC-037 미등록 장치 개시 불가 · VC-038 마감 불변식 · VC-039 마감 후 기록 금지 · VC-040 인계 조직 상이·경로 준수 · VC-041 라벨 복원 소거 · VC-042 제외 근거 · VC-043 합계 열기 등식 · VC-044 불일치 국소화 · VC-045 시드 구성 · VC-046 표본 재계산 · VC-047 표본 열기 재구성 · VC-048 포함 분쟁 절차 · VC-049 `LEGAL_CERTIFIED` 기계 생성 금지 · VC-050 상태 혼용 금지 · VC-051 파기 증명 · VC-052 스캔 카운터 참관 앵커와 마감의 단조 연속 · VC-053 모든 기록은 정확히 하나의 BatchAttest에 포함되고 카운터 구간이 틈 없이 이어짐 · VC-054 저널 영속화 전 각인·투입 금지 · VC-055 시험용 투표양식의 집계·참여 장부 제외 · VC-056 배치 서명 전 저널·메모리 대조 · VC-057 `UNATTESTED` 분류·제외·늦은 마감 복귀 · VC-058 은닉 채널 검사는 기록당 챔버 기여 하나만 복원 · VC-059 감사 표본 열기는 비공개 열람, 공개는 대조 결과만 · VC-060 관외 수령 분류와 봉투·라벨·기록 수량 등식 · VC-061 실시간 명부 조회·표시 실패 시 교부하지 않음 · VC-062 장치에 선택별 누계·직전 선택·순서 없음 · VC-063 `TallyScope` 체크포인트 포함 전 share 합 제출 금지 · VC-064 게시판은 가입·식별 없이 같은 조건으로 공표, 보관·재공표 제한 없음 · VC-065 분기 증거(같은 seq 다른 본문, 같은 크기 다른 root, 일관성 증명 실패)와 그 이후 `HOLD_REVIEW` · VC-066 추적코드 확인은 독립 미러 2곳 또는 공표 지문과 대조 후에만 `LOG_CONSISTENT` · VC-067 genesis 정당 명부 형식(2 ≤ n ≤ 4, P1…Pn 연속, 의석순)과 모든 정당 챔버·모듈의 존재 · VC-068 방문 결정은 그 방문의 모든 기록이 장치·모듈 기록 서명으로 결속된 뒤에만 받고, 모듈은 한 카운터에 본문 해시 하나만 서명 · VC-069 방문 저널 순서(위치 항목, 방문 결정, 각인, 라벨 출력)와 재개 판정 · VC-070 슬립은 방문에서 넣은 표의 추적코드 목록(1–8)이며 분쟁 시 코드마다 확인 · VC-071 해석 유닛은 일련번호 바코드를 해독하지 않고 판독 전 지우며 영속 저장소 없음, 판정 규칙·임계값은 `policy_hash`에 고정 · VC-072 패드는 패드 카드에만, 카드는 파기 의식에서 0 덮기 후 파쇄, 본체 재발급 시 소거·변조 검사·펌웨어 측정 · VC-073 카운터·가명 유닛 교체 시 투표소 순번 연속 · VC-074 감사 사유 코드 1·2(확정 판정 불일치)가 나온 장치는 전수 대조 · VC-075 보고 단위별 종이 대조(후보마다 종이 ≥ 암호 확정, 총수 등식) · VC-076 중복 가명 조사는 영장과 모든 정당 모듈이 있을 때만, 결정문의 가명과 일치한 명부 항목만 출력 · VC-077 연결 목록이 모든 장치·게이트웨이·탭·중앙 시스템 포트를 덮고, TCB 장치에 무선과 들어오는 경로가 없으며, 양방향은 허용된 셋뿐 · VC-078 프레임 본문 1,048,576바이트 고정, 슬롯당 선언된 수, 채움 0, 장치 프레임 서명, 흐름 오프셋 연속, 개시 전·마감 후 송신 없음 · VC-079 기록·share 패키지는 닫힌 배치 단위와 기록 해시 순서로만, 어떤 객체도 공표 규칙보다 이르거나 세밀하게 나가지 않음 · VC-080 `UplinkSession` 링크별 사슬과 세션 연속, 장부의 장치 출처 객체가 모두 세션 프레임 안에 있음 · VC-081 참관인 캡처·통신사 기록·세션 기록의 프레임·바이트·접속 구간 일치 · VC-082 무선 점검 기록과 공개 시드 분해 표본의 결과 공개 · VC-083 연결 위반은 `ConnectivityIncident`, 해당 구간 전자 층 `HOLD_REVIEW`, 커밋먼트 유닛 연루 시 전수 대조, 종이 개표 영향 없음.

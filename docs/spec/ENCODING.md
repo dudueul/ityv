@@ -78,7 +78,7 @@ offset  size  field
 | `schema_id` | 이름 | 깊이 | 비고 |
 |---|---|---|---|
 | 0x0001 | `LedgerFrame` | 1 | 장부 프레임 헤더: seq, prev_hash, event_hash |
-| 0x0002 | `Genesis` | 2 | 명부·키·경로·법적 승인 |
+| 0x0002 | `Genesis` | 3 | 명부·키·경로·법적 승인. 버전 3에서 `connectivity_manifest_hash: Hash512` 추가(ADR-0022) |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
@@ -104,6 +104,10 @@ offset  size  field
 | 0x0019 | `SlipBody` | 1 | 슬립 본문(§8.18) |
 | 0x001A | `BoxClose` | 1 | 마감 본문 바이트 + 장치·사무원·참관인 서명(§8.17) |
 | 0x001B | `ScanCountAttest` | 1 | 스캔 카운터 본문 바이트 + 참관인 서명(§8.15) |
+| 0x001C | `ConnectivityManifest` | 1 | 연결 목록: 포트별 방향·매체·상대·시간대·슬롯당 프레임 수·프레임 키(§8.21, ADR-0022) |
+| 0x001D | `UplinkFrame` | 1 | 고정 크기 송신 프레임. 장부 이벤트가 아닌 전송 단위(§8.22) |
+| 0x001E | `UplinkSessionBody` | 1 | 게이트웨이 세션 본문: 링크별 프레임 수·사슬 head(§8.23) |
+| 0x001F | `UplinkSession` | 1 | 세션 본문 바이트 + 게이트웨이 하이브리드 서명 + 참관인 서명(§8.24) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -340,3 +344,65 @@ offset  size  field
 개수에 하한이 있는 배열은 하한 미달을 `ValueOutOfRange`(개수 접두사 오프셋)로 보고한다. 집합 수준 불변식(ID 집합 일치, 역할·조직 수, 중복 없는 정렬 뒤의 교차 검사)은 배열 전체를 읽은 뒤 그 배열의 개수 접두사 오프셋으로 보고하며, 배열 안의 위반(`NotSorted`, `Duplicate`, 범위)이 먼저 발견되면 그것이 우선한다. 디코더는 필드를 읽는 즉시 그 필드의 규칙을 검사한다(뒤 필드를 읽기 전에).
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.
+
+### 8.21 `ConnectivityManifest` (`schema_id` 0x001C, `schema_version` 1)
+
+genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, §5.8, ADR-0022).
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `frame_body_len` | `u32` | 1,048,576이어야 한다. 그 외 값은 `ValueOutOfRange` |
+| 3 | `slot_minutes` | `u16` | 10이어야 한다 |
+| 4 | `entries` | `Array<{link_id: Ident<64>, device_class: u8, port: Ident<32>, direction: u8, medium: u8, counterpart: Ident<64>, schedule: u8, frames_per_slot: u16, catchup_frames_per_slot: u16, carries: u32, frame_key: [u8; 32]}, 1024>` | 1개 이상, `link_id` 바이트 오름차순, 중복 없음 |
+
+- `device_class`: 1 해석 유닛, 2 커밋먼트 유닛·스캐너 바깥 포트, 3 카운터·가명 유닛, 4 챔버 모듈, 5 선거일 신원 확인 단말, 6 사전투표 신원 확인 단말, 7 투표소 게이트웨이, 8 관찰 탭, 9 장부 수집 서버, 10 게시판 공표 서버, 11 증인, 12 신뢰기관 수신 시스템, 13 수령 라벨 판독기, 14 각인 판독기, 15 프린터류(각인기·슬립·라벨). 그 외 값은 `ValueOutOfRange`.
+- `direction`: 0 없음(봉인 또는 미장착), 1 내보내기만(수신 소자 없음), 2 받기만, 3 양방향.
+- `medium`: 0 없음, 1 광 송신 전용, 2 광커플러(장치 내부), 3 유선 이더넷, 4 광 회선, 5 선거 전용회선(통합선거인명부), 6 의식 현장 직결, 7 무선.
+- `schedule`: 0 사용 안 함, 1 투표함 개시–마감 처리, 2 사전투표 기간, 3 상시, 4 의식 때만.
+- `carries` 비트: 0 공개 기록·배치 증명, 1 봉인 share 패키지, 2 확인 카운터, 3 장치 링크 객체, 4 체크포인트·장부, 5 명부 조회(개인정보), 6 세션 기록. 정의되지 않은 비트가 서 있으면 `ValueOutOfRange`.
+- `frame_key`: `UplinkFrame`을 서명하는 Ed25519 공개키. 프레임을 보내지 않는 항목은 0이어야 한다.
+- 집합 불변식(`InvariantViolation`, `entries` 개수 접두사 오프셋): `device_class` 1–4의 항목은 `direction` ∈ {0, 1}이고 `medium` ≠ 7이다. `direction` 3은 `device_class` 6(`medium` 5, `schedule` 2), 7(바깥 회선), 9–12에만 쓴다. `device_class` 8은 `direction` 1만 쓴다. `carries` 비트 5는 `device_class` 6과 그 상대에만 쓴다. genesis의 장치·포트가 빠짐없이 덮였는지는 검증기가 genesis와 대조한다(VC-077).
+
+### 8.22 `UplinkFrame` (`schema_id` 0x001D, `schema_version` 1)
+
+본문 길이는 언제나 1,048,576바이트다(헤더의 `body_len` 고정). 모든 필드가 고정폭이다.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `link_id_hash` | `Hash512` | 연결 목록 항목 `link_id`의 §4 해시 |
+| 2 | `slot` | `u64` | 선거 epoch 기준 10분 슬롯 번호 |
+| 3 | `index` | `u16` | 슬롯 안 순번. 일반은 `frames_per_slot` 미만, 따라잡기는 `catchup_frames_per_slot` 미만 |
+| 4 | `kind` | `u8` | 0 일반, 1 따라잡기, 2 마감 재전송, 3 입회 재전송. 그 외 값은 `ValueOutOfRange` |
+| 5 | `stream_offset` | `u64` | 이 링크 바이트 흐름에서 `payload` 첫 바이트의 위치 |
+| 6 | `payload_len` | `u32` | 1,048,425 이하 |
+| 7 | `payload` | `[u8; 1048425]` | 앞 `payload_len` 바이트가 흐름의 연속 구간. 나머지는 0이어야 하며 아니면 `NonCanonical` |
+| 8 | `frame_sig` | `[u8; 64]` | `frame_key`의 Ed25519 서명(purpose `uplink-frame`), 필드 1–7의 인코딩에 대해 |
+
+흐름은 정규 객체의 연접이며 연결 목록 `carries`가 허용한 스키마만 담는다. 수신자는 흐름을 이어 붙여 객체 경계를 복원하고, 정규 객체가 아닌 바이트나 허용되지 않은 스키마를 위반으로 기록한다(PROTOCOL §5.8 10항).
+
+### 8.23 `UplinkSessionBody` (`schema_id` 0x001E, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `gateway_id` | `Ident<64>` | |
+| 4 | `session_index` | `u32` | 게이트웨이마다 1부터 1씩 |
+| 5 | `final` | `bool` | 마감 때 최종 기록이면 1 |
+| 6 | `start_slot` | `u64` | |
+| 7 | `end_slot` | `u64` | `start_slot` 이상 |
+| 8 | `links` | `Array<{link_id_hash: Hash512, frames: u64, catchup_frames: u64, missing_slots: u32, last_stream_offset: u64, chain_head: Hash512}, 16>` | `link_id_hash` 오름차순, 중복 없음 |
+| 9 | `wan_bytes` | `u64` | 이 세션 동안 게이트웨이가 바깥 회선으로 보낸 바이트 |
+| 10 | `previous_session_hash` | `Hash512` | 첫 세션이면 0 |
+
+사슬: `h_0 = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ link_id_hash)`, `h_i = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ h_{i−1} ‖ frame_hash_i)`. `frame_hash`는 `UplinkFrame` 객체의 §4 해시다. 세션은 앞 세션의 head에서 이어진다.
+
+### 8.24 `UplinkSession` (`schema_id` 0x001F, `schema_version` 1)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<2048>` | 인코딩된 `UplinkSessionBody` 객체 전체 |
+| 2 | `gateway_sig` | `[u8; 4691]` | 하이브리드 서명(purpose `uplink-session`) |
+| 3 | `observer_sigs` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, capture_hash: Hash512, sig: [u8; 4691]}, 4>` | 0개 이상, `observer_id` 오름차순, 중복 없음. `capture_hash`는 그 참관인이 받아 둔 캡처 파일의 SHA3-512. purpose `uplink-session` |
+
