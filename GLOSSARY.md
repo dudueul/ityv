@@ -38,7 +38,7 @@
 | 참여 장부 | participation ledger | `participation` | 확인마다 서명된 카운터 이벤트와 가명. 교차 중복과 수량 검증용. 투표지 또는 투함 ID와 절대 연결하지 않는다. |
 | 가명 | pseudonym | `pseudonym` | 챔버 모듈 X·Y의 PRF 출력을 결합해 만든 유권자 식별 대체값. 어느 한 챔버도 혼자 계산할 수 없다. 선거 후 순서 없는 다중집합으로만 공개한다. |
 | 상태 어휘 | status vocabulary | — | `UNVERIFIED`, `LOG_CONSISTENT`, `SOURCE_COMPLETENESS_CHECKED`, `CRYPTO_TALLY_VERIFIED`, `PAPER_AUDITED`, `HOLD_REVIEW`, `LEGAL_CERTIFIED`. 자동 상호 전환을 금지한다. |
-| 투함 기록 상태 | cast record status | — | `CAST_COMMITTED`, `RECEIVED`, `CAST_NOT_RECEIVED`, `CHALLENGED_SPOILED`, `QUARANTINED`, `UNATTESTED`(기록 서명은 유효하나 배치 증명 없음), `SHARE_MISSING`. |
+| 투함 기록 상태 | cast record status | — | `CAST_COMMITTED`, `RECEIVED`, `RECEIVED_DAMAGED`(훼손 봉투로 수령), `RECEIVED_LATE`(기한 후 수령), `WRONG_DISTRICT`(다른 선거구 투표양식), `CAST_NOT_RECEIVED`, `CHALLENGED_SPOILED`, `QUARANTINED`, `UNATTESTED`(기록 서명은 유효하나 배치 증명 없음), `SHARE_MISSING`. |
 | 수집 프로필 | capture profile | `IN_PERSON_SCAN`, `RECEIPT_SCAN` | 전자는 선거일·관내·관외·재외(투표 시점 커밋먼트), 후자는 거소·선상(수령 시점 스캔, 보장 수준이 낮음을 명시). |
 | 보관 경로 | custody route | `route` | genesis에 고정된 인계 순서. 우편 회송(P1)과 현지 개표(P4)를 같은 코드로 표현한다. |
 | 기록 우선 표본 | record-first sampling | — | 비교 감사에서 공개 기록을 먼저 뽑아 열고 종이를 찾는 순서. 공개 태그가 필요 없어 강요 통로를 만들지 않는다. |
