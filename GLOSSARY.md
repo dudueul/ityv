@@ -27,20 +27,27 @@
 | 배포 프로필 | deployment profile | `L0`, `L1` | L0 증거 계층(현행법), L1 E2E 계층(법 개정 후). 한 코드베이스이며 게이트로만 구분된다. |
 | 활성화 단계 | activation stage | `stage0`..`stage3` | 0 현행법, 1 신뢰기관 구성, 2 투표지 표식·암호 집계 보조·RLA, 3 유권자 검증코드. |
 | 투함 스캐너 | casting scanner | `scanner` | 투표함 위의 장치. 해석 유닛(불신), 커밋먼트 유닛(검증), 챔버 모듈(챔버 공급)로 물리적으로 분할된다. |
+| 기준점·투표양식 표지 | fiducials, ballot-style mark | — | 투표지 네 귀퉁이의 위치 기준 사각형과 `ballot_style_id`만 담은 작은 2차원 코드. 같은 투표양식이면 모든 투표지에 같은 값이라 개별 투표지를 구별하지 않는다. 해석 유닛은 사전투표지의 일련번호 바코드를 해독하지 않고 이것만 읽는다(VC-071). |
 | 해석 유닛 | interpretation unit | `interp` | 투표지 이미지를 해석해 선택 인덱스 몇 바이트를 커밋먼트 유닛에 넘긴다. 불신 대상. 단방향 링크로만 연결. |
 | 커밋먼트 유닛 | commitment unit | `cunit` | `no_std` Rust 수백 줄. 커밋먼트, 정형성 증명, share, 장치 서명, 추적코드, 투함 ID 각인 명령을 만든다. 검증 사다리의 최상위 대상. |
 | 챔버 모듈(봉인 모듈) | chamber module | `cmod` | 챔버가 공급하고 봉인한 물리 모듈. 정당 모듈 P1…Pn은 모두 필수이고, J·A·C는 자체 모듈 또는 독립검증위원회의 중립 모듈에 위임할 수 있으며, N(선관위)은 모듈이 없다. 기능: 난수 기여, 투함 ID·봉투 라벨 기여, 자기 챔버 구성원의 일회용 패드 보관과 XOR, 일회성 MAC 키 공급, 확인 장치용 가명 PRF, 카운터 서명. 발급 값을 보관하지 않는다. |
+| 패드 카드 | pad card | `pad_card` | 일회용 패드를 담는 NOR 플래시 카드. 모듈 본체에 꽂아 봉인하며, 파기 의식에서 0으로 덮은 뒤 파쇄한다. 모듈 본체는 소거·검사·측정을 거쳐 다음 선거에 다시 발급한다(PROTOCOL §9.4.2, VC-072). |
 | 투함 기록 | cast record | `CastRecord` | 표 하나의 공개 기록. 본문(선거·투표함·투표양식·커밋먼트·정형성 증명·모듈 카운터·share 패키지 해시)과 기록 서명(장치·모듈의 Ed25519). 양자내성 서명은 64건 배치의 `BatchAttest`가 제공한다. 선택과 투함 ID는 커밋먼트 안에만 존재하며 시간과 순번은 없다. |
 | 커밋먼트 | commitment | `commitment` | Ristretto255 위의 일반화 Pedersen 커밋먼트. 숨김은 무조건적, 결속은 계산적. |
 | 투함 ID | cast id | `cast_id` | 투함 시 챔버 모듈들의 난수 기여를 해시해 만드는 192비트 값. 투표지에 각인되며 커밋먼트 안에만 존재하고 공개 기록에 노출하지 않는다. |
 | 봉투 라벨 | envelope label | `env_label` | 관외·재외 전용. 챔버 모듈들의 기여를 해시해 만든 독립 무작위 24바이트 토큰을 봉투에 부착한다. 투함 ID나 추적코드에서 유도하지 않으므로 봉투와 투표지를 (라벨, 각인)으로 연결할 수 없다. 공개 기록에 노출하지 않고 share로만 전달하며, 수령 대조 의식에서 정족수가 라벨만 복원해 대조한다. |
+| 라벨 스티커 | label sticker | `sticker` | 관외·재외 방문당 한 장. 그 방문에서 넣은 표들의 봉투 라벨 값 목록을 2차원 코드로 담는다. 다시 찍은 투표지의 스티커는 같은 봉투에 붙인다. 수령지 판독기는 값을 낱개 집합으로만 남긴다(PROTOCOL §10.6). |
 | 추적코드 | tracking code | `tracking_code` | 투함 기록의 SHA3-512 해시. 서명된 슬립으로 유권자에게 인쇄한다. 포함 여부만 검증 가능하고 선택은 증명할 수 없다. |
-| 코드 슬립 | code slip | `slip` | 추적코드, 투표소, 시간 구간과 하이브리드 서명이 인쇄된 종이. |
-| 투입 전 검증 | pre-cast challenge | `challenge` | 유권자나 참관인이 투입 전에 요구. 스캐너가 난수를 공개하고 그 표는 폐기되며 새 표를 교부한다. |
+| 코드 슬립 | code slip | `slip` | 방문당 한 장. 그 방문에서 넣은 표의 추적코드 목록(1–8개), 투표소, 시간 구간과 하이브리드 서명이 인쇄된 종이(ADR-0021). |
+| 투입 전 검증 | pre-cast challenge | `challenge` | 유권자가 방문의 결정에서 확인할 투표지를 고르면(일부 또는 전부) 스캐너가 그 표의 난수를 공개하고 그 표는 폐기되며 그 투표양식만 새로 교부한다. 참관인은 시험용 투표지로 요구한다. |
+| 방문 | visit | `visit` | 유권자가 받은 투표지 전부(1–8장)를 가림 봉투 하나로 한 번에 넣는 투입 단위. 확인 뒤 다시 찍은 투표지는 다음 방문이다(ADR-0021). |
+| 방문 결정 | visit decision | — | 방문의 모든 기록이 장치·모듈 기록 서명으로 묶인 뒤에 받는 위치별 넣기·확인 선택. 저널에 방문 결정 항목(종류 7)으로 영속화되어야 성립한다(VC-068, VC-069). |
+| 결정 전 결속 | pre-decision binding | — | 모듈이 한 카운터에 본문 해시 하나만 서명하고, 그 서명을 결정 전에 받는 규칙. 장치가 어느 표가 확인될지 안 뒤에 기록을 바꾸지 못하게 한다(PROTOCOL §7.2.1). |
 | 여는 값 share | opening share | `share` | 커밋먼트 난수(모듈별 기여), 투함 ID, 봉투 라벨의 선형 비밀분산 조각. 챔버 접근구조로 분산되고 일회용 패드(기본) 또는 하이브리드 KEM(대체)으로 전송된다. |
 | 집계 열기 | aggregate opening | — | 신뢰기관이 share를 합산해 합계 커밋먼트만 연다. 개별 표는 감사 표본 외에 열지 않는다. |
 | 파기 의식 | destruction ceremony | — | 인증과 이의 기간 종료 후 share와 선거 키를 공개적으로 파기한다. |
-| 확인 장치 | check-in device | `checkin` | 신원 확인 유닛(불신), 카운터·가명 유닛(검증), 정당 모듈 P1…Pn으로 분할된 장치. 모든 투표소에 둔다. |
+| 확인 장치 | check-in device | `checkin` | 신원 확인 단말(불신) 여러 대와, 투표소마다 하나인 카운터·가명 유닛(검증)과 거기 꽂힌 정당 모듈 P1…Pn으로 구성된 장치. 단말은 유선으로 유닛에 연결된다. 봉인된 예비 유닛을 하나 둔다(PROTOCOL §6.2). |
+| 중복 가명 조사 | duplicate-pseudonym identification | `DuplicateIdentification` | 공개된 중복 가명의 주인을 찾는 의식. 법원 결정과 모든 정당 모듈이 있어야 하며, 명부 전체로 가명을 계산하되 결정문의 가명과 같은 사람만 내보낸다. 표와는 이어지지 않는다(PROTOCOL §6.6). |
 | 참여 장부 | participation ledger | `participation` | 확인마다 서명된 카운터 이벤트와 가명. 교차 중복과 수량 검증용. 투표지 또는 투함 ID와 절대 연결하지 않는다. |
 | 가명 | pseudonym | `pseudonym` | 모든 정당 모듈의 PRF 출력을 결합해 만든 유권자 식별 대체값. 정당 모듈이 하나라도 빠지면 계산할 수 없다. 선거 후 순서 없는 다중집합으로만 공개한다. |
 | 상태 어휘 | status vocabulary | — | `UNVERIFIED`, `LOG_CONSISTENT`, `SOURCE_COMPLETENESS_CHECKED`, `CRYPTO_TALLY_VERIFIED`, `PAPER_AUDITED`, `HOLD_REVIEW`, `LEGAL_CERTIFIED`. 자동 상호 전환을 금지한다. |
@@ -51,6 +58,8 @@
 | 신뢰 기반 | trusted computing base | `TCB` | 정규 인코딩, 암호 래퍼, 커밋먼트·증명, 장부·Merkle, 상태기계, 공개 검증기, 커밋먼트 유닛, 카운터·가명 유닛, 신뢰기관 집계. |
 | 일괄 증명 | batch attestation | `BatchAttest` | 기록 64건(또는 15분, 또는 마감)마다 기록 해시 Merkle root와 모듈 카운터 구간에 장치와 모듈이 하이브리드 서명한 공개 이벤트. 모듈은 카운터 연속성을 확인한 뒤에만 서명한다. |
 | 봉인 저널 | sealed journal | `journal` | 커밋먼트 유닛이 기록 해시·share 패키지·검증·격리·마감을 순서대로 담아 fsync하는 해시 체인(`JournalEntry` 0x0014). `sealed` 등급이며 투함 순서를 드러내므로 공개하지 않는다. |
+| 보고 단위 | reporting unit | `reporting_unit` | 종이 개표 결과가 법령에 따라 공개되는 단위(선거일 투표구, 관내·관외 사전투표 단위 등). 암호 합계를 이 단위로 열고 `PaperCountReport`와 대조한다(PROTOCOL §11.2, §11.5, VC-075). |
+| 감사 사유 코드 | audit reason code | — | `SampleComparison`의 불일치 종류 0–6. 확정 판정 불일치(1·2)는 그 장치 전수 대조, `UNREADABLE`·`BLANK`인데 종이가 유효(3·4)는 비율 공개(PROTOCOL §12.3, VC-074). |
 | 늦은 마감 | late close | `LateBatchClose`, `LateBoxClose` | 멈췄던 장치를 입회 아래 되살려 저널에서 미결 배치·마감을 닫는 절차. |
 | 비상 투입 | fallback deposit | `FallbackDeclared` | 스캐너와 예비 장치가 모두 없을 때 봉인된 비상 투입구로 기록 없이 받는 투표지. 마감의 `no_record_count`로 센다. |
 | 검증 사다리 | verification ladder | `V1`..`V5` | V1 속성·퍼징·변이, V2 Kani, V3 Verus 또는 Creusot, V4 TLA+·Tamarin, V5 독립 2차 구현. |

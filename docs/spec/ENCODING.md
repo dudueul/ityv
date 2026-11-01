@@ -106,8 +106,9 @@ offset  size  field
 | 0x001B | `ScanCountAttest` | 1 | 스캔 카운터 본문 바이트 + 참관인 서명(§8.15) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
+| 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
 
-필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 §8이 가지며, 구현은 조직 경계를 넘는 객체는 `ityv-encoding`, 크레이트 내부 객체는 그 크레이트(비고에 표기; 0x0010·0x0011은 `ityv-ledger`)다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다. 0x0100–0x01FF는 장치 링크 객체 범위다.
+필드 수준 정의는 `docs/spec/PROTOCOL.md`의 각 절과 §8이 가지며, 구현은 조직 경계를 넘는 객체는 `ityv-encoding`, 크레이트 내부 객체는 그 크레이트(비고에 표기; 0x0010·0x0011은 `ityv-ledger`)다. 둘이 다르면 이 문서와 PROTOCOL.md가 우선하고 크레이트는 결함이다. 0x0100–0x01FF는 장치 링크 객체 범위다. 0x0102는 커밋먼트 유닛 → 모듈 발급 요청에 남겨 둔다.
 
 ## 7. 시험 벡터
 
@@ -298,12 +299,17 @@ offset  size  field
 | 6 | `no_record_count` | `u64` | |
 | 7 | `challenge_count` | `u64` | |
 | 8 | `quarantine_count` | `u64` | |
-| 9 | `record_set_root` | `Hash512` | 기록 해시 정렬 집합의 root |
-| 10 | `journal_head` | `Hash512` | |
-| 11 | `seal_digest` | `Hash512` | |
-| 12 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 7>` | 오름차순, 중복 없음 |
-| 13 | `open_batches` | `u8` | |
-| 14 | `time_bucket` | `u64` | |
+| 9 | `visit_count` | `u64` | 넣은 표가 하나 이상인 방문 수(ADR-0021) |
+| 10 | `envelope_count` | `u64` | 관외·재외 함의 회송 봉투 실물 수. 투표소 함은 0 |
+| 11 | `sticker_count` | `u64` | 관외·재외 함의 라벨 스티커 수(비상 표지 제외). 투표소 함은 0 |
+| 12 | `record_set_root` | `Hash512` | 기록 해시 정렬 집합의 root |
+| 13 | `journal_head` | `Hash512` | |
+| 14 | `seal_digest` | `Hash512` | |
+| 15 | `module_counters` | `Array<{module_id: Ident<64>, final_counter: u64}, 7>` | 오름차순, 중복 없음 |
+| 16 | `open_batches` | `u8` | |
+| 17 | `time_bucket` | `u64` | |
+
+세 필드(9–11)가 더해져 본문이 24바이트 늘지만 `BoxClose.body`의 상한(`Bytes<1024>`) 안이다. 수량 규칙(`visit_count ≤ record_count ≤ 8·visit_count`, 관외·재외 함의 `paper_count` 0과 `sticker_count == visit_count`)은 PROTOCOL §10.2가 정하며 디코더가 아니라 마감 검사와 검증기가 확인한다.
 
 ### 8.17 `BoxClose` (`schema_id` 0x001A, `schema_version` 1)
 
@@ -315,17 +321,19 @@ offset  size  field
 
 ### 8.18 `SlipBody` (`schema_id` 0x0019) and `Slip` (`schema_id` 0x000A), `schema_version` 1
 
-`SlipBody`: `election_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `time_bucket: u64` ‖ `tracking_code: Hash512`.
+`SlipBody`: `election_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `time_bucket: u64` ‖ `tracking_codes: Array<Hash512, 8>`(1 이상 8 이하, 방문의 위치 순서. 개수 0은 `ValueOutOfRange`, 같은 코드 두 번은 `Duplicate`). 방문당 슬립 하나(ADR-0021).
 
-`Slip`: `body: Bytes<256>`(인코딩된 `SlipBody` 객체 전체) ‖ `device_sig: [u8; 4691]`(purpose `slip`).
+`Slip`: `body: Bytes<1024>`(인코딩된 `SlipBody` 객체 전체; 코드 8개에서 약 680바이트) ‖ `device_sig: [u8; 4691]`(purpose `slip`).
 
 ### 8.19 장치 링크 객체 (`ityv-cunit` 구현)
 
 `Interpretation` (`schema_id` 0x0101): `election_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `option_index: u16`. 커밋먼트 유닛은 이 객체 외의 어떤 바이트도 해석 유닛에서 받지 않는다. `option_index > m+1`은 거부한다(m은 genesis의 투표양식에서).
 
+`VisitEnd` (`schema_id` 0x0104): `election_id: Ident<64>` ‖ `ballot_count: u8`(1 이상 8 이하). 해석 유닛이 한 방문의 투표지를 다 보낸 뒤 보낸다. 커밋먼트 유닛은 `ballot_count`가 직전 `VisitEnd` 이후 받은 `Interpretation` 수와 다르면 그 방문을 결정 없이 격리한다(PROTOCOL §7.3). 해석 유닛은 불신 부품이라 방문 경계를 잘못 알려도 생기는 일은 결정 화면이 둘로 나뉘거나 방문이 격리되는 것뿐이다.
+
 `ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C. N은 모듈이 없다) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
 
-`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감, 6 각인 완료) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 7>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`, 6은 각인을 마친 기록의 해시. `module_counters`는 그 항목이 소비한 카운터(1·2와 기록 전 격리 3) 또는 배치·마감 시점의 최고값(4·5)이다. 기록을 지목하는 격리(3)와 각인 완료(6)는 그 기록의 카운터를 되풀이할 뿐 새로 소비하지 않는다. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
+`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감, 6 각인 완료, 7 방문 결정, 8 라벨 출력) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 7>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`, 6은 각인을 마친 기록의 해시, 7은 방문 결정 다이제스트 `SHA3-512("ityv:visit:v1" ‖ 0x00 ‖ n: u8 ‖ (kind_i: u8 ‖ record_hash_i)…)`(바로 앞의 위치 항목 n개, 위치 순), 8은 그 방문의 결정 다이제스트(라벨 값은 저널에 남기지 않는다). 7·8의 `share_package_hash`는 0이고 `module_counters`는 비어 있다. 한 방문의 항목은 위치 항목(1·2) n개, 방문 결정(7), 처리 항목(6·3), 관외면 라벨 출력(8) 순이다(PROTOCOL §7.3, VC-069). `module_counters`는 그 항목이 소비한 카운터(1·2와 기록 전 격리 3) 또는 배치·마감 시점의 최고값(4·5)이다. 기록을 지목하는 격리(3)와 각인 완료(6)는 그 기록의 카운터를 되풀이할 뿐 새로 소비하지 않는다. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
 
 ### 8.20 오류 보고 규칙
 

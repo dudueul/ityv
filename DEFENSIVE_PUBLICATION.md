@@ -1,6 +1,6 @@
 # 방어적 공개 (Defensive Publication)
 
-> English summary: This repository is a deliberate public technical disclosure. Its authors will not seek patents on anything described here and publish it so that it serves as prior art against anyone else's attempt to patent it. Code is AGPL-3.0-or-later (with the GPLv3-family patent license and patent-retaliation terms); documents are CC BY-SA 4.0. The table lists each disclosed technique, where it is specified, and when it was first published in this repository; the commit history and archived copies are the evidence of those dates.
+> English summary: This repository is a deliberate public technical disclosure. Its authors will not seek patents on anything described here and publish it so that it serves as prior art against anyone else's attempt to patent it. Code is AGPL-3.0-or-later (with the GPLv3-family patent license and patent-retaliation terms); documents are CC BY-SA 4.0. The table lists each disclosed technique, where it is specified, and when it was first published in this repository; the evidence of those dates is this repository's commit history and GitHub's public record; whether to register copies with any outside archive or DOI service is the repository owner's decision.
 
 ## 원칙
 
@@ -8,7 +8,7 @@
 2. 공개의 목적은 선거 기반 시설에 쓰일 기술을 누구도 특허로 독점하지 못하게 하는 것이다. 여기 공개된 내용은 공개일부터 누구에게나 선행기술이다.
 3. 코드는 AGPL-3.0-or-later다. 이 라이선스는 기여자가 자기 특허 청구항에 대해 실시권을 주게 하고(제11조), 이 프로그램을 특허 침해로 제소한 자의 라이선스를 끝낸다(제10조). 고친 판을 장치에 넣거나 네트워크로 서비스하면 소스를 공개해야 한다(제13조).
 4. 문서는 CC BY-SA 4.0이다. 고쳐 쓴 문서도 같은 조건으로 공개해야 한다.
-5. 공개일의 증거는 이 저장소의 커밋 이력(서명된 타임스탬프가 아니라 GitHub에 수신된 시각), 공개 보관소 사본(Software Heritage 등), 릴리스별 DOI다.
+5. 공개일의 증거는 이 저장소의 커밋 이력(서명된 타임스탬프가 아니라 GitHub에 수신된 시각)과 GitHub의 공개 기록이다. 외부 보관소나 DOI 서비스에 사본을 등록할지는 저장소 소유자가 정한다.
 
 ## 공개 내역
 
@@ -27,10 +27,19 @@
 | 9 | 선택별 누계 없음, 모든 투표 마감 전 합계 열기 금지 | PROTOCOL §7.3, §11.2 | 2026-11-01 |
 | 10 | 단말기 비용·정확도 설계(방문 단위 투입, 유휴 시간 사전 계산, 붉은 인주 분리 판독, 재사용 모듈과 파쇄형 패드 카드 등) | docs/hardware/DEVICES.md, ADR-0020 | 2026-11-01 |
 | 11 | 배치 증명(64건)과 참관인 스캔 수 앵커, 봉인 저널 재개 판정표 | PROTOCOL §7.2.1, §7.8, ADR-0014, ADR-0017 | 2026-10-31 |
+| 12 | 방문 단위 투입: 받은 투표지 전부를 한 번에 넣고, 모든 기록을 장치·모듈 기록 서명으로 묶은 뒤에만 위치별 넣기·확인 결정을 받는 방식(일부 확인 허용), 모듈이 한 카운터에 본문 하나만 서명하는 결정 전 결속 | PROTOCOL §7.2.1, §7.3, §8, ADR-0021 | 2026-11-01 |
+| 13 | 방문 저널 순서(위치 항목 → 방문 결정 → 각인 → 라벨 출력)와 여러 장 대기 구역의 재개 판정 | PROTOCOL §7.3, §7.8, ENCODING §8.19 | 2026-11-01 |
+| 14 | 방문당 슬립 하나에 추적코드 목록과 하이브리드 서명 한 번 | PROTOCOL §7.7, ENCODING §8.18 | 2026-11-01 |
+| 15 | 관외 방문당 라벨 스티커 하나에 봉투 라벨 목록을 담고, 수령지 판독기는 낱개 값 집합만 남기는 방식, 방문·봉투·스티커 수 마감 등식 | PROTOCOL §10.2, §10.6, ADR-0021 | 2026-11-01 |
+| 16 | 기준점과 투표양식 표지로 판독하고 사전투표지 일련번호 바코드는 해독하지 않고 지우는 해석 유닛, 고정 공개 규칙과 애매한 표의 `UNREADABLE` 처리 | PROTOCOL §7.1, BALLOT_LAYOUT §2–§3, ADR-0020 | 2026-11-01 |
+| 17 | 모듈 본체 재사용과 파쇄형 패드 카드(NOR) | PROTOCOL §9.4.2, §9.4.6, §15 | 2026-11-01 |
+| 18 | 투표소당 카운터·가명 유닛 하나와 순번을 이어받는 예비 유닛 | PROTOCOL §6.2, ADR-0009 | 2026-11-01 |
+| 19 | 감사 불일치 사유 코드와 확정 판정 불일치 시 장치 전수 대조 | PROTOCOL §12.3, §12.5 | 2026-11-01 |
+| 20 | 보고 단위별 암호 합계 열기와 종이 개표 결과의 부등식·총수 대조 | PROTOCOL §11.2, §11.5 | 2026-11-01 |
+| 21 | 영장과 모든 정당 모듈이 있을 때만 결정문의 중복 가명에 해당하는 사람만 내보내는 중복 가명 조사 | PROTOCOL §6.6, ADR-0009 | 2026-11-01 |
 
 이후 공개되는 기법은 이 표에 날짜와 함께 더한다.
 
-## 보관
+## 공개일의 증거
 
-- Software Heritage: 공개 저장소 전체의 보관을 요청한다(https://archive.softwareheritage.org).
-- 릴리스마다 Zenodo DOI를 받는 것을 권장한다(저장소 소유자 계정으로 GitHub 연동).
+공개일의 증거는 이 저장소의 커밋 이력과 GitHub의 공개 기록이다. 외부 보관소나 DOI 서비스에 사본을 등록할지는 저장소 소유자가 정한다.

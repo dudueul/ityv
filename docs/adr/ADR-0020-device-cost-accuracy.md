@@ -2,7 +2,7 @@
 
 > English summary: Field-device cost is driven by unit counts, not chip prices: with up to four party chambers each scanner carries seven chamber modules, and the same fleet must carry seven-ballot local elections. We adopt: an open reference board family ("ityv-core") in at least two MCU families, Cortex-M7 class for the commitment unit and Cortex-M33 class for chamber modules and counter units, no discrete secure element; a commodity, RAM-only interpretation unit with duplex RGB contact image sensors at 300 dpi, red-minus-green ink isolation, fiducials and a non-unique ballot-style mark, classical published decision rules with an UNREADABLE band, and a certification target of zero definite misreads in at least 10^7 positions; an optocoupler data diode for the one-way link; NOR flash for pads; proof generation reordered so vote-independent work is precomputed (same output distribution, verifier unchanged) and precomputed KEM encapsulations. We propose (for integration by the spec owners) batch insertion with one cast/check decision per visit, one slip per visit, a fix for out-of-district envelopes holding several ballots, ballot fiducials and style marks, reusable chamber modules with shreddable pad cards, one shared counter unit per station, misread classification with per-device feedback, and optional per-reporting-unit openings. Estimated initial fleet cost USD 25–68 M versus USD 55–151 M for the current one-ballot-at-a-time design. Status: proposed; estimates to be measured in M8.
 
-- 상태: 제안(M8 실측 후 채택 여부 확정)
+- 상태: 채택(2026-11-01, 수치는 M8 실측 후 고친다)
 - 날짜: 2026-11-01
 - 관련: ADR-0005, ADR-0006, ADR-0014, ADR-0017, ADR-0019; `docs/hardware/DEVICES.md`; `CONSTITUTION.md` §1·§3·§4; `docs/spec/PROTOCOL.md` §6.2, §7, §8, §9.4, §9.6, §10, §11, §12; `docs/ballot/BALLOT_LAYOUT.md`
 
@@ -21,7 +21,8 @@
 7. **각인기**는 안료 잉크 열 잉크젯이다.
 8. **증명 생성 재배열과 KEM 사전 계산**을 `ityv-crypto`에 넣는다. 출력 분포와 형식이 명세와 같아 프로토콜 변경이 아니다. 독립 암호 검토와 상수 시간 검사를 조건으로 한다.
 9. **J·A·C 중립 모듈 통합은 권하지 않는다.** 허용은 하되 공개 표기한다(현행 그대로).
-10. **프로토콜 제안 P1–P8**(DEVICES.md §7)은 이 ADR이 채택하지 않는다. 각 명세 담당이 통합하며, 통합 시 해당 ADR을 따로 둔다. 그중 P2b(관외 봉투 하나에 투표지 여러 장)는 현행 명세의 결함 수정이다.
+10. **프로토콜 제안 P1–P8**(DEVICES.md §7)은 모두 채택해 명세에 반영했다. P1(방문 단위 투입과 한 번의 결정), P2(방문당 슬립), P2b(관외 봉투 하나에 투표지 여러 장: 방문당 스티커, `visit_count`·`envelope_count`·`sticker_count`)는 커밋먼트 유닛 동작을 바꾸므로 ADR-0021에 따로 적었다. P2b는 현행 명세의 결함 수정이다. P3(기준점, 투표양식 표지, 일련번호 바코드 해독 금지, 긴 투표지 봉투)는 PROTOCOL §7.1과 `BALLOT_LAYOUT.md` §0–§5, 법령 부속서 개정안 1 ⑨, VC-071. P4(모듈 본체 재사용과 패드 카드)는 PROTOCOL §9.4.2·§9.4.6·§15, VC-072. P5(투표소당 카운터·가명 유닛 하나)는 PROTOCOL §6.2, ADR-0009 개정, VC-073. P6은 아래 11. P7(감사 사유 코드와 확정 판정 불일치 시 전수 대조)은 PROTOCOL §12.3·§12.5, VC-074. P8(보고 단위별 합계 열기와 종이 대조)은 PROTOCOL §11.1·§11.2·§11.5, `PaperCountReport`, VC-075.
+11. **P6(증명 생성 재배열과 KEM 사전 계산)은 구현 과제다.** `ityv-crypto`에 넣고 명세는 바꾸지 않는다. 출력 분포와 인코딩이 §7.5와 같다는 점만 PROTOCOL §7.5에 적었다. 들어가는 조건은 결정 8과 같다(독립 암호 검토, 상수 시간 검사, 명세 방식과의 분포 비교 차분 테스트).
 
 ## 결과
 
