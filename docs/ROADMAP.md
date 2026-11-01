@@ -23,7 +23,8 @@
 
 ## M4 상태기계 `ityv-state` (산출 완료, ADR-0025)
 - 산출: `crates/ityv-state`. `auth`(법적 승인 객체의 두 서명 토큰 확인, 범위 전제와 단계 건너뛰기 금지, `Authorization::grant`만 만드는 `Cap<'a, S>`), `record`(`UNATTESTED`→`CAST_COMMITTED`, `CHALLENGED_SPOILED`·`QUARANTINED`, 수령 대조 다섯 결과, `SHARE_MISSING`·`TEST_BALLOT`, 집계 처분), `close`(VC-038 등식별 보류, 모듈 카운터 틈, 등록된 독립 서명자), `boxes`(`BallotBox<'a, S>` typestate: 개시·비상 투입·마감·수동 마감·늦은 마감·늦은 배치·개표·감사), `custody`(VC-040 인계 사슬과 봉인 변경), `issuance`(교부·참여 등식), `tally`(VC-057·VC-063 관문), `dispute`(두 기관 접수, 앞으로만 가는 상태와 법적 회부), `status`(상태 어휘, 공표 기한 반영, `LEGAL_CERTIFIED` 없는 `Status`와 `LegalReference`), `hold`(끈끈한 보류 사유). `no_std`, `alloc` 없음, 새 외부 의존성 없음. 스키마가 없는 이벤트(`BoxOpened`, `IssuanceCount`, `CustodyHandoff`, `DisputeEvent`, `LegalDecisionRef` 등)는 최소 입력 타입이며 M5 인코딩 과제다. 명세 공백 18건은 ADR-0025에 적었다.
-- 검증(2026-11-01): `ityv-state` 테스트 79개 통과(단위 48, 통합 20: 실제 하이브리드 서명으로 만든 마감·늦은 마감·법적 승인·법적 참조 객체, 속성 5, doctest 6 중 `compile_fail` 5), 워크스페이스 테스트 442개 통과. Kani 하네스 9개 전부 통과(가장 무거운 것은 512개 범위 집합의 전제 규칙, 43초). cargo-mutants 386개 중 잡힘 297·unviable 89·놓침 0·타임아웃 0(첫 실행의 놓침 4건은 서명 반쪽 변조, 감사 상태의 보류, 합집합 연산, 시험용 생성자 시험으로 해소). fmt, clippy(워크스페이스, 모든 타깃), rustdoc `-D warnings`, `thumbv7em-none-eabihf` 빌드, cargo-deny, cargo-vet 통과.
+- 검증(2026-11-01): `ityv-state` 테스트 80개 통과(단위 48, 통합 21: 실제 하이브리드 서명으로 만든 마감·늦은 마감·법적 승인·법적 참조 객체, 속성 5, doctest 6 중 `compile_fail` 5), 워크스페이스 테스트 443개 통과. Kani 하네스 9개 전부 통과(가장 무거운 것은 512개 범위 집합의 전제 규칙, 43초). cargo-mutants 386개 중 잡힘 297·unviable 89·놓침 0·타임아웃 0(첫 실행의 놓침 4건은 서명 반쪽 변조, 감사 상태의 보류, 합집합 연산, 시험용 생성자 시험으로 해소). fmt, clippy(워크스페이스, 모든 타깃), rustdoc `-D warnings`, `thumbv7em-none-eabihf` 빌드, cargo-deny, cargo-vet 통과.
+- 리뷰 수정: 집계 관문 둘이 `CRYPTO_TALLY_AID` 권한의 선거를 확인한다(다른 선거의 권한으로 집계를 열 수 없음). 법적 승인의 두 키는 ML-DSA-87·Ed25519 반쪽이 모두 달라야 한다(VC-006).
 - 남은 것: M5 인코딩 과제(위 객체들의 스키마와 서명 토큰화), ADR-0025의 명세 공백 해소, 시뮬레이터 토큰 타입(ITYV-BEH-162, M6).
 
 ## M5 공개 검증기 `ityv-verify`

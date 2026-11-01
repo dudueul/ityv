@@ -126,10 +126,10 @@ fn check_token(
 /// `commission` and `committee` are verification tokens from
 /// `ityv_crypto::verify_hybrid`; each must cover exactly `object` with
 /// purpose `legal-auth` and come from the matching key. The two keys must
-/// differ.
+/// differ in both halves (ML-DSA-87 and Ed25519).
 ///
 /// # Errors
-/// [`Error::SignatureSigner`] if the keys are equal or a token comes from
+/// [`Error::SignatureSigner`] if the keys share a half or a token comes from
 /// another key, [`Error::SignatureObject`] if a token covers other bytes or
 /// another purpose, [`Error::Decode`] if the object is not a canonical
 /// `LegalAuthorizationBody`, [`Error::ScopePrerequisite`] (VC-008).
@@ -140,7 +140,11 @@ pub fn authorize<'a>(
     committee: &Verified<HybridSigned<'_>>,
     committee_key: &HybridVerifyingKey,
 ) -> Result<Authorization<'a>, Error> {
-    if commission_key == committee_key {
+    // Both halves must differ: a shared Ed25519 or ML-DSA-87 half would let
+    // one holder produce that half of both signatures.
+    if commission_key.mldsa87() == committee_key.mldsa87()
+        || commission_key.ed25519() == committee_key.ed25519()
+    {
         return Err(Error::SignatureSigner);
     }
     check_token(commission, object, commission_key, PURPOSE_LEGAL_AUTH)?;

@@ -68,6 +68,29 @@ fn token(
 }
 
 #[test]
+fn authorize_rejects_keys_sharing_a_half() {
+    let obj = object(stage2());
+    let commission = leak(HybridSigningKey::from_seeds([30; 32], [31; 32]));
+    let commission_vk = commission.verifying_key();
+    let t1 = token(commission, b"legal-auth", obj);
+    // Same Ed25519 half, different ML-DSA-87 half.
+    let shared_ed = leak(HybridSigningKey::from_seeds([32; 32], [31; 32]));
+    // Same ML-DSA-87 half, different Ed25519 half.
+    let shared_ml = leak(HybridSigningKey::from_seeds([30; 32], [33; 32]));
+    for other in [shared_ed, shared_ml] {
+        let vk = other.verifying_key();
+        let t2 = token(other, b"legal-auth", obj);
+        assert_eq!(
+            authorize(obj, &t1, &commission_vk, &t2, &vk).unwrap_err(),
+            Error::SignatureSigner
+        );
+    }
+    let distinct = leak(HybridSigningKey::from_seeds([32; 32], [33; 32]));
+    let t2 = token(distinct, b"legal-auth", obj);
+    assert!(authorize(obj, &t1, &commission_vk, &t2, &distinct.verifying_key()).is_ok());
+}
+
+#[test]
 fn authorize_checks_both_signatures() {
     let s = signers();
     let obj = object(stage2());
@@ -213,8 +236,14 @@ fn capabilities_from_a_signed_authorization() {
         last_close: TimeBucket::new(10),
         now: TimeBucket::new(11 + LATE_CLOSE_WINDOW),
     };
-    assert_eq!(admit_tally_scope(&tally, &ready), Ok(()));
-    assert_eq!(admit_aggregate_opening(&tally, true), Ok(()));
+    assert_eq!(
+        admit_tally_scope(&tally, auth.election_id(), &ready),
+        Ok(())
+    );
+    assert_eq!(
+        admit_aggregate_opening(&tally, auth.election_id(), true),
+        Ok(())
+    );
     assert_eq!(
         auth.grant::<Rla>(today()).unwrap_err(),
         Error::ScopeMissing(Scope::Rla)

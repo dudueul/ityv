@@ -7,7 +7,7 @@
 //! aggregate opening is recorded only after its tally scope is in a witness
 //! checkpoint (VC-063).
 
-use ityv_encoding::TimeBucket;
+use ityv_encoding::{ElectionId, TimeBucket};
 
 use crate::auth::{Cap, CryptoTallyAid};
 use crate::error::Error;
@@ -33,12 +33,15 @@ pub struct TallyReadiness {
 /// Admits a `TallyScope` event.
 ///
 /// # Errors
+/// [`Error::Mismatch`] if the capability belongs to another election,
 /// [`Error::TallyPremature`] if a box is open, the receipts are unresolved
 /// or the late-close window has not passed; [`Error::Overflow`].
 pub fn admit_tally_scope(
-    _cap: &Cap<'_, CryptoTallyAid>,
+    cap: &Cap<'_, CryptoTallyAid>,
+    election_id: ElectionId<'_>,
     readiness: &TallyReadiness,
 ) -> Result<(), Error> {
+    cap.check_election(election_id)?;
     let deadline = readiness
         .last_close
         .get()
@@ -54,12 +57,15 @@ pub fn admit_tally_scope(
 /// Admits an `AggregateOpening` event.
 ///
 /// # Errors
+/// [`Error::Mismatch`] if the capability belongs to another election,
 /// [`Error::TallyPremature`] if the tally scope is not yet in a witness
 /// checkpoint (VC-063).
 pub fn admit_aggregate_opening(
-    _cap: &Cap<'_, CryptoTallyAid>,
+    cap: &Cap<'_, CryptoTallyAid>,
+    election_id: ElectionId<'_>,
     scope_checkpointed: bool,
 ) -> Result<(), Error> {
+    cap.check_election(election_id)?;
     if scope_checkpointed {
         Ok(())
     } else {
@@ -88,43 +94,53 @@ mod tests {
             Day::new(9),
         );
         let cap = auth.grant::<CryptoTallyAid>(Day::new(1)).unwrap();
+        let e1 = ElectionId::new(b"E1").unwrap();
+        let e2 = ElectionId::new(b"E2").unwrap();
         let ready = TallyReadiness {
             boxes_closed: true,
             receipts_resolved: true,
             last_close: TimeBucket::new(100),
             now: TimeBucket::new(100 + LATE_CLOSE_WINDOW + 1),
         };
-        assert_eq!(admit_tally_scope(&cap, &ready), Ok(()));
+        assert_eq!(admit_tally_scope(&cap, e1, &ready), Ok(()));
         let at_deadline = TallyReadiness {
             now: TimeBucket::new(100 + LATE_CLOSE_WINDOW),
             ..ready
         };
         assert_eq!(
-            admit_tally_scope(&cap, &at_deadline),
+            admit_tally_scope(&cap, e1, &at_deadline),
             Err(Error::TallyPremature)
         );
         let open = TallyReadiness {
             boxes_closed: false,
             ..ready
         };
-        assert_eq!(admit_tally_scope(&cap, &open), Err(Error::TallyPremature));
+        assert_eq!(
+            admit_tally_scope(&cap, e1, &open),
+            Err(Error::TallyPremature)
+        );
         let unresolved = TallyReadiness {
             receipts_resolved: false,
             ..ready
         };
         assert_eq!(
-            admit_tally_scope(&cap, &unresolved),
+            admit_tally_scope(&cap, e1, &unresolved),
             Err(Error::TallyPremature)
         );
         let overflow = TallyReadiness {
             last_close: TimeBucket::new(u64::MAX),
             ..ready
         };
-        assert_eq!(admit_tally_scope(&cap, &overflow), Err(Error::Overflow));
-        assert_eq!(admit_aggregate_opening(&cap, true), Ok(()));
+        assert_eq!(admit_tally_scope(&cap, e1, &overflow), Err(Error::Overflow));
+        assert_eq!(admit_aggregate_opening(&cap, e1, true), Ok(()));
         assert_eq!(
-            admit_aggregate_opening(&cap, false),
+            admit_aggregate_opening(&cap, e1, false),
             Err(Error::TallyPremature)
+        );
+        assert_eq!(admit_tally_scope(&cap, e2, &ready), Err(Error::Mismatch));
+        assert_eq!(
+            admit_aggregate_opening(&cap, e2, true),
+            Err(Error::Mismatch)
         );
         assert_eq!(LATE_CLOSE_WINDOW, 96);
     }
