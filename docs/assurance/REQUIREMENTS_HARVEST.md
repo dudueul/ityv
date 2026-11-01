@@ -8,7 +8,7 @@
 
 - 법적 상태: `deployable-now`(현행법·내부 절차로 가능), `needs-rule`(선관위 규칙 필요), `needs-statute`(법률 개정 필요, LEGAL_ANNEX 참조).
 - 활성화 단계: ADR-0002의 0..3.
-- 도메인 코드는 원 ID를 그대로 쓴다. 신규 도메인: SCN(투함 스캐너), CRY(암호), TRU(신뢰기관), PTL(참여 장부), RCV(관외 수령), AUD(감사), DSP(분쟁), GOV(거버넌스 확장), BRD(게시판).
+- 도메인 코드는 원 ID를 그대로 쓴다. 신규 도메인: SCN(투함 스캐너), CRY(암호), TRU(신뢰기관), PTL(참여 장부), RCV(관외 수령), AUD(감사), DSP(분쟁), GOV(거버넌스 확장), BRD(공개원장).
 
 ## 1. 계승 요구사항 (153)
 
@@ -29,7 +29,7 @@
 | ITYV-REQ-LAW-004 | KB-LAW-004 | LAW | 법정 영상 보존과 구간 해시 앵커의 보존 분리 원칙을 문서화한다 | needs-rule | 0 | 보존 정책 문서와 앵커 이벤트 주기 검사 | ADR-0010 |
 | ITYV-REQ-LAW-005 | KB-LAW-005 | LAW | `CRYPTO_TALLY_VERIFIED`는 법적 확정이 아니며 `LEGAL_CERTIFIED`는 법정 권한의 결정 참조로만 생성된다 | needs-statute | 2 | 상태 전이 타입 검사, 자동 전환 경로 부재 | ADR-0011 |
 | ITYV-REQ-LAW-006 | KB-LAW-006 | LAW | 스캐너, 카세트, 각인, 투입 절차의 변경은 규칙 검토와 시범 승인 뒤에만 활성화된다 | needs-statute | 2 | `STAGE_GATE` 범위 검사 | ADR-0002 |
-| ITYV-REQ-LAW-007 | KB-LAW-007 | LAW | 가명 모듈, 참여 장부, 게시판의 개인정보 영향평가를 단계 전환 조건으로 둔다 | needs-rule | 0 | PIA 보고서 제출 없이는 단계 전환 불가 | ADR-0002, ADR-0009 |
+| ITYV-REQ-LAW-007 | KB-LAW-007 | LAW | 가명 모듈, 참여 장부, 공개원장의 개인정보 영향평가를 단계 전환 조건으로 둔다 | needs-rule | 0 | PIA 보고서 제출 없이는 단계 전환 불가 | ADR-0002, ADR-0009 |
 | ITYV-REQ-LAW-008 | KB-LAW-008 | LAW | 장애인·고령자·외국어 지원 범위를 사전에 정의하고 BMD 출력도 같은 스캐너를 통과하게 한다 | needs-rule | 2 | 접근성 평가 보고 | ADR-0005 |
 | ITYV-REQ-LAW-009 | KB-LAW-009 | LAW | 해외 표준은 참조로만 표기하고 국내 인증으로 오인되지 않게 한다 | deployable-now | 0 | 문구 검사 | — |
 | ITYV-REQ-REG-001 | KB-REG-001 | REG | 투표소, 투표함, 장치, 봉인 모듈, 참관인, 인계자, 보관 경로를 genesis 인벤토리에 사전 등록한다 | deployable-now | 0 | 미등록 주체의 이벤트는 수록 거부 | ADR-0010 |
@@ -66,7 +66,7 @@
 | ITYV-REQ-POST-005 | KB-POST-005 | POST | 봉투 중복·유실은 분쟁 절차로 보내며 정상표 자동 무효로 이어지지 않는다 | deployable-now | 0 | 중복 사례에서 양쪽 보존 | ADR-0011 |
 | ITYV-REQ-POST-006 | KB-POST-006 | POST | 일방향 카세트는 법률 검토 후 별도 실증하며 미승인 구조는 비활성화된다 | needs-statute | 2 | 미승인 장치 이벤트 거부 | ADR-0010 |
 | ITYV-REQ-POST-007 | KB-POST-007 | POST | 선거일·관내·관외·재외·거소·선상 흐름은 수집 프로필과 투표함별 보관 경로로 분리 집계한다 | deployable-now | 0 | 경로 오염 시 불일치 탐지 | ADR-0013 |
-| ITYV-REQ-POST-008 | KB-POST-008 | POST | 우편 실명·주소 자료는 장부·게시판 어디에도 복사되지 않는다 | deployable-now | 0 | 공개 데이터 DLP 검색 | ADR-0010 |
+| ITYV-REQ-POST-008 | KB-POST-008 | POST | 우편 실명·주소 자료는 장부·공개원장 어디에도 복사되지 않는다 | deployable-now | 0 | 공개 데이터 DLP 검색 | ADR-0010 |
 | ITYV-REQ-POST-009 | KB-POST-009 | POST | 반송·훼손·미도착은 각각의 상태로 기록되고 정상 배송으로 처리되지 않는다 | deployable-now | 0 | 예외 상태별 처리 확인 | ADR-0010 |
 | ITYV-REQ-BOX-001 | KB-BOX-001 | BOX | 커밋먼트 유닛은 정규 이진 형식 외 어떤 입력도 거부하며 해석 유닛 입력은 선택 인덱스와 양식 ID 몇 바이트로 제한된다 | deployable-now | 0 | 퍼징으로 거부 확인, Kani 정규성 | ENCODING.md, ADR-0005 |
 | ITYV-REQ-BOX-002 | KB-BOX-002 | BOX | 네트워크 없이 투함 기록을 내구 저장하고 중앙 확정은 보류하며 표를 폐기하지 않는다 | deployable-now | 0 | 24시간 오프라인 후 무손실 재생 | ADR-0004 |
@@ -91,7 +91,7 @@
 | ITYV-REQ-WIT-003 | KB-WIT-003 | WIT | 각 증인은 승인한 마지막 체크포인트를 영속 보관하고 확장만 승인한다 | deployable-now | 0 | 분기 체크포인트 서명 거부 | ADR-0012 |
 | ITYV-REQ-WIT-004 | KB-WIT-004 | WIT | 정족수 9 외에 조직 7·공급자 4·지역 3 다양성과 임명 이벤트를 검사한다 | needs-rule | 0 | 한 조직 복수 키 통과 불가 | ADR-0012 |
 | ITYV-REQ-WIT-005 | KB-WIT-005 | WIT | 알고리즘·정족수·선거 ID·`proof_system_id` 변경 시 이전 서명은 무효다 | deployable-now | 0 | 다운그레이드 거부 | ADR-0006 |
-| ITYV-REQ-WIT-006 | KB-WIT-006 | WIT | 증인·신뢰기관 키는 선거별 공개 의식에서 생성·사용·파기하고 다자 승인으로 접근한다 | needs-statute | 1 | 의식 기록과 파기 증빙 | ADR-0012 |
+| ITYV-REQ-WIT-006 | KB-WIT-006 | WIT | 증인·신뢰기관 키는 선거별 공개 절차에서 생성·사용·파기하고 다자 승인으로 접근한다 | needs-statute | 1 | 절차 기록과 파기 증빙 | ADR-0012 |
 | ITYV-REQ-WIT-007 | KB-WIT-007 | WIT | 정족수 미달 시 체크포인트는 `UNVERIFIED`이며 현장 증거는 보존된다 | deployable-now | 0 | 증인 5곳 차단 시 안전한 미확정 | ADR-0004 |
 | ITYV-REQ-WIT-008 | KB-WIT-008 | WIT | 서명 실패·키 교체·분기 사건을 원본과 함께 기록한다 | deployable-now | 0 | 사건 보고 자동 생성 | ADR-0011 |
 | ITYV-REQ-WIT-009 | KB-WIT-009 | WIT | 알고리즘 전환 시 과거 검증 결과와 시점을 보존한다 | needs-statute | 2 | 키 회전 후 과거 검증 재현 | ADR-0006 |
@@ -101,11 +101,11 @@
 | ITYV-REQ-ARC-004 | KB-ARC-004 | ARC | 서로 다른 관리자·공급자에 원본 복제본을 둔다 | needs-rule | 0 | 단일 계정 폐쇄 가정 복구 | ADR-0004 |
 | ITYV-REQ-ARC-005 | KB-ARC-005 | ARC | 공개 미러는 권위가 없고 검증은 클라이언트 측에서 한다 | deployable-now | 0 | 위조 미러 데이터가 상태를 만들지 않음 | ADR-0003 |
 | ITYV-REQ-ARC-006 | KB-ARC-006 | ARC | 외부 앵커와 복제가 실패한 구간은 `LOG_CONSISTENT`로 표시하지 않는다 | deployable-now | 0 | 단절 중 상태 불변 | ADR-0011 |
-| ITYV-REQ-ARC-007 | KB-ARC-007 | ARC | 가명 키·share는 유한 보존 후 파기하고 커밋먼트·체크포인트는 영구 보존한다 | needs-statute | 2 | 파기 의식 이벤트 | ADR-0006 |
+| ITYV-REQ-ARC-007 | KB-ARC-007 | ARC | 가명 키·share는 유한 보존 후 파기하고 커밋먼트·체크포인트는 영구 보존한다 | needs-statute | 2 | 파기 절차 이벤트 | ADR-0006 |
 | ITYV-REQ-ARC-008 | KB-ARC-008 | ARC | 계정 삭제·리전 장애 시 원본 재구축 시간을 측정한다 | deployable-now | 0 | RTO/RPO 실험 | — |
 | ITYV-REQ-ARC-009 | KB-ARC-009 | ARC | 보관·배포 비용 상한 경보를 둔다 | deployable-now | 0 | 10배 리허설 | — |
-| ITYV-REQ-PUB-001 | KB-PUB-001 | PUB | 공식 서버 없이 공개키·체크포인트·게시판으로 집계를 재현하는 검증기를 제공한다 | deployable-now | 0 | 망 분리 PC 재검증 | ADR-0012 |
-| ITYV-REQ-PUB-002 | KB-PUB-002 | PUB | 게시판에는 신원, 시각, 투함 ID, 봉투 라벨, 암호문이 없다 | deployable-now | 0 | 정적·동적 검출 | ADR-0006 |
+| ITYV-REQ-PUB-001 | KB-PUB-001 | PUB | 공식 서버 없이 공개키·체크포인트·공개원장으로 집계를 재현하는 검증기를 제공한다 | deployable-now | 0 | 망 분리 PC 재검증 | ADR-0012 |
+| ITYV-REQ-PUB-002 | KB-PUB-002 | PUB | 공개원장에는 신원, 시각, 투함 ID, 봉투 라벨, 암호문이 없다 | deployable-now | 0 | 정적·동적 검출 | ADR-0006 |
 | ITYV-REQ-PUB-003 | KB-PUB-003 | PUB | 상태 어휘 7종을 혼동 없이 표시하고 자동 전환하지 않는다 | deployable-now | 0 | UI 스냅샷 | CONSTITUTION §5.3 |
 | ITYV-REQ-PUB-004 | KB-PUB-004 | PUB | 예상 투표함 수, 마감 수, 보류 수, 미수령 수를 공개한다 | deployable-now | 0 | 누락 시 보류 상태 노출 | ADR-0010 |
 | ITYV-REQ-PUB-005 | KB-PUB-005 | PUB | 서로 다른 미러·증인의 체크포인트를 자동 비교한다 | deployable-now | 0 | 분기 탐지 | ADR-0012 |
@@ -117,7 +117,7 @@
 | ITYV-REQ-INF-002 | KB-INF-002 | INF | 현장 장치에 무선 기능이 없다 | needs-rule | 2 | RF 시험 | CONSTITUTION §4.3 |
 | ITYV-REQ-INF-003 | KB-INF-003 | INF | 측정 부팅과 펌웨어 해시 검증 경로를 제공한다 | needs-rule | 2 | 변조 이미지 부팅 차단 | CONSTITUTION §4.3 |
 | ITYV-REQ-INF-004 | KB-INF-004 | INF | 재현 이중 빌드, SBOM, in-toto 증명, 하이브리드 서명 릴리스 | deployable-now | 0 | 독립 재현 빌드 해시 일치 | CONSTITUTION §3 |
-| ITYV-REQ-INF-005 | KB-INF-005 | INF | 키 의식·마감 승인·HOLD 해제에 다요소·다자 승인 | needs-rule | 0 | 단일 자격으로 실패 | ADR-0012 |
+| ITYV-REQ-INF-005 | KB-INF-005 | INF | 키 생성·파기 절차·마감 승인·HOLD 해제에 다요소·다자 승인 | needs-rule | 0 | 단일 자격으로 실패 | ADR-0012 |
 | ITYV-REQ-INF-006 | KB-INF-006 | INF | 허가된 주변장치와 포트만 활성화 | needs-rule | 2 | 미허가 USB 삽입 시험 | CONSTITUTION §4.3 |
 | ITYV-REQ-INF-007 | KB-INF-007 | INF | 취약점 접수·패치 심사·선거 중 변경 금지 정책 | deployable-now | 0 | 리허설 | SECURITY.md |
 | ITYV-REQ-INF-008 | KB-INF-008 | INF | 각인기·해석 유닛·봉인 모듈·라이브러리의 공급망 실사 | needs-rule | 2 | 자산·펌웨어 해시 명세 | P0-02 |
@@ -132,7 +132,7 @@
 | ITYV-REQ-ACC-008 | KB-ACC-008 | ACC | 감사 결과·이의 안내의 접근성 | deployable-now | 0 | 이중 검증 | — |
 | ITYV-REQ-ACC-009 | KB-ACC-009 | ACC | 도움 요청과 비밀투표 유지 안내문 | deployable-now | 0 | 이해도 조사 | — |
 | ITYV-REQ-TST-001 | KB-TST-001 | TST | 요구사항·위협·테스트·증명·결함의 양방향 추적 | deployable-now | 0 | 무작위 30건 폐쇄성 검사 | CONSTITUTION §5.1 |
-| ITYV-REQ-TST-002 | KB-TST-002 | TST | 투표함 수·기록 수·게시판 크기·오프라인 기간·복구량의 경계조건 | deployable-now | 0 | 부하 시험 | P0-04 |
+| ITYV-REQ-TST-002 | KB-TST-002 | TST | 투표함 수·기록 수·공개원장 크기·오프라인 기간·복구량의 경계조건 | deployable-now | 0 | 부하 시험 | P0-04 |
 | ITYV-REQ-TST-003 | KB-TST-003 | TST | 내구 기록 경계에서 강제 종료 1000회 | deployable-now | 0 | 손실·중복 분석 | VERIFICATION_LADDER |
 | ITYV-REQ-TST-004 | KB-TST-004 | TST | 조회 DB 전체 변조·삭제·복원이 장부 증거에 영향 없음 | deployable-now | 0 | DROP/ROLLBACK 모의 | ADR-0008 |
 | ITYV-REQ-TST-005 | KB-TST-005 | TST | 증인 5곳 장애 시 조용한 승인 없음 | deployable-now | 0 | 불가용 서명자 5개 케이스 | ADR-0004 |
@@ -189,7 +189,7 @@
 | ITYV-REQ-SCN-007 | SCN | 커밋먼트 유닛의 상태기계는 `IDLE → INTERPRETED → DURABLE → IMPRINTED → SLIP_PRINTED → DROPPED`이며 `DURABLE` 전에는 각인·슬립 전이가 타입상 불가능하다 | deployable-now | 2 | trybuild, Kani 상태 불변식 | CONSTITUTION §1.4 |
 | ITYV-REQ-SCN-008 | SCN | 검증 실패(공개 난수가 커밋먼트와 불일치)는 스캐너 격리, 예비 교체, 해당 장치 기록 전수 감사를 자동으로 요구하는 이벤트를 만든다 | needs-rule | 2 | 시뮬레이터 시나리오 | ADR-0011 |
 | ITYV-REQ-CRY-001 | CRY | 표 커밋먼트는 `C = G_val^{M^v} · G_id^{cast_id} · H^r`(M = 2^26, 9개 선택지 단위 분할)이며 정형성은 1-of-m OR 증명으로 입증된다 | needs-statute | 2 | 알려진 답 벡터, 독립 2차 구현 교차 검증 | ADR-0006 |
-| ITYV-REQ-CRY-002 | CRY | 게시판에는 어떤 암호문도 게시하지 않으며 정보이론적으로 숨겨지는 커밋먼트와 증명만 게시한다 | needs-statute | 2 | 스키마 검사, 게시 전 정적 검출 | ADR-0006 |
+| ITYV-REQ-CRY-002 | CRY | 공개원장에는 어떤 암호문도 게시하지 않으며 정보이론적으로 숨겨지는 커밋먼트와 증명만 게시한다 | needs-statute | 2 | 스키마 검사, 게시 전 정적 검출 | ADR-0006 |
 | ITYV-REQ-CRY-003 | CRY | 여는 값은 챔버 접근구조(X·Y 필수, 6개 중 5개)에 맞는 선형 비밀분산으로 나뉘며 합산 share로 합계만 열린다 | needs-statute | 1 | 접근구조 밖 집합으로 복원 실패, 합계 복원 정확성 | ADR-0006, ADR-0012 |
 | ITYV-REQ-CRY-004 | CRY | share 전송은 봉인 모듈 일회용 패드가 기본이고 패드 유도 MAC을 붙이며, 고갈 시 하이브리드 KEM 대체 경로를 쓰되 기록에 `KEM_FALLBACK`을 표기한다 | needs-rule | 2 | 패드 인덱스 단조·재사용 불가 Kani, 대체 경로 표기 확인 | ADR-0006 |
 | ITYV-REQ-CRY-005 | CRY | 봉인 모듈은 매 표의 난수 `r`을 생성하고 `SHA3-512(r)`에 서명하며 신뢰기관은 집계 전 share에서 복원한 값과 대조한다 | needs-rule | 2 | 모듈 난수를 쓰지 않은 기록이 대조에서 거부됨 | ITYV-THR-203 |
@@ -197,9 +197,9 @@
 | ITYV-REQ-CRY-007 | CRY | 투함 기록은 `proof_system_id`를 가지며 genesis의 허용 집합 밖 ID는 거부된다 | deployable-now | 2 | 다운그레이드 거부 | ADR-0006 |
 | ITYV-REQ-CRY-008 | CRY | 합계는 투표양식별 `Π C_i`를 열어 26비트 자릿수로 읽고, 9개 선택지를 넘는 양식은 커밋먼트를 분할한다. 자릿수 넘침은 설계상 불가능해야 한다 | needs-statute | 2 | 유권자 수 상한 4,400만 가정의 넘침 검사 Kani | ADR-0006 |
 | ITYV-REQ-CRY-009 | CRY | 암호 구현은 검증된 백엔드(libcrux, fiat-crypto 계열)를 쓰고 독립 2차 구현과 차분 테스트한다 | deployable-now | 0 | V5 차분 테스트 | ADR-0007 |
-| ITYV-REQ-TRU-001 | TRU | 신뢰기관 키는 선거마다 검증 가능한 분산 키 생성으로 만들고 의식 기록을 장부에 남긴다 | needs-statute | 1 | 의식 기록 검증 | ADR-0012 |
-| ITYV-REQ-TRU-002 | TRU | 개별 표의 여는 값 복원은 공개 추첨된 감사 표본과 공개 의식에서만 허용되며 모든 열기는 장부 이벤트다 | needs-statute | 2 | 열기 이벤트 없는 복원 경로 부재 | ADR-0011 |
-| ITYV-REQ-TRU-003 | TRU | 인증과 이의 기간 종료 후 share와 선거 키를 공개 파기 의식에서 파기하고 파기 이벤트를 남긴다 | needs-statute | 1 | 파기 이벤트 기한 검사 | ADR-0006 |
+| ITYV-REQ-TRU-001 | TRU | 신뢰기관 키는 선거마다 검증 가능한 분산 키 생성으로 만들고 절차 기록을 장부에 남긴다 | needs-statute | 1 | 절차 기록 검증 | ADR-0012 |
+| ITYV-REQ-TRU-002 | TRU | 개별 표의 여는 값 복원은 공개 추첨된 감사 표본과 공개 절차에서만 허용되며 모든 열기는 장부 이벤트다 | needs-statute | 2 | 열기 이벤트 없는 복원 경로 부재 | ADR-0011 |
+| ITYV-REQ-TRU-003 | TRU | 인증과 이의 기간 종료 후 share와 선거 키를 공개 파기 절차에서 파기하고 파기 이벤트를 남긴다 | needs-statute | 1 | 파기 이벤트 기한 검사 | ADR-0006 |
 | ITYV-REQ-TRU-004 | TRU | 챔버 거부는 암호 계층만 멈추고 종이 개표를 멈추지 않으며 거부 사실을 장부에 기록한다 | needs-statute | 1 | 거부 시나리오에서 종이 절차 계속 | ADR-0012 |
 | ITYV-REQ-TRU-005 | TRU | 집계 열기 불일치 시 이분 탐색은 투표함 단위까지만 허용되고 표 단위 열기는 감사 표본 규칙을 따른다 | needs-rule | 2 | 절차 시험 | ITYV-THR-215 |
 | ITYV-REQ-PTL-001 | PTL | 모든 투표소에 확인 장치를 두며 확인마다 서명 카운터 이벤트(가명, 15분 구간)를 만들고 50건마다 서로 다른 정당 참관인 둘이 공동 서명한다 | needs-statute | 2 | 공동 서명 누락 시 카운터 검증 실패 | ADR-0009 |
@@ -211,9 +211,9 @@
 | ITYV-REQ-RCV-002 | RCV | 관할 선관위는 봉투를 열지 않고 라벨만 읽어 `ReceiptMark` 이벤트를 올리며, 신뢰기관은 share에서 복원한 라벨과 대조해 미수령 기록을 `CAST_NOT_RECEIVED`로 공개 집계한다 | needs-statute | 2 | 미수령 주입 시 집계 제외와 공개 | ADR-0010 |
 | ITYV-REQ-RCV-003 | RCV | 봉투 개봉은 회차 단위로 라벨 분리 후 투표지를 혼합하며 (봉투, 투표지) 쌍 기록은 금지된다 | needs-rule | 2 | 절차 감사 | ADR-0010 |
 | ITYV-REQ-AUD-001 | AUD | 위험제한감사는 기록 우선 표본추출의 표 단위 비교 감사이며 공개 태그로 종이에서 기록을 찾는 경로를 두지 않는다 | needs-statute | 2 | 공개 데이터에 토큰 태그 부재 | ADR-0011 |
-| ITYV-REQ-AUD-002 | AUD | 시드는 명세 동결 후 주사위 의식 기록, 공개 비콘 회차, 최종 체크포인트 해시의 SHA3-512이며 누구나 표본을 재계산한다 | needs-statute | 2 | 재계산 일치 | ADR-0011 |
+| ITYV-REQ-AUD-002 | AUD | 시드는 명세 동결 후 주사위 추첨 기록, 공개 비콘 회차, 최종 체크포인트 해시의 SHA3-512이며 누구나 표본을 재계산한다 | needs-statute | 2 | 재계산 일치 | ADR-0011 |
 | ITYV-REQ-DSP-001 | DSP | 슬립은 추적코드·투표소·시간 구간과 커밋먼트 유닛 하이브리드 서명을 담고 장치 키별 발행 수 상한을 둔다 | needs-statute | 3 | 위조 슬립 거부, 상한 초과 탐지 | ADR-0011 |
-| ITYV-REQ-DSP-002 | DSP | 유효 서명 슬립의 코드가 게시판에 없으면 해당 투표함은 즉시 `HOLD_REVIEW`이고 분쟁은 선관위와 독립검증위원회가 공동 접수한다 | needs-statute | 3 | 시뮬레이터 분쟁 흐름 | ADR-0011 |
+| ITYV-REQ-DSP-002 | DSP | 유효 서명 슬립의 코드가 공개원장에 없으면 해당 투표함은 즉시 `HOLD_REVIEW`이고 분쟁은 선관위와 독립검증위원회가 공동 접수한다 | needs-statute | 3 | 시뮬레이터 분쟁 흐름 | ADR-0011 |
 | ITYV-REQ-GOV-010 | GOV | 증인·신뢰기관·위원의 독립성은 추천 기관이 서명한 임명 이벤트로만 인정되며 자기 선언 문자열은 쓰지 않는다 | needs-statute | 1 | 임명 이벤트 없는 서명 거부 | ADR-0012 |
-| ITYV-REQ-BRD-001 | BRD | 공개 등급 이벤트는 법정 기한 내 게시판에 공표되고 투함 기록은 추적코드 순으로 정렬되며 기한 초과는 위반 이벤트로 기록된다 | needs-statute | 2 | 기한 검사, 정렬 속성 테스트 | ADR-0003, ITYV-THR-209 |
+| ITYV-REQ-BRD-001 | BRD | 공개 등급 이벤트는 법정 기한 내 공개원장에 공표되고 투함 기록은 추적코드 순으로 정렬되며 기한 초과는 위반 이벤트로 기록된다 | needs-statute | 2 | 기한 검사, 정렬 속성 테스트 | ADR-0003, ITYV-THR-209 |
 | ITYV-REQ-BRD-002 | BRD | 법으로 지정된 최소 3개 독립 공개 검증자가 기한 내 검증 결과를 공표한다 | needs-statute | 2 | 공표 기록 | ADR-0012 |

@@ -11,7 +11,7 @@
 use ityv_encoding::{
     Decode, Encode, Error as EncodingError, ErrorKind, Point32, Reader, Token192, Writer,
 };
-use subtle::ConstantTimeEq;
+use subtle::{ConditionallySelectable, ConstantTimeEq};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::backend::ristretto::Point;
@@ -41,6 +41,9 @@ pub const LABEL_BASE_RAND: &[u8] = b"ityv:base:rand:v1";
 pub struct OptionCount(u16);
 
 impl OptionCount {
+    /// The smallest option set, one option (the empty proof's).
+    pub(crate) const ONE: Self = Self(1);
+
     /// Returns `Some` if `1 <= raw <= MAX_OPTIONS`.
     #[must_use]
     pub fn new(raw: u16) -> Option<Self> {
@@ -151,15 +154,20 @@ pub(crate) fn set_bit(bytes: &mut [u8; 32], bit: u32) {
 /// zero.
 #[must_use]
 pub fn packed_value(option: OptionIndex, chunk: ChunkIndex) -> Scalar {
-    match packed_exponent(option, chunk) {
-        None => Scalar::ZERO,
-        Some(exponent) => {
-            let mut bytes = [0u8; 32];
-            set_bit(&mut bytes, exponent);
-            // 2^exponent < 2^209 < ℓ, so this is already canonical.
-            Scalar::from_bytes_mod_order(bytes)
-        }
+    // The option is a secret when this computes a commitment or a proof: it
+    // is compared with each of the chunk's nine options in constant time
+    // instead of being turned into a branch or a bit index.
+    let first = u16::from(chunk.0).saturating_mul(DIGITS_PER_CHUNK);
+    let mut value = Scalar::ZERO;
+    for digit in 0..DIGITS_PER_CHUNK {
+        let mut bytes = [0u8; 32];
+        set_bit(&mut bytes, u32::from(digit).saturating_mul(DIGIT_BITS));
+        // 2^(26·digit) < 2^209 < ℓ, so this is already canonical.
+        let candidate = Scalar::from_bytes_mod_order(bytes);
+        let here = option.0.ct_eq(&first.saturating_add(digit));
+        value.conditional_assign(&candidate, here);
     }
+    value
 }
 
 /// A 192-bit cast identifier, mapped to a scalar as a little-endian integer

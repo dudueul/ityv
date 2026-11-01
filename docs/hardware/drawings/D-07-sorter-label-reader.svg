@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" width="1400" height="960">
+<title>D-07 개표소 분류기 확장과 수령 라벨 판독기</title>
+<desc>개표소 투표지 분류기에 붙이는 각인 판독기와, 관외 회송 봉투를 열지 않고 라벨만 읽어 일방향 카세트에 넣는 수령 선관위 라벨 판독기의 개념도.</desc>
+<style>
+svg { color: #1b2430; --muted: #5a6878; --fill: rgba(27,36,48,.05); --fill2: rgba(29,114,125,.12); --chm: rgba(154,107,0,.12); --warn: #b81f2e; --teal: #1d727d; --gold: #8a6100; --paper: rgba(27,36,48,.03); }
+@media (prefers-color-scheme: dark) {
+  svg { color: #e5ebf1; --muted: #a3b1c0; --fill: rgba(229,235,241,.06); --fill2: rgba(76,193,204,.16); --chm: rgba(226,181,71,.14); --warn: #ef7a88; --teal: #5fd0db; --gold: #e2b547; --paper: rgba(229,235,241,.04); }
+}
+text { fill: currentColor; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "IBM Plex Sans KR", sans-serif; font-size: 12px; }
+.s { font-size: 11px; fill: var(--muted); }
+.h { font-size: 16px; font-weight: 700; }
+.h2 { font-size: 13px; font-weight: 700; }
+.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; }
+.red { fill: var(--warn); } .tl { fill: var(--teal); } .gd { fill: var(--gold); } .mu { fill: var(--muted); }
+.ln { stroke: currentColor; fill: none; stroke-width: 1.4; }
+.thin { stroke: currentColor; fill: none; stroke-width: .8; }
+.dim { stroke: var(--muted); fill: none; stroke-width: .8; }
+.ext { stroke: var(--muted); fill: none; stroke-width: .6; stroke-dasharray: 2 2; }
+.box { stroke: currentColor; fill: var(--fill); stroke-width: 1.4; }
+.paper { stroke: currentColor; fill: var(--paper); stroke-width: 1; }
+.tcb { stroke: var(--teal); fill: var(--fill2); stroke-width: 1.6; }
+.unt { stroke: var(--muted); fill: var(--fill); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.chm { stroke: var(--gold); fill: var(--chm); stroke-width: 1.6; }
+.warn { stroke: var(--warn); fill: none; stroke-width: 1.6; }
+.warnf { stroke: var(--warn); fill: none; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.one { stroke: var(--teal); fill: none; stroke-width: 2; }
+.oned { stroke: var(--teal); fill: none; stroke-width: 2; stroke-dasharray: 7 4; }
+.two { stroke: var(--muted); fill: none; stroke-width: 1.6; }
+.seal { stroke: var(--warn); fill: none; stroke-width: 1.4; }
+.sealf { fill: var(--warn); }
+.zone { stroke: var(--warn); fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.dot { fill: currentColor; }
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--teal)"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+<marker id="ad" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" style="fill: var(--muted)"/></marker>
+</defs>
+<text x="24" y="34" class="h" >D-07 · 개표소 분류기 확장 · 수령 라벨 판독기와 일방향 카세트</text>
+<text x="24" y="54" class="s" >둘 다 불신 장치이며 연결 목록에 "연결 없음"으로 선언한다. 둘 다 수만 내고, 개별 값 목록은 restricted로 봉인 보관한다.</text>
+<text x="24" y="70" class="s" >왼쪽은 개표소, 오른쪽은 관외 봉투를 받는 수령 선관위.</text>
+<text x="40" y="112" class="h2" >A. 투표지 분류기 확장 (옆에서 본 개념)</text>
+<rect x="40" y="130" width="640" height="250" rx="6" class="ext" />
+<path d="M60,200 L140,200 L150,250 L60,250 Z" class="box" />
+<text x="64" y="192" class="s" >급지대</text>
+<line x1="70" y1="210" x2="140" y2="210" class="thin" />
+<line x1="70" y1="217" x2="140" y2="217" class="thin" />
+<line x1="70" y1="224" x2="140" y2="224" class="thin" />
+<line x1="70" y1="231" x2="140" y2="231" class="thin" />
+<line x1="70" y1="238" x2="140" y2="238" class="thin" />
+<circle cx="165" cy="256" r="11" class="box" />
+<line x1="150" y1="268" x2="640" y2="268" class="one" marker-end="url(#at)" />
+<rect x="215" y="236" width="100" height="22" rx="2" class="unt" />
+<rect x="215" y="278" width="100" height="22" rx="2" class="unt" />
+<text x="265" y="228" class="s" text-anchor="middle" >기존 판독부 (기표란)</text>
+<rect x="360" y="230" width="110" height="28" rx="2" class="tcb" />
+<rect x="360" y="278" width="110" height="28" rx="2" class="tcb" />
+<path d="M360,258 L360,264 M470,258 L470,264 M360,278 L360,272 M470,278 L470,272" class="ln" />
+<text x="415" y="222" class="s" text-anchor="middle" >각인 판독기 (추가)</text>
+<rect x="500" y="280" width="24" height="80" rx="2" class="box" />
+<text x="512" y="376" class="s" text-anchor="middle" >1</text>
+<rect x="528" y="280" width="24" height="80" rx="2" class="box" />
+<text x="540" y="376" class="s" text-anchor="middle" >2</text>
+<rect x="556" y="280" width="24" height="80" rx="2" class="box" />
+<text x="568" y="376" class="s" text-anchor="middle" >3</text>
+<rect x="584" y="280" width="24" height="80" rx="2" class="box" />
+<text x="596" y="376" class="s" text-anchor="middle" >4</text>
+<rect x="612" y="280" width="24" height="80" rx="2" class="box" />
+<text x="624" y="376" class="s" text-anchor="middle" >미</text>
+<line x1="500" y1="268" x2="500" y2="280" class="thin" />
+<text x="570" y="398" class="s" text-anchor="middle" >후보별 칸 · 미분류</text>
+<rect x="70" y="300" width="160" height="64" rx="3" class="paper" />
+<rect x="72" y="352" width="156" height="10" rx="0" class="tcb" />
+<text x="150" y="320" class="s" text-anchor="middle" >분류기 화면</text>
+<text x="150" y="338" class="s" text-anchor="middle" >수와 등식만</text>
+<rect x="360" y="324" width="110" height="40" rx="3" class="box" />
+<circle cx="466" cy="326" r="5" class="seal" />
+<text x="415" y="342" class="s" text-anchor="middle" >cast_id 목록</text>
+<text x="415" y="357" class="s" text-anchor="middle" >봉인 저장 (restricted)</text>
+<line x1="415" y1="306" x2="415" y2="324" class="one" marker-end="url(#at)" />
+<path d="M360,292 L250,292 L250,330 L230,330" class="one" marker-end="url(#at)" />
+<text x="254" y="316" class="s" >수 셋만</text>
+<circle cx="100" cy="205" r="2" class="dot" />
+<line x1="100" y1="205" x2="130" y2="160" class="dim" />
+<circle cx="130" cy="160" r="9" class="box" />
+<text x="130" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">1</text>
+<circle cx="165" cy="250" r="2" class="dot" />
+<line x1="165" y1="250" x2="200" y2="160" class="dim" />
+<circle cx="200" cy="160" r="9" class="box" />
+<text x="200" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">2</text>
+<circle cx="265" cy="240" r="2" class="dot" />
+<line x1="265" y1="240" x2="265" y2="160" class="dim" />
+<circle cx="265" cy="160" r="9" class="box" />
+<text x="265" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">3</text>
+<circle cx="415" cy="234" r="2" class="dot" />
+<line x1="415" y1="234" x2="415" y2="160" class="dim" />
+<circle cx="415" cy="160" r="9" class="box" />
+<text x="415" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">4</text>
+<circle cx="540" cy="290" r="2" class="dot" />
+<line x1="540" y1="290" x2="560" y2="160" class="dim" />
+<circle cx="560" cy="160" r="9" class="box" />
+<text x="560" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">5</text>
+<circle cx="466" cy="330" r="2" class="dot" />
+<line x1="466" y1="330" x2="600" y2="200" class="dim" />
+<circle cx="600" cy="200" r="9" class="box" />
+<text x="600" y="204" text-anchor="middle" style="font-size:11px;font-weight:700">6</text>
+<text x="40" y="418" class="h2" >각인 판독기의 시야 (투표지 앞면)</text>
+<rect x="60" y="436" width="300" height="100" rx="2" class="paper" />
+<text x="210" y="480" class="s" text-anchor="middle" >기표란 · 후보 목록</text>
+<text x="210" y="496" class="s" text-anchor="middle" >(판독기가 보지 않는 영역)</text>
+<rect x="330" y="436" width="30" height="100" rx="0" class="tcb" />
+<text x="345" y="560" class="s" text-anchor="middle" >각인 구역 18</text>
+<rect x="312" y="428" width="56" height="116" rx="0" class="warnf" />
+<text x="376" y="466" class="red" >센서 시야</text>
+<text x="376" y="482" class="s" >(차폐로 제한)</text>
+<text x="376" y="506" class="s" >Data Matrix</text>
+<text x="376" y="522" class="s" >+ 사람이 읽는 48자</text>
+<line x1="54" y1="486" x2="360" y2="486" class="ext" />
+<text x="60" y="582" class="s" >지나가는 방향 → (투표지 하단이 판독기 쪽, 방향 처리는 가정)</text>
+<text x="720" y="112" class="h2" >B. 수령 라벨 판독기와 일방향 카세트 (옆에서 본 개념)</text>
+<rect x="720" y="130" width="660" height="250" rx="6" class="ext" />
+<path d="M740,230 L810,230 L810,262 L740,262 Z" class="box" />
+<text x="744" y="222" class="s" >봉투 투입</text>
+<line x1="810" y1="248" x2="1360" y2="248" class="one" marker-end="url(#at)" />
+<rect x="850" y="214" width="90" height="24" rx="2" class="tcb" />
+<text x="895" y="206" class="s" text-anchor="middle" >라벨 구역 센서</text>
+<rect x="970" y="290" width="120" height="70" rx="3" class="box" />
+<text x="978" y="308" class="s" >분류 단추 (사람)</text>
+<text x="978" y="326" class="s" >훼손·개봉 흔적</text>
+<text x="978" y="341" class="s" >기한 후 · 오배송</text>
+<line x1="1030" y1="290" x2="1030" y2="258" class="two" marker-end="url(#am)" />
+<path d="M1120,240 L1140,248 L1120,256 Z" class="box" />
+<rect x="1190" y="150" width="150" height="200" rx="6" class="box" />
+<text x="1265" y="170" class="h2" text-anchor="middle" >일방향 카세트</text>
+<path d="M1190,240 L1220,262 M1190,256 L1210,270" class="ln" />
+<rect x="1240" y="300" width="80" height="8" rx="1" class="paper" />
+<rect x="1240" y="288" width="80" height="8" rx="1" class="paper" />
+<rect x="1240" y="276" width="80" height="8" rx="1" class="paper" />
+<rect x="1240" y="264" width="80" height="8" rx="1" class="paper" />
+<rect x="1240" y="252" width="80" height="8" rx="1" class="paper" />
+<rect x="1240" y="240" width="80" height="8" rx="1" class="paper" />
+<circle cx="1200" cy="160" r="5" class="seal" />
+<circle cx="1330" cy="160" r="5" class="seal" />
+<text x="1265" y="340" class="s" text-anchor="middle" >정상 봉투</text>
+<path d="M1140,252 L1160,300 L1160,340" class="oned" marker-end="url(#at)" />
+<rect x="1120" y="342" width="60" height="30" rx="3" class="box" />
+<text x="1150" y="362" class="s" text-anchor="middle" >예외</text>
+<circle cx="1176" cy="344" r="5" class="seal" />
+<rect x="850" y="300" width="100" height="60" rx="3" class="box" />
+<text x="900" y="318" class="s" text-anchor="middle" >값 집합</text>
+<text x="900" y="333" class="s" text-anchor="middle" >분류별, 낱개</text>
+<text x="900" y="348" class="s" text-anchor="middle" >(restricted)</text>
+<line x1="895" y1="238" x2="895" y2="300" class="one" marker-end="url(#at)" />
+<circle cx="760" cy="240" r="2" class="dot" />
+<line x1="760" y1="240" x2="756" y2="190" class="dim" />
+<circle cx="756" cy="190" r="9" class="box" />
+<text x="756" y="194" text-anchor="middle" style="font-size:11px;font-weight:700">7</text>
+<circle cx="895" cy="218" r="2" class="dot" />
+<line x1="895" y1="218" x2="895" y2="160" class="dim" />
+<circle cx="895" cy="160" r="9" class="box" />
+<text x="895" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">8</text>
+<circle cx="1050" cy="300" r="2" class="dot" />
+<line x1="1050" y1="300" x2="1030" y2="160" class="dim" />
+<circle cx="1030" cy="160" r="9" class="box" />
+<text x="1030" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">9</text>
+<circle cx="1130" cy="248" r="2" class="dot" />
+<line x1="1130" y1="248" x2="1130" y2="160" class="dim" />
+<circle cx="1130" cy="160" r="9" class="box" />
+<text x="1130" y="164" text-anchor="middle" style="font-size:11px;font-weight:700">10</text>
+<circle cx="1340" cy="240" r="2" class="dot" />
+<line x1="1340" y1="240" x2="1370" y2="210" class="dim" />
+<circle cx="1370" cy="210" r="9" class="box" />
+<text x="1370" y="214" text-anchor="middle" style="font-size:11px;font-weight:700">11</text>
+<circle cx="1150" cy="350" r="2" class="dot" />
+<line x1="1150" y1="350" x2="1100" y2="210" class="dim" />
+<circle cx="1100" cy="210" r="9" class="box" />
+<text x="1100" y="214" text-anchor="middle" style="font-size:11px;font-weight:700">12</text>
+<circle cx="850" cy="330" r="2" class="dot" />
+<line x1="850" y1="330" x2="820" y2="330" class="dim" />
+<circle cx="820" cy="330" r="9" class="box" />
+<text x="820" y="334" text-anchor="middle" style="font-size:11px;font-weight:700">13</text>
+<text x="720" y="418" class="h2" >회송 봉투와 라벨 구역 (센서는 이 구역만 본다)</text>
+<rect x="720" y="436" width="300" height="150" rx="3" class="paper" />
+<text x="732" y="460" class="s" >수신 선관위 · 선거명</text>
+<text x="732" y="476" class="s" >관리관 도장 · 봉함선</text>
+<text x="732" y="568" class="s" >이름·주소·cast_id·추적코드 없음</text>
+<rect x="956" y="444" width="52" height="134" rx="0" class="warnf" />
+<rect x="960" y="448" width="44" height="60" rx="2" class="chm" />
+<rect x="960" y="514" width="44" height="60" rx="2" class="chm" />
+<rect x="968" y="458" width="28" height="28" rx="0" class="box" />
+<text x="982" y="500" class="s" text-anchor="middle" >N개</text>
+<text x="1030" y="458" class="s" >라벨 구역 40 × 120</text>
+<text x="1030" y="474" class="s" >스티커 40 × 60, 두 장까지</text>
+<text x="1030" y="490" class="s" >Data Matrix 20 × 20: env_label 1–8개</text>
+<text x="1030" y="506" class="s" >"라벨 N개" + 각 라벨 앞 8자</text>
+<text x="1030" y="530" class="s" >판독기는 봉투 외관을 찍지 않는다.</text>
+<text x="1030" y="546" class="s" >어느 값들이 같은 스티커·봉투였는지</text>
+<text x="1030" y="562" class="s" >남기지 않는다 (§10.6 1항).</text>
+<text x="40" y="620" class="h2" >부품</text>
+<circle cx="49" cy="638" r="8" class="thin" />
+<text x="49" y="642" text-anchor="middle" style="font-size:11px">1</text>
+<text x="64" y="642" >급지대</text>
+<text x="220" y="642" class="s" >기존 분류기</text>
+<circle cx="49" cy="656" r="8" class="thin" />
+<text x="49" y="660" text-anchor="middle" style="font-size:11px">2</text>
+<text x="64" y="660" >분리 롤러</text>
+<text x="220" y="660" class="s" >기존</text>
+<circle cx="49" cy="674" r="8" class="thin" />
+<text x="49" y="678" text-anchor="middle" style="font-size:11px">3</text>
+<text x="64" y="678" >기존 판독부</text>
+<text x="220" y="678" class="s" >기표란 → 후보별 칸 (보조 수단)</text>
+<circle cx="49" cy="692" r="8" class="thin" />
+<text x="49" y="696" text-anchor="middle" style="font-size:11px">4</text>
+<text x="64" y="696" >각인 판독기</text>
+<text x="220" y="696" class="s" >각인 구역만 보는 라인 센서, 위·아래</text>
+<circle cx="49" cy="710" r="8" class="thin" />
+<text x="49" y="714" text-anchor="middle" style="font-size:11px">5</text>
+<text x="64" y="714" >후보별 칸 · 미분류 칸</text>
+<text x="220" y="714" class="s" >미분류는 사람 판정</text>
+<circle cx="49" cy="728" r="8" class="thin" />
+<text x="49" y="732" text-anchor="middle" style="font-size:11px">6</text>
+<text x="64" y="732" >cast_id 목록 봉인 저장</text>
+<text x="220" y="732" class="s" >restricted, 공개 안 함</text>
+<circle cx="49" cy="746" r="8" class="thin" />
+<text x="49" y="750" text-anchor="middle" style="font-size:11px">7</text>
+<text x="64" y="750" >봉투 투입구</text>
+<text x="220" y="750" class="s" >한 장씩</text>
+<circle cx="479" cy="638" r="8" class="thin" />
+<text x="479" y="642" text-anchor="middle" style="font-size:11px">8</text>
+<text x="494" y="642" >라벨 구역 센서</text>
+<text x="650" y="642" class="s" >스티커 구역만 (Data Matrix)</text>
+<circle cx="479" cy="656" r="8" class="thin" />
+<text x="479" y="660" text-anchor="middle" style="font-size:11px">9</text>
+<text x="494" y="660" >분류 단추</text>
+<text x="650" y="660" class="s" >훼손·기한 후·오배송은 사람이 누름</text>
+<circle cx="479" cy="674" r="8" class="thin" />
+<text x="479" y="678" text-anchor="middle" style="font-size:11px">10</text>
+<text x="494" y="678" >분기 게이트</text>
+<text x="650" y="678" class="s" >정상 → 카세트, 그 밖 → 예외</text>
+<circle cx="479" cy="692" r="8" class="thin" />
+<text x="479" y="696" text-anchor="middle" style="font-size:11px">11</text>
+<text x="494" y="696" >일방향 카세트</text>
+<text x="650" y="696" class="s" >넣을 수만 있음, 번호 봉인</text>
+<circle cx="479" cy="710" r="8" class="thin" />
+<text x="479" y="714" text-anchor="middle" style="font-size:11px">12</text>
+<text x="494" y="714" >예외 봉투 칸</text>
+<text x="650" y="714" class="s" >열지 않고 별도 봉인</text>
+<circle cx="479" cy="728" r="8" class="thin" />
+<text x="479" y="732" text-anchor="middle" style="font-size:11px">13</text>
+<text x="494" y="732" >값 집합 저장</text>
+<text x="650" y="732" class="s" >분류별 낱개 집합, restricted</text>
+<text x="24" y="790" class="h2" >주</text>
+<text x="24" y="808" class="s" >1. 분류기 출력은 수 셋뿐이다: 판독 성공 수, 각인 없음 수, 중복 cast_id 수. 각인 없음·중복은 DisputeEvent(2)로 간다 (BALLOT_LAYOUT §10).</text>
+<text x="24" y="824" class="s" >2. 분류기 화면: 종이 수 = 기록 수 + 비상 투입 수의 양변과 차이. 법적 결과는 사람이 심사·계수한 종이 결과다 (SCREENS §4).</text>
+<text x="24" y="840" class="s" >3. 각인 판독기는 기존 판독부와 장마다의 값을 주고받지 않는다. 분류기 화면에는 수 셋만 넘긴다 (가정).</text>
+<text x="24" y="856" class="s" >4. ReceiptMark 공개부: 수령 선관위, 회차, 봉투·스티커·라벨 값 수, 라벨 값 집합의 Merkle root (§10.6).</text>
+<text x="24" y="872" class="s" >5. 카세트를 열고 닫을 때 CassetteOpened·CassetteSealed를 남긴다 (§10.5). 개봉은 회차 단위, 봉투와 투표지를 섞은 뒤에만.</text>
+<text x="24" y="888" class="s" >6. 센서 차폐, 방향 처리, 분류 단추, 카세트 구조는 가정이다.</text>
+<rect x="954" y="812" width="430" height="132" rx="0" class="box" />
+<text x="962" y="832" class="s" >도면 번호</text>
+<text x="1046" y="832" >D-07</text>
+<line x1="954" y1="837" x2="1384" y2="837" class="thin" />
+<text x="962" y="852" class="s" >이름</text>
+<text x="1046" y="852" class="h2" >분류기 확장 · 수령 라벨 판독기</text>
+<line x1="954" y1="857" x2="1384" y2="857" class="thin" />
+<text x="962" y="872" class="s" >축척 · 단위</text>
+<text x="1046" y="872" >축척 없음 · mm</text>
+<line x1="954" y1="877" x2="1384" y2="877" class="thin" />
+<text x="962" y="892" class="s" >판 · 날짜</text>
+<text x="1046" y="892" >1판 (연구용 초안) · 2026-11-01</text>
+<line x1="954" y1="897" x2="1384" y2="897" class="thin" />
+<text x="962" y="912" class="s" >근거</text>
+<text x="1046" y="912" >BALLOT_LAYOUT §5·§10, SCREENS §4</text>
+<line x1="954" y1="917" x2="1384" y2="917" class="thin" />
+<text x="962" y="932" class="s" ></text>
+<text x="1046" y="932" >PROTOCOL §10.5·§10.6·§11.4, ADR-0010</text>
+<line x1="1038" y1="812" x2="1038" y2="944" class="thin" />
+</svg>

@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" width="1400" height="960">
+<title>D-08 확인 카드와 현장 증명</title>
+<desc>참관인 앱이 인쇄하는 확인 카드(100 × 80mm)의 배치, QR에 담기는 AttestChallenge, 스캐너가 인쇄하는 증명 요약 QR, 현장 증명의 순서.</desc>
+<style>
+svg { color: #1b2430; --muted: #5a6878; --fill: rgba(27,36,48,.05); --fill2: rgba(29,114,125,.12); --chm: rgba(154,107,0,.12); --warn: #b81f2e; --teal: #1d727d; --gold: #8a6100; --paper: rgba(27,36,48,.03); }
+@media (prefers-color-scheme: dark) {
+  svg { color: #e5ebf1; --muted: #a3b1c0; --fill: rgba(229,235,241,.06); --fill2: rgba(76,193,204,.16); --chm: rgba(226,181,71,.14); --warn: #ef7a88; --teal: #5fd0db; --gold: #e2b547; --paper: rgba(229,235,241,.04); }
+}
+text { fill: currentColor; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "IBM Plex Sans KR", sans-serif; font-size: 12px; }
+.s { font-size: 11px; fill: var(--muted); }
+.h { font-size: 16px; font-weight: 700; }
+.h2 { font-size: 13px; font-weight: 700; }
+.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; }
+.red { fill: var(--warn); } .tl { fill: var(--teal); } .gd { fill: var(--gold); } .mu { fill: var(--muted); }
+.ln { stroke: currentColor; fill: none; stroke-width: 1.4; }
+.thin { stroke: currentColor; fill: none; stroke-width: .8; }
+.dim { stroke: var(--muted); fill: none; stroke-width: .8; }
+.ext { stroke: var(--muted); fill: none; stroke-width: .6; stroke-dasharray: 2 2; }
+.box { stroke: currentColor; fill: var(--fill); stroke-width: 1.4; }
+.paper { stroke: currentColor; fill: var(--paper); stroke-width: 1; }
+.tcb { stroke: var(--teal); fill: var(--fill2); stroke-width: 1.6; }
+.unt { stroke: var(--muted); fill: var(--fill); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.chm { stroke: var(--gold); fill: var(--chm); stroke-width: 1.6; }
+.warn { stroke: var(--warn); fill: none; stroke-width: 1.6; }
+.warnf { stroke: var(--warn); fill: none; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.one { stroke: var(--teal); fill: none; stroke-width: 2; }
+.oned { stroke: var(--teal); fill: none; stroke-width: 2; stroke-dasharray: 7 4; }
+.two { stroke: var(--muted); fill: none; stroke-width: 1.6; }
+.seal { stroke: var(--warn); fill: none; stroke-width: 1.4; }
+.sealf { fill: var(--warn); }
+.zone { stroke: var(--warn); fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.dot { fill: currentColor; }
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--teal)"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+<marker id="ad" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" style="fill: var(--muted)"/></marker>
+</defs>
+<text x="24" y="34" class="h" >D-08 · 확인 카드와 현장 증명 (참관인 QR)</text>
+<text x="24" y="54" class="s" >확인 카드는 투표지가 아니다. 스캐너는 QR만 읽고 카드를 투입구로 되돌린다 (BALLOT_LAYOUT §14, PROTOCOL §7.9, ADR-0023).</text>
+<text x="24" y="70" class="s" >카드와 쪽지의 QR 무늬는 예시이며 실제 값이 아니다.</text>
+<text x="40" y="124" class="h2" >확인 카드 (1mm = 3px)</text>
+<clipPath id="cardclip"><path clip-rule="evenodd" d="M70,150 h300.0 v240.0 h-300.0 Z M167.0,160.0 h106.0 v106.0 h-106.0 Z M132.0,278.0 h176.0 v35.0 h-176.0 Z"/></clipPath>
+<rect x="70" y="150" width="300.0" height="240.0" rx="6" class="paper" />
+<g clip-path="url(#cardclip)">
+<text x="-100" y="70" class="s" transform="rotate(-28 -100 70)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="70" y="70" class="s" transform="rotate(-28 70 70)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="240" y="70" class="s" transform="rotate(-28 240 70)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="410" y="70" class="s" transform="rotate(-28 410 70)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-40" y="110" class="s" transform="rotate(-28 -40 110)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="130" y="110" class="s" transform="rotate(-28 130 110)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="300" y="110" class="s" transform="rotate(-28 300 110)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="470" y="110" class="s" transform="rotate(-28 470 110)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-100" y="150" class="s" transform="rotate(-28 -100 150)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="70" y="150" class="s" transform="rotate(-28 70 150)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="240" y="150" class="s" transform="rotate(-28 240 150)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="410" y="150" class="s" transform="rotate(-28 410 150)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-40" y="190" class="s" transform="rotate(-28 -40 190)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="130" y="190" class="s" transform="rotate(-28 130 190)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="300" y="190" class="s" transform="rotate(-28 300 190)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="470" y="190" class="s" transform="rotate(-28 470 190)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-100" y="230" class="s" transform="rotate(-28 -100 230)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="70" y="230" class="s" transform="rotate(-28 70 230)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="240" y="230" class="s" transform="rotate(-28 240 230)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="410" y="230" class="s" transform="rotate(-28 410 230)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-40" y="270" class="s" transform="rotate(-28 -40 270)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="130" y="270" class="s" transform="rotate(-28 130 270)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="300" y="270" class="s" transform="rotate(-28 300 270)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="470" y="270" class="s" transform="rotate(-28 470 270)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-100" y="310" class="s" transform="rotate(-28 -100 310)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="70" y="310" class="s" transform="rotate(-28 70 310)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="240" y="310" class="s" transform="rotate(-28 240 310)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="410" y="310" class="s" transform="rotate(-28 410 310)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-40" y="350" class="s" transform="rotate(-28 -40 350)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="130" y="350" class="s" transform="rotate(-28 130 350)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="300" y="350" class="s" transform="rotate(-28 300 350)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="470" y="350" class="s" transform="rotate(-28 470 350)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="-100" y="390" class="s" transform="rotate(-28 -100 390)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="70" y="390" class="s" transform="rotate(-28 70 390)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="240" y="390" class="s" transform="rotate(-28 240 390)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+<text x="410" y="390" class="s" transform="rotate(-28 410 390)" style="opacity:.75">확인 카드 · 투표지 아님</text>
+</g>
+<rect x="169.0" y="162.0" width="102.0" height="102.0" rx="2" class="box" />
+<rect x="175.0" y="168.0" width="90.0" height="90.0" rx="0" class="paper" />
+<rect x="175.0" y="168.0" width="30.0" height="30.0" rx="0" class="dot" />
+<rect x="179.28571428571428" y="172.28571428571428" width="21.428571428571427" height="21.428571428571427" rx="0" class="paper" style="fill: var(--paper); stroke:none"/>
+<rect x="183.57142857142858" y="176.57142857142858" width="12.857142857142858" height="12.857142857142858" rx="0" class="dot" />
+<rect x="235.0" y="168.0" width="30.0" height="30.0" rx="0" class="dot" />
+<rect x="239.28571428571428" y="172.28571428571428" width="21.428571428571427" height="21.428571428571427" rx="0" class="paper" style="fill: var(--paper); stroke:none"/>
+<rect x="243.57142857142856" y="176.57142857142858" width="12.857142857142858" height="12.857142857142858" rx="0" class="dot" />
+<rect x="175.0" y="228.0" width="30.0" height="30.0" rx="0" class="dot" />
+<rect x="179.28571428571428" y="232.28571428571428" width="21.428571428571427" height="21.428571428571427" rx="0" class="paper" style="fill: var(--paper); stroke:none"/>
+<rect x="183.57142857142858" y="236.57142857142856" width="12.857142857142858" height="12.857142857142858" rx="0" class="dot" />
+<path d="M175.0,202.3h4.3v4.3h-4.3zM175.0,206.6h4.3v4.3h-4.3zM175.0,215.1h4.3v4.3h-4.3zM179.3,202.3h4.3v4.3h-4.3zM179.3,206.6h4.3v4.3h-4.3zM179.3,215.1h4.3v4.3h-4.3zM179.3,219.4h4.3v4.3h-4.3zM183.6,202.3h4.3v4.3h-4.3zM183.6,206.6h4.3v4.3h-4.3zM183.6,210.9h4.3v4.3h-4.3zM183.6,219.4h4.3v4.3h-4.3zM187.9,202.3h4.3v4.3h-4.3zM187.9,219.4h4.3v4.3h-4.3zM192.1,206.6h4.3v4.3h-4.3zM192.1,215.1h4.3v4.3h-4.3zM192.1,219.4h4.3v4.3h-4.3zM196.4,202.3h4.3v4.3h-4.3zM196.4,206.6h4.3v4.3h-4.3zM196.4,215.1h4.3v4.3h-4.3zM200.7,206.6h4.3v4.3h-4.3zM200.7,215.1h4.3v4.3h-4.3zM200.7,219.4h4.3v4.3h-4.3zM205.0,202.3h4.3v4.3h-4.3zM205.0,210.9h4.3v4.3h-4.3zM205.0,215.1h4.3v4.3h-4.3zM209.3,172.3h4.3v4.3h-4.3zM209.3,185.1h4.3v4.3h-4.3zM209.3,206.6h4.3v4.3h-4.3zM209.3,215.1h4.3v4.3h-4.3zM209.3,219.4h4.3v4.3h-4.3zM209.3,228.0h4.3v4.3h-4.3zM209.3,236.6h4.3v4.3h-4.3zM213.6,168.0h4.3v4.3h-4.3zM213.6,206.6h4.3v4.3h-4.3zM213.6,228.0h4.3v4.3h-4.3zM213.6,232.3h4.3v4.3h-4.3zM213.6,240.9h4.3v4.3h-4.3zM213.6,249.4h4.3v4.3h-4.3zM213.6,253.7h4.3v4.3h-4.3zM217.9,168.0h4.3v4.3h-4.3zM217.9,176.6h4.3v4.3h-4.3zM217.9,180.9h4.3v4.3h-4.3zM217.9,185.1h4.3v4.3h-4.3zM217.9,193.7h4.3v4.3h-4.3zM217.9,198.0h4.3v4.3h-4.3zM217.9,219.4h4.3v4.3h-4.3zM217.9,223.7h4.3v4.3h-4.3zM217.9,228.0h4.3v4.3h-4.3zM217.9,240.9h4.3v4.3h-4.3zM217.9,245.1h4.3v4.3h-4.3zM217.9,249.4h4.3v4.3h-4.3zM217.9,253.7h4.3v4.3h-4.3zM222.1,176.6h4.3v4.3h-4.3zM222.1,180.9h4.3v4.3h-4.3zM222.1,185.1h4.3v4.3h-4.3zM222.1,189.4h4.3v4.3h-4.3zM222.1,219.4h4.3v4.3h-4.3zM222.1,240.9h4.3v4.3h-4.3zM222.1,245.1h4.3v4.3h-4.3zM222.1,249.4h4.3v4.3h-4.3zM226.4,168.0h4.3v4.3h-4.3zM226.4,172.3h4.3v4.3h-4.3zM226.4,176.6h4.3v4.3h-4.3zM226.4,180.9h4.3v4.3h-4.3zM226.4,185.1h4.3v4.3h-4.3zM226.4,189.4h4.3v4.3h-4.3zM226.4,193.7h4.3v4.3h-4.3zM226.4,198.0h4.3v4.3h-4.3zM226.4,202.3h4.3v4.3h-4.3zM226.4,206.6h4.3v4.3h-4.3zM226.4,210.9h4.3v4.3h-4.3zM226.4,223.7h4.3v4.3h-4.3zM226.4,228.0h4.3v4.3h-4.3zM226.4,232.3h4.3v4.3h-4.3zM226.4,236.6h4.3v4.3h-4.3zM226.4,240.9h4.3v4.3h-4.3zM230.7,206.6h4.3v4.3h-4.3zM230.7,210.9h4.3v4.3h-4.3zM230.7,215.1h4.3v4.3h-4.3zM230.7,219.4h4.3v4.3h-4.3zM230.7,228.0h4.3v4.3h-4.3zM230.7,232.3h4.3v4.3h-4.3zM230.7,245.1h4.3v4.3h-4.3zM230.7,253.7h4.3v4.3h-4.3zM235.0,219.4h4.3v4.3h-4.3zM235.0,223.7h4.3v4.3h-4.3zM235.0,228.0h4.3v4.3h-4.3zM235.0,245.1h4.3v4.3h-4.3zM235.0,249.4h4.3v4.3h-4.3zM239.3,223.7h4.3v4.3h-4.3zM239.3,232.3h4.3v4.3h-4.3zM239.3,236.6h4.3v4.3h-4.3zM239.3,240.9h4.3v4.3h-4.3zM239.3,245.1h4.3v4.3h-4.3zM239.3,249.4h4.3v4.3h-4.3zM243.6,206.6h4.3v4.3h-4.3zM243.6,223.7h4.3v4.3h-4.3zM243.6,228.0h4.3v4.3h-4.3zM243.6,232.3h4.3v4.3h-4.3zM243.6,236.6h4.3v4.3h-4.3zM243.6,240.9h4.3v4.3h-4.3zM247.9,215.1h4.3v4.3h-4.3zM247.9,240.9h4.3v4.3h-4.3zM247.9,249.4h4.3v4.3h-4.3zM252.1,206.6h4.3v4.3h-4.3zM252.1,210.9h4.3v4.3h-4.3zM252.1,223.7h4.3v4.3h-4.3zM252.1,228.0h4.3v4.3h-4.3zM252.1,232.3h4.3v4.3h-4.3zM252.1,245.1h4.3v4.3h-4.3zM256.4,206.6h4.3v4.3h-4.3zM256.4,215.1h4.3v4.3h-4.3zM256.4,219.4h4.3v4.3h-4.3zM256.4,240.9h4.3v4.3h-4.3zM256.4,253.7h4.3v4.3h-4.3zM260.7,202.3h4.3v4.3h-4.3zM260.7,206.6h4.3v4.3h-4.3zM260.7,210.9h4.3v4.3h-4.3zM260.7,219.4h4.3v4.3h-4.3zM260.7,223.7h4.3v4.3h-4.3zM260.7,228.0h4.3v4.3h-4.3zM260.7,236.6h4.3v4.3h-4.3zM260.7,253.7h4.3v4.3h-4.3z" class="dot"/>
+<rect x="136.0" y="282.0" width="168.0" height="27.0" rx="2" class="box" />
+<text x="220.0" y="301.5" class="m" text-anchor="middle" style="font-size:13px">9TXC 4HBA 7MZD 2QKP</text>
+<line x1="70" y1="392.0" x2="70" y2="420.0" class="ext" />
+<line x1="370.0" y1="392.0" x2="370.0" y2="420.0" class="ext" />
+<line x1="70" y1="416.0" x2="370.0" y2="416.0" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="220.0" y="412.0" class="s" text-anchor="middle" >100 (투표지 폭)</text>
+<line x1="372.0" y1="150" x2="392.0" y2="150" class="ext" />
+<line x1="372.0" y1="390.0" x2="392.0" y2="390.0" class="ext" />
+<line x1="388.0" y1="150" x2="388.0" y2="390.0" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="394.0" y="274.0" class="s" >80</text>
+<line x1="175.0" y1="162.0" x2="175.0" y2="144" class="ext" />
+<line x1="265.0" y1="162.0" x2="265.0" y2="144" class="ext" />
+<line x1="175.0" y1="140" x2="265.0" y2="140" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="220.0" y="136" class="s" text-anchor="middle" >30 (가정)</text>
+<circle cx="265.0" cy="188.0" r="2" class="dot" />
+<line x1="265.0" y1="188.0" x2="430.0" y2="190" class="dim" />
+<circle cx="430.0" cy="190" r="9" class="box" />
+<text x="430.0" y="194" text-anchor="middle" style="font-size:11px;font-weight:700">1</text>
+<circle cx="304.0" cy="294.0" r="2" class="dot" />
+<line x1="304.0" y1="294.0" x2="430.0" y2="300" class="dim" />
+<circle cx="430.0" cy="300" r="9" class="box" />
+<text x="430.0" y="304" text-anchor="middle" style="font-size:11px;font-weight:700">2</text>
+<circle cx="334.0" cy="360.0" r="2" class="dot" />
+<line x1="334.0" y1="360.0" x2="430.0" y2="355" class="dim" />
+<circle cx="430.0" cy="355" r="9" class="box" />
+<text x="430.0" y="359" text-anchor="middle" style="font-size:11px;font-weight:700">3</text>
+<text x="40" y="444" class="s" >1 QR 하나 (위쪽 가운데): AttestChallenge</text>
+<text x="40" y="459" class="s" >2 난수 앞 16자 (넷씩 넷, 사람이 대조)</text>
+<text x="40" y="474" class="s" >3 바탕 사선 문구 "확인 카드 · 투표지 아님"</text>
+<text x="40" y="489" class="s" >투표양식 표지·기준점·기표란이 없어 투표지로 판정되지 않는다.</text>
+<text x="480" y="124" class="h2" >카드 QR: AttestChallenge (0x0105, ENCODING §8.19)</text>
+<text x="480" y="150" class="m" >election_id</text>
+<text x="600" y="150" class="m" >Ident&lt;64&gt;</text>
+<text x="690" y="150" class="s" >선거</text>
+<text x="480" y="170" class="m" >observer_id</text>
+<text x="600" y="170" class="m" >Ident&lt;64&gt;</text>
+<text x="690" y="170" class="s" >genesis의 투표소 토큰 목록에 있어야 함</text>
+<text x="480" y="190" class="m" >nonce</text>
+<text x="600" y="190" class="m" >[u8; 32]</text>
+<text x="690" y="190" class="s" >참관인 앱이 만든 난수</text>
+<text x="480" y="210" class="m" >challenge_sig</text>
+<text x="600" y="210" class="m" >[u8; 64]</text>
+<text x="690" y="210" class="s" >참관인 확인 키의 Ed25519 서명</text>
+<line x1="480" y1="132" x2="910" y2="132" class="thin" />
+<text x="480" y="244" class="s" >서명 대상: election_id ‖ station_id ‖ observer_id ‖ nonce</text>
+<text x="480" y="260" class="s" >  (헤더 없는 필드 묶음, purpose attest-challenge)</text>
+<text x="480" y="276" class="s" >station_id는 커밋먼트 유닛이 자기 설정에서 채운다.</text>
+<text x="480" y="292" class="s" >해석 유닛은 QR을 이 객체로 옮기기만 하고 필드를 만들 수 없다.</text>
+<text x="480" y="308" class="s" >최대 약 232바이트 + 객체 머리 (계산값).</text>
+<text x="960" y="124" class="h2" >증명 요약 쪽지 (80mm 감열, 슬립 프린터)</text>
+<rect x="960" y="138" width="160" height="270" rx="2" class="paper" />
+<text x="1040" y="160" text-anchor="middle" >현장 증명 요약</text>
+<rect x="985" y="174" width="110" height="110" rx="0" class="paper" />
+<rect x="985.0" y="174.0" width="26.551724137931036" height="26.551724137931036" rx="0" class="dot" />
+<rect x="988.7931034482758" y="177.79310344827587" width="18.96551724137931" height="18.96551724137931" rx="0" class="paper" style="fill: var(--paper); stroke:none"/>
+<rect x="992.5862068965517" y="181.58620689655172" width="11.379310344827587" height="11.379310344827587" rx="0" class="dot" />
+<rect x="1068.448275862069" y="174.0" width="26.551724137931036" height="26.551724137931036" rx="0" class="dot" />
+<rect x="1072.2413793103449" y="177.79310344827587" width="18.96551724137931" height="18.96551724137931" rx="0" class="paper" style="fill: var(--paper); stroke:none"/>
+<rect x="1076.0344827586207" y="181.58620689655172" width="11.379310344827587" height="11.379310344827587" rx="0" class="dot" />
+<rect x="985.0" y="257.44827586206895" width="26.551724137931036" height="26.551724137931036" rx="0" class="dot" />
+<rect x="988.7931034482758" y="261.2413793103448" width="18.96551724137931" height="18.96551724137931" rx="0" class="paper" style="fill: var(--paper); stroke:none"/>
+<rect x="992.5862068965517" y="265.0344827586207" width="11.379310344827587" height="11.379310344827587" rx="0" class="dot" />
+<path d="M985.0,227.1h3.8v3.8h-3.8zM985.0,242.3h3.8v3.8h-3.8zM985.0,246.1h3.8v3.8h-3.8zM985.0,249.9h3.8v3.8h-3.8zM988.8,211.9h3.8v3.8h-3.8zM988.8,230.9h3.8v3.8h-3.8zM988.8,234.7h3.8v3.8h-3.8zM988.8,242.3h3.8v3.8h-3.8zM988.8,246.1h3.8v3.8h-3.8zM988.8,249.9h3.8v3.8h-3.8zM992.6,204.3h3.8v3.8h-3.8zM992.6,211.9h3.8v3.8h-3.8zM992.6,238.5h3.8v3.8h-3.8zM996.4,208.1h3.8v3.8h-3.8zM996.4,211.9h3.8v3.8h-3.8zM996.4,215.7h3.8v3.8h-3.8zM996.4,219.5h3.8v3.8h-3.8zM996.4,227.1h3.8v3.8h-3.8zM996.4,234.7h3.8v3.8h-3.8zM996.4,246.1h3.8v3.8h-3.8zM996.4,249.9h3.8v3.8h-3.8zM1000.2,215.7h3.8v3.8h-3.8zM1000.2,219.5h3.8v3.8h-3.8zM1000.2,230.9h3.8v3.8h-3.8zM1000.2,234.7h3.8v3.8h-3.8zM1000.2,238.5h3.8v3.8h-3.8zM1000.2,249.9h3.8v3.8h-3.8zM1004.0,204.3h3.8v3.8h-3.8zM1004.0,208.1h3.8v3.8h-3.8zM1004.0,211.9h3.8v3.8h-3.8zM1004.0,219.5h3.8v3.8h-3.8zM1004.0,227.1h3.8v3.8h-3.8zM1004.0,230.9h3.8v3.8h-3.8zM1004.0,238.5h3.8v3.8h-3.8zM1004.0,246.1h3.8v3.8h-3.8zM1004.0,249.9h3.8v3.8h-3.8zM1007.8,204.3h3.8v3.8h-3.8zM1007.8,208.1h3.8v3.8h-3.8zM1007.8,219.5h3.8v3.8h-3.8zM1007.8,227.1h3.8v3.8h-3.8zM1007.8,230.9h3.8v3.8h-3.8zM1007.8,242.3h3.8v3.8h-3.8zM1007.8,249.9h3.8v3.8h-3.8zM1011.6,204.3h3.8v3.8h-3.8zM1011.6,211.9h3.8v3.8h-3.8zM1011.6,215.7h3.8v3.8h-3.8zM1011.6,219.5h3.8v3.8h-3.8zM1011.6,223.3h3.8v3.8h-3.8zM1011.6,230.9h3.8v3.8h-3.8zM1011.6,238.5h3.8v3.8h-3.8zM1015.3,181.6h3.8v3.8h-3.8zM1015.3,185.4h3.8v3.8h-3.8zM1015.3,196.8h3.8v3.8h-3.8zM1015.3,200.6h3.8v3.8h-3.8zM1015.3,211.9h3.8v3.8h-3.8zM1015.3,227.1h3.8v3.8h-3.8zM1015.3,230.9h3.8v3.8h-3.8zM1015.3,234.7h3.8v3.8h-3.8zM1015.3,242.3h3.8v3.8h-3.8zM1015.3,249.9h3.8v3.8h-3.8zM1015.3,261.2h3.8v3.8h-3.8zM1015.3,265.0h3.8v3.8h-3.8zM1015.3,272.6h3.8v3.8h-3.8zM1015.3,276.4h3.8v3.8h-3.8zM1019.1,181.6h3.8v3.8h-3.8zM1019.1,189.2h3.8v3.8h-3.8zM1019.1,193.0h3.8v3.8h-3.8zM1019.1,196.8h3.8v3.8h-3.8zM1019.1,200.6h3.8v3.8h-3.8zM1019.1,204.3h3.8v3.8h-3.8zM1019.1,208.1h3.8v3.8h-3.8zM1019.1,211.9h3.8v3.8h-3.8zM1019.1,219.5h3.8v3.8h-3.8zM1019.1,223.3h3.8v3.8h-3.8zM1019.1,246.1h3.8v3.8h-3.8zM1019.1,249.9h3.8v3.8h-3.8zM1019.1,253.7h3.8v3.8h-3.8zM1019.1,268.8h3.8v3.8h-3.8zM1022.9,174.0h3.8v3.8h-3.8zM1022.9,181.6h3.8v3.8h-3.8zM1022.9,211.9h3.8v3.8h-3.8zM1022.9,227.1h3.8v3.8h-3.8zM1022.9,246.1h3.8v3.8h-3.8zM1022.9,257.4h3.8v3.8h-3.8zM1022.9,276.4h3.8v3.8h-3.8zM1026.7,177.8h3.8v3.8h-3.8zM1026.7,185.4h3.8v3.8h-3.8zM1026.7,193.0h3.8v3.8h-3.8zM1026.7,204.3h3.8v3.8h-3.8zM1026.7,223.3h3.8v3.8h-3.8zM1026.7,227.1h3.8v3.8h-3.8zM1026.7,230.9h3.8v3.8h-3.8zM1026.7,238.5h3.8v3.8h-3.8zM1026.7,242.3h3.8v3.8h-3.8zM1026.7,253.7h3.8v3.8h-3.8zM1026.7,261.2h3.8v3.8h-3.8zM1026.7,268.8h3.8v3.8h-3.8zM1026.7,272.6h3.8v3.8h-3.8zM1030.5,177.8h3.8v3.8h-3.8zM1030.5,185.4h3.8v3.8h-3.8zM1030.5,189.2h3.8v3.8h-3.8zM1030.5,211.9h3.8v3.8h-3.8zM1030.5,215.7h3.8v3.8h-3.8zM1030.5,223.3h3.8v3.8h-3.8zM1030.5,227.1h3.8v3.8h-3.8zM1030.5,230.9h3.8v3.8h-3.8zM1030.5,242.3h3.8v3.8h-3.8zM1030.5,257.4h3.8v3.8h-3.8zM1030.5,261.2h3.8v3.8h-3.8zM1030.5,268.8h3.8v3.8h-3.8zM1030.5,280.2h3.8v3.8h-3.8zM1034.3,177.8h3.8v3.8h-3.8zM1034.3,181.6h3.8v3.8h-3.8zM1034.3,189.2h3.8v3.8h-3.8zM1034.3,196.8h3.8v3.8h-3.8zM1034.3,200.6h3.8v3.8h-3.8zM1034.3,204.3h3.8v3.8h-3.8zM1034.3,211.9h3.8v3.8h-3.8zM1034.3,234.7h3.8v3.8h-3.8zM1034.3,242.3h3.8v3.8h-3.8zM1034.3,246.1h3.8v3.8h-3.8zM1034.3,257.4h3.8v3.8h-3.8zM1034.3,261.2h3.8v3.8h-3.8zM1034.3,265.0h3.8v3.8h-3.8zM1038.1,174.0h3.8v3.8h-3.8zM1038.1,185.4h3.8v3.8h-3.8zM1038.1,196.8h3.8v3.8h-3.8zM1038.1,211.9h3.8v3.8h-3.8zM1038.1,238.5h3.8v3.8h-3.8zM1038.1,257.4h3.8v3.8h-3.8zM1038.1,280.2h3.8v3.8h-3.8zM1041.9,181.6h3.8v3.8h-3.8zM1041.9,185.4h3.8v3.8h-3.8zM1041.9,189.2h3.8v3.8h-3.8zM1041.9,204.3h3.8v3.8h-3.8zM1041.9,211.9h3.8v3.8h-3.8zM1041.9,219.5h3.8v3.8h-3.8zM1041.9,223.3h3.8v3.8h-3.8zM1041.9,230.9h3.8v3.8h-3.8zM1041.9,234.7h3.8v3.8h-3.8zM1041.9,265.0h3.8v3.8h-3.8zM1041.9,268.8h3.8v3.8h-3.8zM1041.9,276.4h3.8v3.8h-3.8zM1045.7,189.2h3.8v3.8h-3.8zM1045.7,193.0h3.8v3.8h-3.8zM1045.7,204.3h3.8v3.8h-3.8zM1045.7,223.3h3.8v3.8h-3.8zM1045.7,238.5h3.8v3.8h-3.8zM1045.7,249.9h3.8v3.8h-3.8zM1045.7,268.8h3.8v3.8h-3.8zM1045.7,276.4h3.8v3.8h-3.8zM1049.5,177.8h3.8v3.8h-3.8zM1049.5,185.4h3.8v3.8h-3.8zM1049.5,189.2h3.8v3.8h-3.8zM1049.5,204.3h3.8v3.8h-3.8zM1049.5,208.1h3.8v3.8h-3.8zM1049.5,219.5h3.8v3.8h-3.8zM1049.5,227.1h3.8v3.8h-3.8zM1049.5,230.9h3.8v3.8h-3.8zM1049.5,234.7h3.8v3.8h-3.8zM1049.5,242.3h3.8v3.8h-3.8zM1049.5,246.1h3.8v3.8h-3.8zM1049.5,253.7h3.8v3.8h-3.8zM1049.5,261.2h3.8v3.8h-3.8zM1049.5,268.8h3.8v3.8h-3.8zM1049.5,272.6h3.8v3.8h-3.8zM1049.5,280.2h3.8v3.8h-3.8zM1053.3,174.0h3.8v3.8h-3.8zM1053.3,177.8h3.8v3.8h-3.8zM1053.3,185.4h3.8v3.8h-3.8zM1053.3,189.2h3.8v3.8h-3.8zM1053.3,215.7h3.8v3.8h-3.8zM1053.3,230.9h3.8v3.8h-3.8zM1053.3,234.7h3.8v3.8h-3.8zM1053.3,242.3h3.8v3.8h-3.8zM1053.3,253.7h3.8v3.8h-3.8zM1053.3,257.4h3.8v3.8h-3.8zM1053.3,265.0h3.8v3.8h-3.8zM1053.3,268.8h3.8v3.8h-3.8zM1053.3,276.4h3.8v3.8h-3.8zM1057.1,174.0h3.8v3.8h-3.8zM1057.1,177.8h3.8v3.8h-3.8zM1057.1,185.4h3.8v3.8h-3.8zM1057.1,189.2h3.8v3.8h-3.8zM1057.1,204.3h3.8v3.8h-3.8zM1057.1,223.3h3.8v3.8h-3.8zM1057.1,227.1h3.8v3.8h-3.8zM1057.1,230.9h3.8v3.8h-3.8zM1057.1,234.7h3.8v3.8h-3.8zM1057.1,249.9h3.8v3.8h-3.8zM1057.1,253.7h3.8v3.8h-3.8zM1057.1,257.4h3.8v3.8h-3.8zM1057.1,272.6h3.8v3.8h-3.8zM1057.1,276.4h3.8v3.8h-3.8zM1060.9,181.6h3.8v3.8h-3.8zM1060.9,193.0h3.8v3.8h-3.8zM1060.9,200.6h3.8v3.8h-3.8zM1060.9,211.9h3.8v3.8h-3.8zM1060.9,223.3h3.8v3.8h-3.8zM1060.9,227.1h3.8v3.8h-3.8zM1060.9,230.9h3.8v3.8h-3.8zM1060.9,238.5h3.8v3.8h-3.8zM1060.9,261.2h3.8v3.8h-3.8zM1060.9,280.2h3.8v3.8h-3.8zM1064.7,219.5h3.8v3.8h-3.8zM1064.7,242.3h3.8v3.8h-3.8zM1064.7,249.9h3.8v3.8h-3.8zM1064.7,253.7h3.8v3.8h-3.8zM1064.7,261.2h3.8v3.8h-3.8zM1064.7,265.0h3.8v3.8h-3.8zM1064.7,276.4h3.8v3.8h-3.8zM1068.4,208.1h3.8v3.8h-3.8zM1068.4,223.3h3.8v3.8h-3.8zM1068.4,246.1h3.8v3.8h-3.8zM1068.4,257.4h3.8v3.8h-3.8zM1068.4,261.2h3.8v3.8h-3.8zM1068.4,265.0h3.8v3.8h-3.8zM1068.4,268.8h3.8v3.8h-3.8zM1068.4,272.6h3.8v3.8h-3.8zM1068.4,276.4h3.8v3.8h-3.8zM1068.4,280.2h3.8v3.8h-3.8zM1072.2,234.7h3.8v3.8h-3.8zM1072.2,246.1h3.8v3.8h-3.8zM1072.2,253.7h3.8v3.8h-3.8zM1072.2,261.2h3.8v3.8h-3.8zM1072.2,272.6h3.8v3.8h-3.8zM1072.2,280.2h3.8v3.8h-3.8zM1076.0,211.9h3.8v3.8h-3.8zM1076.0,215.7h3.8v3.8h-3.8zM1076.0,227.1h3.8v3.8h-3.8zM1076.0,234.7h3.8v3.8h-3.8zM1076.0,238.5h3.8v3.8h-3.8zM1076.0,242.3h3.8v3.8h-3.8zM1076.0,246.1h3.8v3.8h-3.8zM1076.0,249.9h3.8v3.8h-3.8zM1076.0,257.4h3.8v3.8h-3.8zM1076.0,268.8h3.8v3.8h-3.8zM1076.0,280.2h3.8v3.8h-3.8zM1079.8,208.1h3.8v3.8h-3.8zM1079.8,219.5h3.8v3.8h-3.8zM1079.8,249.9h3.8v3.8h-3.8zM1079.8,261.2h3.8v3.8h-3.8zM1079.8,265.0h3.8v3.8h-3.8zM1079.8,272.6h3.8v3.8h-3.8zM1079.8,276.4h3.8v3.8h-3.8zM1083.6,208.1h3.8v3.8h-3.8zM1083.6,215.7h3.8v3.8h-3.8zM1083.6,238.5h3.8v3.8h-3.8zM1083.6,242.3h3.8v3.8h-3.8zM1083.6,257.4h3.8v3.8h-3.8zM1083.6,261.2h3.8v3.8h-3.8zM1087.4,204.3h3.8v3.8h-3.8zM1087.4,208.1h3.8v3.8h-3.8zM1087.4,223.3h3.8v3.8h-3.8zM1087.4,227.1h3.8v3.8h-3.8zM1087.4,230.9h3.8v3.8h-3.8zM1087.4,234.7h3.8v3.8h-3.8zM1087.4,242.3h3.8v3.8h-3.8zM1087.4,249.9h3.8v3.8h-3.8zM1087.4,253.7h3.8v3.8h-3.8zM1087.4,268.8h3.8v3.8h-3.8zM1087.4,276.4h3.8v3.8h-3.8zM1087.4,280.2h3.8v3.8h-3.8zM1091.2,211.9h3.8v3.8h-3.8zM1091.2,215.7h3.8v3.8h-3.8zM1091.2,230.9h3.8v3.8h-3.8zM1091.2,234.7h3.8v3.8h-3.8zM1091.2,238.5h3.8v3.8h-3.8zM1091.2,246.1h3.8v3.8h-3.8zM1091.2,257.4h3.8v3.8h-3.8zM1091.2,272.6h3.8v3.8h-3.8zM1091.2,276.4h3.8v3.8h-3.8zM1091.2,280.2h3.8v3.8h-3.8z" class="dot"/>
+<text x="1040" y="310" class="s" text-anchor="middle" >구성 지문</text>
+<text x="1040" y="326" class="m" text-anchor="middle" >K7QF 2M8D R5WN Q3XA</text>
+<text x="1040" y="346" class="s" text-anchor="middle" >난수 앞 16자</text>
+<text x="1040" y="362" class="m" text-anchor="middle" >9TXC 4HBA 7MZD 2QKP</text>
+<rect x="964" y="378" width="152" height="24" rx="0" class="tcb" />
+<text x="1040" y="394" class="s" text-anchor="middle" >신원 줄</text>
+<text x="1136" y="154" >AttestationSummary (0x0025)</text>
+<text x="1136" y="174" class="m" >device_id</text>
+<text x="1246" y="174" class="m" >Ident&lt;64&gt;</text>
+<text x="1136" y="191" class="m" >observer_id</text>
+<text x="1246" y="191" class="m" >Ident&lt;64&gt;</text>
+<text x="1136" y="208" class="m" >nonce</text>
+<text x="1246" y="208" class="m" >[u8; 32]</text>
+<text x="1136" y="225" class="m" >time_bucket</text>
+<text x="1246" y="225" class="m" >u64</text>
+<text x="1136" y="242" class="m" >boot_count</text>
+<text x="1246" y="242" class="m" >u32</text>
+<text x="1136" y="259" class="m" >bundle_hash</text>
+<text x="1246" y="259" class="m" >Hash512</text>
+<text x="1136" y="276" class="m" >body_hash</text>
+<text x="1246" y="276" class="m" >Hash512</text>
+<text x="1136" y="293" class="m" >summary_sig</text>
+<text x="1246" y="293" class="m" >[u8; 64]</text>
+<text x="1136" y="320" class="s" >약 450바이트, QR 하나 (§8.30)</text>
+<text x="1136" y="336" class="s" >summary_sig: 증명 키의 Ed25519</text>
+<text x="1136" y="352" class="s" >  부분 서명 (attest-summary)</text>
+<text x="1136" y="368" class="s" >body_hash로 나중에 공개원장의</text>
+<text x="1136" y="384" class="s" >  DeviceAttestation과 대조</text>
+<text x="40" y="516" class="h2" >현장 증명 순서</text>
+<rect x="48" y="530" width="104" height="26" rx="3" class="box" />
+<text x="100" y="548" text-anchor="middle" >참관인 앱</text>
+<line x1="100" y1="556" x2="100" y2="790" class="ext" />
+<rect x="178" y="530" width="104" height="26" rx="3" class="box" />
+<text x="230" y="548" text-anchor="middle" >확인 카드</text>
+<line x1="230" y1="556" x2="230" y2="790" class="ext" />
+<rect x="308" y="530" width="104" height="26" rx="3" class="box" />
+<text x="360" y="548" text-anchor="middle" >해석 유닛</text>
+<line x1="360" y1="556" x2="360" y2="790" class="ext" />
+<rect x="448" y="530" width="104" height="26" rx="3" class="box" />
+<text x="500" y="548" text-anchor="middle" >커밋먼트 유닛</text>
+<line x1="500" y1="556" x2="500" y2="790" class="ext" />
+<rect x="588" y="530" width="104" height="26" rx="3" class="box" />
+<text x="640" y="548" text-anchor="middle" >챔버 모듈</text>
+<line x1="640" y1="556" x2="640" y2="790" class="ext" />
+<rect x="718" y="530" width="104" height="26" rx="3" class="box" />
+<text x="770" y="548" text-anchor="middle" >슬립 프린터</text>
+<line x1="770" y1="556" x2="770" y2="790" class="ext" />
+<rect x="838" y="530" width="104" height="26" rx="3" class="box" />
+<text x="890" y="548" text-anchor="middle" >공개원장</text>
+<line x1="890" y1="556" x2="890" y2="790" class="ext" />
+<path d="M100,574 h26 v12 h-24" class="one" marker-end="url(#at)" />
+<text x="132" y="584" class="s" >nonce 32바이트 만들고 확인 키로 서명</text>
+<line x1="100" y1="603" x2="226" y2="603" class="one" marker-end="url(#at)" />
+<text x="106" y="598" class="s" >QR로 인쇄</text>
+<line x1="230" y1="626" x2="356" y2="626" class="one" marker-end="url(#at)" />
+<text x="236" y="621" class="s" >투표와 투표 사이에 투입구로</text>
+<line x1="360" y1="649" x2="496" y2="649" class="one" marker-end="url(#at)" />
+<text x="366" y="644" class="s" >AttestChallenge (L3, 한 방향)</text>
+<line x1="360" y1="672" x2="234" y2="672" class="two" marker-end="url(#am)" />
+<text x="236" y="667" class="s" >카드를 투입구로 되돌림</text>
+<path d="M500,689 h26 v12 h-24" class="one" marker-end="url(#at)" />
+<text x="532" y="699" class="s" >토큰 목록·서명·30초·열린 방문 확인. 틀리면 버림 (VC-088)</text>
+<line x1="500" y1="718" x2="636" y2="718" class="one" marker-end="url(#at)" />
+<text x="506" y="713" class="s" >같은 도전값</text>
+<line x1="640" y1="741" x2="504" y2="741" class="one" marker-end="url(#at)" />
+<text x="506" y="736" class="s" >module-attestation 서명 (카운터·패드 안 씀)</text>
+<line x1="500" y1="764" x2="886" y2="764" class="one" marker-end="url(#at)" />
+<text x="506" y="759" class="s" >DeviceAttestation (0x0024), 다음 슬롯</text>
+<line x1="500" y1="787" x2="766" y2="787" class="one" marker-end="url(#at)" />
+<text x="506" y="782" class="s" >AttestationSummary QR</text>
+<text x="960" y="470" class="h2" >참관인 앱 확인 (인터넷 없이, SCREENS §6)</text>
+<text x="960" y="492" class="s" >서명 확인됨 · 도전값 일치 · 구성 지문 일치를 각각</text>
+<text x="974" y="509" class="s" >확인됨/실패로 보인다. 근거는 genesis와 릴리스 목록뿐.</text>
+<text x="960" y="526" class="s" >실패 이유: 서명 오류, 도전값 다름, 지문 다름,</text>
+<text x="974" y="543" class="s" >빌드 낮음, 시간 초과.</text>
+<text x="960" y="560" class="s" >화면 신원 줄의 지문과도 맞춰 본다.</text>
+<text x="960" y="577" class="s" >나중에 공개원장의 하이브리드 서명본과 대조한다.</text>
+<text x="960" y="594" class="s" >어긋나면 AttestationIncident → 봉인 예비로 교체,</text>
+<text x="974" y="611" class="s" >그 장치 기록 전수 대조, 전자 층 HOLD_REVIEW</text>
+<text x="974" y="628" class="s" >(종이 개표는 영향 없음, VC-090).</text>
+<text x="24" y="830" class="h2" >주</text>
+<text x="24" y="848" class="s" >1. 카드 크기 100 × 80과 QR 하나, 난수 앞 16자, 사선 문구는 BALLOT_LAYOUT §14의 값이다. QR 크기와 여백은 가정이다.</text>
+<text x="24" y="864" class="s" >2. 카드는 한 번 쓰고 참관인이 보관한다. 같은 카드를 다시 넣으면 같은 도전값을 다시 증명할 뿐이다.</text>
+<text x="24" y="880" class="s" >3. 개시 때(첫 투표지 전)와 마감 때(BoxClose 전) 증명이 의무다. 그 밖의 시점은 참관인이 정한다 (VC-089).</text>
+<text x="24" y="896" class="s" >4. 증명에는 기록 수, 선택, 투함 ID, 가명 같은 투표 값이 없다. 증명 계산은 투표 상태를 읽거나 바꾸지 않는다.</text>
+<rect x="954" y="812" width="430" height="132" rx="0" class="box" />
+<text x="962" y="832" class="s" >도면 번호</text>
+<text x="1046" y="832" >D-08</text>
+<line x1="954" y1="837" x2="1384" y2="837" class="thin" />
+<text x="962" y="852" class="s" >이름</text>
+<text x="1046" y="852" class="h2" >확인 카드와 현장 증명</text>
+<line x1="954" y1="857" x2="1384" y2="857" class="thin" />
+<text x="962" y="872" class="s" >축척 · 단위</text>
+<text x="1046" y="872" >카드 1mm = 3px, 그 밖은 축척 없음 · mm</text>
+<line x1="954" y1="877" x2="1384" y2="877" class="thin" />
+<text x="962" y="892" class="s" >판 · 날짜</text>
+<text x="1046" y="892" >1판 (연구용 초안) · 2026-11-01</text>
+<line x1="954" y1="897" x2="1384" y2="897" class="thin" />
+<text x="962" y="912" class="s" >근거</text>
+<text x="1046" y="912" >BALLOT_LAYOUT §14, ENCODING §8.19·§8.30</text>
+<line x1="954" y1="917" x2="1384" y2="917" class="thin" />
+<text x="962" y="932" class="s" ></text>
+<text x="1046" y="932" >PROTOCOL §7.9, SCREENS §6, ADR-0023</text>
+<line x1="1038" y1="812" x2="1038" y2="944" class="thin" />
+</svg>

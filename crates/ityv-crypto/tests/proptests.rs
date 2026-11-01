@@ -93,13 +93,17 @@ proptest! {
     }
 
     #[test]
-    fn reconstruction_succeeds_exactly_on_qualified_sets(counts in prop::array::uniform6(0u8..=3), seed in any::<u64>()) {
-        let structure = AccessStructure::uniform(Threshold::new(2, 3).unwrap());
+    fn reconstruction_succeeds_exactly_on_qualified_sets(counts in prop::array::uniform8(0u8..=3), parties in 2u8..=4, seed in any::<u64>()) {
+        let structure = AccessStructure::uniform(parties, Threshold::new(2, 3).unwrap()).unwrap();
         let mut rng = rng(seed);
         let secret = Scalar::random(&mut rng);
         let shares = split(&secret, &structure, &mut rng);
         let mut set = Vec::new();
-        for (chamber, count) in Chamber::ALL.iter().zip(counts.iter()) {
+        let mut counts = counts;
+        for (chamber, count) in Chamber::ALL.iter().zip(counts.iter_mut()) {
+            if !structure.includes(*chamber) {
+                *count = 0;
+            }
             for index in 0..*count {
                 set.push(shares.share(MemberId::new(*chamber, index).unwrap()));
             }

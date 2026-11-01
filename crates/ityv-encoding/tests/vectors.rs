@@ -21,14 +21,13 @@
 
 mod common;
 
-use common::{encode_to_vec, hex, kind_from_name, unhex};
+use common::{Vector, check_file, encode_to_vec, render, self_check};
 use ityv_encoding::{
     CheckpointBody, CheckpointParts, Day, ElectionId, Encode, Hash512, KeysetId, LedgerFrame,
     LedgerId, LegalAuthorizationBody, SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME,
     SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SchemaId, Scope, ScopeSet, Seq, TimeBucket,
     TreeSize, decode_object,
 };
-use std::string::String;
 use std::vec::Vec;
 
 fn patterned(seed: u8) -> Hash512 {
@@ -37,12 +36,6 @@ fn patterned(seed: u8) -> Hash512 {
         *b = seed.wrapping_add(u8::try_from(i).unwrap());
     }
     Hash512(h)
-}
-
-struct Vector {
-    label: &'static str,
-    bytes: Vec<u8>,
-    expected: Option<(&'static str, usize)>,
 }
 
 fn ledger_frame_vectors() -> Vec<Vector> {
@@ -291,70 +284,6 @@ fn checkpoint_vectors() -> Vec<Vector> {
         expected: Some(("ValueOutOfRange", 73)),
     });
     v
-}
-
-fn render(title: &str, schema: SchemaId, vectors: &[Vector]) -> String {
-    use core::fmt::Write as _;
-    let mut out = String::new();
-    // Writing to a String cannot fail, so the results are discarded.
-    let _ = writeln!(
-        out,
-        "# ityv-encoding test vectors: {title} (schema_id 0x{:04x}, version {SCHEMA_VERSION_1})",
-        schema.get()
-    );
-    let _ = writeln!(out, "# VALID <label> <hex>");
-    let _ = writeln!(out, "# INVALID <ErrorKind> <offset> <label> <hex>");
-    for v in vectors {
-        let label = v.label.replace(' ', "_");
-        let _ = match v.expected {
-            None => writeln!(out, "VALID {label} {}", hex(&v.bytes)),
-            Some((kind, offset)) => {
-                writeln!(out, "INVALID {kind} {offset} {label} {}", hex(&v.bytes))
-            }
-        };
-    }
-    out
-}
-
-fn check_file(name: &str, content: &str) {
-    let path = std::format!("{}/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
-    if std::env::var_os("ITYV_UPDATE_VECTORS").is_some() {
-        std::fs::write(&path, content).unwrap();
-        return;
-    }
-    let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("missing vector file {path}: {e}; run with ITYV_UPDATE_VECTORS=1")
-    });
-    assert_eq!(
-        on_disk, content,
-        "vector file {name} is stale; run with ITYV_UPDATE_VECTORS=1"
-    );
-}
-
-/// Re-reads a rendered file and checks every line against the decoder, the
-/// way an independent implementation would.
-fn self_check<F>(content: &str, decode_and_reencode: F)
-where
-    F: Fn(&[u8]) -> Result<Vec<u8>, ityv_encoding::Error>,
-{
-    for line in content.lines().filter(|l| !l.starts_with('#')) {
-        let fields: Vec<&str> = line.split(' ').collect();
-        match fields.first().copied() {
-            Some("VALID") => {
-                let bytes = unhex(fields[2]);
-                let re = decode_and_reencode(&bytes).unwrap_or_else(|e| panic!("{line}: {e}"));
-                assert_eq!(re, bytes, "{line}");
-            }
-            Some("INVALID") => {
-                let kind = kind_from_name(fields[1]);
-                let offset: usize = fields[2].parse().unwrap();
-                let bytes = unhex(fields[4]);
-                let e = decode_and_reencode(&bytes).expect_err(line);
-                assert_eq!((e.kind(), e.offset()), (kind, offset), "{line}");
-            }
-            _ => panic!("unexpected line: {line}"),
-        }
-    }
 }
 
 #[test]

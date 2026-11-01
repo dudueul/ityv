@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" width="900" height="460" font-family="sans-serif" font-size="11">
-  <title>장부·게시판·체크포인트·증인·공개 검증자 흐름</title>
+  <title>장부·공개원장·체크포인트·증인·공개 검증자 흐름</title>
   <desc>Devices and institutions append events through the ledger operator; public-class events form the board; witnesses verify and sign checkpoints; checkpoints reach mandated public verifiers within an hour; anyone verifies with out-of-band pins and publishes a status-vocabulary result.</desc>
   <defs>
     <marker id="b" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker>
@@ -32,7 +32,7 @@
     <text x="335" y="210" text-anchor="middle" font-size="9">프레임 해시 사슬 · UPDATE/DELETE 없음</text>
     <text x="335" y="282" text-anchor="middle" font-weight="bold">제한·봉인 저장소</text>
     <text x="335" y="300" text-anchor="middle" font-size="9">restricted / sealed 등급 이벤트</text>
-    <text x="335" y="382" text-anchor="middle" font-weight="bold">공개 게시판</text>
+    <text x="335" y="382" text-anchor="middle" font-weight="bold">공개원장</text>
     <text x="335" y="400" text-anchor="middle" font-size="9">public 등급 · Merkle 트리 SHA3-512 (§5.3)</text>
     <text x="555" y="50" text-anchor="middle" font-weight="bold">증인 1</text>
     <text x="555" y="66" text-anchor="middle" font-size="9">§5.4 확인 후 서명</text>

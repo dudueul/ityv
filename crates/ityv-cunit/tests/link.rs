@@ -1,0 +1,1240 @@
+//! Link objects, interpretation and issue checks, configuration rules, the
+//! generator and the pure counting rules.
+// Integration-test crate: outside the TCB. Tests express "this must hold"
+// with unwrap/expect/panic/indexing and small arithmetic on test sizes,
+// so these lints are relaxed for this file only (CONSTITUTION.md §1.1).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines,
+    clippy::missing_panics_doc,
+    clippy::many_single_char_names
+)]
+
+mod common;
+
+use common::{
+    Buffers, MODULES, MemJournal, ModuleSpec, SEED, STYLE_SMALL, interpretation, mocks,
+    module_config, ports, tb, work, world, world_with,
+};
+use ityv_crypto::{AccessStructure, Chamber, OptionCount, Threshold};
+use ityv_cunit::boxstate::OpenBox;
+use ityv_cunit::config::{
+    BallotStyle, ConfigParts, ElectionConfig, MAX_STYLES, ModuleConfig, Profile, TrusteeConfig,
+    chamber_code, chamber_of,
+};
+use ityv_cunit::error::{ConfigFault, Invariant as I};
+use ityv_cunit::link::{
+    Interpretation, JournalEntry, JournalKind, MAX_INTERPRETATION_LEN, MAX_JOURNAL_ENTRY_LEN,
+    MAX_MODULE_CHAMBER_CODE, MAX_MODULE_ISSUE_LEN, MAX_VISIT_BALLOTS, MAX_VISIT_END_LEN,
+    ModuleIssue, ModuleIssueParts, SCHEMA_INTERPRETATION, SCHEMA_JOURNAL_ENTRY,
+    SCHEMA_MODULE_ISSUE, SCHEMA_VISIT_END, VisitEnd,
+};
+use ityv_cunit::rng::DeviceRng;
+use ityv_cunit::{Error, module_may_sign_batch, rules};
+use ityv_encoding::{
+    BallotStyleId, ElectionId, ErrorKind, Hash512, ModuleCounter, ModuleCounters, ModuleId,
+    SCHEMA_VERSION_1, Scalar32, Token192, TrusteeId, decode_object, encode_object,
+};
+use proptest::prelude::*;
+use rand_core::Rng;
+
+#[test]
+fn interpretation_layout_is_fixed() {
+    let bytes = interpretation(b"E", b"P", 0x0102);
+    // header 16 ‖ u32 len 1 ‖ "E" ‖ u32 len 1 ‖ "P" ‖ u16
+    assert_eq!(bytes.len(), 16 + 5 + 5 + 2);
+    assert_eq!(&bytes[..4], b"ITYV");
+    assert_eq!(&bytes[4..8], &0x0101u32.to_be_bytes());
+    assert_eq!(&bytes[16..], &[0, 0, 0, 1, b'E', 0, 0, 0, 1, b'P', 1, 2]);
+    let parsed: Interpretation<'_> =
+        decode_object(SCHEMA_INTERPRETATION, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(parsed.option_index(), 0x0102);
+    assert_eq!(parsed.election_id().as_bytes(), b"E");
+    assert_eq!(parsed.ballot_style_id().as_bytes(), b"P");
+    assert!(bytes.len() <= MAX_INTERPRETATION_LEN);
+}
+
+#[test]
+fn interpret_accepts_only_this_election_known_styles_and_options_up_to_m_plus_one() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut area = work();
+    assert_eq!(
+        b.interpret(&interpretation(b"E-OTHER", STYLE_SMALL, 0), &mut area)
+            .unwrap_err(),
+        Error::WrongElection
+    );
+    assert_eq!(
+        b.interpret(&interpretation(b"E-2026", b"NOPE", 0), &mut area)
+            .unwrap_err(),
+        Error::UnknownBallotStyle
+    );
+    assert_eq!(
+        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, 4), &mut area)
+            .unwrap_err(),
+        Error::OptionOutOfRange
+    );
+    assert_eq!(
+        b.interpret(&interpretation(b"E-2026", STYLE_SMALL, u16::MAX), &mut area)
+            .unwrap_err(),
+        Error::OptionOutOfRange
+    );
+    assert!(matches!(
+        b.interpret(&[0u8; 30], &mut area).unwrap_err(),
+        Error::Encoding(_)
+    ));
+    let mut wrong_schema = interpretation(b"E-2026", STYLE_SMALL, 0);
+    wrong_schema[7] = 0x02;
+    assert!(
+        matches!(b.interpret(&wrong_schema, &mut area).unwrap_err(), Error::Encoding(e) if e.kind() == ErrorKind::SchemaMismatch)
+    );
+    assert!(!b.has_ballot_in_flight());
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 3), &mut area)
+        .unwrap();
+    assert_eq!(ballot.style().id().as_bytes(), STYLE_SMALL);
+    assert!(b.has_ballot_in_flight());
+}
+
+fn issue_bytes(parts: &ModuleIssueParts<'_>) -> std::vec::Vec<u8> {
+    let issue = ModuleIssue::new(parts).unwrap();
+    let mut out = std::vec![0u8; MAX_MODULE_ISSUE_LEN];
+    let len = encode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &issue, &mut out).unwrap();
+    out.truncate(len);
+    out
+}
+
+#[test]
+fn module_issue_round_trips_and_rejects_bad_fields() {
+    let rand = [Scalar32([1; 32]), Scalar32([2; 32])];
+    let tags = [[3u8; 16], [4; 16]];
+    let parts = ModuleIssueParts {
+        module_id: ModuleId::new(b"mod-p1").unwrap(),
+        chamber: 1,
+        counter: 7,
+        rand: &rand,
+        cid: Token192([5; 24]),
+        lab: Some(Token192([6; 24])),
+        tags: &tags,
+    };
+    let bytes = issue_bytes(&parts);
+    assert_eq!(bytes.len(), MAX_MODULE_ISSUE_LEN - 6 * 32 - 6 * 16 - 64 + 6);
+    let parsed: ModuleIssue<'_> =
+        decode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(parsed.counter(), 7);
+    assert_eq!(parsed.chamber(), 1);
+    assert_eq!(parsed.rand(), &rand);
+    assert_eq!(parsed.tags(), &tags);
+    assert_eq!(parsed.cid().0, [5; 24]);
+    assert_eq!(parsed.lab().unwrap().0, [6; 24]);
+    assert!(std::format!("{parsed:?}").contains("counter"));
+    assert!(!std::format!("{parsed:?}").contains("cid"));
+    // body offsets: 16 header, id 4+6, chamber at 26, counter at 27, rand count at 35
+    let reject = |at: usize, value: &[u8], kind: ErrorKind, offset: usize| {
+        let mut b = bytes.clone();
+        b[at..at + value.len()].copy_from_slice(value);
+        let e = decode_object::<ModuleIssue<'_>>(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &b)
+            .unwrap_err();
+        assert_eq!((e.kind(), e.offset()), (kind, offset));
+    };
+    reject(26, &[0], ErrorKind::ValueOutOfRange, 26);
+    // N (code 8) has no module; codes 1..=7 (P1–P4, J, A, C) do
+    reject(26, &[8], ErrorKind::ValueOutOfRange, 26);
+    for code in 1..=MAX_MODULE_CHAMBER_CODE {
+        let mut b = bytes.clone();
+        b[26] = code;
+        let parsed: ModuleIssue<'_> =
+            decode_object(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &b).unwrap();
+        assert_eq!(parsed.chamber(), code);
+    }
+    assert_eq!(MAX_MODULE_CHAMBER_CODE, 7);
+    reject(27, &[0; 8], ErrorKind::ValueOutOfRange, 27);
+    reject(35, &[0, 0, 0, 0], ErrorKind::ValueOutOfRange, 35);
+    reject(35, &[0, 0, 0, 9], ErrorKind::CountExceedsMax, 35);
+    for bad in [
+        ModuleIssueParts {
+            chamber: 0,
+            ..parts
+        },
+        ModuleIssueParts {
+            chamber: 8,
+            ..parts
+        },
+        ModuleIssueParts {
+            counter: 0,
+            ..parts
+        },
+        ModuleIssueParts { rand: &[], ..parts },
+        ModuleIssueParts {
+            rand: &[Scalar32([0; 32]); 9],
+            ..parts
+        },
+        ModuleIssueParts {
+            tags: &[[0; 16]; 9],
+            ..parts
+        },
+    ] {
+        assert!(ModuleIssue::new(&bad).is_none());
+    }
+}
+
+#[test]
+fn journal_entry_round_trips_and_rejects_unknown_kinds() {
+    let counters = [
+        ModuleCounter {
+            module_id: ModuleId::new(b"mod-p1").unwrap(),
+            counter: 1,
+        },
+        ModuleCounter {
+            module_id: ModuleId::new(b"mod-p2").unwrap(),
+            counter: 2,
+        },
+    ];
+    let entry = JournalEntry::new(
+        Hash512([1; 64]),
+        JournalKind::BatchClose,
+        Hash512([2; 64]),
+        Hash512::ZERO,
+        ModuleCounters::new(&counters).unwrap(),
+        tb(9),
+    );
+    let mut out = [0u8; MAX_JOURNAL_ENTRY_LEN];
+    let len = encode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &entry, &mut out).unwrap();
+    assert_eq!(len, 16 + 64 + 1 + 64 + 64 + 4 + 2 * (4 + 6 + 8) + 8);
+    let parsed: JournalEntry<'_> =
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &out[..len]).unwrap();
+    assert_eq!(parsed, entry);
+    assert_eq!(parsed.kind(), JournalKind::BatchClose);
+    assert_eq!(parsed.time_bucket(), tb(9));
+    assert_eq!(parsed.share_package_hash(), &Hash512::ZERO);
+    for code in [0u8, 10, 255] {
+        let mut b = out[..len].to_vec();
+        b[80] = code;
+        let e = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &b)
+            .unwrap_err();
+        assert_eq!((e.kind(), e.offset()), (ErrorKind::ValueOutOfRange, 80));
+    }
+    for kind in [
+        JournalKind::Record,
+        JournalKind::Challenge,
+        JournalKind::Quarantine,
+        JournalKind::BatchClose,
+        JournalKind::BoxClose,
+        JournalKind::Imprinted,
+        JournalKind::VisitDecision,
+        JournalKind::LabelPrinted,
+        JournalKind::Bound,
+    ] {
+        assert_eq!(JournalKind::from_code(kind.code()), Some(kind));
+        let mut b = out[..len].to_vec();
+        b[80] = kind.code();
+        let parsed: JournalEntry<'_> =
+            decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &b).unwrap();
+        assert_eq!(parsed.kind(), kind);
+    }
+    assert_eq!(JournalKind::Record.code(), 1);
+    assert_eq!(JournalKind::BoxClose.code(), 5);
+    assert_eq!(JournalKind::Imprinted.code(), 6);
+    assert_eq!(JournalKind::VisitDecision.code(), 7);
+    assert_eq!(JournalKind::LabelPrinted.code(), 8);
+    assert_eq!(JournalKind::Bound.code(), 9);
+    // the largest entry: seven counters with 64-byte identifiers
+    let ids: std::vec::Vec<std::vec::Vec<u8>> = (0..7u8)
+        .map(|i| {
+            let mut id = std::vec![b'm'; 64];
+            id[63] = b'0' + i;
+            id
+        })
+        .collect();
+    let seven: std::vec::Vec<ModuleCounter<'_>> = ids
+        .iter()
+        .map(|id| ModuleCounter {
+            module_id: ModuleId::new(id).unwrap(),
+            counter: u64::MAX,
+        })
+        .collect();
+    let largest = JournalEntry::new(
+        Hash512([1; 64]),
+        JournalKind::BoxClose,
+        Hash512([2; 64]),
+        Hash512::ZERO,
+        ModuleCounters::new(&seven).unwrap(),
+        tb(9),
+    );
+    let mut out = [0u8; MAX_JOURNAL_ENTRY_LEN];
+    let len = encode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &largest, &mut out).unwrap();
+    assert_eq!(len, MAX_JOURNAL_ENTRY_LEN);
+    assert_eq!(MAX_JOURNAL_ENTRY_LEN, 753);
+}
+
+#[test]
+fn visit_end_round_trips_and_rejects_bad_counts() {
+    let election = ElectionId::new(b"E-2026").unwrap();
+    for count in 1..=MAX_VISIT_BALLOTS {
+        let notice = VisitEnd::new(election, count).unwrap();
+        assert_eq!(
+            (notice.election_id(), notice.ballot_count()),
+            (election, count)
+        );
+        let mut out = [0u8; MAX_VISIT_END_LEN];
+        let len = encode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &notice, &mut out).unwrap();
+        assert_eq!(len, 16 + 4 + 6 + 1);
+        let parsed: VisitEnd<'_> =
+            decode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &out[..len]).unwrap();
+        assert_eq!(parsed, notice);
+        for cut in 0..len {
+            assert!(
+                decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &out[..cut])
+                    .is_err()
+            );
+        }
+        // a count of 0 or more than eight is out of range at its offset
+        for bad in [0u8, MAX_VISIT_BALLOTS + 1, u8::MAX] {
+            assert!(VisitEnd::new(election, bad).is_none());
+            let mut b = out[..len].to_vec();
+            b[26] = bad;
+            let e =
+                decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &b).unwrap_err();
+            assert_eq!((e.kind(), e.offset()), (ErrorKind::ValueOutOfRange, 26));
+        }
+    }
+    assert_eq!(MAX_VISIT_BALLOTS, 8);
+    assert_eq!(SCHEMA_VISIT_END.get(), 0x0104);
+    // the largest notice: a 64-byte election identifier
+    let long = [b'E'; 64];
+    let notice = VisitEnd::new(ElectionId::new(&long).unwrap(), 8).unwrap();
+    let mut out = [0u8; MAX_VISIT_END_LEN];
+    let len = encode_object(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &notice, &mut out).unwrap();
+    assert_eq!(len, MAX_VISIT_END_LEN);
+}
+
+/// Runs `issue` with the first module misbehaving through `setup`.
+fn issue_with(module: usize, setup: impl Fn(&mut common::MockModule)) -> Error {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    setup(&mut m[module]);
+    let mut area = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap_err()
+}
+
+#[test]
+fn issue_rejects_every_module_misbehaviour() {
+    assert_eq!(issue_with(0, |m| m.wrong_id = true), Error::WrongModule);
+    assert_eq!(
+        issue_with(1, |m| m.wrong_chamber = true),
+        Error::WrongChamber
+    );
+    assert_eq!(issue_with(2, |m| m.skip_counter = true), Error::CounterGap);
+    assert_eq!(
+        issue_with(3, |m| m.extra_rand = true),
+        Error::ChunkCountMismatch
+    );
+    assert_eq!(issue_with(0, |m| m.flip_label = true), Error::LabelPresence);
+    assert_eq!(issue_with(1, |m| m.extra_tag = true), Error::TagCount);
+    assert_eq!(
+        issue_with(2, |m| m.fail_issue = true),
+        Error::Port(ityv_cunit::PortError::Transport)
+    );
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut area = work();
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    assert_eq!(
+        ballot
+            .issue(&mut b, &mut ports(&mut m[..2]), &SEED)
+            .unwrap_err(),
+        Error::PortCount
+    );
+}
+
+#[test]
+fn build_rejects_a_wrong_pad_index_or_pad_id() {
+    for (wrong_index, expected) in [
+        (true, Error::PadIndexMismatch),
+        (false, Error::PadIdMismatch),
+    ] {
+        let w = world(Profile::InPerson, false);
+        let mut b = OpenBox::open(w.config, tb(1));
+        let mut m = mocks(&w);
+        let mut bufs = Buffers::new(&w);
+        let mut area = work();
+        let ballot = b
+            .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+            .unwrap();
+        let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+        let ballot = ballot.commit(&b).unwrap();
+        if wrong_index {
+            m[1].wrong_pad_index = true;
+        } else {
+            m[1].wrong_pad_id = true;
+        }
+        let err = ballot
+            .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+            .unwrap_err();
+        assert_eq!(err, expected);
+        let mut j = MemJournal::default();
+        b.abandon_visit(&mut j, tb(1)).unwrap();
+        assert_eq!(b.totals().quarantined, 1);
+    }
+}
+
+#[test]
+fn build_needs_room_for_every_trustee() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut m = mocks(&w);
+    let mut bufs = Buffers::new(&w);
+    let mut area = work();
+    bufs.scratch.truncate(100);
+    let ballot = b
+        .interpret(&interpretation(b"E-2026", STYLE_SMALL, 1), &mut area)
+        .unwrap();
+    let ballot = ballot.issue(&mut b, &mut ports(&mut m), &SEED).unwrap();
+    let ballot = ballot.commit(&b).unwrap();
+    assert_eq!(
+        ballot
+            .build(&b, &mut ports(&mut m), &w.device_record, bufs.as_build())
+            .unwrap_err(),
+        Error::BufferTooSmall
+    );
+}
+
+fn base_parts(w: &common::World) -> ConfigParts<'static> {
+    ConfigParts {
+        election_id: w.config.election_id(),
+        box_id: w.config.box_id(),
+        station_id: w.config.station_id(),
+        profile: w.config.profile(),
+        styles: w.config.styles(),
+        modules: w.config.modules(),
+        trustees: w.config.trustees(),
+        access: *w.config.access(),
+        voter_code_enabled: false,
+    }
+}
+
+fn config_fault(parts: ConfigParts<'static>) -> ConfigFault {
+    match ElectionConfig::new(parts) {
+        Err(Error::Config(fault)) => fault,
+        other => panic!("expected a configuration fault, got {other:?}"),
+    }
+}
+
+#[test]
+fn configuration_rules_are_enforced() {
+    let w = world(Profile::InPerson, false);
+    let ok = base_parts(&w);
+    assert!(ElectionConfig::new(ok).is_ok());
+    let modules = w.config.modules();
+    let leak_modules =
+        |v: std::vec::Vec<ModuleConfig<'static>>| -> &'static [ModuleConfig<'static>] {
+            common::leak(v).as_slice()
+        };
+    // unsorted
+    let mut reversed = modules.to_vec();
+    reversed.reverse();
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(reversed),
+            ..ok
+        }),
+        ConfigFault::ModulesUnsorted
+    );
+    // missing P1
+    let without_x: std::vec::Vec<_> = modules
+        .iter()
+        .copied()
+        .filter(|m| m.chamber() != Chamber::P1)
+        .collect();
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(without_x),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // J, A or C without a module (neither own nor delegated)
+    for chamber in [Chamber::J, Chamber::A, Chamber::C] {
+        let without: std::vec::Vec<_> = modules
+            .iter()
+            .copied()
+            .filter(|m| m.chamber() != chamber)
+            .collect();
+        assert_eq!(
+            config_fault(ConfigParts {
+                modules: leak_modules(without),
+                ..ok
+            }),
+            ConfigFault::ChamberModules,
+            "{chamber:?}"
+        );
+    }
+    // N with a module
+    let mut with_n = modules.to_vec();
+    with_n.push(module_config(b"mod-z", Chamber::N, false));
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(with_n),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // a party module is never delegated: neutral P1
+    let neutral_x: std::vec::Vec<_> = modules
+        .iter()
+        .map(|m| {
+            if m.chamber() == Chamber::P1 {
+                ModuleConfig::new(
+                    m.module_id(),
+                    Chamber::P1,
+                    true,
+                    *m.record_key(),
+                    m.batch_key(),
+                )
+            } else {
+                *m
+            }
+        })
+        .collect();
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(neutral_x),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // two modules for one chamber
+    let mut twice = modules.to_vec();
+    twice.push(module_config(b"mod-z", Chamber::J, false));
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(twice),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // a module for a party chamber beyond n = 2
+    let mut with_p3 = modules.to_vec();
+    with_p3.push(module_config(b"mod-p3", Chamber::P3, false));
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(with_p3.clone()),
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // n = 3 without the P3 module
+    let three = common::access(3);
+    assert_eq!(
+        config_fault(ConfigParts {
+            access: three,
+            ..ok
+        }),
+        ConfigFault::ChamberModules
+    );
+    // n = 3 with the P3 module but without P3 members
+    assert_eq!(
+        config_fault(ConfigParts {
+            access: three,
+            modules: leak_modules(with_p3),
+            ..ok
+        }),
+        ConfigFault::ThresholdCount
+    );
+    // eight modules
+    let eight: std::vec::Vec<_> = (0..8u8)
+        .map(|i| {
+            module_config(
+                common::leak_bytes(std::vec![b'm', b'0' + i]),
+                Chamber::J,
+                false,
+            )
+        })
+        .collect();
+    assert_eq!(
+        config_fault(ConfigParts {
+            modules: leak_modules(eight),
+            ..ok
+        }),
+        ConfigFault::ModulesUnsorted
+    );
+
+    let trustees = w.config.trustees();
+    let leak_trustees =
+        |v: std::vec::Vec<TrusteeConfig<'static>>| -> &'static [TrusteeConfig<'static>] {
+            common::leak(v).as_slice()
+        };
+    let mut reversed = trustees.to_vec();
+    reversed.reverse();
+    assert_eq!(
+        config_fault(ConfigParts {
+            trustees: leak_trustees(reversed),
+            ..ok
+        }),
+        ConfigFault::TrusteesUnsorted
+    );
+    let dup_index: std::vec::Vec<_> = trustees
+        .iter()
+        .map(|t| {
+            TrusteeConfig::new(
+                t.trustee_id(),
+                t.chamber(),
+                0,
+                t.pad_id(),
+                t.kem_public_key(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        config_fault(ConfigParts {
+            trustees: leak_trustees(dup_index),
+            ..ok
+        }),
+        ConfigFault::MemberIndices
+    );
+    let out_of_range: std::vec::Vec<_> = trustees
+        .iter()
+        .map(|t| {
+            TrusteeConfig::new(
+                t.trustee_id(),
+                t.chamber(),
+                t.member_index() + 2,
+                t.pad_id(),
+                t.kem_public_key(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        config_fault(ConfigParts {
+            trustees: leak_trustees(out_of_range),
+            ..ok
+        }),
+        ConfigFault::MemberIndices
+    );
+    let missing: std::vec::Vec<_> = trustees.iter().skip(1).copied().collect();
+    assert_eq!(
+        config_fault(ConfigParts {
+            trustees: leak_trustees(missing),
+            ..ok
+        }),
+        ConfigFault::ThresholdCount
+    );
+    // members for a party chamber beyond n = 2
+    let mut with_p3_member = trustees.to_vec();
+    with_p3_member.push(TrusteeConfig::new(
+        TrusteeId::new(b"t-3-0").unwrap(),
+        Chamber::P3,
+        0,
+        7,
+        trustees[0].kem_public_key(),
+    ));
+    with_p3_member.sort_by(|a, b| a.trustee_id().as_bytes().cmp(b.trustee_id().as_bytes()));
+    assert_eq!(
+        config_fault(ConfigParts {
+            trustees: leak_trustees(with_p3_member),
+            ..ok
+        }),
+        ConfigFault::MemberIndices
+    );
+    let t22 = Threshold::new(2, 2).unwrap();
+    let t13 = Threshold::new(1, 3).unwrap();
+    assert_eq!(
+        config_fault(ConfigParts {
+            access: AccessStructure::new(2, [t22, t22, t22, t22, t13, t13, t13, t13]).unwrap(),
+            ..ok
+        }),
+        ConfigFault::ThresholdCount
+    );
+
+    assert_eq!(
+        config_fault(ConfigParts { styles: &[], ..ok }),
+        ConfigFault::Styles
+    );
+    let style = BallotStyle::new(
+        BallotStyleId::new(b"S").unwrap(),
+        OptionCount::new(4).unwrap(),
+    );
+    let dup = common::leak(std::vec![style, style]).as_slice();
+    assert_eq!(
+        config_fault(ConfigParts { styles: dup, ..ok }),
+        ConfigFault::StylesUnsorted
+    );
+    assert_eq!(
+        config_fault(ConfigParts {
+            styles: common::styles(MAX_STYLES + 1),
+            ..ok
+        }),
+        ConfigFault::Styles
+    );
+
+    // capacity: seven modules × 8 chunks + cast id + label = 58 secrets fits
+    assert_eq!(
+        ityv_cunit::config::secret_count(7, 8, Profile::Absentee),
+        58
+    );
+    assert_eq!(ityv_cunit::config::secret_count(4, 1, Profile::InPerson), 5);
+}
+
+#[test]
+fn configuration_accessors_and_chamber_codes() {
+    let w = world(Profile::Absentee, true);
+    let c = w.config;
+    assert_eq!(c.election_id().as_bytes(), b"E-2026");
+    assert_eq!(c.box_id().as_bytes(), b"BOX-1");
+    assert_eq!(c.station_id().as_bytes(), b"ST-1");
+    assert_eq!(c.profile(), Profile::Absentee);
+    assert!(c.profile().has_label());
+    assert!(!Profile::InPerson.has_label());
+    assert!(c.voter_code_enabled());
+    assert!(c.uses_neutral_module());
+    assert_eq!(c.styles().len(), 2);
+    assert_eq!(c.modules().len(), 5);
+    assert_eq!(c.trustees().len(), 12);
+    let (index, style) = c
+        .style(BallotStyleId::new(common::STYLE_WIDE).unwrap())
+        .unwrap();
+    assert_eq!(index, 0);
+    assert_eq!(style.chunk_count(), 2);
+    assert_eq!(style.option_count().get(), 12);
+    assert_eq!(c.secret_count(style), 5 * 2 + 2);
+    // one b per box: the two-chunk style's share, 62 + 32·12 + 24 = 470
+    assert_eq!(c.member_share_len(style), 470);
+    assert_eq!(c.pad_consumption(), 534);
+    assert_eq!(c.module_for(Chamber::P1).unwrap().0, 3);
+    let (record, batch) = common::module_keys(b"mod-p1");
+    assert_eq!(c.modules()[3].record_key(), &record.verifying_key());
+    assert_eq!(c.modules()[3].batch_key(), &batch.verifying_key());
+    assert!(c.module_for(Chamber::N).is_none());
+    assert!(c.modules()[0].is_neutral());
+    for chamber in Chamber::ALL {
+        assert_eq!(chamber_of(chamber_code(chamber)), chamber);
+    }
+    assert_eq!(chamber_code(Chamber::P1).code(), 1);
+    for (chamber, code) in Chamber::ALL.into_iter().zip(1u8..) {
+        assert_eq!(chamber_code(chamber).code(), code, "{chamber:?}");
+    }
+    assert_eq!(chamber_code(Chamber::N).code(), 8);
+    let own = |spec: ModuleSpec| ModuleSpec {
+        neutral: false,
+        ..spec
+    };
+    let no_neutral: [ModuleSpec; 5] = MODULES.map(own);
+    let w2 = world_with(Profile::InPerson, false, &no_neutral);
+    assert!(!w2.config.uses_neutral_module());
+    // in person: 62 + 32·11 = 414 for the two-chunk style
+    assert_eq!(w2.config.pad_consumption(), 478);
+    for t in w.config.trustees() {
+        assert_eq!(
+            t.chamber(),
+            w.trustees
+                .iter()
+                .find(|s| s.id == t.trustee_id().as_bytes())
+                .unwrap()
+                .chamber
+        );
+    }
+}
+
+#[test]
+fn generators_are_deterministic_and_domain_separated() {
+    let mut a = DeviceRng::for_signing(&[1; 32]);
+    let mut b = DeviceRng::for_signing(&[1; 32]);
+    let mut c = DeviceRng::for_signing(&[2; 32]);
+    let (mut x, mut y, mut z) = ([0u8; 100], [0u8; 100], [0u8; 100]);
+    a.fill_bytes(&mut x);
+    b.fill_bytes(&mut y);
+    c.fill_bytes(&mut z);
+    assert_eq!(x, y);
+    assert_ne!(x, z);
+    // the stream does not repeat its first block
+    assert_ne!(x[..64], x[36..100]);
+    let f1 = a.fork(b"one", 0);
+    let f2 = a.fork(b"one", 1);
+    let f3 = a.fork(b"two", 0);
+    let f4 = b.fork(b"one", 0);
+    let first = |mut r: DeviceRng| {
+        let mut out = [0u8; 32];
+        r.fill_bytes(&mut out);
+        out
+    };
+    let (o1, o2, o3, o4) = (first(f1), first(f2), first(f3), first(f4));
+    assert_ne!(o1, o2);
+    assert_ne!(o1, o3);
+    assert_eq!(
+        o1, o4,
+        "forks depend on the key, not on the stream position"
+    );
+    let mut r = DeviceRng::for_signing(&[9; 32]);
+    let (u, v) = (r.next_u32(), r.next_u64());
+    let mut again = DeviceRng::for_signing(&[9; 32]);
+    let mut bytes = [0u8; 12];
+    again.fill_bytes(&mut bytes);
+    assert_eq!(u.to_le_bytes(), bytes[..4]);
+    assert_eq!(v.to_le_bytes(), bytes[4..]);
+    assert_eq!(std::format!("{r:?}"), "DeviceRng(..)");
+}
+
+#[test]
+fn module_batch_rule_examples() {
+    // a module signs one body per counter (VC-068)
+    assert!(ityv_cunit::module_may_sign_record(None, &[1; 64]));
+    assert!(ityv_cunit::module_may_sign_record(Some(&[1; 64]), &[1; 64]));
+    assert!(!ityv_cunit::module_may_sign_record(
+        Some(&[1; 64]),
+        &[2; 64]
+    ));
+    assert!(module_may_sign_batch(&[4, 5, 6], 4, 6));
+    assert!(module_may_sign_batch(&[4], 4, 4));
+    assert!(!module_may_sign_batch(&[4, 6], 4, 6));
+    assert!(!module_may_sign_batch(&[4, 5, 6, 7], 4, 6));
+    assert!(!module_may_sign_batch(&[5, 6], 4, 6));
+    assert!(!module_may_sign_batch(&[4, 5], 4, 6));
+    assert!(!module_may_sign_batch(&[], 4, 6));
+    assert!(!module_may_sign_batch(&[6, 5, 4], 4, 6));
+    assert!(!module_may_sign_batch(&[4], 5, 4));
+    assert!(module_may_sign_batch(&[u64::MAX], u64::MAX, u64::MAX));
+    assert!(!module_may_sign_batch(&[0], 0, u64::MAX));
+}
+
+#[test]
+fn counting_rule_examples() {
+    use rules::CounterCheck::{Gap, Next, Regression};
+    assert!(rules::option_in_range(4, 3));
+    assert!(!rules::option_in_range(4, 4));
+    assert_eq!(rules::check_counter(4, 5), Next);
+    assert_eq!(rules::check_counter(4, 6), Gap);
+    assert_eq!(rules::check_counter(4, 4), Regression);
+    assert_eq!(rules::check_counter(4, 3), Regression);
+    assert_eq!(rules::check_counter(u64::MAX, 0), Regression);
+    assert_eq!(rules::check_counter(0, u64::MAX), Gap);
+    let mut mark = 4;
+    assert_eq!(rules::advance_mark(&mut mark, 5), Next);
+    assert_eq!(mark, 5);
+    assert_eq!(rules::advance_mark(&mut mark, 3), Regression);
+    assert_eq!(rules::advance_mark(&mut mark, 7), Gap);
+    assert_eq!(mark, 5);
+    assert_eq!(rules::PAD_MAC_KEY_OFFSET, 0);
+    assert_eq!(rules::PAD_TAG_KEY_OFFSET, 32);
+    assert_eq!(rules::PAD_PLAINTEXT_OFFSET, 64);
+    assert_eq!(rules::pad_consumption(222), Some(286));
+    assert_eq!(rules::pad_index(3, 286), Some(858));
+    assert_eq!(rules::pad_index(u64::MAX, 2), None);
+    // a batch closes before a visit could overflow it (57 + 8 > 64)
+    assert_eq!(rules::BATCH_VISIT_START_MAX, 56);
+    assert!(rules::batch_due(57, 0, 0));
+    assert!(rules::batch_due(64, 0, 0));
+    assert!(!rules::batch_due(56, 5, 5));
+    assert!(rules::batch_due(56, 5, 6));
+    assert!(!rules::batch_due(0, 5, 100));
+    assert!(!rules::batch_due(1, u64::MAX, u64::MAX));
+    assert!(rules::scan_count_due(50, 0, 0));
+    assert!(!rules::scan_count_due(49, 0, 7));
+    assert!(rules::scan_count_due(49, 0, 8));
+    assert!(!rules::scan_count_due(0, u64::MAX, u64::MAX));
+    let v = rules::Violations::default();
+    assert!(v.is_empty());
+    assert_eq!(v.count(), 0);
+}
+
+#[test]
+fn errors_display_without_secrets() {
+    for e in [
+        Error::BufferTooSmall,
+        Error::WrongElection,
+        Error::PadIndexMismatch,
+        Error::JournalMismatch,
+        Error::Config(ConfigFault::Styles),
+        Error::Port(ityv_cunit::PortError::Exhausted),
+        Error::Journal(ityv_cunit::JournalError::Full),
+    ] {
+        assert!(!std::format!("{e}").is_empty());
+    }
+    let shown: std::collections::BTreeSet<std::string::String> = [
+        Error::BallotInFlight,
+        Error::NoBallotInFlight,
+        Error::StaleBallot,
+        Error::TimeRegression,
+        Error::VoterCodeDisabled,
+        Error::BatchEmpty,
+        Error::BatchFull,
+        Error::BoxClosed,
+        Error::CounterGap,
+        Error::CounterRegression,
+        Error::RecordSignature,
+        Error::BatchSignature,
+        Error::JournalCorrupt,
+        Error::EnvelopeCountProfile,
+        Error::ForeignCloseToken,
+        Error::Journal(ityv_cunit::JournalError::Unreadable),
+    ]
+    .iter()
+    .map(|e| std::format!("{e}"))
+    .collect();
+    assert_eq!(shown.len(), 16);
+}
+
+proptest! {
+    #[test]
+    fn link_decoders_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..600)) {
+        let _ = decode_object::<Interpretation<'_>>(SCHEMA_INTERPRETATION, SCHEMA_VERSION_1, &bytes);
+        let _ = decode_object::<ModuleIssue<'_>>(SCHEMA_MODULE_ISSUE, SCHEMA_VERSION_1, &bytes);
+        let _ = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &bytes);
+        let _ = decode_object::<VisitEnd<'_>>(SCHEMA_VISIT_END, SCHEMA_VERSION_1, &bytes);
+        let _ = decode_object::<ityv_cunit::AttestChallenge<'_>>(
+            ityv_cunit::link::SCHEMA_ATTEST_CHALLENGE,
+            SCHEMA_VERSION_1,
+            &bytes,
+        );
+    }
+
+    #[test]
+    fn interpretations_round_trip(option in any::<u16>(), style_len in 1usize..=64) {
+        let style = std::vec![b'S'; style_len];
+        let bytes = interpretation(b"E-2026", &style, option);
+        let parsed: Interpretation<'_> = decode_object(SCHEMA_INTERPRETATION, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(parsed.option_index(), option);
+        prop_assert_eq!(parsed.ballot_style_id().as_bytes(), style.as_slice());
+        let e = ElectionId::new(b"E-2026").unwrap();
+        prop_assert_eq!(parsed.election_id(), e);
+        for cut in 0..bytes.len() {
+            prop_assert!(decode_object::<Interpretation<'_>>(SCHEMA_INTERPRETATION, SCHEMA_VERSION_1, &bytes[..cut]).is_err());
+        }
+    }
+
+    #[test]
+    fn close_verdict_matches_its_definition(
+        paper in 0u64..6, records in 0u64..6, attested in 0u64..6, open in 0u64..6,
+        without in 0u64..3, challenged in 0u64..3, quarantined in 0u64..3, spoiled in 0u64..6,
+        c0 in 0u64..10, c1 in 0u64..10, batches in 0u8..2, visits in 0u64..4,
+        envelopes in proptest::option::of((0u64..4, 0u64..4, 0u64..6, 0u64..4)),
+        declared in any::<bool>(), incidents in 0u64..3,
+    ) {
+        let counters = [c0, c1];
+        let envelopes = envelopes.map(|(envelopes, stickers, issued, returned_empty)| {
+            rules::EnvelopeCounts { envelopes, stickers, issued, returned_empty }
+        });
+        let facts = rules::CloseFacts {
+            paper, records, visits, attested, open_batch_records: open, without_record: without,
+            challenged, quarantined, spoiled_envelopes: spoiled, module_final_counters: &counters,
+            open_batches: batches, envelopes, fallback_declared: declared,
+            paper_incidents: incidents,
+        };
+        let v = rules::close_verdict(&facts);
+        let paper_ok = if envelopes.is_some() { paper == 0 } else { records + without == paper };
+        prop_assert_eq!(v.contains(I::PaperCount), !paper_ok);
+        prop_assert_eq!(v.contains(I::AttestedCount), attested + open != records);
+        prop_assert_eq!(v.contains(I::SpoiledEnvelopes), challenged + quarantined != spoiled);
+        let consumed = records + challenged + quarantined;
+        prop_assert_eq!(v.contains(I::ModuleCounters), c0 != consumed || c1 != consumed);
+        prop_assert_eq!(v.contains(I::OpenBatches), batches != 0);
+        prop_assert_eq!(
+            v.contains(I::EnvelopeCount),
+            envelopes.is_some_and(|e| e.issued < e.returned_empty || e.issued - e.returned_empty != e.envelopes)
+        );
+        prop_assert_eq!(v.contains(I::StickerCount), envelopes.is_some_and(|e| e.stickers != visits));
+        prop_assert_eq!(v.contains(I::VisitCount), visits > records || records > 8 * visits);
+        prop_assert_eq!(v.contains(I::FallbackDeclared), without > 0 && !declared);
+        prop_assert_eq!(v.contains(I::PaperIncidents), incidents > 0);
+    }
+}
+
+/// A visit state from a compact spec: `C.` cast open, `Ci` cast
+/// imprinted, `Cq` cast quarantined, `K` checked.
+fn visit_state(stage: rules::VisitStage, spec: &[&str], label_printed: bool) -> rules::VisitState {
+    use rules::{Choice, Settlement};
+    let mut visit = rules::VisitState::NONE;
+    visit.stage = stage;
+    visit.positions = spec.len() as u8;
+    visit.label_printed = label_printed;
+    for (i, p) in spec.iter().enumerate() {
+        let (choice, settled) = match *p {
+            "C." => (Choice::Cast, Settlement::Open),
+            "Ci" => (Choice::Cast, Settlement::Imprinted),
+            "Cq" => (Choice::Cast, Settlement::Quarantined),
+            "K" => (Choice::Check, Settlement::Open),
+            other => panic!("bad spec {other}"),
+        };
+        visit.choices[i] = choice;
+        visit.settled[i] = settled;
+    }
+    visit
+}
+
+fn area(papers: u8, front_imprinted: bool, sticker_printed: bool) -> rules::WaitingArea {
+    rules::WaitingArea {
+        papers,
+        front_imprinted,
+        sticker_printed,
+    }
+}
+
+#[test]
+fn the_resume_plan_covers_the_four_cases() {
+    use rules::PaperAction::{Drop, Hold, Quarantine, Return, SpoilChute};
+    use rules::ResumeCase::{AfterDecision, BeforeDecision, Inconsistent, LabelMissing, Nothing};
+    use rules::VisitStage::{Decided, None as NoVisit, Undecided};
+    let plan = |stage, spec: &[&str], label, a, absentee| {
+        rules::resume_plan(&visit_state(stage, spec, label), a, absentee, false)
+    };
+    // the same with the modules having issued for the ballot in flight
+    let flight = |stage, spec: &[&str], label, a, absentee| {
+        rules::resume_plan(&visit_state(stage, spec, label), a, absentee, true)
+    };
+    let papers = |p: &rules::ResumePlan| p.papers[..usize::from(p.paper_count)].to_vec();
+    let quarantined = |p: &rules::ResumePlan| -> std::vec::Vec<usize> {
+        (0..8).filter(|&i| p.quarantine[i]).collect()
+    };
+    // nothing pending
+    let p = plan(NoVisit, &[], false, area(0, false, false), false);
+    assert_eq!((p.case, p.paper_count, p.incident), (Nothing, 0, false));
+    // (1) papers no entry names and that consumed nothing: back to the
+    // voter, nothing journaled
+    let p = plan(NoVisit, &[], false, area(2, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p)),
+        (BeforeDecision, 0, [Return; 2].to_vec())
+    );
+    assert!(!p.incident);
+    // the first of them was in flight and the modules issued for it: it is
+    // quarantined by an entry without record carrying the counters
+    let p = flight(NoVisit, &[], false, area(2, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p), p.incident),
+        (BeforeDecision, 1, [Quarantine, Return].to_vec(), false)
+    );
+    // issued, but no paper: the entry is still written, the paper is
+    // missing
+    let p = flight(NoVisit, &[], false, area(0, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.paper_count, p.incident),
+        (BeforeDecision, 1, 0, true)
+    );
+    // an imprinted unbound paper fits nothing: every paper quarantined
+    let p = plan(NoVisit, &[], false, area(2, true, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p), p.incident),
+        (BeforeDecision, 2, [Quarantine; 2].to_vec(), true)
+    );
+    let p = flight(NoVisit, &[], false, area(2, false, true), false);
+    assert_eq!(
+        (p.unjournaled, papers(&p), p.incident),
+        (2, [Quarantine; 2].to_vec(), true)
+    );
+    // an imprint with no unbound paper: the counters are still journaled
+    let p = flight(Undecided, &["C."], false, area(1, true, false), false);
+    assert_eq!(
+        (p.unjournaled, papers(&p), p.incident),
+        (1, [Quarantine].to_vec(), true)
+    );
+    // (1) an undecided visit: its bound positions by record hash, the
+    // paper in flight with its counters, the rest back to the voter
+    let p = plan(Undecided, &["C.", "K"], false, area(4, false, false), false);
+    assert_eq!(
+        (p.case, quarantined(&p), p.unjournaled, p.incident),
+        (BeforeDecision, [0, 1].to_vec(), 0, false)
+    );
+    assert_eq!(papers(&p), [Quarantine, Quarantine, Return, Return]);
+    let p = flight(Undecided, &["C.", "K"], false, area(4, false, false), false);
+    assert_eq!((quarantined(&p), p.unjournaled), ([0, 1].to_vec(), 1));
+    assert_eq!(papers(&p), [Quarantine, Quarantine, Quarantine, Return]);
+    // a position quarantined before the stop is not quarantined again
+    let p = plan(
+        Undecided,
+        &["Cq", "C."],
+        false,
+        area(2, false, false),
+        false,
+    );
+    assert_eq!((quarantined(&p), p.incident), ([1].to_vec(), false));
+    // a bound paper missing, or an imprint before any decision: incidents
+    let p = plan(Undecided, &["C.", "K"], false, area(1, false, false), false);
+    assert_eq!(
+        (quarantined(&p), p.unjournaled, p.incident),
+        ([0, 1].to_vec(), 0, true)
+    );
+    let p = plan(Undecided, &["C."], false, area(2, true, false), false);
+    assert_eq!(
+        (papers(&p), p.unjournaled, p.incident),
+        ([Quarantine, Quarantine].to_vec(), 1, true)
+    );
+    // (2) the front cast paper is imprinted: its entry, then it drops
+    let p = plan(
+        Decided,
+        &["Ci", "K", "C."],
+        false,
+        area(1, true, false),
+        false,
+    );
+    assert_eq!(
+        (p.case, p.imprint, papers(&p)),
+        (AfterDecision, Some(2), [Drop].to_vec())
+    );
+    assert!(quarantined(&p).is_empty());
+    // (2) its imprint entry already exists: it just drops
+    let p = plan(
+        Decided,
+        &["Ci", "K", "Ci"],
+        false,
+        area(1, true, false),
+        false,
+    );
+    assert_eq!(
+        (p.case, p.imprint, papers(&p)),
+        (AfterDecision, None, [Drop].to_vec())
+    );
+    // (2) not imprinted: quarantined by its record hash
+    let p = plan(
+        Decided,
+        &["Ci", "K", "C."],
+        false,
+        area(1, false, false),
+        false,
+    );
+    assert_eq!(
+        (p.imprint, quarantined(&p), papers(&p)),
+        (None, [2].to_vec(), [Quarantine].to_vec())
+    );
+    // (2) a checked paper goes to the chute, later cast papers are quarantined
+    let p = plan(
+        Decided,
+        &["Ci", "K", "C."],
+        false,
+        area(2, false, false),
+        false,
+    );
+    assert_eq!(
+        (papers(&p), quarantined(&p)),
+        ([SpoilChute, Quarantine].to_vec(), [2].to_vec())
+    );
+    // (2) a quarantined front paper goes to the envelope without a new entry
+    let p = plan(Decided, &["Cq", "C."], false, area(2, false, false), false);
+    assert_eq!(
+        (papers(&p), quarantined(&p)),
+        ([Quarantine, Quarantine].to_vec(), [1].to_vec())
+    );
+    // a settled visit: trailing checked papers, or a new visit's
+    let p = plan(Decided, &["Ci", "Ci"], false, area(0, false, false), false);
+    assert_eq!(p.case, Nothing);
+    let p = plan(Decided, &["Ci", "K"], false, area(1, false, false), false);
+    assert_eq!((p.case, papers(&p)), (AfterDecision, [SpoilChute].to_vec()));
+    let p = plan(Decided, &["Ci", "K"], false, area(2, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p), p.incident),
+        (BeforeDecision, 0, [Return; 2].to_vec(), false)
+    );
+    let p = plan(Decided, &["Ci", "Ci"], false, area(1, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.incident),
+        (BeforeDecision, 0, false)
+    );
+    // the modules issued after a settled visit: a new visit's paper in
+    // flight, even where a trailing checked paper would fit
+    let p = flight(Decided, &["Ci", "K"], false, area(1, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p)),
+        (BeforeDecision, 1, [Quarantine].to_vec())
+    );
+    let p = flight(Decided, &["Ci", "Ci"], false, area(0, false, false), false);
+    assert_eq!(
+        (p.case, p.unjournaled, p.incident),
+        (BeforeDecision, 1, true)
+    );
+    // but not while the decided visit still owes a position
+    let p = flight(Decided, &["Ci", "C."], false, area(1, true, false), false);
+    assert_eq!((p.case, p.unjournaled), (Inconsistent, 0));
+    // an imprinted paper or a sticker that fits no position: quarantined
+    // without record, and an incident
+    for (spec, a) in [
+        (["Ci", "K"], area(1, true, false)),
+        (["Ci", "Cq"], area(1, true, false)),
+        (["Ci", "K"], area(1, false, true)),
+    ] {
+        let p = plan(Decided, &spec, false, a, false);
+        assert_eq!(
+            (p.case, p.unjournaled, p.incident),
+            (BeforeDecision, 1, true),
+            "{spec:?}"
+        );
+    }
+    // (3) out of district without a sticker entry: every cast record
+    let p = plan(
+        Decided,
+        &["Ci", "K", "Ci"],
+        false,
+        area(0, false, false),
+        true,
+    );
+    assert_eq!(
+        (p.case, quarantined(&p), p.return_tray),
+        (LabelMissing, [0, 2].to_vec(), true)
+    );
+    // a sticker printed before its entry was written, no paper left: the
+    // same (the entry is what counts)
+    let p = plan(
+        Decided,
+        &["Ci", "K", "Ci"],
+        false,
+        area(0, false, true),
+        true,
+    );
+    assert_eq!(
+        (p.case, quarantined(&p), p.return_tray, p.incident),
+        (LabelMissing, [0, 2].to_vec(), true, false)
+    );
+    let p = plan(Decided, &["Ci", "C."], false, area(1, true, false), true);
+    assert_eq!(
+        (
+            p.case,
+            p.imprint,
+            quarantined(&p),
+            papers(&p),
+            p.return_tray
+        ),
+        (
+            AfterDecision,
+            None,
+            [0, 1].to_vec(),
+            [Quarantine].to_vec(),
+            true
+        )
+    );
+    let p = plan(Decided, &["Ci", "Ci"], true, area(0, false, false), true);
+    assert_eq!(p.case, Nothing);
+    let p = plan(Decided, &["Ci", "Ci"], true, area(1, false, false), true);
+    assert_eq!(
+        (p.case, p.unjournaled, papers(&p)),
+        (BeforeDecision, 0, [Return].to_vec()),
+        "after the sticker, a new visit"
+    );
+    let p = plan(Decided, &["Cq", "K"], false, area(0, false, false), true);
+    assert_eq!(p.case, Nothing, "nothing cast, no sticker owed");
+    // (4) papers that do not fit
+    for (spec, a) in [
+        (&["C.", "K"][..], area(1, false, false)), // an unsettled cast paper is gone
+        (&["Ci", "C."], area(3, false, false)),    // more papers than positions
+        (&["Ci", "K", "C."], area(2, true, false)), // an imprinted checked paper
+        (&["Cq", "C."], area(2, true, false)),     // an imprinted quarantined paper
+        (&["C.", "C."], area(2, false, true)),     // a sticker while papers are left
+        (&["Ci", "C."], area(2, false, false)),    // an imprinted paper shown as not
+        (&["C.", "Ci"], area(2, false, false)),    // a settled paper behind the front
+    ] {
+        let p = plan(Decided, spec, false, a, false);
+        assert_eq!((p.case, p.incident), (Inconsistent, true), "{spec:?} {a:?}");
+        assert!(papers(&p).iter().all(|&x| x == Hold));
+        assert!(quarantined(&p).is_empty() && p.imprint.is_none() && p.unjournaled == 0);
+    }
+    let p = plan(NoVisit, &[], false, area(9, false, false), false);
+    assert_eq!((p.case, p.paper_count), (Inconsistent, 9));
+}

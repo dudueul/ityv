@@ -1,0 +1,4 @@
+# ityv-encoding test vectors: ImprintAuditBody (schema_id 0x002c, version 1)
+# VALID <label> <hex>
+# INVALID <ErrorKind> <offset> <label> <hex>
+VALID ten_without_imprint 495459560000002c00010000000000370000000c4b522d323033302d505245530000000b626f782d31312d30303432000000000000000a000000000000000000000000000003e8

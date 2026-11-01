@@ -16,9 +16,10 @@ doctest = true
 # The library has no dependencies. Keep it that way: every dependency is a
 # verification obligation (CONSTITUTION.md §1.10).
 [dependencies]
+zeroize = { version = "=1.9.1", default-features = false }
 
 [dev-dependencies]
-proptest = { version = "1.9", default-features = false, features = ["std"] }
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

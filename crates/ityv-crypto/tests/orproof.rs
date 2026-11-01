@@ -20,7 +20,7 @@ mod common;
 use common::{decode_exact, encode_to_vec, rng};
 use ityv_crypto::{
     Bases, CastId, ChunkIndex, Commitment, Error, MAX_CHUNKS, Opening, OptionCount, OptionIndex,
-    PROOF_SYSTEM_OR_REP_V1, Proof, Scalar, Statement, commit, prove, verify,
+    PROOF_SYSTEM_OR_REP_V1, Proof, Scalar, Statement, commit, prove, prove_into, verify,
 };
 use ityv_encoding::{ElectionId, ErrorKind, Ident, Token192};
 use rand_chacha::ChaCha20Rng;
@@ -486,4 +486,74 @@ fn statement_validation() {
         Error::InvalidStatement
     );
     assert!(Statement::new(election, box_id, style, options(16), &commitments).is_ok());
+}
+
+#[test]
+fn prove_into_overwrites_in_place_with_the_same_proof() {
+    let bases = Bases::derive();
+    let mut setup = rng(77);
+    let (opening, commitments) = record(&bases, 18, 11, &mut setup);
+    let st = statement(18, &commitments);
+    let expected = prove(&bases, &st, &opening, &mut rng(5)).unwrap();
+    // A proof already holding another, larger proof is fully overwritten.
+    let (big_opening, big_commitments) = record(&bases, 64, 40, &mut setup);
+    let big = statement(64, &big_commitments);
+    let mut out = Proof::EMPTY;
+    prove_into(&mut out, &bases, &big, &big_opening, &mut rng(6)).unwrap();
+    assert_eq!(out.option_count().get(), 64);
+    prove_into(&mut out, &bases, &st, &opening, &mut rng(5)).unwrap();
+    assert_eq!(out, expected);
+    assert_eq!(encode_to_vec(&out), encode_to_vec(&expected));
+    assert!(verify(&bases, &st, &out).is_ok());
+}
+
+#[test]
+fn a_failed_prove_into_leaves_the_empty_proof_of_the_statement() {
+    let bases = Bases::derive();
+    let mut setup = rng(78);
+    let (opening, commitments) = record(&bases, 9, 4, &mut setup);
+    let st = statement(9, &commitments);
+    let mut out = prove(&bases, &st, &opening, &mut setup).unwrap();
+    let (other, _) = record(&bases, 9, 2, &mut setup);
+    assert_eq!(
+        prove_into(&mut out, &bases, &st, &other, &mut setup).unwrap_err(),
+        Error::OpeningInvalid
+    );
+    // all-zero proof of nine options, one chunk: 3 + 9·(64 + 32) bytes
+    let mut zero = std::vec![0u8, 9, 1];
+    zero.resize(3 + 9 * 96, 0);
+    let empty: Proof = decode_exact(&zero).unwrap();
+    assert_eq!(out, empty);
+}
+
+#[test]
+fn the_empty_proof_and_clear() {
+    assert_eq!(Proof::EMPTY.option_count().get(), 1);
+    assert_eq!(
+        encode_to_vec(&Proof::EMPTY),
+        [0, 1, 1]
+            .iter()
+            .copied()
+            .chain([0u8; 96])
+            .collect::<Vec<u8>>()
+    );
+    let bases = Bases::derive();
+    let mut setup = rng(79);
+    let (opening, commitments) = record(&bases, 3, 1, &mut setup);
+    let mut proof = prove(&bases, &statement(3, &commitments), &opening, &mut setup).unwrap();
+    assert_ne!(proof, Proof::EMPTY);
+    assert!(!proof.is_empty());
+    proof.clear();
+    assert_eq!(proof, Proof::EMPTY);
+    assert!(proof.is_empty());
+    assert!(Proof::EMPTY.is_empty());
+    // a one-option proof is not empty, nor is an all-zero proof of nine
+    let (one, one_commitments) = record(&bases, 1, 0, &mut setup);
+    let single = prove(&bases, &statement(1, &one_commitments), &one, &mut setup).unwrap();
+    assert_eq!(single.option_count().get(), 1);
+    assert!(!single.is_empty());
+    let mut zero = std::vec![0u8, 9, 1];
+    zero.resize(3 + 9 * 96, 0);
+    let nine: Proof = decode_exact(&zero).unwrap();
+    assert!(!nine.is_empty());
 }

@@ -86,7 +86,8 @@ pub use kem::{
     decapsulate, encapsulate, open, seal,
 };
 pub use orproof::{
-    FS_LABEL_OR_REP_V1, PROOF_SYSTEM_OR_REP_V1, Proof, ProvenStatement, Statement, prove, verify,
+    FS_LABEL_OR_REP_V1, PROOF_SYSTEM_OR_REP_V1, Proof, ProofPrecomputation, ProvenStatement,
+    Statement, prove, prove_into, prove_precomputed, verify,
 };
 pub use otmac::{
     OneTimeKey, Tag as OneTimeTag, tag as one_time_tag, verify_tag as verify_one_time_tag,
@@ -94,14 +95,15 @@ pub use otmac::{
 pub use pad::xor_in_place;
 pub use scalar::Scalar;
 pub use shares::{
-    AccessStructure, CHAMBER_COUNT, Chamber, MAX_MEMBERS, MemberId, MemberShares, Share, Threshold,
-    is_qualified, reconstruct, split,
+    AccessStructure, CHAMBER_COUNT, Chamber, MAX_MEMBERS, MAX_PARTIES, MIN_PARTIES, MemberId,
+    MemberShares, Share, Threshold, is_qualified, reconstruct, split,
 };
 pub use sig::{
     ArchiveSignature, ArchiveSigned, ArchiveSigningKey, ArchiveVerifyingKey, HybridSignature,
-    HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT,
-    PURPOSE_CHECKPOINT_ARCHIVE, PURPOSE_MODULE_RECORD, RecordPurpose, RecordSignature,
-    RecordSigned, RecordSigningKey, RecordVerifyingKey, sign_archive, sign_hybrid, sign_record,
-    verify_archive, verify_hybrid, verify_record,
+    HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_ATTEST_CHALLENGE,
+    PURPOSE_ATTEST_SUMMARY, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT, PURPOSE_CHECKPOINT_ARCHIVE,
+    PURPOSE_MODULE_RECORD, RecordPurpose, RecordSignature, RecordSigned, RecordSigningKey,
+    RecordVerifyingKey, sign_archive, sign_ed25519_half, sign_hybrid, sign_record, verify_archive,
+    verify_hybrid, verify_record,
 };
 pub use verified::Verified;

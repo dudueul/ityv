@@ -1,12 +1,15 @@
 //! Linear secret sharing over the chamber access structure (PROTOCOL.md
-//! §9.2; ADR-0012).
+//! §9.2; ADR-0019).
 //!
-//! Γ = { S ⊆ {X, Y, J, A, C, N} : X ∈ S ∧ Y ∈ S ∧ |S| ≥ 5 }, realized as
-//! `s = s_X + s_Y + s_rest` with `s_rest` shared 3-of-4 over the chambers
-//! `J = 1, A = 2, C = 3, N = 4` by Shamir's scheme, and every chamber secret
-//! shared `k_c`-of-`n_c` among the chamber's members (member `i` at point
-//! `i + 1`). Every step is linear, so member shares of several secrets add
-//! to member shares of the sum (aggregate-only reconstruction).
+//! The chambers are the party chambers `P1..Pn` (`2 ≤ n ≤ 4`, fixed by
+//! genesis) and `J, A, C, N`. Γ = { S : {P1, …, Pn} ⊆ S ∧ |S ∩ {J, A, C, N}|
+//! ≥ 3 }, realized as `s = s_P1 + … + s_Pn + s_rest` with every `s_Pi`
+//! random and `s_rest` shared 3-of-4 over the chambers `J = 1, A = 2, C = 3,
+//! N = 4` by Shamir's scheme; every chamber secret is then shared
+//! `k_c`-of-`n_c` among the chamber's members (member `i` at point `i + 1`).
+//! Party chambers beyond `n` take no part and get no shares. Every step is
+//! linear, so member shares of several secrets add to member shares of the
+//! sum (aggregate-only reconstruction).
 //!
 //! [`reconstruct`] checks qualification before touching any share value and
 //! returns nothing for an unqualified subset (VC-031). When more shares than
@@ -22,8 +25,12 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use crate::error::Error;
 use crate::scalar::Scalar;
 
-/// Number of chambers.
-pub const CHAMBER_COUNT: usize = 6;
+/// Number of chambers: four party chambers and J, A, C, N.
+pub const CHAMBER_COUNT: usize = 8;
+/// Party chambers at most (ADR-0019 §1).
+pub const MAX_PARTIES: u8 = 4;
+/// Party chambers at least.
+pub const MIN_PARTIES: u8 = 2;
 /// Maximum members per chamber (fixed capacity, ADR-0015 §6).
 pub const MAX_MEMBERS: usize = 8;
 /// Chambers sharing `s_rest`.
@@ -31,13 +38,19 @@ pub const REST_CHAMBERS: usize = 4;
 /// Threshold among the chambers sharing `s_rest`.
 pub const REST_THRESHOLD: usize = 3;
 
+const MAX_PARTY_SLOTS: usize = MAX_PARTIES as usize;
+
 /// A trustee chamber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Chamber {
-    /// Party bloc X (mandatory).
-    X,
-    /// Party bloc Y (mandatory).
-    Y,
+    /// Party chamber 1 (the party with the most seats).
+    P1,
+    /// Party chamber 2.
+    P2,
+    /// Party chamber 3 (present when genesis lists three or more parties).
+    P3,
+    /// Party chamber 4 (present when genesis lists four parties).
+    P4,
     /// Judiciary.
     J,
     /// Academia.
@@ -49,34 +62,57 @@ pub enum Chamber {
 }
 
 impl Chamber {
-    /// All chambers in index order.
-    pub const ALL: [Self; CHAMBER_COUNT] = [Self::X, Self::Y, Self::J, Self::A, Self::C, Self::N];
+    /// All chambers in index order (the order of their wire codes 1..=8).
+    pub const ALL: [Self; CHAMBER_COUNT] = [
+        Self::P1,
+        Self::P2,
+        Self::P3,
+        Self::P4,
+        Self::J,
+        Self::A,
+        Self::C,
+        Self::N,
+    ];
 
     /// Position in [`Self::ALL`].
     #[must_use]
     pub const fn index(self) -> usize {
         match self {
-            Self::X => 0,
-            Self::Y => 1,
-            Self::J => 2,
-            Self::A => 3,
-            Self::C => 4,
-            Self::N => 5,
+            Self::P1 => 0,
+            Self::P2 => 1,
+            Self::P3 => 2,
+            Self::P4 => 3,
+            Self::J => 4,
+            Self::A => 5,
+            Self::C => 6,
+            Self::N => 7,
         }
     }
 
-    /// `true` for the two chambers every qualified set must contain.
+    /// The party number `0..4` of a party chamber, `None` for J, A, C, N.
     #[must_use]
-    pub const fn is_mandatory(self) -> bool {
-        matches!(self, Self::X | Self::Y)
+    pub const fn party(self) -> Option<u8> {
+        match self {
+            Self::P1 => Some(0),
+            Self::P2 => Some(1),
+            Self::P3 => Some(2),
+            Self::P4 => Some(3),
+            Self::J | Self::A | Self::C | Self::N => None,
+        }
+    }
+
+    /// `true` for a party chamber.
+    #[must_use]
+    pub const fn is_party(self) -> bool {
+        self.party().is_some()
     }
 
     /// The Shamir evaluation point of a chamber sharing `s_rest`, or `None`
-    /// for X and Y.
+    /// for a party chamber.
     #[must_use]
     pub const fn rest_point(self) -> Option<u8> {
         match self {
-            Self::X | Self::Y => None,
+            Self::P1 | Self::P2 | Self::P3 | Self::P4 => None,
             Self::J => Some(1),
             Self::A => Some(2),
             Self::C => Some(3),
@@ -116,25 +152,46 @@ impl Threshold {
     }
 }
 
-/// One threshold per chamber.
+/// The number of party chambers and one threshold per chamber.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccessStructure {
+    parties: u8,
     inner: [Threshold; CHAMBER_COUNT],
 }
 
 impl AccessStructure {
-    /// Builds a structure from the per-chamber thresholds, in
-    /// [`Chamber::ALL`] order.
+    /// Builds a structure with the party chambers `P1..P{parties}` and the
+    /// per-chamber thresholds in [`Chamber::ALL`] order; the thresholds of
+    /// party chambers beyond `parties` are ignored. `None` unless
+    /// `MIN_PARTIES ≤ parties ≤ MAX_PARTIES`.
     #[must_use]
-    pub const fn new(inner: [Threshold; CHAMBER_COUNT]) -> Self {
-        Self { inner }
+    pub const fn new(parties: u8, inner: [Threshold; CHAMBER_COUNT]) -> Option<Self> {
+        if parties < MIN_PARTIES || parties > MAX_PARTIES {
+            None
+        } else {
+            Some(Self { parties, inner })
+        }
     }
 
     /// The same threshold for every chamber.
     #[must_use]
-    pub const fn uniform(threshold: Threshold) -> Self {
-        Self {
-            inner: [threshold; CHAMBER_COUNT],
+    pub const fn uniform(parties: u8, threshold: Threshold) -> Option<Self> {
+        Self::new(parties, [threshold; CHAMBER_COUNT])
+    }
+
+    /// The number of party chambers `n`.
+    #[must_use]
+    pub const fn parties(&self) -> u8 {
+        self.parties
+    }
+
+    /// `true` if `chamber` takes part: every chamber but the party chambers
+    /// beyond `n`.
+    #[must_use]
+    pub const fn includes(&self, chamber: Chamber) -> bool {
+        match chamber.party() {
+            Some(party) => party < self.parties,
+            None => true,
         }
     }
 
@@ -337,40 +394,44 @@ pub(crate) fn member_point(index: usize) -> Result<Scalar, Error> {
     Ok(Scalar::from_u64(raw))
 }
 
-/// Shares `secret` to every member under `structure`.
+/// Shares `secret` to every member of every chamber taking part under
+/// `structure`; party chambers beyond `n` get no shares (their slots stay
+/// zero) and draw no randomness.
 pub fn split<R: CryptoRng + ?Sized>(
     secret: &Scalar,
     structure: &AccessStructure,
     rng: &mut R,
 ) -> MemberShares {
-    let share_x = Zeroizing::new(Scalar::random(rng));
-    let share_y = Zeroizing::new(Scalar::random(rng));
-    let rest_poly = Zeroizing::new([
-        secret.sub(&share_x).sub(&share_y),
-        Scalar::random(rng),
-        Scalar::random(rng),
-    ]);
+    let parties = usize::from(structure.parties);
+    let mut party_shares = Zeroizing::new([Scalar::ZERO; MAX_PARTY_SLOTS]);
+    let mut rest_secret = Zeroizing::new(*secret);
+    for share in party_shares.iter_mut().take(parties) {
+        *share = Scalar::random(rng);
+        *rest_secret = rest_secret.sub(share);
+    }
+    let rest_poly = Zeroizing::new([*rest_secret, Scalar::random(rng), Scalar::random(rng)]);
     let mut chamber_secrets = Zeroizing::new([Scalar::ZERO; CHAMBER_COUNT]);
     for (chamber, slot) in Chamber::ALL.iter().zip(chamber_secrets.iter_mut()) {
-        *slot = match chamber.rest_point() {
-            None => {
-                if matches!(chamber, Chamber::X) {
-                    *share_x
-                } else {
-                    *share_y
-                }
+        *slot = match (chamber.party(), chamber.rest_point()) {
+            (Some(party), _) => party_shares
+                .get(usize::from(party))
+                .copied()
+                .unwrap_or(Scalar::ZERO),
+            (None, Some(point)) => {
+                eval_poly(rest_poly.as_ref(), &Scalar::from_u64(u64::from(point)))
             }
-            Some(point) => eval_poly(rest_poly.as_ref(), &Scalar::from_u64(u64::from(point))),
+            (None, None) => Scalar::ZERO,
         };
     }
 
     let mut out = MemberShares::zeroed();
-    let rows = structure
-        .inner
+    let rows = Chamber::ALL
         .iter()
+        .zip(structure.inner.iter())
         .zip(chamber_secrets.iter())
-        .zip(out.values.iter_mut());
-    for ((threshold, chamber_secret), row) in rows {
+        .zip(out.values.iter_mut())
+        .filter(|(((chamber, _), _), _)| structure.includes(**chamber));
+    for (((_, threshold), chamber_secret), row) in rows {
         let degree_plus_one = usize::from(threshold.k);
         let mut poly = Zeroizing::new([Scalar::ZERO; MAX_MEMBERS]);
         for (position, coefficient) in poly.iter_mut().enumerate().take(degree_plus_one) {
@@ -389,7 +450,8 @@ pub fn split<R: CryptoRng + ?Sized>(
 }
 
 /// Which chambers reach their member threshold, given the number of
-/// distinct members present per chamber (in [`Chamber::ALL`] order).
+/// distinct members present per chamber (in [`Chamber::ALL`] order). A
+/// party chamber beyond `n` never reaches.
 #[must_use]
 pub fn reached(
     structure: &AccessStructure,
@@ -398,29 +460,33 @@ pub fn reached(
     let mut out = [false; CHAMBER_COUNT];
     let cells = out
         .iter_mut()
+        .zip(Chamber::ALL.iter())
         .zip(structure.inner.iter())
         .zip(member_counts.iter());
-    for ((flag, threshold), count) in cells {
-        *flag = *count >= threshold.k;
+    for (((flag, chamber), threshold), count) in cells {
+        *flag = structure.includes(*chamber) && *count >= threshold.k;
     }
     out
 }
 
-/// `true` if the chambers that reach their thresholds form a set in Γ: X
-/// and Y both reach, and at least three of J, A, C, N reach.
+/// `true` if the chambers that reach their thresholds form a set in Γ:
+/// every party chamber `P1..Pn` reaches, and at least three of J, A, C, N
+/// reach.
 #[must_use]
 pub fn is_qualified(structure: &AccessStructure, member_counts: [u8; CHAMBER_COUNT]) -> bool {
     let flags = reached(structure, member_counts);
-    let mut mandatory = true;
+    let mut parties = true;
     let mut rest = 0usize;
     for (chamber, flag) in Chamber::ALL.iter().zip(flags.iter()) {
-        if chamber.is_mandatory() {
-            mandatory &= *flag;
+        if chamber.is_party() {
+            if structure.includes(*chamber) {
+                parties &= *flag;
+            }
         } else if *flag {
             rest = rest.saturating_add(1);
         }
     }
-    mandatory && rest >= REST_THRESHOLD
+    parties && rest >= REST_THRESHOLD
 }
 
 /// The `(x, y)` points of one chamber's present members, zeroized when
@@ -464,12 +530,13 @@ fn interpolate_checked(
 }
 
 /// Reconstructs the secret from `shares`. Every intermediate value (the
-/// collected shares, the chamber secrets, the rest points and the two
-/// mandatory shares) is zeroized on every return path.
+/// collected shares, the chamber secrets, the rest points and the party
+/// shares) is zeroized on every return path.
 ///
 /// # Errors
-/// [`Error::InvalidMember`] if a member index is at or above its chamber's
-/// `n`; [`Error::DuplicateShare`] if a member appears twice;
+/// [`Error::InvalidMember`] if a member's chamber takes no part or its
+/// index is at or above its chamber's `n`; [`Error::DuplicateShare`] if a
+/// member appears twice;
 /// [`Error::NotQualified`] if the members present do not form a set in Γ
 /// (checked before any share value is used); [`Error::InconsistentShares`]
 /// if shares beyond a threshold disagree with the interpolated polynomial.
@@ -478,7 +545,9 @@ pub fn reconstruct(structure: &AccessStructure, shares: &[Share]) -> Result<Scal
         Zeroizing::new([[None; MAX_MEMBERS]; CHAMBER_COUNT]);
     for share in shares {
         let member = share.member;
-        if member.index >= structure.threshold(member.chamber).n {
+        if !structure.includes(member.chamber)
+            || member.index >= structure.threshold(member.chamber).n
+        {
             return Err(Error::InvalidMember);
         }
         let slot = present
@@ -531,19 +600,14 @@ pub fn reconstruct(structure: &AccessStructure, shares: &[Share]) -> Result<Scal
         REST_THRESHOLD,
     )?);
 
-    let share_x = Zeroizing::new(
-        chamber_secrets
-            .get(Chamber::X.index())
-            .copied()
-            .flatten()
-            .ok_or(Error::NotQualified)?,
-    );
-    let share_y = Zeroizing::new(
-        chamber_secrets
-            .get(Chamber::Y.index())
-            .copied()
-            .flatten()
-            .ok_or(Error::NotQualified)?,
-    );
-    Ok(share_x.add(&share_y).add(&rest))
+    let mut total = rest;
+    let parties = Chamber::ALL
+        .iter()
+        .zip(chamber_secrets.iter())
+        .filter(|(chamber, _)| chamber.is_party() && structure.includes(**chamber));
+    for (_, secret) in parties {
+        let party_secret = Zeroizing::new(secret.ok_or(Error::NotQualified)?);
+        *total = total.add(&party_secret);
+    }
+    Ok(*total)
 }

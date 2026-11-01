@@ -409,6 +409,7 @@ fn every_error_variant_displays_distinctly() {
         Error::InconsistentShares,
         Error::ProofInvalid,
         Error::OpeningInvalid,
+        Error::PrecomputationMismatch,
         Error::AggregateInvalid,
         Error::NonContributoryKey,
         Error::AeadInvalid,

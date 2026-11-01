@@ -2,13 +2,13 @@
 # inherits the lint set below without exception (CONSTITUTION.md §1.1).
 [workspace]
 resolver = "3"
-members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger"]
+members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit", "crates/ityv-state"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/dudueul/ityv"
 publish = false
 

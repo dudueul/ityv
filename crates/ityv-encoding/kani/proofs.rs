@@ -235,3 +235,393 @@ fn ledger_frame_rejects_zero_seq() {
         Some((Kind::ValueOutOfRange, 5))
     );
 }
+
+// ---------------------------------------------------------------------------
+// M3 schemas (ENCODING.md §8.6–§8.18)
+// ---------------------------------------------------------------------------
+
+use crate::primitives::{BoxId, StationId, TimeBucket};
+use crate::schema::SCHEMA_SCAN_COUNT_ATTEST_BODY;
+use crate::schema::batch_attest::record_count_valid;
+use crate::schema::box_close::SignerRole;
+use crate::schema::cast_record::{ProofHeader, transport_flags_valid};
+use crate::schema::scan_count::ScanCountAttestBody;
+use crate::schema::share_package::{ChamberCode, pad_fields_valid, transport_code_valid};
+use crate::schema::slip::SlipBody;
+
+/// `SlipBody::new` accepts exactly one to eight tracking codes without a
+/// repeat, and keeps them in position order, for every count `0..=9`. The
+/// codes are symbolic in their first byte (the rest zero), so equality is
+/// equality of that byte. The count runs over concrete values: a symbolic
+/// slice length would unroll every comparison loop to the bound. The
+/// object-level round trip of this body with an array field is covered by
+/// V1 like the other array bodies (README).
+#[kani::proof]
+#[kani::unwind(70)] // 64-byte array comparisons unroll to 64 iterations plus slack.
+fn slip_body_constructor_is_exact() {
+    const SLOTS: usize = 9;
+    let firsts: [u8; SLOTS] = kani::any();
+    let mut codes = [Hash512::ZERO; SLOTS];
+    for (code, first) in codes.iter_mut().zip(firsts) {
+        code.0[0] = first;
+    }
+    let Some(election_id) = ElectionId::new(b"E") else {
+        unreachable!("literal identifier is valid");
+    };
+    let Some(station_id) = StationId::new(b"S") else {
+        unreachable!("literal identifier is valid");
+    };
+    for n in 0..=SLOTS {
+        let built = SlipBody::new(election_id, station_id, TimeBucket::new(0), &codes[..n]);
+        let mut distinct = true;
+        for i in 0..n {
+            for j in 0..i {
+                if firsts[i] == firsts[j] {
+                    distinct = false;
+                }
+            }
+        }
+        assert_eq!(built.is_some(), (1..=8).contains(&n) && distinct);
+        if let Some(body) = built {
+            assert_eq!(body.tracking_codes().len(), n);
+            for i in 0..n {
+                assert_eq!(body.tracking_codes()[i].0[0], firsts[i]);
+            }
+        }
+    }
+}
+
+/// A `ScanCountAttestBody` with symbolic counts and bucket survives an
+/// object-level round trip (the journal head is concrete to keep the model
+/// small; its bytes are copied verbatim like every other digest).
+#[kani::proof]
+#[kani::unwind(70)]
+fn scan_count_body_round_trip() {
+    let records: u64 = kani::any();
+    let challenges: u64 = kani::any();
+    let quarantines: u64 = kani::any();
+    let bucket: u64 = kani::any();
+    let Some(election_id) = ElectionId::new(b"E") else {
+        unreachable!("literal identifier is valid");
+    };
+    let Some(box_id) = BoxId::new(b"B") else {
+        unreachable!("literal identifier is valid");
+    };
+    let body = ScanCountAttestBody::new(
+        election_id,
+        box_id,
+        records,
+        challenges,
+        quarantines,
+        Hash512([7; 64]),
+        TimeBucket::new(bucket),
+    );
+    let mut buf = [0u8; 160];
+    let Ok(len) = encode(
+        SCHEMA_SCAN_COUNT_ATTEST_BODY,
+        SCHEMA_VERSION_1,
+        &body,
+        &mut buf,
+    ) else {
+        unreachable!("160 bytes suffice for one-byte identifiers");
+    };
+    assert_eq!(len, 16 + 5 + 5 + 24 + 64 + 8);
+    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+    let decoded: Result<ScanCountAttestBody<'_>, _> =
+        decode(SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
+    assert_eq!(decoded, Ok(body));
+}
+
+/// The proof header check of a cast record body, stated against PROTOCOL
+/// §7.5 written out independently of the implementation: for any header
+/// bytes and any claimed proof length, the header parses exactly when
+/// `2 <= option_count <= 64`, `chunk_count` is the integer
+/// `(option_count + 8) / 9`, and the length is
+/// `3 + 32·option_count·chunk_count + 64·option_count` (one 32-byte
+/// scalar per option per chunk, plus two per option). Hence a chunk count
+/// that differs from the commitment count can never pass the body's
+/// cross-field check.
+#[kani::proof]
+#[kani::unwind(4)]
+fn proof_header_is_exact() {
+    let head: [u8; 3] = kani::any();
+    let len: usize = kani::any();
+    let option_count = u16::from_be_bytes([head[0], head[1]]);
+    let chunk_count = head[2];
+    // Model the proof as its header plus an opaque tail of `len - 3` bytes;
+    // the parser reads only the header and the total length.
+    let parsed = ProofHeader::parse_with_len(head, len);
+    let oc = usize::from(option_count);
+    let cc = usize::from(chunk_count);
+    let expected =
+        (2..=64).contains(&option_count) && cc == (oc + 8) / 9 && len == 3 + 32 * oc * cc + 64 * oc;
+    assert_eq!(parsed.is_some(), expected);
+    if let Some(h) = parsed {
+        assert_eq!(h.option_count, option_count);
+        assert_eq!(h.chunk_count, chunk_count);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Finite-domain cross-field checks (ENCODING.md §8.6, §8.10, §8.12, §8.17)
+// ---------------------------------------------------------------------------
+
+/// `transport_flags` admits exactly the values whose bits above bit 1 are
+/// clear (bit 0 KEM fallback, bit 1 neutral module).
+#[kani::proof]
+fn transport_flags_mask_is_exact() {
+    let flags: u8 = kani::any();
+    assert_eq!(transport_flags_valid(flags), flags >> 2 == 0);
+}
+
+/// Chamber codes: exactly 1 P1, 2 P2, 3 P3, 4 P4, 5 J, 6 A, 7 C, 8 N
+/// decode, each to the chamber whose code it is; every other byte is
+/// rejected (ADR-0019).
+#[kani::proof]
+fn chamber_codes_are_exact() {
+    let code: u8 = kani::any();
+    let expected = match code {
+        1 => Some(ChamberCode::P1),
+        2 => Some(ChamberCode::P2),
+        3 => Some(ChamberCode::P3),
+        4 => Some(ChamberCode::P4),
+        5 => Some(ChamberCode::J),
+        6 => Some(ChamberCode::A),
+        7 => Some(ChamberCode::C),
+        8 => Some(ChamberCode::N),
+        _ => None,
+    };
+    assert_eq!(ChamberCode::from_code(code), expected);
+    if let Some(chamber) = expected {
+        assert_eq!(chamber.code(), code);
+    }
+}
+
+/// Signer roles: exactly 1 (clerk) and 2 (observer) decode, each to the
+/// role whose code it is; every other byte is rejected.
+#[kani::proof]
+fn signer_role_codes_are_exact() {
+    let code: u8 = kani::any();
+    let expected = match code {
+        1 => Some(SignerRole::Clerk),
+        2 => Some(SignerRole::Observer),
+        _ => None,
+    };
+    assert_eq!(SignerRole::from_code(code), expected);
+    if let Some(role) = expected {
+        assert_eq!(role.code(), code);
+    }
+}
+
+/// Transport codes and KEM pad fields: transport 0 admits any pad fields,
+/// transport 1 only zero pad fields, and every other code is rejected.
+#[kani::proof]
+fn transport_and_pad_fields_are_exact() {
+    let code: u8 = kani::any();
+    let pad_id: u32 = kani::any();
+    let pad_index: u64 = kani::any();
+    assert_eq!(transport_code_valid(code), code == 0 || code == 1);
+    let expected = match code {
+        0 => true,
+        1 => pad_id == 0 && pad_index == 0,
+        _ => false,
+    };
+    assert_eq!(
+        transport_code_valid(code) && pad_fields_valid(code, pad_id, pad_index),
+        expected
+    );
+}
+
+/// `record_count` admits exactly `1..=64`.
+#[kani::proof]
+fn record_count_range_is_exact() {
+    let record_count: u16 = kani::any();
+    assert_eq!(
+        record_count_valid(record_count),
+        record_count != 0 && record_count < 65
+    );
+}
+
+use crate::primitives::{OrgId, SignerId};
+use crate::schema::events::{
+    CustodyHandoffBody, CustodyHandoffParts, DisputeAction, DisputeEventBody, DisputeEventParts,
+    DisputeType, FallbackBody, FallbackKind, FallbackParts, FallbackReason, LateBatchReason,
+    LegalOutcome, SealChangeReason, TallyEffect,
+};
+use crate::schema::genesis::{CaptureProfile, RosterRole};
+use crate::schema::witnessed::EventRole;
+
+static E1: ElectionId<'static> = match ElectionId::new(b"E") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static B1: BoxId<'static> = match BoxId::new(b"B") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static S1: SignerId<'static> = match SignerId::new(b"S") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static ORG_A: OrgId<'static> = match OrgId::new(b"A") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+static ORG_B: OrgId<'static> = match OrgId::new(b"B") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+/// Every one-byte code of the M5 event schemas decodes exactly to the
+/// value whose code it is, and nothing else decodes.
+#[kani::proof]
+fn event_codes_are_exact() {
+    let code: u8 = kani::any();
+    let role = EventRole::from_code(code);
+    assert_eq!(role.is_some(), (1..=8).contains(&code));
+    if let Some(r) = role {
+        assert_eq!(r.code(), code);
+    }
+    let checks = [
+        (DisputeType::from_code(code).map(DisputeType::code), 1..=8),
+        (
+            DisputeAction::from_code(code).map(DisputeAction::code),
+            1..=4,
+        ),
+        (LegalOutcome::from_code(code).map(LegalOutcome::code), 1..=5),
+        (TallyEffect::from_code(code).map(TallyEffect::code), 0..=2),
+        (FallbackKind::from_code(code).map(FallbackKind::code), 1..=2),
+        (
+            FallbackReason::from_code(code).map(FallbackReason::code),
+            0..=4,
+        ),
+        (
+            SealChangeReason::from_code(code).map(SealChangeReason::code),
+            1..=5,
+        ),
+        (
+            LateBatchReason::from_code(code).map(LateBatchReason::code),
+            1..=4,
+        ),
+        (
+            CaptureProfile::from_code(code).map(CaptureProfile::code),
+            1..=3,
+        ),
+        (RosterRole::from_code(code).map(RosterRole::code), 1..=3),
+    ];
+    for (decoded, range) in checks {
+        assert_eq!(decoded.is_some(), range.contains(&code));
+        if let Some(back) = decoded {
+            assert_eq!(back, code);
+        }
+    }
+}
+
+/// A custody handoff body is built exactly when the index is at least 1,
+/// the previous hash is zero exactly for index 1, and the organisations
+/// differ.
+#[kani::proof]
+fn custody_handoff_rules_are_exact() {
+    let index: u32 = kani::any();
+    let zero_previous: bool = kani::any();
+    let same_org: bool = kani::any();
+    let parts = CustodyHandoffParts {
+        election_id: E1,
+        box_id: B1,
+        index,
+        from_signer: S1,
+        from_org: ORG_A,
+        to_signer: S1,
+        to_org: if same_org { ORG_A } else { ORG_B },
+        previous_handoff_hash: if zero_previous {
+            Hash512([0; 64])
+        } else {
+            Hash512([1; 64])
+        },
+        seal_digest: Hash512([2; 64]),
+        count: kani::any(),
+        time_bucket: TimeBucket::new(kani::any()),
+    };
+    let expected = index >= 1 && (index == 1) == zero_previous && !same_org;
+    assert_eq!(CustodyHandoffBody::new(&parts).is_ok(), expected);
+}
+
+/// A dispute event body is built exactly when the filing hash is zero
+/// exactly for a filing, the result hash is nonzero exactly for the two
+/// resolutions, and a record is named only with its box.
+#[kani::proof]
+fn dispute_event_rules_are_exact() {
+    let action = match kani::any::<u8>() % 4 {
+        0 => DisputeAction::Filed,
+        1 => DisputeAction::Investigating,
+        2 => DisputeAction::ResolvedTechnical,
+        _ => DisputeAction::ReferredLegal,
+    };
+    let zero_filing: bool = kani::any();
+    let zero_result: bool = kani::any();
+    let with_box: bool = kani::any();
+    let with_record: bool = kani::any();
+    let parts = DisputeEventParts {
+        election_id: E1,
+        action,
+        dispute_type: DisputeType::Other,
+        box_id: if with_box { Some(B1) } else { None },
+        record_hash: if with_record {
+            Some(Hash512([3; 64]))
+        } else {
+            None
+        },
+        evidence_hash: Hash512([4; 64]),
+        filing_hash: if zero_filing {
+            Hash512([0; 64])
+        } else {
+            Hash512([5; 64])
+        },
+        result_hash: if zero_result {
+            Hash512([0; 64])
+        } else {
+            Hash512([6; 64])
+        },
+        time_bucket: TimeBucket::new(0),
+    };
+    let filed = action == DisputeAction::Filed;
+    let resolved = matches!(
+        action,
+        DisputeAction::ResolvedTechnical | DisputeAction::ReferredLegal
+    );
+    let expected = filed == zero_filing && resolved != zero_result && (with_box || !with_record);
+    assert_eq!(DisputeEventBody::new(&parts).is_ok(), expected);
+}
+
+/// A fallback body is built exactly when the reason is `NotApplicable`
+/// exactly for an end and a marker range runs forward.
+#[kani::proof]
+fn fallback_rules_are_exact() {
+    let ended: bool = kani::any();
+    let reason_code: u8 = kani::any();
+    let Some(reason) = FallbackReason::from_code(reason_code) else {
+        return;
+    };
+    let first: u64 = kani::any();
+    let last: u64 = kani::any();
+    let with_markers: bool = kani::any();
+    let parts = FallbackParts {
+        election_id: E1,
+        box_id: B1,
+        kind: if ended {
+            FallbackKind::Ended
+        } else {
+            FallbackKind::Declared
+        },
+        reason,
+        statement_hash: Hash512([7; 64]),
+        markers: if with_markers {
+            Some(crate::schema::events::MarkerRange { first, last })
+        } else {
+            None
+        },
+        time_bucket: TimeBucket::new(0),
+    };
+    let expected = ended == (reason_code == 0) && (!with_markers || first <= last);
+    assert_eq!(FallbackBody::new(&parts).is_ok(), expected);
+}

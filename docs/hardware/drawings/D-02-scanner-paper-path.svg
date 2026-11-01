@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" width="1400" height="960">
+<title>D-02 투함 스캐너 종이 경로 단면</title>
+<desc>투입 후드부터 급지, 겹침 감지, 양면 판독, 대기 구역, 각인, 분기까지 종이 경로를 종이 경로 면에서 자른 개념 단면. 치수는 가정이다.</desc>
+<style>
+svg { color: #1b2430; --muted: #5a6878; --fill: rgba(27,36,48,.05); --fill2: rgba(29,114,125,.12); --chm: rgba(154,107,0,.12); --warn: #b81f2e; --teal: #1d727d; --gold: #8a6100; --paper: rgba(27,36,48,.03); }
+@media (prefers-color-scheme: dark) {
+  svg { color: #e5ebf1; --muted: #a3b1c0; --fill: rgba(229,235,241,.06); --fill2: rgba(76,193,204,.16); --chm: rgba(226,181,71,.14); --warn: #ef7a88; --teal: #5fd0db; --gold: #e2b547; --paper: rgba(229,235,241,.04); }
+}
+text { fill: currentColor; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "IBM Plex Sans KR", sans-serif; font-size: 12px; }
+.s { font-size: 11px; fill: var(--muted); }
+.h { font-size: 16px; font-weight: 700; }
+.h2 { font-size: 13px; font-weight: 700; }
+.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; }
+.red { fill: var(--warn); } .tl { fill: var(--teal); } .gd { fill: var(--gold); } .mu { fill: var(--muted); }
+.ln { stroke: currentColor; fill: none; stroke-width: 1.4; }
+.thin { stroke: currentColor; fill: none; stroke-width: .8; }
+.dim { stroke: var(--muted); fill: none; stroke-width: .8; }
+.ext { stroke: var(--muted); fill: none; stroke-width: .6; stroke-dasharray: 2 2; }
+.box { stroke: currentColor; fill: var(--fill); stroke-width: 1.4; }
+.paper { stroke: currentColor; fill: var(--paper); stroke-width: 1; }
+.tcb { stroke: var(--teal); fill: var(--fill2); stroke-width: 1.6; }
+.unt { stroke: var(--muted); fill: var(--fill); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.chm { stroke: var(--gold); fill: var(--chm); stroke-width: 1.6; }
+.warn { stroke: var(--warn); fill: none; stroke-width: 1.6; }
+.warnf { stroke: var(--warn); fill: none; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.one { stroke: var(--teal); fill: none; stroke-width: 2; }
+.oned { stroke: var(--teal); fill: none; stroke-width: 2; stroke-dasharray: 7 4; }
+.two { stroke: var(--muted); fill: none; stroke-width: 1.6; }
+.seal { stroke: var(--warn); fill: none; stroke-width: 1.4; }
+.sealf { fill: var(--warn); }
+.zone { stroke: var(--warn); fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.dot { fill: currentColor; }
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--teal)"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+<marker id="ad" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" style="fill: var(--muted)"/></marker>
+</defs>
+<text x="24" y="34" class="h" >D-02 · 투함 스캐너 종이 경로 단면 (종이 경로 면에서 자름)</text>
+<text x="24" y="54" class="s" >앞(유권자)은 왼쪽, 뒤(사무원)는 오른쪽. 종이 경로는 폭 방향 왼쪽 반에, 전자부는 오른쪽 반에 있다 (D-03).</text>
+<text x="24" y="70" class="s" >번호는 가운데 부품 목록, 오른쪽은 방문 하나의 처리 순서.</text>
+<rect x="150.0" y="200.0" width="384.0" height="600.0" rx="0" class="ln" />
+<line x1="150.0" y1="380.0" x2="534.0" y2="380.0" class="thin" />
+<path d="M84.0,200.0 L84.0,152.0 L276.0,143.0 L276.0,200.0 Z" class="box" />
+<rect x="168.0" y="614.0" width="234.0" height="171.0" rx="0" class="thin" />
+<rect x="177.0" y="626.0" width="216.0" height="153.0" rx="0" class="paper" />
+<line x1="369.0" y1="626.0" x2="393.0" y2="626.0" class="ln" style="stroke-width:3"/>
+<rect x="414.0" y="614.0" width="111.0" height="171.0" rx="0" class="thin" />
+<rect x="421.2" y="626.0" width="96.59999999999997" height="153.0" rx="0" class="paper" />
+<text x="282.0" y="710.0" class="s" text-anchor="middle" >투표함 (기존 규격, 가정)</text>
+<text x="469.2" y="710.0" class="s" text-anchor="middle" >폐기함</text>
+<rect x="135.0" y="302.0" width="15.0" height="36.0" rx="0" class="box" />
+<line x1="135.0" y1="302.0" x2="150.0" y2="293.0" class="thin" />
+<path d="M81.9,181.0 L21.1,155.3 L25.3,145.3 L86.1,171.0 Z" class="chm" />
+<text x="24" y="150" class="s" >가림 봉투</text>
+<line x1="84.0" y1="165.20000000000005" x2="162.0" y2="198.80000000000007" class="thin" />
+<line x1="84.0" y1="186.80000000000007" x2="162.0" y2="219.20000000000005" class="thin" />
+<circle cx="168.0" cy="200.0" r="7.199999999999999" class="box" />
+<rect x="163.2" y="213.20000000000005" width="12.0" height="3.6000000000000227" rx="0" class="box" />
+<rect x="195.0" y="197.0" width="6.0" height="9.0" rx="0" class="tcb" />
+<rect x="195.0" y="216.80000000000007" width="6.0" height="7.199999999999932" rx="0" class="tcb" />
+<rect x="216.0" y="201.20000000000005" width="18.0" height="8.399999999999977" rx="0" class="unt" />
+<rect x="216.0" y="222.80000000000007" width="18.0" height="7.199999999999932" rx="0" class="unt" />
+<circle cx="261.0" cy="214.39999999999998" r="5.3999999999999995" class="box" />
+<circle cx="261.0" cy="230.0" r="5.3999999999999995" class="box" />
+<path d="M84.0,176.0 L162.0,209.0 L246.0,219.2 Q291.0,222.8 304.8,239.0" class="one" marker-end="url(#at)" />
+<line x1="297.0" y1="233.0" x2="501.0" y2="557.6" class="ln" style="stroke-width:2.4"/>
+<line x1="314.27220753429583" y1="222.1450082039546" x2="518.2722075342958" y2="546.7450082039545" class="thin" />
+<line x1="501.0" y1="557.6" x2="518.2722075342958" y2="546.7450082039545" class="ln" style="stroke-width:2.4"/>
+<line x1="310.19628780369806" y1="249.48725535591564" x2="501.75496655744115" y2="554.2909177258422" class="thin" style="stroke-width:1.2"/>
+<text x="302.19628780369806" y="253.48725535591564" class="s" text-anchor="end" >1</text>
+<line x1="367.01127730367466" y1="334.25197070444693" x2="504.2949970771906" y2="552.6945954028944" class="thin" style="stroke-width:1.2"/>
+<text x="359.01127730367466" y="338.25197070444693" class="s" text-anchor="end" >2</text>
+<line x1="411.05568822006836" y1="398.69644189498314" x2="506.83502759693994" y2="551.0982730799465" class="thin" style="stroke-width:1.2"/>
+<text x="403.05568822006836" y="402.69644189498314" class="s" text-anchor="end" >3</text>
+<circle cx="468.1680086109121" cy="522.272385180775" r="8.4" class="box" />
+<rect x="508.829726613911" y="517.7165326125263" width="9.600000000000023" height="7.199999999999932" rx="0" class="unt" />
+<path d="M501.6,558.6 L510.0,572.0 L510.0,588.8" class="one" marker-end="url(#at)" />
+<rect x="514.8" y="564.8" width="15.600000000000023" height="24.0" rx="0" class="unt" />
+<path d="M505.2,592.4 L514.8,592.4 L510.0,599.6 Z" class="box" />
+<path d="M506.4,599.6 L390.0,611.6 L382.8,622.4" class="one" marker-end="url(#at)" />
+<path d="M512.4,599.6 L512.4,621.2" class="oned" marker-end="url(#at)" />
+<path d="M505.2,588.8 L174.0,588.8 L174.0,326.0 L141.6,320.0" class="oned" marker-end="url(#at)" />
+<line x1="354.0" y1="200.0" x2="354.0" y2="612.8" class="ext" marker-end="url(#am)" />
+<line x1="84.0" y1="230.0" x2="84.0" y2="830" class="ext" />
+<line x1="150.0" y1="230.0" x2="150.0" y2="830" class="ext" />
+<line x1="84.0" y1="826" x2="150.0" y2="826" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="117.0" y="822" class="s" text-anchor="middle" >110</text>
+<line x1="150.0" y1="802" x2="150.0" y2="830" class="ext" />
+<line x1="534.0" y1="802" x2="534.0" y2="830" class="ext" />
+<line x1="150.0" y1="826" x2="534.0" y2="826" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="342.0" y="822" class="s" text-anchor="middle" >640 (가정)</text>
+<line x1="80.0" y1="176.0" x2="56" y2="176.0" class="ext" />
+<line x1="80.0" y1="800.0" x2="56" y2="800.0" class="ext" />
+<line x1="60" y1="176.0" x2="60" y2="800.0" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="54" y="492.0" class="s" text-anchor="end" >1,040</text>
+<text x="54" y="508.0" class="s" text-anchor="end" >투입구</text>
+<text x="440.56042727649145" y="372.95148747873003" class="s" >640 · 기울기 약 58° (가정)</text>
+<circle cx="90.0" cy="170.0" r="2" class="dot" />
+<line x1="90.0" y1="170.0" x2="110" y2="116" class="dim" />
+<circle cx="110" cy="116" r="9" class="box" />
+<text x="110" y="120" text-anchor="middle" style="font-size:11px;font-weight:700">1</text>
+<circle cx="168.0" cy="196.39999999999998" r="2" class="dot" />
+<line x1="168.0" y1="196.39999999999998" x2="166" y2="116" class="dim" />
+<circle cx="166" cy="116" r="9" class="box" />
+<text x="166" y="120" text-anchor="middle" style="font-size:11px;font-weight:700">2</text>
+<circle cx="198.0" cy="200.0" r="2" class="dot" />
+<line x1="198.0" y1="200.0" x2="196" y2="116" class="dim" />
+<circle cx="196" cy="116" r="9" class="box" />
+<text x="196" y="120" text-anchor="middle" style="font-size:11px;font-weight:700">3</text>
+<circle cx="225.0" cy="204.80000000000007" r="2" class="dot" />
+<line x1="225.0" y1="204.80000000000007" x2="226" y2="116" class="dim" />
+<circle cx="226" cy="116" r="9" class="box" />
+<text x="226" y="120" text-anchor="middle" style="font-size:11px;font-weight:700">4</text>
+<circle cx="408.0" cy="368.0" r="2" class="dot" />
+<line x1="408.0" y1="368.0" x2="470" y2="300" class="dim" />
+<circle cx="470" cy="300" r="9" class="box" />
+<text x="470" y="304" text-anchor="middle" style="font-size:11px;font-weight:700">5</text>
+<circle cx="468.1680086109121" cy="522.272385180775" r="2" class="dot" />
+<line x1="468.1680086109121" y1="522.272385180775" x2="430" y2="560" class="dim" />
+<circle cx="430" cy="560" r="9" class="box" />
+<text x="430" y="564" text-anchor="middle" style="font-size:11px;font-weight:700">6</text>
+<circle cx="513.6297266139111" cy="521.3165326125263" r="2" class="dot" />
+<line x1="513.6297266139111" y1="521.3165326125263" x2="570" y2="530" class="dim" />
+<circle cx="570" cy="530" r="9" class="box" />
+<text x="570" y="534" text-anchor="middle" style="font-size:11px;font-weight:700">12</text>
+<circle cx="528.0" cy="576.8" r="2" class="dot" />
+<line x1="528.0" y1="576.8" x2="570" y2="565" class="dim" />
+<circle cx="570" cy="565" r="9" class="box" />
+<text x="570" y="569" text-anchor="middle" style="font-size:11px;font-weight:700">7</text>
+<circle cx="513.5999999999999" cy="596.0" r="2" class="dot" />
+<line x1="513.5999999999999" y1="596.0" x2="570" y2="600" class="dim" />
+<circle cx="570" cy="600" r="9" class="box" />
+<text x="570" y="604" text-anchor="middle" style="font-size:11px;font-weight:700">8</text>
+<circle cx="282.0" cy="680.0" r="2" class="dot" />
+<line x1="282.0" y1="680.0" x2="300" y2="690" class="dim" />
+<circle cx="300" cy="690" r="9" class="box" />
+<text x="300" y="694" text-anchor="middle" style="font-size:11px;font-weight:700">9</text>
+<circle cx="469.2" cy="680.0" r="2" class="dot" />
+<line x1="469.2" y1="680.0" x2="500" y2="690" class="dim" />
+<circle cx="500" cy="690" r="9" class="box" />
+<text x="500" y="694" text-anchor="middle" style="font-size:11px;font-weight:700">10</text>
+<circle cx="141.6" cy="320.0" r="2" class="dot" />
+<line x1="141.6" y1="320.0" x2="110" y2="300" class="dim" />
+<circle cx="110" cy="300" r="9" class="box" />
+<text x="110" y="304" text-anchor="middle" style="font-size:11px;font-weight:700">11</text>
+<circle cx="354.0" cy="440.0" r="2" class="dot" />
+<line x1="354.0" y1="440.0" x2="380" y2="460" class="dim" />
+<circle cx="380" cy="460" r="9" class="box" />
+<text x="380" y="464" text-anchor="middle" style="font-size:11px;font-weight:700">13</text>
+<text x="610" y="130" class="h2" >부품 목록</text>
+<circle cx="619" cy="148" r="8" class="thin" />
+<text x="619" y="152" text-anchor="middle" style="font-size:11px">1</text>
+<text x="634" y="152" >투입 후드</text>
+<text x="790" y="152" class="s" >봉투의 열린 끝만 받음</text>
+<circle cx="619" cy="167" r="8" class="thin" />
+<text x="619" y="171" text-anchor="middle" style="font-size:11px">2</text>
+<text x="634" y="171" >급지 롤러·역회전 패드</text>
+<text x="790" y="171" class="s" >한 장씩 뗌. 거꾸로도 돎</text>
+<circle cx="619" cy="186" r="8" class="thin" />
+<text x="619" y="190" text-anchor="middle" style="font-size:11px">3</text>
+<text x="634" y="190" >초음파 겹침 감지</text>
+<text x="790" y="190" class="s" >겹치면 판독 전 멈춤·되돌림</text>
+<circle cx="619" cy="205" r="8" class="thin" />
+<text x="619" y="209" text-anchor="middle" style="font-size:11px">4</text>
+<text x="634" y="209" >양면 CIS</text>
+<text x="790" y="209" class="s" >RGB 300dpi, 위·아래</text>
+<circle cx="619" cy="224" r="8" class="thin" />
+<text x="619" y="228" text-anchor="middle" style="font-size:11px">5</text>
+<text x="634" y="228" >대기 구역 (escrow)</text>
+<text x="790" y="228" class="s" >최대 8장, 순서 보관</text>
+<circle cx="619" cy="243" r="8" class="thin" />
+<text x="619" y="247" text-anchor="middle" style="font-size:11px">6</text>
+<text x="634" y="247" >바닥 픽업 롤러·게이트</text>
+<text x="790" y="247" class="s" >맨 아래 장부터 (가정)</text>
+<circle cx="619" cy="262" r="8" class="thin" />
+<text x="619" y="266" text-anchor="middle" style="font-size:11px">7</text>
+<text x="634" y="266" >각인 헤드</text>
+<text x="790" y="266" class="s" >열 잉크젯·안료, 고정 위치</text>
+<circle cx="619" cy="281" r="8" class="thin" />
+<text x="619" y="285" text-anchor="middle" style="font-size:11px">8</text>
+<text x="634" y="285" >3방향 분기기</text>
+<text x="790" y="285" class="s" >투표함 · 폐기함 · 반환</text>
+<circle cx="619" cy="300" r="8" class="thin" />
+<text x="619" y="304" text-anchor="middle" style="font-size:11px">9</text>
+<text x="634" y="304" >투표함</text>
+<text x="790" y="304" class="s" >넣는 표</text>
+<circle cx="619" cy="319" r="8" class="thin" />
+<text x="619" y="323" text-anchor="middle" style="font-size:11px">10</text>
+<text x="634" y="323" >폐기함</text>
+<text x="790" y="323" class="s" >확인한 표 (각인 없음)</text>
+<circle cx="619" cy="338" r="8" class="thin" />
+<text x="619" y="342" text-anchor="middle" style="font-size:11px">11</text>
+<text x="634" y="342" >반환 트레이</text>
+<text x="790" y="342" class="s" >관외·재외 프로필</text>
+<circle cx="619" cy="357" r="8" class="thin" />
+<text x="619" y="361" text-anchor="middle" style="font-size:11px">12</text>
+<text x="634" y="361" >장 수 센서</text>
+<text x="790" y="361" class="s" >대기 구역 장 수 (가정)</text>
+<circle cx="619" cy="376" r="8" class="thin" />
+<text x="619" y="380" text-anchor="middle" style="font-size:11px">13</text>
+<text x="634" y="380" >비상 투입 슈트</text>
+<text x="790" y="380" class="s" >오른쪽 반, 숨은선</text>
+<text x="620" y="440" class="h2" >투표지 방향 (축척 없음)</text>
+<rect x="640" y="470" width="60" height="170" rx="3" class="chm" />
+<rect x="645" y="476" width="50" height="150" rx="0" class="paper" />
+<rect x="645" y="617" width="50" height="9" rx="0" class="tcb" />
+<text x="670" y="462" class="s" text-anchor="middle" >봉투 110 × 320</text>
+<line x1="670" y1="646" x2="670" y2="684" class="one" marker-end="url(#at)" />
+<text x="670" y="700" class="s" text-anchor="middle" >장치로</text>
+<circle cx="695" cy="621" r="2.2" class="dot" />
+<path d="M695,621 L722,606" class="dim" />
+<text x="726" y="610" class="s" >각인 구역 (하단 18mm)</text>
+<text x="726" y="625" class="s" >열린 끝 쪽 → 먼저 들어감</text>
+<circle cx="670" cy="510" r="2.2" class="dot" />
+<path d="M670,510 L722,506" class="dim" />
+<text x="726" y="510" class="s" >윗변부터 넣음</text>
+<text x="726" y="525" class="s" >기표면은 봉투 안쪽</text>
+<circle cx="695" cy="476" r="2.2" class="dot" />
+<path d="M695,476 L722,552" class="dim" />
+<text x="726" y="556" class="s" >봉투 세 변은 닫힘</text>
+<text x="620" y="720" class="s" >긴 투표지(최대 600)는 110 × 560 봉투, 같은 경로.</text>
+<text x="620" y="736" class="s" >대기 구역 길이 640은 이것 때문이다 (DEVICES §3.2).</text>
+<text x="960" y="130" class="h2" >방문 하나의 처리 순서</text>
+<text x="960" y="152" class="s" >1.</text>
+<text x="978" y="152" >봉투째 1에 넣는다. 2가 한 장씩 떼고 3이 겹침을 본다.</text>
+<text x="978" y="170" class="s" >겹치면 판독 전에 멈추고 되돌린다. 기록이 생기지 않는다.</text>
+<text x="960" y="188" class="s" >2.</text>
+<text x="978" y="188" >4가 양면을 읽고 종이는 5에 쌓인다. 해석 유닛은 장마다</text>
+<text x="978" y="206" class="s" >Interpretation만 단방향으로 보낸다 (D-03).</text>
+<text x="960" y="224" class="s" >3.</text>
+<text x="978" y="224" >다 넣으면 해석 유닛이 VisitEnd(장 수)를 보낸다.</text>
+<text x="960" y="242" class="s" >4.</text>
+<text x="978" y="242" >커밋먼트 유닛이 모든 위치를 커밋·서명하고 저널에 묶은</text>
+<text x="978" y="260" class="s" >뒤에만 화면 단추를 켠다 (VC-068).</text>
+<text x="960" y="278" class="s" >5.</text>
+<text x="978" y="278" >유권자가 모두 넣기 또는 확인할 장 고르기를 누른다.</text>
+<text x="978" y="296" class="s" >결정이 저널에 영속화된 뒤에야 종이가 움직인다.</text>
+<text x="960" y="314" class="s" >6.</text>
+<text x="978" y="314" >6이 위치 순서대로 한 장씩 꺼낸다.</text>
+<text x="978" y="332" class="s" >넣는 장: 7 각인 → 8 → 9 (관외·재외는 → 11)</text>
+<text x="978" y="350" class="s" >확인하는 장: 각인 없이 8 → 10</text>
+<text x="960" y="368" class="s" >7.</text>
+<text x="978" y="368" >확인 결과는 화면이 아니라 인쇄물 출구로 나온다 (D-01 5).</text>
+<text x="960" y="396" class="h2" >다른 경우</text>
+<text x="960" y="416" >확인 카드: 3·4를 지나 QR만 읽힌 뒤 2가 거꾸로 돌아 1로 되돌린다.</text>
+<text x="978" y="434" class="s" >투표함에 들어가지 않는다 (PROTOCOL §7.9, D-08).</text>
+<text x="960" y="452" >정전: 내장 전지로 지금 방문을 마무리한다. 재개는 저널 순서와</text>
+<text x="978" y="470" class="s" >대기 구역 순서가 같아야 한다 (DEVICES §3.2, P1).</text>
+<text x="960" y="488" >걸림: 사무원이 열기 전에 참관인 2인이 입회한다 (가정).</text>
+<line x1="960" y1="636" x2="986" y2="636" class="one" marker-end="url(#at)" />
+<text x="994" y="640" class="s" >종이 경로 (기본)</text>
+<line x1="960" y1="656" x2="986" y2="656" class="oned" marker-end="url(#at)" />
+<text x="994" y="660" class="s" >종이 경로 (조건부: 폐기·반환)</text>
+<rect x="960" y="670" width="26" height="13" rx="0" class="unt" />
+<text x="994" y="680" class="s" >불신 센서·헤드</text>
+<rect x="960" y="690" width="26" height="13" rx="0" class="tcb" />
+<text x="994" y="700" class="s" >겹침 감지기 · 각인 구역</text>
+<rect x="960" y="710" width="26" height="13" rx="0" class="chm" />
+<text x="994" y="720" class="s" >가림 봉투</text>
+<text x="24" y="862" class="h2" >주</text>
+<text x="24" y="880" class="s" >1. 모든 치수와 기울기, 픽업 방식은 가정이다. M8에서 급지·겹침·걸림률을 재서 정한다 (DEVICES §8).</text>
+<text x="24" y="896" class="s" >2. 12의 장 수를 VisitEnd의 장 수와 맞춰 볼지는 M8에서 정한다 (가정, 명세 아님).</text>
+<text x="24" y="912" class="s" >3. 각인 위치·글꼴·농도는 고정이고 바꿀 설정이 없다 (BALLOT_LAYOUT §9).</text>
+<rect x="954" y="812" width="430" height="132" rx="0" class="box" />
+<text x="962" y="832" class="s" >도면 번호</text>
+<text x="1046" y="832" >D-02</text>
+<line x1="954" y1="837" x2="1384" y2="837" class="thin" />
+<text x="962" y="852" class="s" >이름</text>
+<text x="1046" y="852" class="h2" >투함 스캐너 종이 경로 단면</text>
+<line x1="954" y1="857" x2="1384" y2="857" class="thin" />
+<text x="962" y="872" class="s" >축척 · 단위</text>
+<text x="1046" y="872" >축척 없음 (치수 기입) · mm</text>
+<line x1="954" y1="877" x2="1384" y2="877" class="thin" />
+<text x="962" y="892" class="s" >판 · 날짜</text>
+<text x="1046" y="892" >1판 (연구용 초안) · 2026-11-01</text>
+<line x1="954" y1="897" x2="1384" y2="897" class="thin" />
+<text x="962" y="912" class="s" >근거</text>
+<text x="1046" y="912" >DEVICES §3.2·§9, BALLOT_LAYOUT §2·§4·§14</text>
+<line x1="954" y1="917" x2="1384" y2="917" class="thin" />
+<text x="962" y="932" class="s" ></text>
+<text x="1046" y="932" >PROTOCOL §7.1·§7.3·§7.9, ADR-0021</text>
+<line x1="1038" y1="812" x2="1038" y2="944" class="thin" />
+</svg>

@@ -12,7 +12,7 @@ use core::ops::{Add, Mul, Neg, Sub};
 
 use ityv_encoding::{Decode, Encode, Error as EncodingError, ErrorKind, Reader, Writer};
 use rand_core::CryptoRng;
-use subtle::{Choice, ConstantTimeEq};
+use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 use zeroize::Zeroize;
 
 use crate::backend::ristretto::InnerScalar as Inner;
@@ -129,6 +129,12 @@ impl fmt::Debug for Scalar {
 impl ConstantTimeEq for Scalar {
     fn ct_eq(&self, other: &Self) -> Choice {
         self.0.ct_eq(&other.0)
+    }
+}
+
+impl ConditionallySelectable for Scalar {
+    fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
+        Self(Inner::conditional_select(&a.0, &b.0, choice))
     }
 }
 

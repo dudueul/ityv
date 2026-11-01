@@ -110,3 +110,135 @@ pub(crate) fn kind_from_name(name: &str) -> ErrorKind {
         .find(|k| std::format!("{k:?}") == name)
         .unwrap_or_else(|| panic!("unknown error kind name {name}"))
 }
+
+// ---------------------------------------------------------------------------
+// Builders for the M3 schemas (ENCODING.md §8.6–§8.18).
+// ---------------------------------------------------------------------------
+
+use ityv_encoding::{Commitments, Point32, Scalar32};
+
+/// A 64-byte digest with a recognizable pattern.
+pub(crate) fn patterned64(seed: u8) -> ityv_encoding::Hash512 {
+    let mut h = [0u8; 64];
+    for (i, b) in h.iter_mut().enumerate() {
+        *b = seed.wrapping_add(u8::try_from(i).unwrap());
+    }
+    ityv_encoding::Hash512(h)
+}
+
+/// A patterned fixed array of `N` bytes.
+pub(crate) fn patterned<const N: usize>(seed: u8) -> [u8; N] {
+    let mut out = [0u8; N];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = seed.wrapping_add(u8::try_from(i % 251).unwrap());
+    }
+    out
+}
+
+/// A proof byte string with a valid PROTOCOL.md §7.5 header for
+/// `option_count` options and `chunk_count` chunks, scalars filled with `fill`.
+pub(crate) fn proof_bytes(option_count: u16, chunk_count: u8, fill: u8) -> Vec<u8> {
+    let len = 3 + usize::from(option_count) * (usize::from(chunk_count) + 2) * 32;
+    let mut out = std::vec![fill; len];
+    out[0..2].copy_from_slice(&option_count.to_be_bytes());
+    out[2] = chunk_count;
+    out
+}
+
+/// `k` patterned commitments.
+pub(crate) fn commitments(k: usize, seed: u8) -> Commitments {
+    let points: Vec<Point32> = (0..k)
+        .map(|i| Point32(patterned::<32>(seed.wrapping_add(u8::try_from(i).unwrap()))))
+        .collect();
+    Commitments::new(&points).unwrap()
+}
+
+/// `n` patterned scalars.
+pub(crate) fn scalars(n: usize, seed: u8) -> Vec<Scalar32> {
+    (0..n)
+        .map(|i| Scalar32(patterned::<32>(seed.wrapping_add(u8::try_from(i).unwrap()))))
+        .collect()
+}
+
+/// Encoded length of an identifier field: four-byte prefix plus bytes.
+pub(crate) fn ident_len(id: &[u8]) -> usize {
+    4 + id.len()
+}
+
+// ---------------------------------------------------------------------------
+// Published vector files (ENCODING.md §7).
+// ---------------------------------------------------------------------------
+
+use ityv_encoding::SCHEMA_VERSION_1;
+use std::string::String;
+
+/// One published vector: valid, or invalid with the expected error.
+pub(crate) struct Vector {
+    pub(crate) label: &'static str,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) expected: Option<(&'static str, usize)>,
+}
+
+pub(crate) fn render(title: &str, schema: SchemaId, vectors: &[Vector]) -> String {
+    use core::fmt::Write as _;
+    let mut out = String::new();
+    // Writing to a String cannot fail, so the results are discarded.
+    let _ = writeln!(
+        out,
+        "# ityv-encoding test vectors: {title} (schema_id 0x{:04x}, version {SCHEMA_VERSION_1})",
+        schema.get()
+    );
+    let _ = writeln!(out, "# VALID <label> <hex>");
+    let _ = writeln!(out, "# INVALID <ErrorKind> <offset> <label> <hex>");
+    for v in vectors {
+        let label = v.label.replace(' ', "_");
+        let _ = match v.expected {
+            None => writeln!(out, "VALID {label} {}", hex(&v.bytes)),
+            Some((kind, offset)) => {
+                writeln!(out, "INVALID {kind} {offset} {label} {}", hex(&v.bytes))
+            }
+        };
+    }
+    out
+}
+
+pub(crate) fn check_file(name: &str, content: &str) {
+    let path = std::format!("{}/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var_os("ITYV_UPDATE_VECTORS").is_some() {
+        std::fs::write(&path, content).unwrap();
+        return;
+    }
+    let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("missing vector file {path}: {e}; run with ITYV_UPDATE_VECTORS=1")
+    });
+    assert_eq!(
+        on_disk, content,
+        "vector file {name} is stale; run with ITYV_UPDATE_VECTORS=1"
+    );
+}
+
+/// Re-reads a rendered file and checks every line against the decoder, the
+/// way an independent implementation would.
+pub(crate) fn self_check<F>(content: &str, decode_and_reencode: F)
+where
+    F: Fn(&[u8]) -> Result<Vec<u8>, ityv_encoding::Error>,
+{
+    for line in content.lines().filter(|l| !l.starts_with('#')) {
+        let fields: Vec<&str> = line.split(' ').collect();
+        match fields.first().copied() {
+            Some("VALID") => {
+                let bytes = unhex(fields[2]);
+                let re = decode_and_reencode(&bytes).unwrap_or_else(|e| panic!("{line}: {e}"));
+                assert_eq!(re, bytes, "{line}");
+            }
+            Some("INVALID") => {
+                let kind = kind_from_name(fields[1]);
+                let offset: usize = fields[2].parse().unwrap();
+                let bytes = unhex(fields[4]);
+                let e = decode_and_reencode(&bytes).expect_err(line);
+                assert_eq!((e.kind(), e.offset()), (kind, offset), "{line}");
+            }
+            _ => panic!("unexpected line: {line}"),
+        }
+    }
+}
