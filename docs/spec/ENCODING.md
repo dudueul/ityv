@@ -325,7 +325,7 @@ offset  size  field
 
 `ModuleIssue` (`schema_id` 0x0103): `module_id: Ident<64>` ‖ `chamber: u8`(1 X, 2 Y, 3 J, 4 A, 5 C) ‖ `counter: u64`(≥ 1) ‖ `rand: Array<Scalar, 8>`(개수 = k) ‖ `cid: Token192` ‖ `lab: Option<Token192>` ‖ `tags: Array<[u8; 16], 8>`(챔버 구성원 순서). 비공개부(`rand` 이후)는 링크 밖으로 나가지 않는다.
 
-`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 6>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`. `module_counters`는 그 항목이 소비한 카운터(1·2·3) 또는 배치·마감 시점의 최고값(4·5). head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
+`JournalEntry` (`schema_id` 0x0014): `prev_head: Hash512`(첫 항목은 0) ‖ `kind: u8`(1 기록, 2 검증 폐기, 3 격리, 4 배치 마감, 5 투표함 마감, 6 각인 완료) ‖ `record_hash: Hash512` ‖ `share_package_hash: Hash512`(기록이 아니면 0) ‖ `module_counters: Array<{module_id: Ident<64>, counter: u64}, 6>` ‖ `time_bucket: u64`. `record_hash`의 뜻은 종류마다 다르다: 1·2는 그 표의 기록 해시, 3은 저널에 기록된 표를 격리하면 그 기록 해시이고 기록 전 격리(부분 발급, 각인 전 고장)면 0, 4는 배치의 `records_root`, 5는 투표함의 `record_set_root`, 6은 각인을 마친 기록의 해시. `module_counters`는 그 항목이 소비한 카운터(1·2와 기록 전 격리 3) 또는 배치·마감 시점의 최고값(4·5)이다. 기록을 지목하는 격리(3)와 각인 완료(6)는 그 기록의 카운터를 되풀이할 뿐 새로 소비하지 않는다. head = 항목의 §4 해시. 디스크 스트림은 `u32_be 길이 ‖ 항목`이며, 기록 항목 뒤에는 `u32_be 길이 ‖ SharePackage 객체`가 따른다. `sealed` 등급이다.
 
 ### 8.20 오류 보고 규칙
 
