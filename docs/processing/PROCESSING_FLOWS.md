@@ -150,7 +150,7 @@ flowchart LR
     B[공개 난수 비콘 회차] --> S
     C[최종 체크포인트 해시] --> S
     S --> SAM[SHAKE256 스트림 → 포함 기록 인덱스 표본, 누구나 재계산 VC-046]
-    SAM --> OPEN[정족수: SampleOpening (t, cast_id, r_j) 공개]
+    SAM --> OPEN[정족수: SampleOpening (t, cast_id, r_j) 비공개 열람, 공개는 해시]
     OPEN --> FIND[감사인 2조직: 투표함 개봉, cast_id 판독으로 종이 찾기]
     FIND --> CMP[SampleComparison 일치/불일치]
     CMP -->|임계 이하| PA[PAPER_AUDITED]
