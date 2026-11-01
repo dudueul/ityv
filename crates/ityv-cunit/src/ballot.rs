@@ -99,7 +99,7 @@ use core::fmt;
 
 use ityv_crypto::{
     CastId, ChunkIndex, Commitment, MemberId, Opening, OptionIndex, Proof, RecordPurpose,
-    RecordSigningKey, Scalar, Sha3Hasher, Statement, encapsulate, object_hash, prove, seal,
+    RecordSigningKey, Scalar, Sha3Hasher, Statement, encapsulate, object_hash, prove_into, seal,
     sign_record, split, verify_record,
 };
 use ityv_encoding::{
@@ -259,9 +259,9 @@ fn wipe_scalars(scalars: &mut [Scalar32]) {
 /// each ballot in turn. Not `Clone`; `Debug` shows nothing; wiped on drop.
 ///
 /// The proof is public once the record is published (it is
-/// zero-knowledge); it sits here so that no ballot state carries its 20 KB.
-/// Its encoding is staged in the host's record buffer while the body is
-/// written.
+/// zero-knowledge); it sits here so that no ballot state carries its 20 KB,
+/// and `ityv_crypto::prove_into` writes it in place. Its encoding is staged
+/// in the host's record buffer while the body is written.
 pub struct BallotWork {
     option: u16,
     contributions: [Contribution; MAX_MODULES],
@@ -271,7 +271,7 @@ pub struct BallotWork {
     values: [Scalar; MAX_SECRETS],
     member: [Scalar32; MAX_SECRETS],
     plaintext: [u8; MAX_MEMBER_SHARE_LEN],
-    proof: Option<Proof>,
+    proof: Proof,
     opening: OpeningScratch,
 }
 
@@ -292,7 +292,7 @@ impl BallotWork {
             values: [Scalar::ZERO; MAX_SECRETS],
             member: [Scalar32([0; 32]); MAX_SECRETS],
             plaintext: [0; MAX_MEMBER_SHARE_LEN],
-            proof: None,
+            proof: Proof::EMPTY,
             opening: OpeningScratch {
                 rand: [Scalar32([0; 32]); ityv_crypto::MAX_CHUNKS],
                 module_rand: [[Scalar32([0; 32]); ityv_crypto::MAX_CHUNKS]; MAX_MODULES],
@@ -317,7 +317,7 @@ impl BallotWork {
             && self.values.iter().all(Scalar::is_zero)
             && scalars_clear(&self.member)
             && self.plaintext.iter().all(|&b| b == 0)
-            && self.proof.is_none()
+            && self.proof.is_empty()
             && scalars_clear(&opening.rand)
             && opening.module_rand.iter().all(|row| scalars_clear(row))
             && opening.body.iter().all(|&b| b == 0)
@@ -340,7 +340,7 @@ impl BallotWork {
         self.rng.wipe();
         self.issue.zeroize();
         self.wipe_shares();
-        self.proof = None;
+        self.proof.clear();
         self.opening.zeroize();
     }
 }
@@ -449,8 +449,10 @@ pub struct Durable<'b> {
     record: &'b [u8],
 }
 
-/// Terminal: imprinted, or quarantined after an imprint failure. Carries no
-/// secret and no choice; the work area is wiped.
+/// Terminal: imprinted and journaled as such (the paper may drop into the
+/// box), or quarantined after an imprint failure (the paper goes to the
+/// quarantine envelope). Carries no secret and no choice; the work area is
+/// wiped.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Done(());
 
@@ -754,9 +756,9 @@ impl<'c, 'w> Ballot<'c, 'w, Issued> {
             commitments.get(..k).ok_or(Error::Capacity)?,
         )?;
         let opening = Opening::new(option, w.secrets.cast_id, w.secrets.rand);
-        let proof = prove(bases, &statement, &opening, &mut w.rng);
+        let proved = prove_into(&mut w.proof, bases, &statement, &opening, &mut w.rng);
         drop(opening);
-        w.proof = Some(proof?);
+        proved?;
         let encoded =
             Commitments::new(points.get(..k).ok_or(Error::Capacity)?).ok_or(Error::Capacity)?;
         Ok(Ballot {
@@ -1193,9 +1195,8 @@ impl<'c, 'w> Ballot<'c, 'w, Committed> {
         let module_counters = open_box.counter_list(&flight.counters, flight.issued)?;
         // The record buffer stages the proof encoding until the record is
         // written over it.
-        let proof = w.proof.as_ref().ok_or(Error::StaleBallot)?;
         let mut writer = Writer::new(record);
-        proof.encode(&mut writer)?;
+        w.proof.encode(&mut writer)?;
         let proof_len = writer.finish();
         let body_object = CastRecordBody::new(&CastRecordParts {
             election_id: config.election_id(),
@@ -1361,12 +1362,12 @@ fn write_opening(
         Scalars::new(opening.rand.get(..k).ok_or(Error::Capacity)?).ok_or(Error::Capacity)?;
     let modules = config.modules();
     let first = modules.first().ok_or(Error::Capacity)?;
-    let mut openings = [ModuleOpening {
+    let mut openings: [ModuleOpening<'_>; MAX_MODULES] = core::array::from_fn(|_| ModuleOpening {
         module_id: first.module_id(),
         counter: 0,
-        rand,
+        rand: rand.duplicate(),
         cid: Token192([0; 24]),
-    }; MAX_MODULES];
+    });
     for (((slot, module), contribution), row) in openings
         .iter_mut()
         .zip(modules)
@@ -1473,13 +1474,24 @@ impl<'c, 'b> Ballot<'c, '_, Durable<'b>> {
         written.get(..len).ok_or(Error::BufferTooSmall)
     }
 
-    /// The imprinter printed the cast id and the paper dropped into the
-    /// box. The work area is wiped.
+    /// The imprinter printed the cast id (PROTOCOL.md §7.3 step 8): journals
+    /// the imprint-complete entry (kind 6, naming the record and repeating
+    /// its counters) and only then returns [`Done`], the host's signal to
+    /// drop the paper into the box. The work area is wiped either way. If
+    /// the entry fails, the paper must not drop: the ballot stays in flight
+    /// and the host quarantines it with [`OpenBox::quarantine_in_flight`]
+    /// (the paper goes to the quarantine envelope).
     ///
     /// # Errors
-    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`].
-    pub fn imprinted(self, open_box: &mut OpenBox<'c>) -> Result<Done, Error> {
-        open_box.end_ballot(self.ticket)?;
+    /// [`Error::StaleBallot`], [`Error::NoBallotInFlight`],
+    /// [`Error::TimeRegression`], the journal's error.
+    pub fn imprinted(
+        self,
+        open_box: &mut OpenBox<'c>,
+        sink: &mut dyn JournalSink,
+        time_bucket: TimeBucket,
+    ) -> Result<Done, Error> {
+        open_box.journal_imprint(self.ticket, sink, time_bucket)?;
         Ok(Done(()))
     }
 
@@ -1527,8 +1539,8 @@ mod tests {
         work.values = [Scalar::from_u64(2); MAX_SECRETS];
         work.member = [Scalar32([3; 32]); MAX_SECRETS];
         work.plaintext = [4; MAX_MEMBER_SHARE_LEN];
-        work.proof = sample_proof();
-        assert!(work.proof.is_some());
+        work.proof = sample_proof().expect("a well-formed proof");
+        assert!(!work.proof.is_empty());
         work.opening.rand = [Scalar32([6; 32]); ityv_crypto::MAX_CHUNKS];
         work.opening.module_rand = [[Scalar32([7; 32]); ityv_crypto::MAX_CHUNKS]; MAX_MODULES];
         work.opening.body = [8; MAX_CHALLENGE_BODY_LEN];
@@ -1576,7 +1588,7 @@ mod tests {
         assert!(rng_is_empty(&mut work.rng));
         assert!(work.issue.iter().all(|&b| b == 0));
         assert!(shares_are_wiped(&work));
-        assert!(work.proof.is_none());
+        assert!(work.proof.is_empty());
         assert!(work.opening.rand.iter().all(|s| s.0 == [0; 32]));
         assert!(
             work.opening
@@ -1607,7 +1619,7 @@ mod tests {
             |w| w.values[MAX_SECRETS - 1] = Scalar::from_u64(1),
             |w| w.member[MAX_SECRETS - 1].0[31] = 1,
             |w| w.plaintext[MAX_MEMBER_SHARE_LEN - 1] = 1,
-            |w| w.proof = sample_proof(),
+            |w| w.proof = sample_proof().expect("a well-formed proof"),
         ];
         for (i, make_dirty) in dirty.iter().enumerate() {
             let mut work = Box::new(BallotWork::new());
@@ -1645,7 +1657,7 @@ mod tests {
         assert!(rng_is_empty(&mut work.rng));
         assert!(work.issue.iter().all(|&b| b == 0));
         assert!(shares_are_wiped(&work));
-        assert!(work.proof.is_none());
+        assert!(work.proof.is_empty());
         assert!(work.opening.body.iter().all(|&b| b == 0));
     }
 
@@ -1654,7 +1666,7 @@ mod tests {
         let mut work = filled();
         work.wipe_shares();
         assert!(shares_are_wiped(&work));
-        assert!(work.proof.is_some());
+        assert!(!work.proof.is_empty());
         assert_eq!(work.secrets.cast_id.token().0, [4; 24]);
     }
 
@@ -1669,7 +1681,7 @@ mod tests {
         assert_eq!(work.option, 0);
         let mut work = filled();
         drop(WorkGuard(&mut work));
-        assert!(work.proof.is_none());
+        assert!(work.proof.is_empty());
     }
 
     #[test]

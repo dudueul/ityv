@@ -12,7 +12,7 @@ ityv의 다른 모든 크레이트는 암호를 이 크레이트를 통해서만
 | `sig` | 하이브리드 서명(ML-DSA-87 **그리고** Ed25519), 기록 서명(Ed25519, `cast-record`/`module-record` 전용), 보존 서명(SLH-DSA-SHAKE-256s, `checkpoint-archive` 전용) | PROTOCOL.md §3.1, §7.2.1 |
 | `kem` | ML-KEM-1024 **그리고** X25519 결합 KEM, `ChaCha20-Poly1305` 봉인 | PROTOCOL.md §9.6 |
 | `commit` | 일반화 Pedersen 커밋먼트, 자릿수 묶음·해제, 합계 열기 | PROTOCOL.md §7.4, §11.2 |
-| `orproof` | 1-of-(m+2) OR 표현 증명(Σ-프로토콜, Fiat-Shamir) | PROTOCOL.md §7.5 |
+| `orproof` | 1-of-(m+2) OR 표현 증명(Σ-프로토콜, Fiat-Shamir). `prove_into`는 호출자의 `Proof`에 제자리로 써서 20 KB 임시값을 만들지 않고 `prove`는 그 얇은 포장이다(같은 난수 소비, 같은 바이트). `Proof::EMPTY`는 컴파일 시간 상수라 호출자 메모리(정적 영역, 작업 영역)에 둘 수 있다 | PROTOCOL.md §7.5, ADR-0017 개정 15 |
 | `shares` | 챔버 접근구조 Γ의 선형 비밀분산, 정족수 판정, 복원 | PROTOCOL.md §9.2, ADR-0012 |
 | `otmac`, `pad` | Poly1305 일회성 MAC, 일회용 패드 XOR | PROTOCOL.md §9.3, §9.4 |
 

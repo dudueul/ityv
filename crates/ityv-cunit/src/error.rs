@@ -21,8 +21,11 @@ pub enum ConfigFault {
     MemberIndices,
     /// A chamber's trustee count differs from its threshold's `n`.
     ThresholdCount,
-    /// No ballot style, more than the capacity, or duplicate style identifiers.
+    /// No ballot style, or more than the capacity.
     Styles,
+    /// Styles are not strictly ascending by identifier bytes (unsorted or
+    /// duplicate identifiers).
+    StylesUnsorted,
 }
 
 /// A box-close invariant of PROTOCOL.md §10.2 (VC-038).
@@ -42,6 +45,9 @@ pub enum Invariant {
     EnvelopeCount,
     /// `no_record_count > 0` without a `FallbackDeclared` event.
     FallbackDeclared,
+    /// A record's paper went missing, or an imprinted paper matched no
+    /// record, at a resume (PROTOCOL.md §7.3 step 7).
+    PaperIncidents,
 }
 
 /// Why an operation failed.
@@ -174,7 +180,8 @@ impl fmt::Display for ConfigFault {
             Self::TrusteesUnsorted => "trustees not strictly ascending or more than 64",
             Self::MemberIndices => "member indices of a chamber are not 0..n",
             Self::ThresholdCount => "trustee count of a chamber differs from its threshold n",
-            Self::Styles => "no ballot style, too many, or duplicate identifiers",
+            Self::Styles => "no ballot style, or more than 4096",
+            Self::StylesUnsorted => "ballot styles not strictly ascending by identifier",
         })
     }
 }
@@ -189,6 +196,7 @@ impl fmt::Display for Invariant {
             Self::OpenBatches => "open_batches != 0",
             Self::EnvelopeCount => "envelope count != record_count",
             Self::FallbackDeclared => "no_record_count > 0 without FallbackDeclared",
+            Self::PaperIncidents => "a paper went missing or matched no record at a resume",
         })
     }
 }

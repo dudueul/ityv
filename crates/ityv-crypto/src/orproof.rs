@@ -237,13 +237,42 @@ pub struct Proof {
 }
 
 impl Proof {
-    fn empty(option_count: OptionCount) -> Self {
-        Self {
-            option_count,
-            challenges: [Scalar::ZERO; MAX_OPTIONS],
-            resp_id: [Scalar::ZERO; MAX_OPTIONS],
-            resp_rand: core::array::from_fn(|_| [Scalar::ZERO; MAX_CHUNKS]),
+    /// The empty proof: one option, every scalar zero. Evaluated at compile
+    /// time, so a caller can keep a proof in its own memory (a `static`, a
+    /// work area) and let [`prove_into`] overwrite it in place.
+    pub const EMPTY: Self = Self {
+        option_count: OptionCount::ONE,
+        challenges: [Scalar::ZERO; MAX_OPTIONS],
+        resp_id: [Scalar::ZERO; MAX_OPTIONS],
+        resp_rand: [[Scalar::ZERO; MAX_CHUNKS]; MAX_OPTIONS],
+    };
+
+    /// Resets the proof in place to the empty proof of `option_count`.
+    fn reset(&mut self, option_count: OptionCount) {
+        self.option_count = option_count;
+        self.challenges.fill(Scalar::ZERO);
+        self.resp_id.fill(Scalar::ZERO);
+        for row in &mut self.resp_rand {
+            row.fill(Scalar::ZERO);
         }
+    }
+
+    /// Resets the proof in place to [`Self::EMPTY`].
+    pub fn clear(&mut self) {
+        self.reset(Self::EMPTY.option_count);
+    }
+
+    /// `true` if the proof is [`Self::EMPTY`] (one option, every scalar
+    /// zero).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.option_count == OptionCount::ONE
+            && self
+                .challenges
+                .iter()
+                .chain(self.resp_id.iter())
+                .chain(self.resp_rand.iter().flatten())
+                .all(Scalar::is_zero)
     }
 
     /// The option set (`m + 2`).
@@ -338,7 +367,8 @@ impl<'a> Decode<'a> for Proof {
         if chunk_count != option_count.chunk_count() {
             return Err(EncodingError::new(ErrorKind::InvariantViolation, at));
         }
-        let mut proof = Self::empty(option_count);
+        let mut proof = Self::EMPTY;
+        proof.reset(option_count);
         let options = usize::from(option_count.get());
         let chunks = usize::from(chunk_count);
         let rows = proof
@@ -407,6 +437,40 @@ pub fn prove<R: CryptoRng + ?Sized>(
     witness: &Opening,
     rng: &mut R,
 ) -> Result<Proof, Error> {
+    let mut proof = Proof::EMPTY;
+    prove_into(&mut proof, bases, statement, witness, rng)?;
+    Ok(proof)
+}
+
+/// [`prove`] writing into `out` in place, so no proof-sized temporary is
+/// made; the result and the randomness drawn are the same. On error `out`
+/// is the empty proof of the statement's option set.
+///
+/// # Errors
+/// As [`prove`].
+pub fn prove_into<R: CryptoRng + ?Sized>(
+    out: &mut Proof,
+    bases: &Bases,
+    statement: &Statement<'_>,
+    witness: &Opening,
+    rng: &mut R,
+) -> Result<(), Error> {
+    out.reset(statement.option_count);
+    let result = fill_proof(out, bases, statement, witness, rng);
+    if result.is_err() {
+        out.reset(statement.option_count);
+    }
+    result
+}
+
+/// The body of [`prove_into`]; `proof` is empty on entry.
+fn fill_proof<R: CryptoRng + ?Sized>(
+    proof: &mut Proof,
+    bases: &Bases,
+    statement: &Statement<'_>,
+    witness: &Opening,
+    rng: &mut R,
+) -> Result<(), Error> {
     let opened = verify_opening(
         bases,
         statement.option_count,
@@ -417,7 +481,6 @@ pub fn prove<R: CryptoRng + ?Sized>(
     let chunks = usize::from(statement.chunk_count());
     let true_option = usize::from(opened.get().option().get());
     let points = statement.points()?;
-    let mut proof = Proof::empty(statement.option_count);
     let mut transcript = Transcript::begin(FS_LABEL_OR_REP_V1, statement.transcript_len());
     statement.absorb_header(&mut transcript)?;
 
@@ -490,7 +553,7 @@ pub fn prove<R: CryptoRng + ?Sized>(
     for ((cell, beta_j), rand_j) in cells {
         *cell = beta_j.add(&true_challenge.mul(rand_j));
     }
-    Ok(proof)
+    Ok(())
 }
 
 /// What [`verify`] verified: the statement and the proof that proves it.

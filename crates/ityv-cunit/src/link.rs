@@ -361,6 +361,9 @@ pub enum JournalKind {
     BatchClose = 4,
     /// The box closed.
     BoxClose = 5,
+    /// A record's imprint completed; the paper may drop into the box
+    /// (PROTOCOL.md §7.3 step 8).
+    Imprinted = 6,
 }
 
 impl JournalKind {
@@ -379,6 +382,7 @@ impl JournalKind {
             3 => Some(Self::Quarantine),
             4 => Some(Self::BatchClose),
             5 => Some(Self::BoxClose),
+            6 => Some(Self::Imprinted),
             _ => None,
         }
     }

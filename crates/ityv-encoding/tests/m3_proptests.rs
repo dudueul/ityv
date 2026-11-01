@@ -57,7 +57,7 @@ macro_rules! check_canonical {
                         i
                     );
                     let re = encode_to_vec($schema, SCHEMA_VERSION_1, &other);
-                    prop_assert_eq!(re, mutated, "re-encoding differs after mutation at {}", i);
+                    prop_assert_eq!(&re, &mutated, "re-encoding differs after mutation at {}", i);
                 }
             }
         }
@@ -167,7 +167,7 @@ proptest! {
         let modules: Vec<ModuleOpening<'_>> = ids.iter().enumerate().map(|(i, id)| ModuleOpening {
             module_id: ModuleId::new(id).unwrap(),
             counter: counters[i],
-            rand,
+            rand: rand.duplicate(),
             cid: cids[i],
         }).collect();
         let body = ChallengeOpeningBody::new(&ChallengeOpeningParts {

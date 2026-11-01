@@ -14,7 +14,9 @@
 //! * the pad consumption and pad index of §9.4.3 (VC-034);
 //! * the module's batch-signing rule (VC-021);
 //! * the batch and scan-count triggers (§7.2.1, §7.8, VC-052);
-//! * every close invariant of §10.2 (VC-038).
+//! * every close invariant of §10.2 (VC-038);
+//! * the resume decision for the waiting area (§7.3 step 7) against an
+//!   independently written table.
 //!
 //! Kani additionally checks every harness for panics, overflow and
 //! out-of-bounds access on all explored inputs.
@@ -35,9 +37,10 @@
 use crate::error::Invariant;
 use crate::port::module_may_sign_batch;
 use crate::rules::{
-    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, PAD_KEY_BYTES,
-    SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, advance_mark, batch_due, check_counter, close_verdict,
-    option_in_range, pad_consumption, pad_index, scan_count_due,
+    BATCH_IDLE_BUCKETS, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, PAD_KEY_BYTES, RecordTail,
+    SCAN_COUNT_BUCKETS, SCAN_COUNT_RECORDS, WaitingAction, WaitingArea, advance_mark, batch_due,
+    check_counter, close_verdict, option_in_range, pad_consumption, pad_index, scan_count_due,
+    waiting_area_action,
 };
 
 /// The option bound accepts exactly the indices `0..=option_count − 1`.
@@ -166,7 +169,7 @@ fn scan_count_trigger_is_exact() {
 /// Every close invariant of VC-038, for two modules and symbolic counts,
 /// against the statement written out in 128-bit arithmetic.
 #[kani::proof]
-#[kani::unwind(9)]
+#[kani::unwind(10)]
 fn close_verdict_is_exact() {
     let counters: [u64; 2] = kani::any();
     let absentee: Option<u64> = kani::any();
@@ -183,6 +186,7 @@ fn close_verdict_is_exact() {
         open_batches: kani::any(),
         absentee_envelopes: absentee,
         fallback_declared: kani::any(),
+        paper_incidents: kani::any(),
     };
     let v = close_verdict(&facts);
     let records = facts.records as u128;
@@ -212,12 +216,50 @@ fn close_verdict_is_exact() {
         v.contains(Invariant::FallbackDeclared),
         facts.without_record > 0 && !facts.fallback_declared
     );
+    assert_eq!(
+        v.contains(Invariant::PaperIncidents),
+        facts.paper_incidents > 0
+    );
     let any = v.contains(Invariant::PaperCount)
         || v.contains(Invariant::AttestedCount)
         || v.contains(Invariant::SpoiledEnvelopes)
         || v.contains(Invariant::ModuleCounters)
         || v.contains(Invariant::OpenBatches)
         || v.contains(Invariant::EnvelopeCount)
-        || v.contains(Invariant::FallbackDeclared);
+        || v.contains(Invariant::FallbackDeclared)
+        || v.contains(Invariant::PaperIncidents);
     assert_eq!(v.is_empty(), !any);
+}
+
+/// The resume decision of PROTOCOL.md §7.3 step 7 matches the table
+/// below, written row by row from the protocol text, for every
+/// waiting-area state and every state of the journal's last record.
+#[kani::proof]
+fn waiting_area_decision_matches_the_table() {
+    use WaitingAction::{
+        Divert as V, Drop as D, JournalImprint as J, Nothing as N, PaperMissing as M,
+        QuarantineRecord as R, QuarantineUnjournaled as U, QuarantineUnmatched as X,
+    };
+    const AREAS: [WaitingArea; 3] = [
+        WaitingArea::Empty,
+        WaitingArea::Imprinted,
+        WaitingArea::Unimprinted,
+    ];
+    const TAILS: [RecordTail; 5] = [
+        RecordTail::NoRecord,
+        RecordTail::Open,
+        RecordTail::Imprinted,
+        RecordTail::Quarantined,
+        RecordTail::Missing,
+    ];
+    //            no record  open  imprinted  quarantined  missing
+    const TABLE: [[WaitingAction; 5]; 3] = [
+        /* empty       */ [N, M, N, N, N],
+        /* imprinted   */ [X, J, D, V, X],
+        /* unimprinted */ [U, R, U, U, U],
+    ];
+    let a: usize = kani::any();
+    let t: usize = kani::any();
+    kani::assume(a < 3 && t < 5);
+    assert_eq!(waiting_area_action(AREAS[a], TAILS[t]), TABLE[a][t]);
 }

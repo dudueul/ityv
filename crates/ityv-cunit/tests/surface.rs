@@ -61,6 +61,7 @@ fn every_enum_displays_a_distinct_text() {
             Invariant::OpenBatches,
             Invariant::EnvelopeCount,
             Invariant::FallbackDeclared,
+            Invariant::PaperIncidents,
         ]
         .map(|i| format!("{i}")),
     );
@@ -183,7 +184,7 @@ fn built_and_durable_accessors_expose_the_written_objects() {
     let durable = ballot.cast(&mut b, &mut j, tb(1)).unwrap();
     assert_eq!(durable.record_bytes(), record.as_slice());
     assert_eq!(durable.tracking_code(), &ityv_crypto::object_hash(&body));
-    durable.imprinted(&mut b).unwrap();
+    durable.imprinted(&mut b, &mut j, tb(1)).unwrap();
     assert_eq!(b.config().election_id().as_bytes(), b"E-2026");
 }
 
@@ -207,7 +208,7 @@ fn a_close_with_an_open_batch_reports_it_in_the_body() {
     ballot
         .cast(&mut b, &mut j, tb(1))
         .unwrap()
-        .imprinted(&mut b)
+        .imprinted(&mut b, &mut j, tb(1))
         .unwrap();
     let inputs = CloseInputs {
         paper: 1,
@@ -328,7 +329,7 @@ fn batch_index_counts_closed_batches() {
         ballot
             .cast(&mut b, &mut j, tb(1))
             .unwrap()
-            .imprinted(&mut b)
+            .imprinted(&mut b, &mut j, tb(1))
             .unwrap();
         let head = *b.journal_head();
         let mut out = std::vec![0u8; BATCH_WORK_LEN];
@@ -547,6 +548,7 @@ fn scan_count_accepts_the_bucket_of_the_last_entry_and_verdicts_report_violation
         open_batches: 0,
         absentee_envelopes: None,
         fallback_declared: false,
+        paper_incidents: 0,
     };
     let v = ityv_cunit::rules::close_verdict(&facts);
     assert!(!v.is_empty());
@@ -596,6 +598,6 @@ fn secret_bearing_values_debug_print_nothing_secret() {
     assert_eq!(format!("{command:?}"), "ImprintCommand(..)");
     assert!(command.env_label().is_none());
     assert_ne!(command.cast_id(), &[0; 24]);
-    ballot.imprinted(&mut b).unwrap();
+    ballot.imprinted(&mut b, &mut j, tb(1)).unwrap();
     assert!(area.is_clear());
 }

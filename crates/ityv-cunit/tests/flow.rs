@@ -127,7 +127,7 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     let ballot = ballot.cast(&mut box_, &mut journal, tb(11)).unwrap();
     let imprint = ballot.imprint_command(&box_).unwrap();
     assert!(imprint.env_label().is_none());
-    let _done = ballot.imprinted(&mut box_).unwrap();
+    let _done = ballot.imprinted(&mut box_, &mut journal, tb(11)).unwrap();
 
     verify_cast_record(&w, &modules, &record, &tracking);
     let parsed: CastRecord<'_> =
@@ -146,16 +146,29 @@ fn in_person_ballot_is_cast_imprinted_and_publicly_verifiable() {
     }
     assert_eq!(imprint.cast_id()[..], h.finish()[..24]);
 
-    assert_eq!(journal.entries.len(), 1);
+    assert_eq!(journal.entries.len(), 2);
     let entry: JournalEntry<'_> =
         decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[0]).unwrap();
     assert_eq!(entry.kind(), JournalKind::Record);
     assert_eq!(entry.record_hash(), &tracking);
     assert_eq!(entry.prev_head(), &ityv_encoding::Hash512::ZERO);
     assert_eq!(journal.packages[0].as_deref(), Some(package.as_slice()));
+    // the imprint entry names the record, repeats its counters and comes
+    // before the paper drops
+    let imprint_entry: JournalEntry<'_> =
+        decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &journal.entries[1]).unwrap();
+    assert_eq!(imprint_entry.kind(), JournalKind::Imprinted);
+    assert_eq!(imprint_entry.record_hash(), &tracking);
+    assert_eq!(imprint_entry.module_counters(), entry.module_counters());
+    assert_eq!(imprint_entry.time_bucket(), tb(11));
+    assert_eq!(
+        imprint_entry.prev_head(),
+        &ityv_crypto::object_hash(&journal.entries[0])
+    );
+    assert_eq!(journal.packages[1], None);
     assert_eq!(
         box_.journal_head(),
-        &ityv_crypto::object_hash(&journal.entries[0])
+        &ityv_crypto::object_hash(&journal.entries[1])
     );
     assert_eq!(box_.totals().records, 1);
     assert_eq!(box_.module_counters(), &[1, 1, 1, 1, 1]);
@@ -454,7 +467,7 @@ fn absentee_ballot_imprints_an_envelope_label() {
     let imprint = ballot.imprint_command(&box_).unwrap();
     assert!(imprint.env_label().is_some());
     assert_ne!(imprint.env_label(), Some(imprint.cast_id()));
-    ballot.imprinted(&mut box_).unwrap();
+    ballot.imprinted(&mut box_, &mut journal, tb(1)).unwrap();
 }
 
 #[test]
@@ -487,7 +500,7 @@ fn exhausted_pad_falls_back_to_the_kem_and_sets_bit_zero() {
     ballot
         .cast(&mut box_, &mut journal, tb(1))
         .unwrap()
-        .imprinted(&mut box_)
+        .imprinted(&mut box_, &mut journal, tb(1))
         .unwrap();
     let rec: CastRecord<'_> = decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, &record).unwrap();
     assert_eq!(
@@ -557,7 +570,7 @@ fn slip_is_signed_over_the_tracking_code() {
         &sig,
     )
     .unwrap();
-    ballot.imprinted(&mut box_).unwrap();
+    ballot.imprinted(&mut box_, &mut journal, tb(3)).unwrap();
 }
 
 #[test]
@@ -615,7 +628,7 @@ fn cast_bytes(
     ballot
         .cast(box_, journal, tb(1))
         .unwrap()
-        .imprinted(box_)
+        .imprinted(box_, journal, tb(1))
         .unwrap();
     assert!(area.is_clear());
     (record, package)

@@ -10,6 +10,10 @@
 //! Its length is fixed by the election configuration; the pad consumption
 //! per member is the object length plus 64 (PROTOCOL.md §9.4.3).
 
+use core::fmt;
+
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Kind};
 use crate::primitives::{BoxId, ElectionId, Token192, TrusteeId};
@@ -306,9 +310,14 @@ impl<'a> Decode<'a> for SharePackage<'a> {
     }
 }
 
-/// One member's share plaintext. Not `Copy`: it holds up to fifty secret
-/// shares, and implicit copies would work against zeroization.
-#[derive(Debug, PartialEq, Eq, Hash)]
+/// The tag a member share points to while it is being decoded.
+static NO_TAG: [u8; TAG_LEN] = [0; TAG_LEN];
+
+/// One member's share plaintext. Neither `Clone` nor `Copy`: it holds up
+/// to fifty secret shares and the module's private contributions. `Debug`
+/// shows only `has_module`; the shares, `cid` and `lab` are zeroized on
+/// drop (the tag is borrowed and left to its owner).
+#[derive(PartialEq, Eq, Hash)]
 pub struct MemberShare<'a> {
     shares: Scalars<MAX_SECRETS>,
     has_module: bool,
@@ -335,7 +344,7 @@ impl<'a> MemberShare<'a> {
             return None;
         }
         Some(Self {
-            shares: *shares,
+            shares: shares.duplicate(),
             has_module,
             cid,
             lab,
@@ -374,6 +383,33 @@ impl<'a> MemberShare<'a> {
     }
 }
 
+impl Zeroize for MemberShare<'_> {
+    fn zeroize(&mut self) {
+        self.shares.zeroize();
+        self.cid.0.zeroize();
+        if let Some(lab) = self.lab.as_mut() {
+            lab.0.zeroize();
+        }
+        self.lab = None;
+    }
+}
+
+impl Drop for MemberShare<'_> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for MemberShare<'_> {}
+
+impl fmt::Debug for MemberShare<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemberShare")
+            .field("has_module", &self.has_module)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Encode for MemberShare<'_> {
     fn encoded_len(&self) -> usize {
         self.shares
@@ -396,32 +432,33 @@ impl Encode for MemberShare<'_> {
 impl<'a> Decode<'a> for MemberShare<'a> {
     fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
         let shares_at = r.position();
-        let shares = Scalars::<MAX_SECRETS>::decode(r)?;
-        if shares.count() == 0 {
+        // Built in place: an error drops (and wipes) what was read.
+        let mut share = Self {
+            shares: Scalars::<MAX_SECRETS>::decode(r)?,
+            has_module: false,
+            cid: Token192([0; 24]),
+            lab: None,
+            tag: &NO_TAG,
+        };
+        if share.shares.count() == 0 {
             return Err(Error::new(Kind::ValueOutOfRange, shares_at));
         }
-        let has_module = r.read_bool()?;
+        share.has_module = r.read_bool()?;
         let cid_at = r.position();
-        let cid = Token192::decode(r)?;
-        if !has_module && cid.0 != [0; 24] {
+        share.cid = Token192::decode(r)?;
+        if !share.has_module && share.cid.0 != [0; 24] {
             return Err(Error::new(Kind::InvariantViolation, cid_at));
         }
         let lab_at = r.position();
-        let lab = Option::<Token192>::decode(r)?;
-        if !has_module && lab.is_some() {
+        share.lab = Option::<Token192>::decode(r)?;
+        if !share.has_module && share.lab.is_some() {
             return Err(Error::new(Kind::InvariantViolation, lab_at));
         }
         let tag_at = r.position();
-        let tag = read_fixed::<TAG_LEN>(r)?;
-        if !has_module && *tag != [0; TAG_LEN] {
+        share.tag = read_fixed::<TAG_LEN>(r)?;
+        if !share.has_module && *share.tag != [0; TAG_LEN] {
             return Err(Error::new(Kind::InvariantViolation, tag_at));
         }
-        Ok(Self {
-            shares,
-            has_module,
-            cid,
-            lab,
-            tag,
-        })
+        Ok(share)
     }
 }

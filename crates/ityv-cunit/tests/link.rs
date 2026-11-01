@@ -24,8 +24,8 @@ use common::{
 use ityv_crypto::{AccessStructure, Chamber, OptionCount, Threshold};
 use ityv_cunit::boxstate::OpenBox;
 use ityv_cunit::config::{
-    BallotStyle, ConfigParts, ElectionConfig, ModuleConfig, Profile, TrusteeConfig, chamber_code,
-    chamber_of,
+    BallotStyle, ConfigParts, ElectionConfig, MAX_STYLES, ModuleConfig, Profile, TrusteeConfig,
+    chamber_code, chamber_of,
 };
 use ityv_cunit::error::{ConfigFault, Invariant as I};
 use ityv_cunit::link::{
@@ -202,7 +202,7 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
     assert_eq!(parsed.kind(), JournalKind::BatchClose);
     assert_eq!(parsed.time_bucket(), tb(9));
     assert_eq!(parsed.share_package_hash(), &Hash512::ZERO);
-    for code in [0u8, 6, 255] {
+    for code in [0u8, 7, 255] {
         let mut b = out[..len].to_vec();
         b[80] = code;
         let e = decode_object::<JournalEntry<'_>>(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, &b)
@@ -215,11 +215,13 @@ fn journal_entry_round_trips_and_rejects_unknown_kinds() {
         JournalKind::Quarantine,
         JournalKind::BatchClose,
         JournalKind::BoxClose,
+        JournalKind::Imprinted,
     ] {
         assert_eq!(JournalKind::from_code(kind.code()), Some(kind));
     }
     assert_eq!(JournalKind::Record.code(), 1);
     assert_eq!(JournalKind::BoxClose.code(), 5);
+    assert_eq!(JournalKind::Imprinted.code(), 6);
 }
 
 /// Runs `issue` with the first module misbehaving through `setup`.
@@ -533,26 +535,13 @@ fn configuration_rules_are_enforced() {
     let dup = common::leak(std::vec![style, style]).as_slice();
     assert_eq!(
         config_fault(ConfigParts { styles: dup, ..ok }),
-        ConfigFault::Styles
+        ConfigFault::StylesUnsorted
     );
-    let many = common::leak(
-        (0..65u8)
-            .map(|i| {
-                BallotStyle::new(
-                    BallotStyleId::new(common::leak_bytes(std::vec![
-                        b's',
-                        i / 10 + b'0',
-                        i % 10 + b'0'
-                    ]))
-                    .unwrap(),
-                    OptionCount::new(4).unwrap(),
-                )
-            })
-            .collect::<std::vec::Vec<_>>(),
-    )
-    .as_slice();
     assert_eq!(
-        config_fault(ConfigParts { styles: many, ..ok }),
+        config_fault(ConfigParts {
+            styles: common::styles(MAX_STYLES + 1),
+            ..ok
+        }),
         ConfigFault::Styles
     );
 
@@ -582,7 +571,7 @@ fn configuration_accessors_and_chamber_codes() {
     let (index, style) = c
         .style(BallotStyleId::new(common::STYLE_WIDE).unwrap())
         .unwrap();
-    assert_eq!(index, 1);
+    assert_eq!(index, 0);
     assert_eq!(style.chunk_count(), 2);
     assert_eq!(style.option_count().get(), 12);
     assert_eq!(c.secret_count(style), 5 * 2 + 2);
@@ -776,13 +765,14 @@ proptest! {
         paper in 0u64..6, records in 0u64..6, attested in 0u64..6, open in 0u64..6,
         without in 0u64..3, challenged in 0u64..3, quarantined in 0u64..3, spoiled in 0u64..6,
         c0 in 0u64..10, c1 in 0u64..10, batches in 0u8..2, envelopes in proptest::option::of(0u64..6),
-        declared in any::<bool>(),
+        declared in any::<bool>(), incidents in 0u64..3,
     ) {
         let counters = [c0, c1];
         let facts = rules::CloseFacts {
             paper, records, attested, open_batch_records: open, without_record: without,
             challenged, quarantined, spoiled_envelopes: spoiled, module_final_counters: &counters,
             open_batches: batches, absentee_envelopes: envelopes, fallback_declared: declared,
+            paper_incidents: incidents,
         };
         let v = rules::close_verdict(&facts);
         prop_assert_eq!(v.contains(I::PaperCount), records + without != paper);
@@ -793,5 +783,39 @@ proptest! {
         prop_assert_eq!(v.contains(I::OpenBatches), batches != 0);
         prop_assert_eq!(v.contains(I::EnvelopeCount), envelopes.is_some_and(|n| n != records));
         prop_assert_eq!(v.contains(I::FallbackDeclared), without > 0 && !declared);
+        prop_assert_eq!(v.contains(I::PaperIncidents), incidents > 0);
+    }
+}
+
+#[test]
+fn the_waiting_area_decision_covers_every_case() {
+    use rules::WaitingAction::{
+        Divert, Drop, JournalImprint, Nothing, PaperMissing, QuarantineRecord,
+        QuarantineUnjournaled, QuarantineUnmatched,
+    };
+    use rules::{RecordTail as T, WaitingArea as A};
+    let table = [
+        (A::Empty, T::NoRecord, Nothing),
+        (A::Empty, T::Open, PaperMissing),
+        (A::Empty, T::Imprinted, Nothing),
+        (A::Empty, T::Quarantined, Nothing),
+        (A::Empty, T::Missing, Nothing),
+        (A::Imprinted, T::NoRecord, QuarantineUnmatched),
+        (A::Imprinted, T::Open, JournalImprint),
+        (A::Imprinted, T::Imprinted, Drop),
+        (A::Imprinted, T::Quarantined, Divert),
+        (A::Imprinted, T::Missing, QuarantineUnmatched),
+        (A::Unimprinted, T::NoRecord, QuarantineUnjournaled),
+        (A::Unimprinted, T::Open, QuarantineRecord),
+        (A::Unimprinted, T::Imprinted, QuarantineUnjournaled),
+        (A::Unimprinted, T::Quarantined, QuarantineUnjournaled),
+        (A::Unimprinted, T::Missing, QuarantineUnjournaled),
+    ];
+    for (area, tail, action) in table {
+        assert_eq!(
+            rules::waiting_area_action(area, tail),
+            action,
+            "{area:?} {tail:?}"
+        );
     }
 }

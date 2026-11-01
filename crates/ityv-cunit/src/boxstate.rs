@@ -38,7 +38,10 @@ use crate::error::Error;
 use crate::link::{JournalEntry, JournalKind, MAX_JOURNAL_ENTRY_LEN, SCHEMA_JOURNAL_ENTRY};
 use crate::port::{JournalSink, JournalSource, ModulePort};
 use crate::rng::DeviceRng;
-use crate::rules::{self, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, Violations};
+use crate::rules::{
+    self, BATCH_MAX_RECORDS, CloseFacts, CounterCheck, RecordTail, Violations, WaitingAction,
+    WaitingArea,
+};
 
 /// Purpose of the batch attestation signatures.
 pub const PURPOSE_BATCH_ATTEST: &[u8] = b"batch-attest";
@@ -260,20 +263,51 @@ pub struct Totals {
 pub struct ResumeInputs {
     /// The bucket of the box's `BoxOpened` event.
     pub opened: TimeBucket,
-    /// Two clerks and two observers confirmed that a ballot is left in
-    /// the waiting area (PROTOCOL.md §7.3 step 7).
-    pub waiting_area_occupied: bool,
-    /// The current bucket, used for a waiting-area quarantine entry.
+    /// The waiting-area state two clerks and two observers attested
+    /// (PROTOCOL.md §7.3 step 7).
+    pub waiting_area: WaitingArea,
+    /// The current bucket, used for any entry the resume appends.
     pub time_bucket: TimeBucket,
 }
 
-/// The record entry a quarantine entry may re-classify: the last entry of
-/// the journal when it is a record.
+/// A record entry: its hash and the counters it consumed. An imprint or
+/// quarantine entry naming it repeats them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecordTrace {
     hash: Hash512,
     counters: [u64; MAX_MODULES],
     include: [bool; MAX_MODULES],
+}
+
+impl RecordTrace {
+    /// No record: an entry without record hash and without counters.
+    const NONE: Self = Self {
+        hash: Hash512::ZERO,
+        counters: [0; MAX_MODULES],
+        include: [false; MAX_MODULES],
+    };
+}
+
+/// The journal's last record while it is replayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    NoRecord,
+    Open(RecordTrace),
+    Imprinted,
+    Quarantined,
+    Missing,
+}
+
+impl Tail {
+    const fn public(self) -> RecordTail {
+        match self {
+            Self::NoRecord => RecordTail::NoRecord,
+            Self::Open(_) => RecordTail::Open,
+            Self::Imprinted => RecordTail::Imprinted,
+            Self::Quarantined => RecordTail::Quarantined,
+            Self::Missing => RecordTail::Missing,
+        }
+    }
 }
 
 /// A ballot box accepting ballots.
@@ -292,6 +326,7 @@ pub struct OpenBox<'c> {
     in_flight: Option<InFlight>,
     next_ticket: u64,
     phase: Phase,
+    paper_incidents: u64,
 }
 
 impl<'c> OpenBox<'c> {
@@ -316,6 +351,7 @@ impl<'c> OpenBox<'c> {
             in_flight: None,
             next_ticket: 1,
             phase: Phase::Open,
+            paper_incidents: 0,
         }
     }
 
@@ -381,6 +417,13 @@ impl<'c> OpenBox<'c> {
     #[must_use]
     pub const fn has_ballot_in_flight(&self) -> bool {
         self.in_flight.is_some()
+    }
+
+    /// Papers lost or unmatched at a resume (PROTOCOL.md §7.3 step 7); any
+    /// makes the close `HOLD_REVIEW`.
+    #[must_use]
+    pub const fn paper_incidents(&self) -> u64 {
+        self.paper_incidents
     }
 
     /// `true` once a journal mismatch latched the box (VC-056).
@@ -453,12 +496,6 @@ impl<'c> OpenBox<'c> {
         *flight.counters.get_mut(module).ok_or(Error::Capacity)? = counter;
         *flight.issued.get_mut(module).ok_or(Error::Capacity)? = true;
         self.in_flight = Some(flight);
-        Ok(())
-    }
-
-    pub(crate) fn end_ballot(&mut self, ticket: u64) -> Result<(), Error> {
-        self.check_ticket(ticket)?;
-        self.in_flight = None;
         Ok(())
     }
 
@@ -570,6 +607,33 @@ impl<'c> OpenBox<'c> {
             .challenged
             .checked_add(1)
             .ok_or(Error::Overflow)?;
+        self.in_flight = None;
+        Ok(())
+    }
+
+    /// Journals the imprint-complete entry (kind 6) of the ballot `ticket`,
+    /// repeating its record's hash and counters, and ends the ballot
+    /// (PROTOCOL.md §7.3 step 8). On error the ballot stays in flight.
+    pub(crate) fn journal_imprint(
+        &mut self,
+        ticket: u64,
+        sink: &mut dyn JournalSink,
+        time_bucket: TimeBucket,
+    ) -> Result<(), Error> {
+        let flight = self.check_ticket(ticket)?;
+        let record_hash = flight.record.ok_or(Error::StaleBallot)?;
+        self.journal(
+            sink,
+            &EntryFields {
+                kind: JournalKind::Imprinted,
+                record_hash,
+                share_package_hash: Hash512::ZERO,
+                counters: &flight.counters,
+                include: flight.issued,
+                time_bucket,
+            },
+            None,
+        )?;
         self.in_flight = None;
         Ok(())
     }
@@ -981,6 +1045,7 @@ impl<'c> OpenBox<'c> {
             open_batches: u8::from(self.batch.count > 0),
             absentee_envelopes: inputs.absentee_envelopes,
             fallback_declared: inputs.fallback_declared,
+            paper_incidents: self.paper_incidents,
         }
     }
 
@@ -1094,20 +1159,25 @@ impl<'c> OpenBox<'c> {
     }
 
     /// Rebuilds a box from its journal after a power loss (PROTOCOL.md
-    /// §7.3 step 7, §7.8; ADR-0017 개정 11). Every entry is decoded and
+    /// §7.3 step 7, §7.8; ADR-0017 개정 11, 14). Every entry is decoded and
     /// checked: the head chain from zero, non-decreasing time buckets, a
     /// share package exactly after record entries and matching their
     /// package hash, consumed counters that each follow the module's mark,
-    /// a quarantine with a record hash only right after that record, batch
-    /// closes whose root and counters match the replayed batch, nothing
-    /// after a box close. The high-water marks, the open batch, the batch
-    /// index and the totals follow from the entries.
+    /// an imprint or a quarantine naming a record only right after that
+    /// record and with its counters, batch closes whose root and counters
+    /// match the replayed batch, nothing after a box close. The high-water
+    /// marks, the open batch, the batch index and the totals follow from
+    /// the entries. A record that another entry follows without its
+    /// imprint or quarantine lost its paper at an earlier resume and counts
+    /// as a paper incident.
     ///
-    /// If the waiting area holds a ballot, it is quarantined: by the last
-    /// entry's record hash when the last entry is a record, otherwise as a
-    /// quarantine without record (its consumed counters are unknown). No
-    /// ballot is in flight afterwards and a scan count is due at once.
-    /// `package` must hold the largest share package of the box.
+    /// Then the attested waiting-area state decides, with the journal's
+    /// last record, what happens to the paper there
+    /// ([`rules::waiting_area_action`]); the returned action tells the host
+    /// where the paper goes. Entries it appends carry
+    /// `inputs.time_bucket`. No ballot is in flight afterwards and a scan
+    /// count is due at once. `package` must hold the largest share package
+    /// of the box.
     ///
     /// # Errors
     /// [`Error::JournalCorrupt`] for any broken or inconsistent entry,
@@ -1119,47 +1189,91 @@ impl<'c> OpenBox<'c> {
         sink: &mut dyn JournalSink,
         inputs: &ResumeInputs,
         package: &mut [u8],
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, WaitingAction), Error> {
         let mut open_box = Self::open(config, inputs.opened);
         let mut entry = [0u8; MAX_JOURNAL_ENTRY_LEN];
-        let mut last = None;
+        let mut tail = Tail::NoRecord;
         while let Some(item) = source.next_item(&mut entry, package)? {
             let entry_bytes = entry.get(..item.entry_len).ok_or(Error::JournalCorrupt)?;
             let package_bytes = match item.package_len {
                 Some(len) => Some(package.get(..len).ok_or(Error::JournalCorrupt)?),
                 None => None,
             };
-            last = open_box
-                .replay(entry_bytes, package_bytes, last)
+            tail = open_box
+                .replay(entry_bytes, package_bytes, tail)
                 .map_err(|_| Error::JournalCorrupt)?;
         }
         open_box.usable()?;
-        if inputs.waiting_area_occupied {
-            let trace = last.unwrap_or(RecordTrace {
-                hash: Hash512::ZERO,
-                counters: [0; MAX_MODULES],
-                include: [false; MAX_MODULES],
-            });
-            open_box.journal(
-                sink,
-                &EntryFields {
-                    kind: JournalKind::Quarantine,
-                    record_hash: trace.hash,
-                    share_package_hash: Hash512::ZERO,
-                    counters: &trace.counters,
-                    include: trace.include,
-                    time_bucket: inputs.time_bucket,
-                },
-                None,
-            )?;
-            if last.is_some() {
-                open_box.withdraw_record(&trace.hash)?;
-            } else {
+        let action = rules::waiting_area_action(inputs.waiting_area, tail.public());
+        let open = match tail {
+            Tail::Open(trace) => trace,
+            Tail::NoRecord | Tail::Imprinted | Tail::Quarantined | Tail::Missing => {
+                RecordTrace::NONE
+            }
+        };
+        match action {
+            WaitingAction::Nothing | WaitingAction::Drop | WaitingAction::Divert => {}
+            WaitingAction::PaperMissing => open_box.count_paper_incident()?,
+            WaitingAction::JournalImprint => {
+                open_box.append_settling(
+                    sink,
+                    JournalKind::Imprinted,
+                    &open,
+                    inputs.time_bucket,
+                )?;
+            }
+            WaitingAction::QuarantineRecord => {
+                open_box.append_settling(
+                    sink,
+                    JournalKind::Quarantine,
+                    &open,
+                    inputs.time_bucket,
+                )?;
+                open_box.withdraw_record(&open.hash)?;
+            }
+            WaitingAction::QuarantineUnjournaled | WaitingAction::QuarantineUnmatched => {
+                open_box.append_settling(
+                    sink,
+                    JournalKind::Quarantine,
+                    &RecordTrace::NONE,
+                    inputs.time_bucket,
+                )?;
                 open_box.count_quarantine()?;
+                if action == WaitingAction::QuarantineUnmatched {
+                    open_box.count_paper_incident()?;
+                }
             }
         }
         open_box.scan.pending = true;
-        Ok(open_box)
+        Ok((open_box, action))
+    }
+
+    /// Appends an imprint or quarantine entry naming `trace` (or naming no
+    /// record, for [`RecordTrace::NONE`]).
+    fn append_settling(
+        &mut self,
+        sink: &mut dyn JournalSink,
+        kind: JournalKind,
+        trace: &RecordTrace,
+        time_bucket: TimeBucket,
+    ) -> Result<(), Error> {
+        self.journal(
+            sink,
+            &EntryFields {
+                kind,
+                record_hash: trace.hash,
+                share_package_hash: Hash512::ZERO,
+                counters: &trace.counters,
+                include: trace.include,
+                time_bucket,
+            },
+            None,
+        )
+    }
+
+    fn count_paper_incident(&mut self) -> Result<(), Error> {
+        self.paper_incidents = self.paper_incidents.checked_add(1).ok_or(Error::Overflow)?;
+        Ok(())
     }
 
     /// The counters an entry lists, as arrays in configuration order.
@@ -1220,14 +1334,9 @@ impl<'c> OpenBox<'c> {
         }
     }
 
-    /// Applies one journal entry read back at resume; returns the record
-    /// trace when the entry is a record.
-    fn replay(
-        &mut self,
-        bytes: &[u8],
-        package: Option<&[u8]>,
-        last: Option<RecordTrace>,
-    ) -> Result<Option<RecordTrace>, Error> {
+    /// Applies one journal entry read back at resume and returns the new
+    /// state of the last record.
+    fn replay(&mut self, bytes: &[u8], package: Option<&[u8]>, tail: Tail) -> Result<Tail, Error> {
         self.usable()?;
         let entry: JournalEntry<'_> = decode_object(SCHEMA_JOURNAL_ENTRY, SCHEMA_VERSION_1, bytes)?;
         if *entry.prev_head() != self.journal_head {
@@ -1235,23 +1344,35 @@ impl<'c> OpenBox<'c> {
         }
         let time_bucket = entry.time_bucket();
         self.check_time(time_bucket)?;
-        let is_record = entry.kind() == JournalKind::Record;
+        let kind = entry.kind();
         let package_hash = package.map_or(Hash512::ZERO, object_hash);
-        if package.is_some() != is_record || *entry.share_package_hash() != package_hash {
+        if package.is_some() != (kind == JournalKind::Record)
+            || *entry.share_package_hash() != package_hash
+        {
             return Err(Error::JournalCorrupt);
         }
         let (counters, include) = self.entry_counters(&entry)?;
         let record_hash = *entry.record_hash();
-        let mut trace = None;
-        match entry.kind() {
+        let trace = RecordTrace {
+            hash: record_hash,
+            counters,
+            include,
+        };
+        let names_record = kind == JournalKind::Imprinted
+            || (kind == JournalKind::Quarantine && record_hash != Hash512::ZERO);
+        let mut tail = tail;
+        if matches!(tail, Tail::Open(_)) && !names_record {
+            // In live operation a record is followed by its imprint or
+            // quarantine before anything else; only a resume that found the
+            // waiting area empty leaves it open.
+            self.count_paper_incident()?;
+            tail = Tail::Missing;
+        }
+        match kind {
             JournalKind::Record => {
                 self.replay_consumed(&counters, include)?;
                 self.push_record(record_hash, time_bucket)?;
-                trace = Some(RecordTrace {
-                    hash: record_hash,
-                    counters,
-                    include,
-                });
+                tail = Tail::Open(trace);
             }
             JournalKind::Challenge => {
                 self.replay_consumed(&counters, include)?;
@@ -1266,15 +1387,17 @@ impl<'c> OpenBox<'c> {
                 self.count_quarantine()?;
             }
             JournalKind::Quarantine => {
-                let expected = Some(RecordTrace {
-                    hash: record_hash,
-                    counters,
-                    include,
-                });
-                if last != expected {
+                if tail != Tail::Open(trace) {
                     return Err(Error::JournalCorrupt);
                 }
                 self.withdraw_record(&record_hash)?;
+                tail = Tail::Quarantined;
+            }
+            JournalKind::Imprinted => {
+                if tail != Tail::Open(trace) {
+                    return Err(Error::JournalCorrupt);
+                }
+                tail = Tail::Imprinted;
             }
             JournalKind::BatchClose => {
                 self.replay_marks(&counters, include)?;
@@ -1292,7 +1415,7 @@ impl<'c> OpenBox<'c> {
         }
         self.journal_head = object_hash(bytes);
         self.last_bucket = time_bucket.get();
-        Ok(trace)
+        Ok(tail)
     }
 }
 

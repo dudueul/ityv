@@ -6,6 +6,10 @@
 //! `ballot_style_id`, `record_hash`, `option_index`, `cast_id`, `rand`,
 //! `modules`. `ChallengeOpening` field order: `body`, `device_sig`.
 
+use core::fmt;
+
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Kind};
 use crate::primitives::{BallotStyleId, BoxId, ElectionId, Hash512, ModuleId, Token192};
@@ -23,8 +27,10 @@ pub const MAX_OPTION_INDEX: u16 = 63;
 /// Maximum length of the embedded `ChallengeOpeningBody` object bytes.
 pub const MAX_CHALLENGE_BODY_LEN: usize = 4096;
 
-/// One module's contribution to the opened ballot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One module's contribution to the opened ballot. Secret until the
+/// opening is published: neither `Clone` nor `Copy`, `Debug` shows only the
+/// public fields, zeroized on drop.
+#[derive(PartialEq, Eq, Hash)]
 pub struct ModuleOpening<'a> {
     /// The module.
     pub module_id: ModuleId<'a>,
@@ -34,6 +40,43 @@ pub struct ModuleOpening<'a> {
     pub rand: Scalars<MAX_CHUNKS>,
     /// The module's cast-id contribution.
     pub cid: Token192,
+}
+
+impl ModuleOpening<'_> {
+    /// An explicit copy (zeroized on drop like the original).
+    #[must_use]
+    pub fn duplicate(&self) -> Self {
+        Self {
+            module_id: self.module_id,
+            counter: self.counter,
+            rand: self.rand.duplicate(),
+            cid: self.cid,
+        }
+    }
+}
+
+impl Zeroize for ModuleOpening<'_> {
+    fn zeroize(&mut self) {
+        self.rand.zeroize();
+        self.cid.0.zeroize();
+    }
+}
+
+impl Drop for ModuleOpening<'_> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for ModuleOpening<'_> {}
+
+impl fmt::Debug for ModuleOpening<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ModuleOpening")
+            .field("module_id", &self.module_id)
+            .field("counter", &self.counter)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Unvalidated inputs for [`ChallengeOpeningBody::new`].
@@ -57,8 +100,11 @@ pub struct ChallengeOpeningParts<'a> {
     pub modules: &'a [ModuleOpening<'a>],
 }
 
-/// The body of a challenge opening.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The body of a challenge opening. It reveals the choice, so until it is
+/// published it is secret: neither `Clone` nor `Copy`, `Debug` shows only
+/// the public fields, and the option, the cast id and every scalar are
+/// zeroized on drop.
+#[derive(PartialEq, Eq, Hash)]
 pub struct ChallengeOpeningBody<'a> {
     election_id: ElectionId<'a>,
     box_id: BoxId<'a>,
@@ -78,7 +124,7 @@ impl<'a> ChallengeOpeningBody<'a> {
     #[must_use]
     pub fn new(parts: &ChallengeOpeningParts<'a>) -> Option<Self> {
         let modules = parts.modules;
-        let rand = *parts.rand;
+        let rand = parts.rand;
         if parts.option_index > MAX_OPTION_INDEX || rand.count() == 0 || modules.len() > MAX_MODULES
         {
             return None;
@@ -87,21 +133,22 @@ impl<'a> ChallengeOpeningBody<'a> {
         if !ascending || modules.iter().any(|m| m.rand.count() != rand.count()) {
             return None;
         }
-        let mut slots = [None; MAX_MODULES];
-        for (slot, module) in slots.iter_mut().zip(modules) {
-            *slot = Some(*module);
-        }
-        Some(Self {
+        let module_count = u8::try_from(modules.len()).ok()?;
+        let mut body = Self {
             election_id: parts.election_id,
             box_id: parts.box_id,
             ballot_style_id: parts.ballot_style_id,
             record_hash: parts.record_hash,
             option_index: parts.option_index,
             cast_id: parts.cast_id,
-            rand,
-            modules: slots,
-            module_count: u8::try_from(modules.len()).ok()?,
-        })
+            rand: rand.duplicate(),
+            modules: core::array::from_fn(|_| None),
+            module_count,
+        };
+        for (slot, module) in body.modules.iter_mut().zip(modules) {
+            *slot = Some(module.duplicate());
+        }
+        Some(body)
     }
 
     /// The election.
@@ -147,12 +194,42 @@ impl<'a> ChallengeOpeningBody<'a> {
     }
 
     /// The per-module contributions in ascending identifier order.
-    pub fn modules(&self) -> impl Iterator<Item = ModuleOpening<'a>> + '_ {
+    pub fn modules(&self) -> impl Iterator<Item = &ModuleOpening<'a>> + '_ {
         self.modules
             .iter()
             .take(usize::from(self.module_count))
             .flatten()
-            .copied()
+    }
+}
+
+impl Zeroize for ChallengeOpeningBody<'_> {
+    fn zeroize(&mut self) {
+        self.option_index.zeroize();
+        self.cast_id.0.zeroize();
+        self.rand.zeroize();
+        for module in self.modules.iter_mut().flatten() {
+            module.zeroize();
+        }
+    }
+}
+
+impl Drop for ChallengeOpeningBody<'_> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for ChallengeOpeningBody<'_> {}
+
+impl fmt::Debug for ChallengeOpeningBody<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChallengeOpeningBody")
+            .field("election_id", &self.election_id)
+            .field("box_id", &self.box_id)
+            .field("ballot_style_id", &self.ballot_style_id)
+            .field("record_hash", &self.record_hash)
+            .field("module_count", &self.module_count)
+            .finish_non_exhaustive()
     }
 }
 
@@ -168,7 +245,7 @@ impl Encode for ChallengeOpeningBody<'_> {
     fn encoded_len(&self) -> usize {
         let modules = self
             .modules()
-            .fold(4usize, |acc, m| acc.saturating_add(module_len(&m)));
+            .fold(4usize, |acc, m| acc.saturating_add(module_len(m)));
         self.election_id
             .encoded_len()
             .saturating_add(self.box_id.encoded_len())
@@ -210,17 +287,29 @@ impl<'a> Decode<'a> for ChallengeOpeningBody<'a> {
         if option_index > MAX_OPTION_INDEX {
             return Err(Error::new(Kind::ValueOutOfRange, index_at));
         }
-        let cast_id = Token192::decode(r)?;
+        // The secret part is decoded straight into the value, whose drop
+        // wipes it: an error leaves no copy of the part already read.
+        let mut body = Self {
+            election_id,
+            box_id,
+            ballot_style_id,
+            record_hash,
+            option_index,
+            cast_id: Token192([0; 24]),
+            rand: Scalars::empty(),
+            modules: core::array::from_fn(|_| None),
+            module_count: 0,
+        };
+        body.cast_id = Token192::decode(r)?;
         let rand_at = r.position();
-        let rand = Scalars::<MAX_CHUNKS>::decode(r)?;
-        if rand.count() == 0 {
+        body.rand = Scalars::<MAX_CHUNKS>::decode(r)?;
+        if body.rand.count() == 0 {
             return Err(Error::new(Kind::ValueOutOfRange, rand_at));
         }
         let modules_at = r.position();
         let count = r.read_count(MAX_MODULES)?;
-        let mut modules = [None; MAX_MODULES];
         let mut previous: Option<&[u8]> = None;
-        for slot in modules.iter_mut().take(count) {
+        for slot in body.modules.iter_mut().take(count) {
             let id_at = r.position();
             let module_id = ModuleId::decode(r)?;
             Reader::check_ascending(previous, module_id.as_bytes(), id_at)?;
@@ -228,35 +317,26 @@ impl<'a> Decode<'a> for ChallengeOpeningBody<'a> {
             let counter = r.read_u64()?;
             let mrand_at = r.position();
             let mrand = Scalars::<MAX_CHUNKS>::decode(r)?;
-            if mrand.count() != rand.count() {
+            if mrand.count() != body.rand.count() {
                 return Err(Error::new(Kind::InvariantViolation, mrand_at));
             }
-            let cid = Token192::decode(r)?;
-            *slot = Some(ModuleOpening {
+            let opening = slot.insert(ModuleOpening {
                 module_id,
                 counter,
                 rand: mrand,
-                cid,
+                cid: Token192([0; 24]),
             });
+            opening.cid = Token192::decode(r)?;
         }
-        Ok(Self {
-            election_id,
-            box_id,
-            ballot_style_id,
-            record_hash,
-            option_index,
-            cast_id,
-            rand,
-            modules,
-            module_count: u8::try_from(count)
-                .map_err(|_| Error::new(Kind::CountExceedsMax, modules_at))?,
-        })
+        body.module_count =
+            u8::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, modules_at))?;
+        Ok(body)
     }
 }
 
 /// A challenge opening event: the body object bytes with the device's
 /// hybrid signature (purpose `challenge`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ChallengeOpening<'a> {
     body_bytes: &'a [u8],
     body: ChallengeOpeningBody<'a>,

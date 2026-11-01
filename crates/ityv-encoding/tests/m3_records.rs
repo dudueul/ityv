@@ -525,8 +525,8 @@ fn challenge_opening_round_trip_and_rules() {
     assert_eq!(decoded.cast_id(), &Token192(patterned::<24>(0x21)));
     assert_eq!(decoded.record_hash(), &patterned64(0x20));
     assert_eq!(decoded.rand().count(), 2);
-    let got: Vec<ModuleOpening<'_>> = decoded.modules().collect();
-    assert_eq!(got, modules);
+    let got: Vec<&ModuleOpening<'_>> = decoded.modules().collect();
+    assert_eq!(got, modules.iter().collect::<Vec<_>>());
     assert_eq!(decoded.election_id().as_bytes(), E);
     assert_eq!(decoded.box_id().as_bytes(), BOX);
     assert_eq!(decoded.ballot_style_id().as_bytes(), STYLE);
@@ -579,7 +579,7 @@ fn challenge_opening_round_trip_and_rules() {
     assert!(ChallengeOpeningBody::new(&p).is_none());
     let empty = Scalars::<MAX_CHUNKS>::new(&[]).unwrap();
     assert!(ChallengeOpeningBody::new(&opening_parts(&empty, &modules)).is_none());
-    let swapped = [modules[1], modules[0]];
+    let swapped = [modules[1].duplicate(), modules[0].duplicate()];
     assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &swapped)).is_none());
     let mismatched = [module_opening(b"mod-X", 7, 1, 0x60)];
     assert!(ChallengeOpeningBody::new(&opening_parts(&rand, &mismatched)).is_none());
@@ -589,7 +589,7 @@ fn challenge_opening_round_trip_and_rules() {
             .map(|id| ModuleOpening {
                 module_id: ModuleId::new(id).unwrap(),
                 counter: 1,
-                rand,
+                rand: rand.duplicate(),
                 cid: Token192([0; 24]),
             })
             .collect();

@@ -38,8 +38,11 @@ pub const MAX_MODULES: usize = 6;
 const _: () = assert!(5 * ityv_crypto::MAX_CHUNKS + 2 <= MAX_SECRETS);
 /// Maximum number of trustees over all chambers.
 pub const MAX_TRUSTEES: usize = 64;
-/// Maximum number of ballot styles a box may receive.
-pub const MAX_STYLES: usize = 64;
+/// Maximum number of ballot styles a box may receive. An early-voting
+/// scanner holds every district's style (about 2,300 in a local election),
+/// so the capacity is 4,096. The styles stay in the host's slice; the unit
+/// keeps only the borrow and finds a style by binary search.
+pub const MAX_STYLES: usize = 4096;
 
 /// Whether the box receives in-person ballots or absentee/overseas ballots
 /// (which carry an envelope label, PROTOCOL.md §7.3).
@@ -228,7 +231,8 @@ pub struct ConfigParts<'a> {
     pub station_id: StationId<'a>,
     /// The ballot profile.
     pub profile: Profile,
-    /// The ballot styles the box receives (at least one, distinct ids).
+    /// The ballot styles the box receives: one to [`MAX_STYLES`], strictly
+    /// ascending by identifier bytes (so distinct).
     pub styles: &'a [BallotStyle<'a>],
     /// The modules present, strictly ascending by identifier.
     pub modules: &'a [ModuleConfig<'a>],
@@ -325,14 +329,8 @@ impl<'a> ElectionConfig<'a> {
         if styles.is_empty() || styles.len() > MAX_STYLES {
             return Err(ConfigFault::Styles);
         }
-        for (i, a) in styles.iter().enumerate() {
-            if styles
-                .iter()
-                .skip(i.saturating_add(1))
-                .any(|b| b.id.as_bytes() == a.id.as_bytes())
-            {
-                return Err(ConfigFault::Styles);
-            }
+        if !ascending(styles, |s| s.id.as_bytes()) {
+            return Err(ConfigFault::StylesUnsorted);
         }
         Ok(())
     }
@@ -391,14 +389,15 @@ impl<'a> ElectionConfig<'a> {
         self.parts.voter_code_enabled
     }
 
-    /// The style with identifier `id`, with its index.
+    /// The style with identifier `id`, with its index, found by binary
+    /// search over the ascending style list.
     #[must_use]
     pub fn style(&self, id: BallotStyleId<'_>) -> Option<(usize, &'a BallotStyle<'a>)> {
-        self.parts
-            .styles
-            .iter()
-            .enumerate()
-            .find(|(_, s)| s.id.as_bytes() == id.as_bytes())
+        let styles = self.parts.styles;
+        let index = styles
+            .binary_search_by(|s| s.id.as_bytes().cmp(id.as_bytes()))
+            .ok()?;
+        styles.get(index).map(|style| (index, style))
     }
 
     /// The module serving `chamber`, with its index, if any.

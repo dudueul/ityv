@@ -143,7 +143,46 @@ pub(crate) fn world(profile: Profile, voter_code: bool) -> World {
     world_with(profile, voter_code, &MODULES)
 }
 
+/// `n` styles `S0000`, `S0001`, … (ascending), with option counts cycling
+/// through 3..=64 so that every chunk count occurs.
+pub(crate) fn styles(n: usize) -> &'static [BallotStyle<'static>] {
+    let list: Vec<BallotStyle<'static>> = (0..n)
+        .map(|i| {
+            let id = leak_bytes(std::format!("S{i:04}").into_bytes());
+            BallotStyle::new(
+                BallotStyleId::new(id).unwrap(),
+                OptionCount::new(3 + (i % 62) as u16).unwrap(),
+            )
+        })
+        .collect();
+    Box::leak(list.into_boxed_slice())
+}
+
 pub(crate) fn world_with(profile: Profile, voter_code: bool, modules: &[ModuleSpec]) -> World {
+    // ascending by identifier bytes: "L-12" < "P-4"
+    let styles: &'static [BallotStyle<'static>] = Box::leak(
+        vec![
+            BallotStyle::new(
+                BallotStyleId::new(STYLE_WIDE).unwrap(),
+                OptionCount::new(12).unwrap(),
+            ),
+            BallotStyle::new(
+                BallotStyleId::new(STYLE_SMALL).unwrap(),
+                OptionCount::new(4).unwrap(),
+            ),
+        ]
+        .into_boxed_slice(),
+    );
+    world_full(profile, voter_code, modules, styles)
+}
+
+/// A world with the given modules and styles.
+pub(crate) fn world_full(
+    profile: Profile,
+    voter_code: bool,
+    modules: &[ModuleSpec],
+    styles: &'static [BallotStyle<'static>],
+) -> World {
     let mut r = rng(7);
     let mut trustees = Vec::new();
     for chamber in Chamber::ALL {
@@ -181,16 +220,6 @@ pub(crate) fn world_with(profile: Profile, voter_code: bool, modules: &[ModuleSp
         .iter()
         .map(|m| module_config(m.id, m.chamber, m.neutral))
         .collect();
-    let styles = vec![
-        BallotStyle::new(
-            BallotStyleId::new(STYLE_SMALL).unwrap(),
-            OptionCount::new(4).unwrap(),
-        ),
-        BallotStyle::new(
-            BallotStyleId::new(STYLE_WIDE).unwrap(),
-            OptionCount::new(12).unwrap(),
-        ),
-    ];
     let t22 = Threshold::new(2, 2).unwrap();
     let t12 = Threshold::new(1, 2).unwrap();
     let parts = ConfigParts {
@@ -198,7 +227,7 @@ pub(crate) fn world_with(profile: Profile, voter_code: bool, modules: &[ModuleSp
         box_id: BoxId::new(b"BOX-1").unwrap(),
         station_id: StationId::new(b"ST-1").unwrap(),
         profile,
-        styles: Box::leak(styles.into_boxed_slice()),
+        styles,
         modules: Box::leak(module_configs.into_boxed_slice()),
         trustees: Box::leak(configs.into_boxed_slice()),
         access: AccessStructure::new([t22, t22, t12, t12, t12, t12]),
@@ -675,7 +704,7 @@ pub(crate) fn cast_with(
         .unwrap();
     let ballot = ballot.cast(b, j, tb(at)).unwrap();
     let code = *ballot.tracking_code();
-    ballot.imprinted(b).unwrap();
+    ballot.imprinted(b, j, tb(at)).unwrap();
     code
 }
 

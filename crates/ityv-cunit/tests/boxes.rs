@@ -113,12 +113,15 @@ fn journal_entries_chain_and_carry_the_consumed_counters() {
     challenge_one(&w, &mut b, &mut m, &mut j, 2);
     cast_one(&w, &mut b, &mut m, &mut j, 3);
     let mut head = Hash512::ZERO;
-    for (n, bytes) in j.entries.iter().enumerate() {
+    // record 1, its imprint, challenge 2, record 3, its imprint: the
+    // imprint entries repeat their record's counters
+    let consumed = [1u64, 1, 2, 3, 3];
+    for (bytes, &expected) in j.entries.iter().zip(&consumed) {
         let e = entry(bytes);
         assert_eq!(e.prev_head(), &head);
         assert_eq!(e.module_counters().len(), 5);
         for counter in e.module_counters().iter() {
-            assert_eq!(counter.counter, n as u64 + 1);
+            assert_eq!(counter.counter, expected);
         }
         head = ityv_crypto::object_hash(bytes);
     }
@@ -128,11 +131,20 @@ fn journal_entries_chain_and_carry_the_consumed_counters() {
         kinds(&j),
         [
             JournalKind::Record,
+            JournalKind::Imprinted,
             JournalKind::Challenge,
-            JournalKind::Record
+            JournalKind::Record,
+            JournalKind::Imprinted
         ]
     );
+    assert_eq!(
+        entry(&j.entries[1]).record_hash(),
+        entry(&j.entries[0]).record_hash()
+    );
+    assert_eq!(entry(&j.entries[1]).share_package_hash(), &Hash512::ZERO);
     assert_eq!(j.packages[1], None);
+    assert_eq!(j.packages[2], None);
+    assert_eq!(b.module_counters(), &[3, 3, 3, 3, 3]);
     assert_eq!(
         entry(&j.entries[0]).share_package_hash(),
         &ityv_crypto::object_hash(j.packages[0].as_ref().unwrap())
@@ -159,7 +171,7 @@ fn a_backwards_or_replayed_counter_is_refused_and_leaves_the_mark() {
         assert_eq!(b.module_counters(), &[2, 2, 2, 2, 2]);
         // nothing was consumed, so nothing is journaled
         b.quarantine_in_flight(&mut j, tb(1)).unwrap();
-        assert_eq!(j.entries.len(), 2);
+        assert_eq!(j.entries.len(), 4);
     }
     // The mark was not moved back: the module's next counter, 3, is the
     // one accepted (a mark of 1 would have made it a gap).
@@ -320,7 +332,7 @@ fn a_module_that_consents_then_refuses_or_signs_wrongly_leaves_the_batch_open() 
     );
     assert_eq!(
         (b.batch_records(), b.batch_index(), j.entries.len()),
-        (1, 0, 1)
+        (1, 0, 2)
     );
     let mut m = mocks(&w);
     let mut b2 = OpenBox::open(w.config, tb(1));
@@ -332,7 +344,7 @@ fn a_module_that_consents_then_refuses_or_signs_wrongly_leaves_the_batch_open() 
         Error::BatchSignature
     );
     assert_eq!(b2.batch_records(), 1);
-    assert_eq!(kinds(&j2), [JournalKind::Record]);
+    assert_eq!(kinds(&j2), [JournalKind::Record, JournalKind::Imprinted]);
     assert!(!b2.is_faulted());
 }
 
@@ -450,7 +462,7 @@ fn a_journal_mismatch_latches_the_box() {
             .unwrap_err(),
         Error::JournalMismatch
     );
-    assert_eq!(kinds(&j), [JournalKind::Record]);
+    assert_eq!(kinds(&j), [JournalKind::Record, JournalKind::Imprinted]);
 }
 
 #[test]
@@ -753,7 +765,7 @@ fn imprint_command_and_slip_need_the_ballot_still_in_flight() {
         Error::NoBallotInFlight
     );
     assert_eq!(
-        ballot.imprinted(&mut b).unwrap_err(),
+        ballot.imprinted(&mut b, &mut j, tb(1)).unwrap_err(),
         Error::NoBallotInFlight
     );
 }
@@ -1098,6 +1110,7 @@ fn a_lost_attestation_is_an_attested_count_violation() {
         open_batches: 0,
         absentee_envelopes: None,
         fallback_declared: false,
+        paper_incidents: 0,
     };
     let verdict = close_verdict(&facts);
     assert!(verdict.contains(Invariant::AttestedCount));

@@ -41,6 +41,9 @@ pub const LABEL_BASE_RAND: &[u8] = b"ityv:base:rand:v1";
 pub struct OptionCount(u16);
 
 impl OptionCount {
+    /// The smallest option set, one option (the empty proof's).
+    pub(crate) const ONE: Self = Self(1);
+
     /// Returns `Some` if `1 <= raw <= MAX_OPTIONS`.
     #[must_use]
     pub fn new(raw: u16) -> Option<Self> {

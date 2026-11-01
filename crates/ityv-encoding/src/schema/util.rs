@@ -2,6 +2,10 @@
 //! embedded body objects with rebased offsets, and the small bounded arrays
 //! that several objects carry.
 
+use core::fmt;
+
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 use crate::codec::{Decode, Encode};
 use crate::envelope::decode as decode_object;
 use crate::error::{Error, Kind};
@@ -154,27 +158,49 @@ impl<'a> Decode<'a> for Commitments {
 }
 
 /// A bounded scalar vector: `Array<Scalar, N>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Every use holds secret values (a challenge opening's randomness before
+/// it is published, a member's shares), so the vector is neither `Clone`
+/// nor `Copy`, its `Debug` output shows only the count, and it is zeroized
+/// on drop. [`Self::duplicate`] makes an explicit copy, itself zeroized on
+/// drop.
+#[derive(PartialEq, Eq, Hash)]
 pub struct Scalars<const N: usize> {
     items: [Scalar32; N],
     count: u8,
 }
 
 impl<const N: usize> Scalars<N> {
+    /// An empty vector.
+    pub(crate) const fn empty() -> Self {
+        Self {
+            items: [Scalar32([0; 32]); N],
+            count: 0,
+        }
+    }
+
     /// Builds a vector of at most `N` scalars.
     #[must_use]
     pub fn new(scalars: &[Scalar32]) -> Option<Self> {
         if scalars.len() > N {
             return None;
         }
-        let mut items = [Scalar32([0; 32]); N];
-        for (slot, scalar) in items.iter_mut().zip(scalars) {
+        let count = u8::try_from(scalars.len()).ok()?;
+        let mut out = Self::empty();
+        for (slot, scalar) in out.items.iter_mut().zip(scalars) {
             *slot = *scalar;
         }
-        Some(Self {
-            items,
-            count: u8::try_from(scalars.len()).ok()?,
-        })
+        out.count = count;
+        Some(out)
+    }
+
+    /// An explicit copy (zeroized on drop like the original).
+    #[must_use]
+    pub fn duplicate(&self) -> Self {
+        Self {
+            items: self.items,
+            count: self.count,
+        }
     }
 
     /// The scalars.
@@ -208,14 +234,38 @@ impl<'a, const N: usize> Decode<'a> for Scalars<N> {
     fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
         let at = r.position();
         let count = r.read_count(N)?;
-        let mut items = [Scalar32([0; 32]); N];
-        for slot in items.iter_mut().take(count) {
+        // Filled in place: an error drops (and wipes) what was read.
+        let mut out = Self::empty();
+        for slot in out.items.iter_mut().take(count) {
             *slot = Scalar32::decode(r)?;
         }
-        Ok(Self {
-            items,
-            count: u8::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, at))?,
-        })
+        out.count = u8::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, at))?;
+        Ok(out)
+    }
+}
+
+impl<const N: usize> Zeroize for Scalars<N> {
+    fn zeroize(&mut self) {
+        for scalar in &mut self.items {
+            scalar.0.zeroize();
+        }
+        self.count.zeroize();
+    }
+}
+
+impl<const N: usize> Drop for Scalars<N> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl<const N: usize> ZeroizeOnDrop for Scalars<N> {}
+
+impl<const N: usize> fmt::Debug for Scalars<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Scalars")
+            .field("count", &self.count)
+            .finish_non_exhaustive()
     }
 }
 
@@ -424,5 +474,19 @@ impl<'a> Decode<'a> for ModuleIds<'a> {
             items,
             count: u8::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, at))?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalars_zeroize_wipes_every_item() {
+        let mut s = Scalars::<8>::new(&[Scalar32([9; 32]); 8]).expect("eight fit");
+        s.count = 1;
+        s.zeroize();
+        assert!(s.items.iter().all(|x| x.0 == [0; 32]));
+        assert_eq!(s.count, 0);
     }
 }

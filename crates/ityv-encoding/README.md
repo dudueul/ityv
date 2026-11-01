@@ -1,6 +1,6 @@
 # ityv-encoding
 
-> English summary: The canonical fixed-width binary encoding for every object ityv hashes or signs, implemented as a `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate with no dependencies. It implements `docs/spec/ENCODING.md` exactly, ships published test vectors, and is the exemplar for the verification ladder: V1 (property tests, mutation testing) and V2 (Kani harnesses) are in the tree and run in CI.
+> English summary: The canonical fixed-width binary encoding for every object ityv hashes or signs, implemented as a `no_std`, allocation-free, `unsafe`-free, panic-free Rust crate whose only dependency is `zeroize` (default features off), used to wipe the schema values that hold secrets. It implements `docs/spec/ENCODING.md` exactly, ships published test vectors, and is the exemplar for the verification ladder: V1 (property tests, mutation testing) and V2 (Kani harnesses) are in the tree and run in CI.
 
 ## 무엇인가
 
@@ -9,7 +9,8 @@ ityv가 해시하거나 서명하는 모든 객체의 유일한 바이트 표현
 보장하는 것:
 - 같은 값은 항상 같은 바이트열. 디코딩 후 재인코딩하면 원래 바이트열과 같다.
 - 정규 형식이 아닌 입력은 첫 위반 오프셋에서 거부된다. 자동 정규화나 기본값 채우기가 없다.
-- `no_std`, 힙 없음, `unsafe` 없음, 패닉 없음, 의존성 없음. 재귀 없음.
+- `no_std`, 힙 없음, `unsafe` 없음, 패닉 없음, 재귀 없음. 의존성은 `zeroize` 하나(기본 기능 끔).
+- 비밀을 담는 값(`Scalars`, `MemberShare`, `ModuleOpening`, `ChallengeOpeningBody`)은 `Clone`·`Copy`가 없고, `Debug`는 공개 필드만 찍으며, drop될 때 `zeroize`로 지운다(ADR-0017 개정 15). 사본이 필요하면 `duplicate()`로 명시하고 그 사본도 drop 때 지운다. 디코더는 값을 제자리에서 채우므로 디코딩 오류가 나면 읽은 부분이 함께 지워진다. `tests/zeroize.rs`와 `Scalars`의 단위 테스트가 소거를 직접 확인한다(`impl Drop` 본문은 변이에서 빠지므로 `Drop`은 시험된 `zeroize`만 부른다).
 
 보장하지 않는 것:
 - 객체 내용의 진실성, 서명의 유효성, 스칼라·점의 대수적 유효성. 이 크레이트는 길이만 검사한다.
@@ -91,4 +92,4 @@ cargo mutants -p ityv-encoding                        # V1: 변이 테스트
 
 ## 테스트 코드의 lint 완화
 
-`tests/` 아래 통합 테스트 크레이트는 TCB 밖이다. 각 파일 머리에 사유를 적고 `unwrap`, `expect`, `panic`, 인덱싱, 산술 부작용 lint를 완화하며, 거부 규칙을 하나씩 순서대로 밟는 `m3_records.rs`·`m3_events.rs`는 함수 길이와 유사 이름 스타일 lint(`too_many_lines`, `similar_names`)도 완화한다. `tests/common/mod.rs`는 모든 테스트 바이너리에 컴파일되므로 `dead_code`도 허용한다. TCB 크레이트(`src/`)에는 어떤 완화도 없다.
+`tests/` 아래 통합 테스트 크레이트는 TCB 밖이다. 각 파일 머리에 사유를 적고 `unwrap`, `expect`, `panic`, 인덱싱, 산술 부작용 lint를 완화하며, 거부 규칙을 하나씩 순서대로 밟는 `m3_records.rs`·`m3_events.rs`는 함수 길이와 유사 이름 스타일 lint(`too_many_lines`, `similar_names`)도 완화한다. `tests/common/mod.rs`는 모든 테스트 바이너리에 컴파일되므로 `dead_code`도 허용한다. `tests/zeroize.rs`는 `unwrap`, `expect`, 인덱싱, `missing_panics_doc`만 완화한다. TCB 크레이트(`src/`)에는 어떤 완화도 없다.

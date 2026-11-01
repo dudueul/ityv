@@ -86,7 +86,8 @@ pub use kem::{
     decapsulate, encapsulate, open, seal,
 };
 pub use orproof::{
-    FS_LABEL_OR_REP_V1, PROOF_SYSTEM_OR_REP_V1, Proof, ProvenStatement, Statement, prove, verify,
+    FS_LABEL_OR_REP_V1, PROOF_SYSTEM_OR_REP_V1, Proof, ProvenStatement, Statement, prove,
+    prove_into, verify,
 };
 pub use otmac::{
     OneTimeKey, Tag as OneTimeTag, tag as one_time_tag, verify_tag as verify_one_time_tag,
