@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" width="1400" height="960">
+<title>D-04 챔버 모듈 분해도</title>
+<desc>USB 모양 공개 MCU 챔버 모듈의 분해 측면도, 기판 배치, 조립 외형, 스캐너 모듈 칸, 보호 층. 치수는 가정이다.</desc>
+<style>
+svg { color: #1b2430; --muted: #5a6878; --fill: rgba(27,36,48,.05); --fill2: rgba(29,114,125,.12); --chm: rgba(154,107,0,.12); --warn: #b81f2e; --teal: #1d727d; --gold: #8a6100; --paper: rgba(27,36,48,.03); }
+@media (prefers-color-scheme: dark) {
+  svg { color: #e5ebf1; --muted: #a3b1c0; --fill: rgba(229,235,241,.06); --fill2: rgba(76,193,204,.16); --chm: rgba(226,181,71,.14); --warn: #ef7a88; --teal: #5fd0db; --gold: #e2b547; --paper: rgba(229,235,241,.04); }
+}
+text { fill: currentColor; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "IBM Plex Sans KR", sans-serif; font-size: 12px; }
+.s { font-size: 11px; fill: var(--muted); }
+.h { font-size: 16px; font-weight: 700; }
+.h2 { font-size: 13px; font-weight: 700; }
+.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; }
+.red { fill: var(--warn); } .tl { fill: var(--teal); } .gd { fill: var(--gold); } .mu { fill: var(--muted); }
+.ln { stroke: currentColor; fill: none; stroke-width: 1.4; }
+.thin { stroke: currentColor; fill: none; stroke-width: .8; }
+.dim { stroke: var(--muted); fill: none; stroke-width: .8; }
+.ext { stroke: var(--muted); fill: none; stroke-width: .6; stroke-dasharray: 2 2; }
+.box { stroke: currentColor; fill: var(--fill); stroke-width: 1.4; }
+.paper { stroke: currentColor; fill: var(--paper); stroke-width: 1; }
+.tcb { stroke: var(--teal); fill: var(--fill2); stroke-width: 1.6; }
+.unt { stroke: var(--muted); fill: var(--fill); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.chm { stroke: var(--gold); fill: var(--chm); stroke-width: 1.6; }
+.warn { stroke: var(--warn); fill: none; stroke-width: 1.6; }
+.warnf { stroke: var(--warn); fill: none; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.one { stroke: var(--teal); fill: none; stroke-width: 2; }
+.oned { stroke: var(--teal); fill: none; stroke-width: 2; stroke-dasharray: 7 4; }
+.two { stroke: var(--muted); fill: none; stroke-width: 1.6; }
+.seal { stroke: var(--warn); fill: none; stroke-width: 1.4; }
+.sealf { fill: var(--warn); }
+.zone { stroke: var(--warn); fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.dot { fill: currentColor; }
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--teal)"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+<marker id="ad" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" style="fill: var(--muted)"/></marker>
+</defs>
+<text x="24" y="34" class="h" >D-04 · 챔버 모듈 분해도 (USB 모양 공개 MCU 모듈)</text>
+<text x="24" y="54" class="s" >스캐너의 챔버 모듈과 확인 장치의 정당 모듈은 같은 기판이다. 보안 칩(SE)은 확인 장치 정당 모듈에만 붙인다 (ADR-0024).</text>
+<text x="24" y="70" class="s" >치수는 모두 가정(mm). 분해 측면도와 기판 배치는 1mm = 6px로 그렸다.</text>
+<text x="40" y="112" class="h2" >분해 측면도</text>
+<rect x="340" y="136" width="90" height="8" rx="0" class="seal" />
+<text x="440" y="144" class="s" ></text>
+<path d="M140,204 L140,180 L572,180 L572,204 L560,204 L560,192 L152,192 L152,204 Z" class="box" />
+<rect x="136" y="290" width="436" height="10" rx="0" class="box" />
+<rect x="240" y="280" width="42" height="10" rx="0" class="tcb" />
+<rect x="320" y="283" width="24" height="7" rx="0" class="unt" />
+<rect x="390" y="272" width="14" height="18" rx="0" class="box" />
+<line x1="397" y1="262" x2="397" y2="272" class="ln" />
+<rect x="470" y="280" width="102" height="10" rx="0" class="box" />
+<rect x="160" y="300" width="76" height="12" rx="0" class="box" />
+<rect x="430" y="283" width="18" height="7" rx="0" class="box" />
+<rect x="64" y="282" width="72" height="26" rx="0" class="box" />
+<rect x="70" y="289" width="60" height="12" rx="0" class="paper" />
+<path d="M140,350 L140,374 L572,374 L572,350 L560,350 L560,362 L152,362 L152,350 Z" class="box" />
+<rect x="260" y="374" width="60" height="6" rx="0" class="seal" />
+<rect x="610" y="282" width="150" height="8" rx="0" class="chm" />
+<line x1="606" y1="286" x2="580" y2="286" class="ln" marker-end="url(#a)" />
+<line x1="170" y1="150" x2="170" y2="384" class="ext" />
+<line x1="540" y1="150" x2="540" y2="384" class="ext" />
+<circle cx="385" cy="140" r="2" class="dot" />
+<line x1="385" y1="140" x2="385" y2="128" class="dim" />
+<circle cx="385" cy="128" r="9" class="box" />
+<text x="385" y="132" text-anchor="middle" style="font-size:11px;font-weight:700">1</text>
+<circle cx="572" cy="186" r="2" class="dot" />
+<line x1="572" y1="186" x2="660" y2="172" class="dim" />
+<circle cx="660" cy="172" r="9" class="box" />
+<text x="660" y="176" text-anchor="middle" style="font-size:11px;font-weight:700">2</text>
+<circle cx="261" cy="280" r="2" class="dot" />
+<line x1="261" y1="280" x2="261" y2="246" class="dim" />
+<circle cx="261" cy="246" r="9" class="box" />
+<text x="261" y="250" text-anchor="middle" style="font-size:11px;font-weight:700">3</text>
+<circle cx="332" cy="283" r="2" class="dot" />
+<line x1="332" y1="283" x2="332" y2="246" class="dim" />
+<circle cx="332" cy="246" r="9" class="box" />
+<text x="332" y="250" text-anchor="middle" style="font-size:11px;font-weight:700">4</text>
+<circle cx="397" cy="262" r="2" class="dot" />
+<line x1="397" y1="262" x2="397" y2="236" class="dim" />
+<circle cx="397" cy="236" r="9" class="box" />
+<text x="397" y="240" text-anchor="middle" style="font-size:11px;font-weight:700">5</text>
+<circle cx="521" cy="280" r="2" class="dot" />
+<line x1="521" y1="280" x2="521" y2="246" class="dim" />
+<circle cx="521" cy="246" r="9" class="box" />
+<text x="521" y="250" text-anchor="middle" style="font-size:11px;font-weight:700">6</text>
+<circle cx="198" cy="312" r="2" class="dot" />
+<line x1="198" y1="312" x2="198" y2="336" class="dim" />
+<circle cx="198" cy="336" r="9" class="box" />
+<text x="198" y="340" text-anchor="middle" style="font-size:11px;font-weight:700">7</text>
+<circle cx="100" cy="282" r="2" class="dot" />
+<line x1="100" y1="282" x2="100" y2="246" class="dim" />
+<circle cx="100" cy="246" r="9" class="box" />
+<text x="100" y="250" text-anchor="middle" style="font-size:11px;font-weight:700">8</text>
+<circle cx="572" cy="362" r="2" class="dot" />
+<line x1="572" y1="362" x2="660" y2="336" class="dim" />
+<circle cx="660" cy="336" r="9" class="box" />
+<text x="660" y="340" text-anchor="middle" style="font-size:11px;font-weight:700">9</text>
+<circle cx="685" cy="282" r="2" class="dot" />
+<line x1="685" y1="282" x2="685" y2="246" class="dim" />
+<circle cx="685" cy="246" r="9" class="box" />
+<text x="685" y="250" text-anchor="middle" style="font-size:11px;font-weight:700">10</text>
+<circle cx="439" cy="283" r="2" class="dot" />
+<line x1="439" y1="283" x2="439" y2="246" class="dim" />
+<circle cx="439" cy="246" r="9" class="box" />
+<text x="439" y="250" text-anchor="middle" style="font-size:11px;font-weight:700">11</text>
+<line x1="140" y1="376" x2="140" y2="412" class="ext" />
+<line x1="572" y1="376" x2="572" y2="412" class="ext" />
+<line x1="140" y1="408" x2="572" y2="408" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="356.0" y="404" class="s" text-anchor="middle" >72 (가정)</text>
+<line x1="64" y1="310" x2="64" y2="412" class="ext" />
+<line x1="140" y1="310" x2="140" y2="412" class="ext" />
+<line x1="64" y1="408" x2="140" y2="408" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="102.0" y="404" class="s" text-anchor="middle" >12</text>
+<line x1="610" y1="292" x2="610" y2="322" class="ext" />
+<line x1="760" y1="292" x2="760" y2="322" class="ext" />
+<line x1="610" y1="318" x2="760" y2="318" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="685.0" y="314" class="s" text-anchor="middle" >25 (가정)</text>
+<text x="40" y="450" class="h2" >조립 외형 (평면 · 측면)</text>
+<rect x="140" y="470" width="432" height="144" rx="10" class="box" />
+<rect x="68" y="506" width="72" height="72" rx="2" class="box" />
+<rect x="74" y="520" width="60" height="44" rx="0" class="paper" />
+<rect x="566" y="520" width="6" height="44" rx="0" class="dot" />
+<rect x="180" y="500" width="180" height="84" rx="4" class="paper" />
+<text x="270" y="530" class="s" text-anchor="middle" >모듈 ID · 챔버 코드</text>
+<text x="270" y="548" class="s" text-anchor="middle" >칩 계열 표시</text>
+<text x="270" y="566" class="s" text-anchor="middle" >(인쇄 라벨, 가정)</text>
+<rect x="390" y="466" width="70" height="152" rx="0" class="seal" />
+<text x="425" y="545" class="red" text-anchor="middle" style="font-size:11px">번호 봉인</text>
+<line x1="572" y1="470" x2="604" y2="470" class="ext" />
+<line x1="572" y1="614" x2="604" y2="614" class="ext" />
+<line x1="600" y1="470" x2="600" y2="614" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="606" y="546.0" class="s" >24 (가정)</text>
+<rect x="140" y="640" width="432" height="66" rx="8" class="box" />
+<rect x="68" y="657" width="72" height="30" rx="2" class="box" />
+<line x1="572" y1="640" x2="604" y2="640" class="ext" />
+<line x1="572" y1="706" x2="604" y2="706" class="ext" />
+<line x1="600" y1="640" x2="600" y2="706" class="dim" marker-end="url(#ad)" marker-start="url(#ad)" />
+<text x="606" y="677.0" class="s" >11 (가정)</text>
+<text x="356" y="678" class="s" text-anchor="middle" >측면</text>
+<text x="800" y="112" class="h2" >기판 윗면 배치</text>
+<rect x="820" y="132" width="432" height="120" rx="4" class="box" />
+<rect x="748" y="162" width="72" height="60" rx="2" class="box" />
+<text x="784" y="196" class="s" text-anchor="middle" >커넥터</text>
+<rect x="910" y="157" width="70" height="70" rx="3" class="tcb" />
+<text x="945" y="188" class="h2" text-anchor="middle" >MCU</text>
+<text x="945" y="206" class="s" text-anchor="middle" >M33급</text>
+<rect x="1000" y="162" width="44" height="44" rx="3" class="unt" />
+<text x="1022" y="188" class="s" text-anchor="middle" >SE</text>
+<circle cx="880" cy="192" r="38" class="ext" />
+<text x="880" y="240" class="s" text-anchor="middle" >코인 전지 (뒷면)</text>
+<rect x="1065" y="172" width="26" height="26" rx="2" class="box" />
+<circle cx="1078" cy="185" r="7" class="thin" />
+<text x="1078" y="220" class="s" text-anchor="middle" >변조 스위치</text>
+<rect x="1150" y="147" width="102" height="90" rx="2" class="box" />
+<rect x="1160" y="162" width="92" height="60" rx="2" class="chm" />
+<text x="1206" y="196" class="s" text-anchor="middle" >패드 카드 소켓</text>
+<circle cx="1110" cy="152" r="2.5" class="thin" />
+<circle cx="1124" cy="161" r="2.5" class="thin" />
+<circle cx="1110" cy="170" r="2.5" class="thin" />
+<circle cx="1124" cy="179" r="2.5" class="thin" />
+<circle cx="1110" cy="188" r="2.5" class="thin" />
+<text x="1116" y="248" class="s" text-anchor="middle" >디버그 패드</text>
+<text x="1036" y="274" class="s" text-anchor="middle" >72 × 20 기판 (가정). SE 자리는 확인 장치 정당 모듈만 실장</text>
+<text x="800" y="302" >MCU: LPC55S69 · STM32U5/H5 · nRF54L 중 하나, 정당마다 다른 계열</text>
+<text x="800" y="318" class="s" >기기 고유 키(PUF/HUK/KMU)로 키 영역 암호화, TrustZone 보안 영역</text>
+<text x="800" y="334" class="s" >디버그 패드: 출하 뒤 영구 잠금 + 판독 보호 최고 단계</text>
+<text x="800" y="350" class="s" >칩 난수원 + 챔버 엔트로피로 모듈 안에서 키 생성 (§5.1)</text>
+<text x="800" y="400" class="h2" >모듈 변형</text>
+<text x="800" y="422" class="s" ></text>
+<text x="950" y="422" >스캐너 챔버 모듈</text>
+<text x="1180" y="422" >확인 장치 정당 모듈</text>
+<line x1="800" y1="428" x2="1380" y2="428" class="thin" />
+<text x="800" y="446" class="s" >수량 (지선, n=4)</text>
+<text x="950" y="446" >칸 7개 × 약 25,300대</text>
+<text x="1180" y="446" >n개 × 약 18,700 유닛</text>
+<text x="800" y="464" class="s" >보안 칩 (SE)</text>
+<text x="950" y="464" >없음</text>
+<text x="1180" y="464" >SE050급, PRF 키 (HMAC)</text>
+<text x="800" y="482" class="s" >하는 일</text>
+<text x="950" y="482" >난수·ID·라벨 기여, 패드</text>
+<text x="1180" y="482" >가명 PRF, 카운터 서명</text>
+<text x="800" y="500" class="s" >패드 카드</text>
+<text x="950" y="500" >있음 (선거마다 교체)</text>
+<text x="1180" y="500" >없음 (가정)</text>
+<text x="800" y="518" class="s" >변조 스위치</text>
+<text x="950" y="518" >있음</text>
+<text x="1180" y="518" >있음</text>
+<text x="40" y="740" class="h2" >스캐너 모듈 칸 (정면, 문 연 상태)</text>
+<rect x="60" y="754" width="470" height="60" rx="4" class="box" />
+<rect x="74" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="100" y="789" text-anchor="middle" style="font-weight:700">P1</text>
+<rect x="94" y="800" width="12" height="4" rx="0" class="dot" />
+<rect x="138" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="164" y="789" text-anchor="middle" style="font-weight:700">P2</text>
+<rect x="158" y="800" width="12" height="4" rx="0" class="dot" />
+<rect x="202" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="228" y="789" text-anchor="middle" style="font-weight:700">P3</text>
+<rect x="222" y="800" width="12" height="4" rx="0" class="dot" />
+<rect x="266" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="292" y="789" text-anchor="middle" style="font-weight:700">P4</text>
+<rect x="286" y="800" width="12" height="4" rx="0" class="dot" />
+<rect x="330" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="356" y="789" text-anchor="middle" style="font-weight:700">J</text>
+<rect x="350" y="800" width="12" height="4" rx="0" class="dot" />
+<rect x="394" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="420" y="789" text-anchor="middle" style="font-weight:700">A</text>
+<rect x="414" y="800" width="12" height="4" rx="0" class="dot" />
+<rect x="458" y="764" width="52" height="40" rx="3" class="chm" />
+<text x="484" y="789" text-anchor="middle" style="font-weight:700">C</text>
+<rect x="478" y="800" width="12" height="4" rx="0" class="dot" />
+<text x="60" y="832" class="s" >칸마다 키 홈으로 방향 고정, 칸 번호 = 챔버 코드(1–7). n &lt; 4이면 P3·P4 빈 칸 막이 (가정).</text>
+<text x="800" y="560" class="h2" >보호 층 (KEY_STORAGE §5.2)</text>
+<text x="800" y="582" >기기 고유 키</text>
+<text x="910" y="582" class="s" >키 영역·패드 카드를 칩 고유 키로 암호화</text>
+<text x="800" y="600" >분리</text>
+<text x="910" y="600" class="s" >키 코드와 데이터는 TrustZone 보안 영역에만</text>
+<text x="800" y="618" >디버그·판독</text>
+<text x="910" y="618" class="s" >출하 뒤 영구 잠금, 판독 보호 최고 단계</text>
+<text x="800" y="636" >글리치·변조</text>
+<text x="910" y="636" class="s" >전압·클록·온도 감지 → 키 영역 지움</text>
+<text x="800" y="654" >변조 스위치</text>
+<text x="910" y="654" class="s" >외함이 열리면 키 지움. 선거 기간에만 전지</text>
+<text x="800" y="672" >패드 카드</text>
+<text x="910" y="672" class="s" >쓰자마자 0으로 덮음 (VC-034), 끝나면 파쇄</text>
+<text x="800" y="690" >봉인·인계</text>
+<text x="910" y="690" class="s" >번호 봉인 가방, CustodyHandoff, 두 사람 규칙</text>
+<text x="620" y="728" class="h2" >부품</text>
+<text x="620" y="748" class="s" >1 번호 봉인 (윗면 이음매)</text>
+<text x="620" y="763" class="s" >2 위 외함</text>
+<text x="620" y="778" class="s" >3 MCU (Cortex-M33급)</text>
+<text x="620" y="793" class="s" >4 SE 자리 (변형)</text>
+<text x="620" y="808" class="s" >5 변조 스위치</text>
+<text x="620" y="823" class="s" >6 패드 카드 소켓</text>
+<text x="795" y="748" class="s" >7 코인 전지 (CR1220, 가정)</text>
+<text x="795" y="763" class="s" >8 커넥터 (USB-A 모양, 가정)</text>
+<text x="795" y="778" class="s" >9 아래 외함 · 이음매 봉인</text>
+<text x="795" y="793" class="s" >10 패드 카드 (NOR 256–512Mb)</text>
+<text x="795" y="808" class="s" >11 전원·ESD 부품</text>
+<text x="24" y="862" class="h2" >주</text>
+<text x="24" y="880" class="s" >1. 모든 치수, 커넥터 모양, 코인 전지 규격은 가정이다. 전기 규격은 장치 안 모듈 버스이며 USB 프로토콜을 뜻하지 않는다.</text>
+<text x="24" y="896" class="s" >2. 보안 칩은 스캐너 모듈에 두지 않는다 (ML-DSA 키를 넣지 못해 얻는 것이 없다. DEVICES §5.1).</text>
+<text x="24" y="912" class="s" >3. 모듈 하나가 뚫리는 것은 그 챔버의 공모와 같고 접근구조가 견딘다 (ADR-0019). 분실·봉인 훼손은 사건이다 (§5.5).</text>
+<rect x="954" y="812" width="430" height="132" rx="0" class="box" />
+<text x="962" y="832" class="s" >도면 번호</text>
+<text x="1046" y="832" >D-04</text>
+<line x1="954" y1="837" x2="1384" y2="837" class="thin" />
+<text x="962" y="852" class="s" >이름</text>
+<text x="1046" y="852" class="h2" >챔버 모듈 분해도</text>
+<line x1="954" y1="857" x2="1384" y2="857" class="thin" />
+<text x="962" y="872" class="s" >축척 · 단위</text>
+<text x="1046" y="872" >부분 1mm = 6px, 그 밖은 축척 없음 · mm</text>
+<line x1="954" y1="877" x2="1384" y2="877" class="thin" />
+<text x="962" y="892" class="s" >판 · 날짜</text>
+<text x="1046" y="892" >1판 (연구용 초안) · 2026-11-01</text>
+<line x1="954" y1="897" x2="1384" y2="897" class="thin" />
+<text x="962" y="912" class="s" >근거</text>
+<text x="1046" y="912" >KEY_STORAGE §5·§9, DEVICES §5.1·§5.2·§9</text>
+<line x1="954" y1="917" x2="1384" y2="917" class="thin" />
+<text x="962" y="932" class="s" ></text>
+<text x="1046" y="932" >ADR-0019, ADR-0024, PROTOCOL §7.1</text>
+<line x1="1038" y1="812" x2="1038" y2="944" class="thin" />
+</svg>

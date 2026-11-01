@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" width="1400" height="960">
+<title>D-03 투함 스캐너 전자 블록도</title>
+<desc>투함 스캐너 안의 부품, 신뢰 경계, 한 방향 링크와 양방향 링크, 바깥으로 나가는 유일한 광 송신기를 보인 개념 블록도.</desc>
+<style>
+svg { color: #1b2430; --muted: #5a6878; --fill: rgba(27,36,48,.05); --fill2: rgba(29,114,125,.12); --chm: rgba(154,107,0,.12); --warn: #b81f2e; --teal: #1d727d; --gold: #8a6100; --paper: rgba(27,36,48,.03); }
+@media (prefers-color-scheme: dark) {
+  svg { color: #e5ebf1; --muted: #a3b1c0; --fill: rgba(229,235,241,.06); --fill2: rgba(76,193,204,.16); --chm: rgba(226,181,71,.14); --warn: #ef7a88; --teal: #5fd0db; --gold: #e2b547; --paper: rgba(229,235,241,.04); }
+}
+text { fill: currentColor; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "IBM Plex Sans KR", sans-serif; font-size: 12px; }
+.s { font-size: 11px; fill: var(--muted); }
+.h { font-size: 16px; font-weight: 700; }
+.h2 { font-size: 13px; font-weight: 700; }
+.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; }
+.red { fill: var(--warn); } .tl { fill: var(--teal); } .gd { fill: var(--gold); } .mu { fill: var(--muted); }
+.ln { stroke: currentColor; fill: none; stroke-width: 1.4; }
+.thin { stroke: currentColor; fill: none; stroke-width: .8; }
+.dim { stroke: var(--muted); fill: none; stroke-width: .8; }
+.ext { stroke: var(--muted); fill: none; stroke-width: .6; stroke-dasharray: 2 2; }
+.box { stroke: currentColor; fill: var(--fill); stroke-width: 1.4; }
+.paper { stroke: currentColor; fill: var(--paper); stroke-width: 1; }
+.tcb { stroke: var(--teal); fill: var(--fill2); stroke-width: 1.6; }
+.unt { stroke: var(--muted); fill: var(--fill); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.chm { stroke: var(--gold); fill: var(--chm); stroke-width: 1.6; }
+.warn { stroke: var(--warn); fill: none; stroke-width: 1.6; }
+.warnf { stroke: var(--warn); fill: none; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.one { stroke: var(--teal); fill: none; stroke-width: 2; }
+.oned { stroke: var(--teal); fill: none; stroke-width: 2; stroke-dasharray: 7 4; }
+.two { stroke: var(--muted); fill: none; stroke-width: 1.6; }
+.seal { stroke: var(--warn); fill: none; stroke-width: 1.4; }
+.sealf { fill: var(--warn); }
+.zone { stroke: var(--warn); fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.dot { fill: currentColor; }
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--teal)"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+<marker id="ad" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" style="fill: var(--muted)"/></marker>
+</defs>
+<text x="24" y="34" class="h" >D-03 · 투함 스캐너 전자 블록도 (신뢰 경계와 링크)</text>
+<text x="24" y="54" class="s" >굵은 청록 화살표는 한 방향 링크, 회색 양쪽 화살표는 양방향 링크. L 번호는 오른쪽 링크 표와 같다.</text>
+<text x="24" y="70" class="s" >점선 영역은 불신, 청록 영역은 검증(TCB), 황색은 챔버가 공급한 모듈.</text>
+<rect x="30" y="100" width="890" height="690" rx="6" class="ln" />
+<text x="44" y="120" class="h2" >투함 스캐너 외함 (번호 봉인, 무선 없음)</text>
+<rect x="40" y="132" width="400" height="180" rx="4" class="unt" />
+<text x="52" y="150" class="s" >불신 · 판독 쪽</text>
+<rect x="40" y="330" width="400" height="245" rx="4" class="unt" />
+<text x="52" y="348" class="s" >불신 · 기구 쪽</text>
+<rect x="545" y="132" width="260" height="443" rx="4" class="tcb" />
+<text x="557" y="150" class="s" >검증 (TCB)</text>
+<rect x="40" y="595" width="870" height="180" rx="4" class="unt" />
+<text x="52" y="613" class="s" >불신 · 호스트 쪽 (바깥으로 나가는 유일한 쪽)</text>
+<rect x="52" y="162" width="150" height="54" rx="3" class="box" />
+<text x="60" y="180" class="h2" >양면 CIS</text>
+<text x="60" y="197" class="s" >RGB 300dpi, 위·아래</text>
+<rect x="52" y="232" width="150" height="64" rx="3" class="box" />
+<text x="60" y="250" class="h2" >급지기·겹침 감지</text>
+<text x="60" y="267" class="s" >롤러, 초음파 감지,</text>
+<text x="60" y="282" class="s" >후드 센서</text>
+<rect x="240" y="162" width="185" height="134" rx="3" class="box" />
+<text x="248" y="180" class="h2" >해석 유닛</text>
+<text x="248" y="197" class="s" >소형 Cortex-A7/A53급</text>
+<text x="248" y="212" class="s" >RAM만, 영속 저장소 없음</text>
+<text x="248" y="227" class="s" >쓰기 방지 부팅 플래시</text>
+<text x="248" y="242" class="s" >기준점·표지 → 선택 판정</text>
+<text x="248" y="257" class="s" >고전 영상 처리 (§4.3)</text>
+<rect x="450" y="190" width="80" height="52" rx="3" class="box" />
+<path d="M466,206 L478,216 L466,226 Z" class="tcb" />
+<line x1="478" y1="206" x2="478" y2="226" class="ln" />
+<line x1="484" y1="210" x2="494" y2="204" class="one" marker-end="url(#at)" />
+<line x1="484" y1="220" x2="494" y2="214" class="one" marker-end="url(#at)" />
+<rect x="500" y="204" width="18" height="22" rx="0" class="box" />
+<text x="490" y="184" class="s" text-anchor="middle" >광커플러 UART</text>
+<text x="490" y="258" class="s" text-anchor="middle" >되돌아가는 선 없음</text>
+<rect x="555" y="162" width="240" height="170" rx="3" class="box" />
+<text x="563" y="180" class="h2" >커밋먼트 유닛</text>
+<text x="563" y="197" class="s" >ityv-core, Cortex-M7급</text>
+<text x="563" y="212" class="s" >no_std Rust, 힙 없음</text>
+<text x="563" y="227" class="s" >커밋먼트·정형성 증명·share</text>
+<text x="563" y="242" class="s" >서명·추적코드·각인 명령</text>
+<text x="563" y="257" class="s" >저널 해시 사슬 (봉인 저장)</text>
+<text x="563" y="272" class="s" >처리 후 즉시 소거 (VC-020)</text>
+<rect x="565" y="300" width="220" height="26" rx="2" class="box" />
+<text x="575" y="318" class="s" >부트 ROM · OTP → 증명 키 (§7.9)</text>
+<rect x="555" y="372" width="240" height="192" rx="3" class="box" />
+<text x="565" y="390" class="h2" >챔버 모듈 칸 (봉인 문, D-04)</text>
+<rect x="563.0" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="576.5" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">P1</text>
+<rect x="568.0" y="470" width="17" height="16" rx="1" class="paper" />
+<rect x="595.5" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="609.0" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">P2</text>
+<rect x="600.5" y="470" width="17" height="16" rx="1" class="paper" />
+<rect x="628.0" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="641.5" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">P3</text>
+<rect x="633.0" y="470" width="17" height="16" rx="1" class="paper" />
+<rect x="660.5" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="674.0" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">P4</text>
+<rect x="665.5" y="470" width="17" height="16" rx="1" class="paper" />
+<rect x="693.0" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="706.5" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">J</text>
+<rect x="698.0" y="470" width="17" height="16" rx="1" class="paper" />
+<rect x="725.5" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="739.0" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">A</text>
+<rect x="730.5" y="470" width="17" height="16" rx="1" class="paper" />
+<rect x="758.0" y="402" width="27" height="92" rx="2" class="chm" />
+<text x="771.5" y="420" text-anchor="middle" style="font-size:11px;font-weight:700">C</text>
+<rect x="763.0" y="470" width="17" height="16" rx="1" class="paper" />
+<text x="565" y="512" class="s" >모듈 버스 (장치 안), 칸마다 키 홈</text>
+<text x="565" y="528" class="s" >패드 카드: 선거마다 교체</text>
+<text x="565" y="544" class="s" >N은 모듈 없음 (KEM 대체 경로)</text>
+<text x="565" y="560" class="s" >n &lt; 4이면 빈 칸 막이 (가정)</text>
+<rect x="830" y="162" width="82" height="108" rx="3" class="box" />
+<text x="838" y="180" class="h2" >유권자 쪽</text>
+<text x="838" y="197" class="s" >화면</text>
+<text x="838" y="212" class="s" >촉각 단추</text>
+<text x="838" y="227" class="s" >헤드폰 단자</text>
+<text x="838" y="242" class="s" >SW 확인</text>
+<rect x="830" y="290" width="82" height="70" rx="3" class="box" />
+<text x="838" y="308" class="h2" >토큰</text>
+<text x="838" y="325" class="s" >참관인</text>
+<text x="838" y="340" class="s" >토큰 접촉부</text>
+<rect x="240" y="380" width="185" height="110" rx="3" class="box" />
+<text x="248" y="398" class="h2" >기구 제어기</text>
+<text x="248" y="415" class="s" >각인기·프린터 제어기</text>
+<text x="248" y="430" class="s" >(릴리스 목록 대상)</text>
+<text x="248" y="445" class="s" >명령만 실행, 상태 보고</text>
+<text x="248" y="460" class="s" >구성은 가정</text>
+<rect x="52" y="362" width="150" height="30" rx="2" class="box" />
+<text x="60" y="381" class="s" >대기 구역·픽업·장 수</text>
+<line x1="202" y1="377" x2="240" y2="435" class="thin" />
+<rect x="52" y="402" width="150" height="30" rx="2" class="box" />
+<text x="60" y="421" class="s" >각인 헤드 (열 잉크젯)</text>
+<line x1="202" y1="417" x2="240" y2="435" class="thin" />
+<rect x="52" y="442" width="150" height="30" rx="2" class="box" />
+<text x="60" y="461" class="s" >3방향 분기기</text>
+<line x1="202" y1="457" x2="240" y2="435" class="thin" />
+<rect x="52" y="482" width="150" height="30" rx="2" class="box" />
+<text x="60" y="501" class="s" >슬립 프린터 (80mm)</text>
+<line x1="202" y1="497" x2="240" y2="435" class="thin" />
+<rect x="52" y="522" width="150" height="30" rx="2" class="box" />
+<text x="60" y="541" class="s" >라벨 프린터 (관외)</text>
+<line x1="202" y1="537" x2="240" y2="435" class="thin" />
+<rect x="555" y="630" width="240" height="100" rx="3" class="box" />
+<text x="563" y="648" class="h2" >호스트</text>
+<text x="563" y="665" class="s" >범용 응용 프로세서 + eMMC</text>
+<text x="563" y="680" class="s" >저널 사본, 저장 후 전달</text>
+<text x="563" y="695" class="s" >고정 일정 프레임 생성</text>
+<text x="563" y="710" class="s" >투표지 영상을 볼 수 없음</text>
+<rect x="240" y="630" width="185" height="70" rx="3" class="box" />
+<text x="248" y="648" class="h2" >사무원·참관인 화면</text>
+<text x="248" y="665" class="s" >수만 보임 (SCREENS §2)</text>
+<text x="248" y="680" class="s" >호스트가 그림 (가정)</text>
+<rect x="52" y="630" width="150" height="70" rx="3" class="box" />
+<text x="60" y="648" class="h2" >전원·전지</text>
+<text x="60" y="665" class="s" >방문 하나를 마무리</text>
+<text x="60" y="680" class="s" >(모든 부품에 공급)</text>
+<rect x="830" y="630" width="80" height="46" rx="3" class="tcb" />
+<text x="870" y="650" class="s" text-anchor="middle" >광 송신기</text>
+<text x="870" y="666" class="s" text-anchor="middle" >수신 소자 없음</text>
+<rect x="830" y="700" width="80" height="40" rx="3" class="box" />
+<text x="870" y="718" class="s" text-anchor="middle" >정비 포트</text>
+<text x="870" y="733" class="red" text-anchor="middle" style="font-size:11px">봉인</text>
+<circle cx="822" cy="720" r="5" class="seal" />
+<line x1="202" y1="189" x2="240" y2="189" class="one" marker-end="url(#at)" />
+<rect x="208" y="171" width="26" height="15" rx="7" class="box" />
+<text x="221" y="182" text-anchor="middle" style="font-size:11px">L1</text>
+<line x1="202" y1="262" x2="240" y2="262" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<rect x="208" y="243" width="26" height="15" rx="7" class="box" />
+<text x="221" y="254" text-anchor="middle" style="font-size:11px">L2</text>
+<line x1="425" y1="216" x2="450" y2="216" class="one" marker-end="url(#at)" />
+<line x1="530" y1="216" x2="555" y2="216" class="one" marker-end="url(#at)" />
+<rect x="477" y="269" width="26" height="15" rx="7" class="box" />
+<text x="490" y="280" text-anchor="middle" style="font-size:11px">L3</text>
+<line x1="675" y1="332" x2="675" y2="372" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<rect x="687" y="341" width="26" height="15" rx="7" class="box" />
+<text x="700" y="352" text-anchor="middle" style="font-size:11px">L4</text>
+<line x1="795" y1="230" x2="830" y2="230" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<rect x="799" y="201" width="26" height="15" rx="7" class="box" />
+<text x="812" y="212" text-anchor="middle" style="font-size:11px">L5</text>
+<line x1="830" y1="335" x2="795" y2="335" class="one" marker-end="url(#at)" />
+<rect x="799" y="307" width="26" height="15" rx="7" class="box" />
+<text x="812" y="318" text-anchor="middle" style="font-size:11px">L6</text>
+<path d="M555,240 L470,240 L470,430 L425,430" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<rect x="457" y="319" width="26" height="15" rx="7" class="box" />
+<text x="470" y="330" text-anchor="middle" style="font-size:11px">L7</text>
+<path d="M545,300 L520,300 L520,660 L555,660" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<rect x="507" y="549" width="26" height="15" rx="7" class="box" />
+<text x="520" y="560" text-anchor="middle" style="font-size:11px">L8</text>
+<line x1="555" y1="665" x2="425" y2="665" class="thin" marker-end="url(#a)" />
+<line x1="795" y1="653" x2="830" y2="653" class="one" marker-end="url(#at)" />
+<path d="M910,653 L1010,653" class="one" marker-end="url(#at)" />
+<rect x="937" y="629" width="26" height="15" rx="7" class="box" />
+<text x="950" y="640" text-anchor="middle" style="font-size:11px">L9</text>
+<line x1="795" y1="720" x2="817" y2="720" class="warnf" />
+<rect x="793" y="749" width="26" height="15" rx="7" class="box" />
+<text x="806" y="760" text-anchor="middle" style="font-size:11px">L10</text>
+<path d="M985,660 L985,702" class="oned" marker-end="url(#at)" />
+<path d="M979,646 L991,646 L985,660 Z" class="box" />
+<rect x="935" y="704" width="110" height="40" rx="3" class="unt" />
+<text x="990" y="722" class="s" text-anchor="middle" >관찰 탭 (장치 쪽)</text>
+<text x="990" y="737" class="s" text-anchor="middle" >송신 소자 없음</text>
+<rect x="1010" y="628" width="150" height="52" rx="3" class="box" />
+<text x="1085" y="648" class="h2" text-anchor="middle" >투표소 게이트웨이</text>
+<text x="1085" y="666" class="s" text-anchor="middle" >수광부만 (D-06)</text>
+<text x="960" y="120" class="h2" >링크 표 (연결 목록에 그대로 선언)</text>
+<rect x="961" y="135" width="26" height="15" rx="7" class="box" />
+<text x="974" y="146" text-anchor="middle" style="font-size:11px">L1</text>
+<text x="996" y="146" >CIS → 해석 유닛</text>
+<text x="996" y="161" class="s" >한 방향 · 투표지 영상 (RAM에만)</text>
+<rect x="961" y="169" width="26" height="15" rx="7" class="box" />
+<text x="974" y="180" text-anchor="middle" style="font-size:11px">L2</text>
+<text x="996" y="180" >급지기 ↔ 해석 유닛</text>
+<text x="996" y="195" class="s" >양방향 · 급지·겹침 신호, 롤러 명령 (가정)</text>
+<rect x="961" y="203" width="26" height="15" rx="7" class="box" />
+<text x="974" y="214" text-anchor="middle" style="font-size:11px">L3</text>
+<text x="996" y="214" >해석 유닛 → 커밋먼트 유닛</text>
+<text x="996" y="229" class="s" >한 방향 · Interpretation, VisitEnd, AttestChallenge</text>
+<rect x="961" y="237" width="26" height="15" rx="7" class="box" />
+<text x="974" y="248" text-anchor="middle" style="font-size:11px">L4</text>
+<text x="996" y="248" >커밋먼트 유닛 ↔ 챔버 모듈</text>
+<text x="996" y="263" class="s" >양방향 · 기여, 패드 XOR, 카운터, 모듈 진술</text>
+<rect x="961" y="271" width="26" height="15" rx="7" class="box" />
+<text x="974" y="282" text-anchor="middle" style="font-size:11px">L5</text>
+<text x="996" y="282" >커밋먼트 유닛 ↔ 유권자 쪽</text>
+<text x="996" y="297" class="s" >양방향 · 문구 ID와 수 / 단추 입력</text>
+<rect x="961" y="305" width="26" height="15" rx="7" class="box" />
+<text x="974" y="316" text-anchor="middle" style="font-size:11px">L6</text>
+<text x="996" y="316" >토큰 → 커밋먼트 유닛</text>
+<text x="996" y="331" class="s" >한 방향 (가정) · 참관인 서명 도전값</text>
+<rect x="961" y="339" width="26" height="15" rx="7" class="box" />
+<text x="974" y="350" text-anchor="middle" style="font-size:11px">L7</text>
+<text x="996" y="350" >커밋먼트 유닛 ↔ 기구 제어기</text>
+<text x="996" y="365" class="s" >양방향 · 꺼내기·각인·분기·인쇄 / 걸림·장 수</text>
+<rect x="961" y="373" width="26" height="15" rx="7" class="box" />
+<text x="974" y="384" text-anchor="middle" style="font-size:11px">L8</text>
+<text x="996" y="384" >커밋먼트 유닛 ↔ 호스트</text>
+<text x="996" y="399" class="s" >양방향 · 저널 사본·보낼 객체 / 단조 초 값</text>
+<rect x="961" y="407" width="26" height="15" rx="7" class="box" />
+<text x="974" y="418" text-anchor="middle" style="font-size:11px">L9</text>
+<text x="996" y="418" >호스트 → 게이트웨이</text>
+<text x="996" y="433" class="s" >한 방향 · UplinkFrame 16개 / 10분, 각 1 MiB</text>
+<rect x="961" y="441" width="26" height="15" rx="7" class="box" />
+<text x="974" y="452" text-anchor="middle" style="font-size:11px">L10</text>
+<text x="996" y="452" >정비 포트</text>
+<text x="996" y="467" class="s" >없음 · genesis 뒤 봉인, 개시 때 번호 대조</text>
+<rect x="960" y="476" width="26" height="13" rx="0" class="tcb" />
+<text x="994" y="486" class="s" >검증 (TCB)</text>
+<rect x="960" y="496" width="26" height="13" rx="0" class="chm" />
+<text x="994" y="506" class="s" >챔버 공급 모듈</text>
+<rect x="960" y="516" width="26" height="13" rx="0" class="unt" />
+<text x="994" y="526" class="s" >불신</text>
+<line x1="1170" y1="482" x2="1196" y2="482" class="one" marker-end="url(#at)" />
+<text x="1204" y="486" class="s" >한 방향</text>
+<line x1="1170" y1="502" x2="1196" y2="502" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<text x="1204" y="506" class="s" >양방향</text>
+<line x1="1170" y1="522" x2="1196" y2="522" class="warnf" />
+<text x="1204" y="526" class="s" >봉인된 포트</text>
+<text x="960" y="566" class="s" >L7·L8로 들어오는 값은 불신 입력으로 다룬다. 단조 초 값은</text>
+<text x="960" y="582" class="s" >재요청 간격에만 쓰고 어떤 기록에도 쓰지 않는다 (§7.9).</text>
+<text x="24" y="818" class="h2" >주</text>
+<text x="24" y="836" class="s" >1. 해석 유닛과 호스트는 합치지 않는다. 네트워크 쪽은 투표지 영상을 볼 수 없다 (DEVICES §5.1).</text>
+<text x="24" y="852" class="s" >2. 해석 유닛은 L1·L2·L3 외에 연결이 없고, 챔버 모듈은 L4 외에 연결이 없다 (PROTOCOL §5.8 2항).</text>
+<text x="24" y="868" class="s" >3. 유권자 화면과 단추는 해석 유닛을 거치지 않는다 (§7.1). 읽은 후보는 화면에 나오지 않는다.</text>
+<text x="24" y="884" class="s" >4. 모든 이미지(해석 유닛, 커밋먼트 유닛, 모듈, 호스트, 기구 제어기)는 릴리스 목록에 오른다 (§7.9).</text>
+<text x="24" y="900" class="s" >5. 기구 제어기의 존재와 L2·L6·L7의 신호 구성은 가정이다. L9의 프레임 수와 크기는 §5.8 3항.</text>
+<text x="24" y="916" class="s" >6. TCB 칸(커밋먼트 유닛, 모듈 칸)은 외함 안에서 따로 봉인한다 (가정).</text>
+<rect x="954" y="812" width="430" height="132" rx="0" class="box" />
+<text x="962" y="832" class="s" >도면 번호</text>
+<text x="1046" y="832" >D-03</text>
+<line x1="954" y1="837" x2="1384" y2="837" class="thin" />
+<text x="962" y="852" class="s" >이름</text>
+<text x="1046" y="852" class="h2" >투함 스캐너 전자 블록도</text>
+<line x1="954" y1="857" x2="1384" y2="857" class="thin" />
+<text x="962" y="872" class="s" >축척 · 단위</text>
+<text x="1046" y="872" >축척 없음 · mm</text>
+<line x1="954" y1="877" x2="1384" y2="877" class="thin" />
+<text x="962" y="892" class="s" >판 · 날짜</text>
+<text x="1046" y="892" >1판 (연구용 초안) · 2026-11-01</text>
+<line x1="954" y1="897" x2="1384" y2="897" class="thin" />
+<text x="962" y="912" class="s" >근거</text>
+<text x="1046" y="912" >DEVICES §2.1·§5.1·§9, KEY_STORAGE §5</text>
+<line x1="954" y1="917" x2="1384" y2="917" class="thin" />
+<text x="962" y="932" class="s" ></text>
+<text x="1046" y="932" >PROTOCOL §5.8·§7.1·§7.9, SCREENS §0·§2</text>
+<line x1="1038" y1="812" x2="1038" y2="944" class="thin" />
+</svg>

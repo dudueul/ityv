@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 960" width="1400" height="960">
+<title>D-00 투표소 배치와 연결</title>
+<desc>투표소 장치 배치 예시, 유권자 동선, 광 회선과 관찰 탭, CCTV 구도 규칙(금지 구역)을 보인 평면 개념도. 축척 없음.</desc>
+<style>
+svg { color: #1b2430; --muted: #5a6878; --fill: rgba(27,36,48,.05); --fill2: rgba(29,114,125,.12); --chm: rgba(154,107,0,.12); --warn: #b81f2e; --teal: #1d727d; --gold: #8a6100; --paper: rgba(27,36,48,.03); }
+@media (prefers-color-scheme: dark) {
+  svg { color: #e5ebf1; --muted: #a3b1c0; --fill: rgba(229,235,241,.06); --fill2: rgba(76,193,204,.16); --chm: rgba(226,181,71,.14); --warn: #ef7a88; --teal: #5fd0db; --gold: #e2b547; --paper: rgba(229,235,241,.04); }
+}
+text { fill: currentColor; font-family: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", "IBM Plex Sans KR", sans-serif; font-size: 12px; }
+.s { font-size: 11px; fill: var(--muted); }
+.h { font-size: 16px; font-weight: 700; }
+.h2 { font-size: 13px; font-weight: 700; }
+.m { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 11px; }
+.red { fill: var(--warn); } .tl { fill: var(--teal); } .gd { fill: var(--gold); } .mu { fill: var(--muted); }
+.ln { stroke: currentColor; fill: none; stroke-width: 1.4; }
+.thin { stroke: currentColor; fill: none; stroke-width: .8; }
+.dim { stroke: var(--muted); fill: none; stroke-width: .8; }
+.ext { stroke: var(--muted); fill: none; stroke-width: .6; stroke-dasharray: 2 2; }
+.box { stroke: currentColor; fill: var(--fill); stroke-width: 1.4; }
+.paper { stroke: currentColor; fill: var(--paper); stroke-width: 1; }
+.tcb { stroke: var(--teal); fill: var(--fill2); stroke-width: 1.6; }
+.unt { stroke: var(--muted); fill: var(--fill); stroke-width: 1.4; stroke-dasharray: 6 4; }
+.chm { stroke: var(--gold); fill: var(--chm); stroke-width: 1.6; }
+.warn { stroke: var(--warn); fill: none; stroke-width: 1.6; }
+.warnf { stroke: var(--warn); fill: none; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.one { stroke: var(--teal); fill: none; stroke-width: 2; }
+.oned { stroke: var(--teal); fill: none; stroke-width: 2; stroke-dasharray: 7 4; }
+.two { stroke: var(--muted); fill: none; stroke-width: 1.6; }
+.seal { stroke: var(--warn); fill: none; stroke-width: 1.4; }
+.sealf { fill: var(--warn); }
+.zone { stroke: var(--warn); fill: none; stroke-width: 1; stroke-dasharray: 3 3; }
+.dot { fill: currentColor; }
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+<marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--teal)"/></marker>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--warn)"/></marker>
+<marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted)"/></marker>
+<marker id="ad" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" style="fill: var(--muted)"/></marker>
+</defs>
+<text x="24" y="34" class="h" >D-00 · 투표소 배치와 연결 (평면 예시)</text>
+<text x="24" y="54" class="s" >예시 배치다. 실제 투표소마다 다르다. 번호는 유권자 동선 순서, 기호는 오른쪽 범례.</text>
+<text x="24" y="70" class="s" >CCTV는 장치와 봉인을 비추고, 기표와 봉투 표면은 비추지 않는다 (ADR-0010 3항).</text>
+<path d="M40,110 L900,110 L900,770 L840,770 M760,770 L160,770 M80,770 L40,770 Z" class="ln" style="stroke-width:3"/>
+<text x="120" y="790" class="h2" text-anchor="middle" >입구</text>
+<text x="800" y="790" class="h2" text-anchor="middle" >출구</text>
+<path d="M884,300 L742,368 L742,470 L884,316 Z" class="ext" style="fill: var(--fill2); opacity:.55"/>
+<path d="M884,752 L790,500 L898,500 Z" class="ext" style="fill: var(--fill2); opacity:.55"/>
+<g transform="translate(886,308) rotate(180)"><rect x="-10" y="-6" width="16" height="12" class="box"/><path d="M6,-4 L14,-8 L14,8 L6,4 Z" class="box"/></g>
+<text x="886" y="296" class="s" text-anchor="middle" ></text>
+<g transform="translate(884,752) rotate(250)"><rect x="-10" y="-6" width="16" height="12" class="box"/><path d="M6,-4 L14,-8 L14,8 L6,4 Z" class="box"/></g>
+<text x="884" y="740" class="s" text-anchor="middle" ></text>
+<text x="888" y="290" class="s" text-anchor="end" >CCTV 1</text>
+<text x="780" y="712" class="s" text-anchor="end" >CCTV 2</text>
+<path d="M300,126 L300,206 M370,126 L370,206 M300,126 L370,126" class="ln" />
+<rect x="312" y="132" width="46" height="20" rx="2" class="box" />
+<path d="M306,206 L320,206 M350,206 L364,206" class="thin" />
+<path d="M378,126 L378,206 M448,126 L448,206 M378,126 L448,126" class="ln" />
+<rect x="390" y="132" width="46" height="20" rx="2" class="box" />
+<path d="M384,206 L398,206 M428,206 L442,206" class="thin" />
+<path d="M456,126 L456,206 M526,126 L526,206 M456,126 L526,126" class="ln" />
+<rect x="468" y="132" width="46" height="20" rx="2" class="box" />
+<path d="M462,206 L476,206 M506,206 L520,206" class="thin" />
+<path d="M534,126 L534,206 M604,126 L604,206 M534,126 L604,126" class="ln" />
+<rect x="546" y="132" width="46" height="20" rx="2" class="box" />
+<path d="M540,206 L554,206 M584,206 L598,206" class="thin" />
+<path d="M612,126 L612,206 M682,126 L682,206 M612,126 L682,126" class="ln" />
+<rect x="624" y="132" width="46" height="20" rx="2" class="box" />
+<path d="M618,206 L632,206 M662,206 L676,206" class="thin" />
+<text x="495" y="226" class="s" text-anchor="middle" >기표소</text>
+<rect x="290" y="118" width="400" height="98" rx="0" class="zone" />
+<text x="700" y="132" class="red" >금지 구역</text>
+<rect x="70" y="560" width="200" height="150" rx="6" class="ext" />
+<text x="80" y="578" class="h2" >확인 장치</text>
+<rect x="84" y="594" width="46" height="34" rx="3" class="unt" />
+<text x="107" y="615" class="s" text-anchor="middle" >단말1</text>
+<rect x="144" y="594" width="46" height="34" rx="3" class="unt" />
+<text x="167" y="615" class="s" text-anchor="middle" >단말2</text>
+<rect x="204" y="594" width="46" height="34" rx="3" class="unt" />
+<text x="227" y="615" class="s" text-anchor="middle" >단말3</text>
+<rect x="100" y="650" width="100" height="40" rx="3" class="tcb" />
+<text x="150" y="674" class="s" text-anchor="middle" >카운터 유닛</text>
+<rect x="210" y="650" width="50" height="40" rx="3" class="box" />
+<text x="235" y="674" class="s" text-anchor="middle" >예비</text>
+<circle cx="256" cy="652" r="5" class="seal" />
+<line x1="107" y1="628" x2="150" y2="650" class="one" marker-end="url(#at)" />
+<line x1="167" y1="628" x2="150" y2="650" class="one" marker-end="url(#at)" />
+<line x1="227" y1="628" x2="150" y2="650" class="one" marker-end="url(#at)" />
+<rect x="40" y="525" width="14" height="30" rx="0" class="box" />
+<text x="60" y="512" class="s" >명부 단자 (사전투표만)</text>
+<path d="M54,540 L64,540 L64,611 L84,611" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<rect x="70" y="340" width="200" height="90" rx="6" class="ext" />
+<text x="80" y="358" class="h2" >투표지 교부</text>
+<rect x="84" y="372" width="80" height="44" rx="3" class="box" />
+<text x="124" y="391" class="s" text-anchor="middle" >투표지</text>
+<text x="124" y="406" class="s" text-anchor="middle" >(사전: 발급기)</text>
+<rect x="176" y="372" width="80" height="44" rx="3" class="chm" />
+<text x="216" y="391" class="s" text-anchor="middle" >가림 봉투</text>
+<text x="216" y="406" class="s" text-anchor="middle" >교부</text>
+<rect x="690" y="380" width="70" height="64" rx="3" class="box" />
+<rect x="676" y="388" width="14" height="28" rx="2" class="box" />
+<text x="725" y="410" class="s" text-anchor="middle" >투함</text>
+<text x="725" y="425" class="s" text-anchor="middle" >스캐너</text>
+<line x1="684" y1="354" x2="730" y2="354" class="ext" />
+<line x1="684" y1="470" x2="730" y2="470" class="ext" />
+<rect x="600" y="360" width="86" height="104" rx="0" class="zone" />
+<text x="604" y="354" class="red" >금지 구역</text>
+<text x="698" y="486" class="s" >사무원·참관인 쪽 →</text>
+<rect x="800" y="380" width="60" height="50" rx="3" class="box" />
+<text x="830" y="402" class="s" text-anchor="middle" >예비</text>
+<text x="830" y="418" class="s" text-anchor="middle" >스캐너</text>
+<circle cx="856" cy="382" r="5" class="seal" />
+<rect x="600" y="470" width="70" height="34" rx="3" class="box" />
+<text x="635" y="491" class="s" text-anchor="middle" >봉투 반납</text>
+<rect x="600" y="510" width="70" height="34" rx="3" class="box" />
+<text x="635" y="531" class="s" text-anchor="middle" >자국 봉투</text>
+<rect x="560" y="600" width="150" height="40" rx="3" class="box" />
+<text x="635" y="625" text-anchor="middle" >참관인석</text>
+<line x1="635" y1="600" x2="725" y2="446" class="dim" marker-end="url(#ad)" />
+<line x1="560" y1="620" x2="270" y2="650" class="dim" marker-end="url(#ad)" />
+<rect x="840" y="520" width="52" height="80" rx="3" class="box" />
+<text x="866" y="556" class="s" text-anchor="middle" >게이트</text>
+<text x="866" y="571" class="s" text-anchor="middle" >웨이</text>
+<circle cx="888" cy="524" r="5" class="seal" />
+<rect x="894" y="620" width="6" height="26" rx="0" class="dot" />
+<text x="890" y="668" class="s" text-anchor="end" >바깥 회선</text>
+<text x="890" y="683" class="s" text-anchor="end" >단자</text>
+<line x1="866" y1="600" x2="866" y2="633" class="two" />
+<line x1="866" y1="633" x2="894" y2="633" class="two" marker-end="url(#am)" />
+<rect x="776" y="684" width="56" height="28" rx="3" class="unt" />
+<text x="804" y="703" class="s" text-anchor="middle" >회선 탭</text>
+<line x1="860" y1="634" x2="820" y2="684" class="oned" />
+<path d="M760,430 L800,430 L800,540 L840,540" class="one" marker-end="url(#at)" />
+<path d="M150,710 L150,740 L810,740 L810,570 L840,570" class="one" marker-end="url(#at)" />
+<rect x="730" y="500" width="56" height="28" rx="3" class="unt" />
+<text x="758" y="519" class="s" text-anchor="middle" >장치 탭</text>
+<line x1="800" y1="514" x2="786" y2="514" class="oned" />
+<line x1="810" y1="590" x2="780" y2="528" class="oned" />
+<text x="470" y="756" class="s" text-anchor="middle" >광 회선 (케이블, 바닥 덮개 안)</text>
+<path d="M120,760 L120,720" class="two" marker-end="url(#am)" />
+<path d="M230,560 L230,434" class="dim" marker-end="url(#ad)" />
+<path d="M270,385 Q300,300 330,230" class="dim" marker-end="url(#ad)" />
+<path d="M620,230 Q660,320 676,390" class="dim" marker-end="url(#ad)" />
+<path d="M700,450 Q740,620 800,760" class="dim" marker-end="url(#ad)" />
+<circle cx="120" cy="735" r="11" class="tcb" />
+<text x="120" y="739" text-anchor="middle" style="font-weight:700">1</text>
+<circle cx="230" cy="495" r="11" class="tcb" />
+<text x="230" y="499" text-anchor="middle" style="font-weight:700">2</text>
+<circle cx="300" cy="290" r="11" class="tcb" />
+<text x="300" y="294" text-anchor="middle" style="font-weight:700">3</text>
+<circle cx="650" cy="300" r="11" class="tcb" />
+<text x="650" y="304" text-anchor="middle" style="font-weight:700">4</text>
+<circle cx="745" cy="600" r="11" class="tcb" />
+<text x="745" y="604" text-anchor="middle" style="font-weight:700">5</text>
+<text x="940" y="124" class="h2" >유권자 동선</text>
+<text x="940" y="146" class="s" >1 입구에서 확인 장치로. 신분증 확인 (사전투표면 명부 조회).</text>
+<text x="940" y="163" class="s" >2 투표지와 가림 봉투를 받는다.</text>
+<text x="940" y="180" class="s" >3 기표소에서 찍고, 받은 투표지 전부를 봉투에 넣는다.</text>
+<text x="940" y="197" class="s" >4 투함 스캐너에 봉투째 넣고 넣기 또는 확인을 고른다 (D-02).</text>
+<text x="940" y="214" class="s" >5 봉투를 돌려주고 나간다. 사무원이 봉투 안쪽을 본다.</text>
+<text x="954" y="231" class="s" >관외는 반환 투표지를 회송 봉투에 넣고 사무원 앞에서</text>
+<text x="954" y="248" class="s" >라벨 스티커를 붙인다.</text>
+<text x="940" y="290" class="h2" >CCTV 구도 (ADR-0010 3항)</text>
+<text x="940" y="312" class="s" >보이면 안 됨: 기표소 안, 기표면, 봉투 표면.</text>
+<text x="954" y="329" class="s" >유권자 화면과 인쇄물 출구도 비추지 않는다 (가정).</text>
+<text x="940" y="346" class="s" >보여야 함 (가정): 투표함 칸 문과 봉인, 모듈 칸 문,</text>
+<text x="954" y="363" class="s" >비상 투입구, 예비 장치, 게이트웨이 외함.</text>
+<text x="940" y="380" class="s" >영상은 비공개, 구간 해시를 장부에 앵커한다.</text>
+<text x="940" y="418" class="h2" >연결 (모두 연결 목록에 선언, D-03·D-05·D-06)</text>
+<text x="940" y="440" class="s" >스캐너 → 게이트웨이: 광, 한 방향</text>
+<text x="940" y="457" class="s" >카운터 유닛 → 게이트웨이: 광, 한 방향</text>
+<text x="940" y="474" class="s" >단말 → 카운터 유닛: 광커플러, 한 방향</text>
+<text x="940" y="491" class="s" >단말 ↔ 명부 단자: 사전투표만, 탭 없음</text>
+<text x="940" y="508" class="s" >게이트웨이 ↔ 바깥 회선 단자: 하나</text>
+<text x="940" y="525" class="s" >관찰 탭: 장치 쪽 하나, 회선 쪽 하나 (송신 없음)</text>
+<text x="940" y="542" class="s" >무선: 없음. 개시·정오·마감 무선 점검 (RfCheck)</text>
+<rect x="940" y="570" width="26" height="13" rx="0" class="tcb" />
+<text x="974" y="580" class="s" >검증 장치 (커밋먼트·카운터 유닛)</text>
+<rect x="940" y="590" width="26" height="13" rx="0" class="unt" />
+<text x="974" y="600" class="s" >불신 장치·탭</text>
+<line x1="940" y1="616" x2="966" y2="616" class="one" marker-end="url(#at)" />
+<text x="974" y="620" class="s" >광 회선, 한 방향</text>
+<line x1="940" y1="636" x2="966" y2="636" class="oned" marker-end="url(#at)" />
+<text x="974" y="640" class="s" >관찰 탭 분기</text>
+<line x1="940" y1="656" x2="966" y2="656" class="two" marker-end="url(#am)" marker-start="url(#am)" />
+<text x="974" y="660" class="s" >양방향 회선</text>
+<circle cx="1183" cy="576" r="9" class="seal" />
+<text x="1183" y="580" class="red" text-anchor="middle" style="font-size:11px;font-weight:700">S</text>
+<text x="1204" y="580" class="s" >봉인된 예비·외함</text>
+<rect x="1170" y="590" width="26" height="13" rx="0" class="chm" />
+<text x="1204" y="600" class="s" >가림 봉투</text>
+<rect x="1170" y="620" width="26" height="13" rx="0" class="zone" />
+<text x="1204" y="630" class="s" >CCTV 금지 구역</text>
+<rect x="1170" y="640" width="26" height="13" rx="0" class="ext" style="fill: var(--fill2); opacity:.55"/>
+<text x="1204" y="650" class="s" >CCTV 시야</text>
+<text x="24" y="830" class="h2" >주</text>
+<text x="24" y="848" class="s" >1. 배치와 거리는 예시다 (가정). 기표소 입구는 스캐너와 참관인석을 향하지 않게 둔다 (가정).</text>
+<text x="24" y="864" class="s" >2. 광 회선은 바닥 덮개 안으로 보내고, 개시 때 참관인이 끝에서 끝까지 따라가 본다 (가정).</text>
+<text x="24" y="880" class="s" >3. 참관인은 확인 장치와 스캐너의 사무원 쪽을 볼 수 있어야 한다. 유권자의 기표나 봉투 안은 보지 않는다.</text>
+<text x="24" y="896" class="s" >4. 예비 장치는 봉인한 채 둔다. 바꿀 때는 사무원 2인과 서로 다른 조직 참관인 2인이 입회한다.</text>
+<rect x="954" y="812" width="430" height="132" rx="0" class="box" />
+<text x="962" y="832" class="s" >도면 번호</text>
+<text x="1046" y="832" >D-00</text>
+<line x1="954" y1="837" x2="1384" y2="837" class="thin" />
+<text x="962" y="852" class="s" >이름</text>
+<text x="1046" y="852" class="h2" >투표소 배치와 연결</text>
+<line x1="954" y1="857" x2="1384" y2="857" class="thin" />
+<text x="962" y="872" class="s" >축척 · 단위</text>
+<text x="1046" y="872" >축척 없음 (예시 배치) · mm</text>
+<line x1="954" y1="877" x2="1384" y2="877" class="thin" />
+<text x="962" y="892" class="s" >판 · 날짜</text>
+<text x="1046" y="892" >1판 (연구용 초안) · 2026-11-01</text>
+<line x1="954" y1="897" x2="1384" y2="897" class="thin" />
+<text x="962" y="912" class="s" >근거</text>
+<text x="1046" y="912" >DEVICES §2.1, PROTOCOL §5.8·§6.2·§7.1</text>
+<line x1="954" y1="917" x2="1384" y2="917" class="thin" />
+<text x="962" y="932" class="s" ></text>
+<text x="1046" y="932" >ADR-0010 3항, ADR-0022, BALLOT_LAYOUT §4</text>
+<line x1="1038" y1="812" x2="1038" y2="944" class="thin" />
+</svg>
