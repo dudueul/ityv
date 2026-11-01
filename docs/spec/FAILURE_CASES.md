@@ -15,7 +15,8 @@
 - `module.final_counter = record_count + challenge_count + quarantine_count` (모듈마다, 틈 없음)
 - 관외·재외 함: `paper_count = 0`(봉투 안이라 셀 수 없음), `sticker_count = visit_count`, `envelope_count = 회송 봉투 교부 수 − 빈 봉투 회수 수`, 스티커의 라벨 값 수 `= record_count`(수령지에서 확인)
 - 모든 함: `visit_count ≤ record_count ≤ 8 · visit_count` (방문당 넣은 표 1–8장, ADR-0021)
-- 교부 회계: `issued = record_count + no_record_count + challenge_count + quarantine_count + voter_spoiled_reissued + returned`
+- 용지 재고: `stock_received = issued + unused + printer_waste`(현장 인쇄 투표소는 백지 수, `IssuanceCountBody`, PROTOCOL §10.2)
+- 교부 회계: `issued = record_count + no_record_count + challenge_count + quarantine_count + voter_spoiled_reissued + returned`(투표소의 모든 함 합계)
 - 참여 장부: `checkin_count = issued − voter_spoiled_reissued − challenge_count`(검증 후 재교부와 유권자 훼손 재교부는 같은 유권자의 두 번째 교부)
 
 ## 1. 시점 축

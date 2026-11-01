@@ -92,7 +92,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 활성화 규칙:
 - `BALLOT_MARK` 없이 `CastRecord`를 만들 수 없다. `VOTER_CODE` 없이 `Slip`을 만들 수 없다. `TRUSTEE_BODY` 없이 share 패키지를 만들 수 없다. `CRYPTO_TALLY_AID` 없이 합계 열기 이벤트를 수록할 수 없다. `RLA` 없이 표본 추출 이벤트를 수록할 수 없다(VC-007).
-- `VOTER_CODE`는 `BALLOT_MARK`와 `TRUSTEE_BODY`를 전제한다. 전제 없는 조합은 genesis 검증에서 거부한다(VC-008).
+- 0단계 위의 모든 범위는 `PUBLIC_BOARD`를, 1단계 위의 모든 범위는 `TRUSTEE_BODY`를 전제한다. `VOTER_CODE`는 2단계 범위 여섯 가지(`BALLOT_MARK`, `CRYPTO_TALLY_AID`, `RLA`, `OBSERVER_ACCESS`, `DEPLOY_AUTH`, `STAGE_GATE`)를 모두 전제한다. 3단계는 완전한 2단계 위에서만 시작한다. `RLA`는 `CRYPTO_TALLY_AID`를 전제한다. 감사 표본은 집계 범위(§11.1)의 포함 기록에서 뽑으므로, 이 전제가 있어야 상태 사다리에서 `CRYPTO_TALLY_VERIFIED`를 건너뛰고 `PAPER_AUDITED`로 가는 구성이 생기지 않는다. 전제 없는 조합은 genesis 검증에서 거부한다(VC-008).
 - 코드에서는 capability 타입으로 강제한다(`CONSTITUTION.md` §1.7).
 
 ### 4.5 임명 이벤트
@@ -238,7 +238,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 4. 커밋먼트 유닛이 본문에 하이브리드 장치 서명을 한다.
 5. `BatchAttest` 이벤트(공개)를 수록한다. 본문 `BatchAttestBody`(스키마 0x0012): `election_id`, `box_id`, `batch_index`, `record_count`, `records_root`, `module_ranges: Array<{module_id, counter_first, counter_last}, 7>`, `module_refusals: Array<module_id, 7>`, `journal_head`, `time_bucket`. 이벤트 `BatchAttest`(스키마 0x0017) = 본문 바이트 + `module_sigs` + `device_sig`(purpose `batch-attest`). 필드 배치는 `ENCODING.md` §8.12·§8.13.
 
-**늦은 마감.** 장치가 배치를 닫기 전에 멈췄다가 살아나면, 사무원 2인과 서로 다른 조직 참관인 2인의 입회 아래 장치를 켜고 저널에서 미결 배치를 닫는다. 결과는 `LateBatchClose` 이벤트(배치 본문과 서명, 입회자 서명, 사유 코드)로 수록되며 일반 배치와 같은 효력을 가진다. 모듈도 미결 카운터 목록이 일치해야 서명한다.
+**늦은 마감.** 장치가 배치를 닫기 전에 멈췄다가 살아나면, 사무원 2인과 서로 다른 조직 참관인 2인의 입회 아래 장치를 켜고 저널에서 미결 배치를 닫는다. 결과는 그 배치의 `BatchAttest`(장치·모듈 서명)와, 입회자가 서명한 `LateBatchClose`(본문 `LateBatchCloseBody` 0x002E: 닫는 배치 본문의 객체 해시, 사유 코드 1 장치 재기동·2 전원 복구·3 모듈 교체·4 기타, `time_bucket`, purpose `late-batch-close`, `ENCODING.md` §8.41)로 수록되며 일반 배치와 같은 효력을 가진다. 모듈도 미결 카운터 목록이 일치해야 서명한다. `LateBatchClose`는 그 투표함 마감의 `time_bucket` 뒤 96구간(24시간) 안의 것만 받는다. 이 배치로 장부의 모든 기록이 증명되면 투표함의 열린 배치 보류가 풀린다(VC-100).
 
 **미증명 기록.** 기록 서명은 유효하나 어떤 `BatchAttest`에도 포함되지 않은 기록은 `UNATTESTED` 상태다. 검증기는 이를 목록으로 공개하고, 집계 범위(§11.1)에서 `UNATTESTED` 사유로 제외하며, 감사(§12)에서는 종이와 대조한다. 늦은 마감으로 증명되면 `CAST_COMMITTED`로 돌아온다. 집계 범위는 늦은 마감 기한(마감 후 24시간) 이후에 확정한다(VC-057).
 
@@ -276,7 +276,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 해석 유닛과 커밋먼트 유닛은 선택별 누계, 직전 선택, 선택의 순서를 계산하거나 보관하거나 출력하지 않는다. 장치가 세는 것은 기록·검증·격리·스캔 수와 모듈 카운터뿐이므로, 투표 중에는 장치 안에도 공개원장에도 중간 결과가 없다(VC-062).
 
-스캐너를 쓸 수 없고 예비 장치도 없으면 사무원 2인과 참관인 2인이 `FallbackDeclared` 이벤트(사유, 시작 구간)를 수록한 뒤 봉인된 비상 투입구로 투표지를 받는다. 이 투표지에는 기록이 없으며 마감 때 `no_record_count`로 센다. 예비 장치가 오면 `FallbackEnded`를 수록한다. 관외·재외 프로필의 비상 투입에서는 투표지를 회송용 봉투에 넣고, 사전 인쇄된 일련번호 **비상 표지**를 라벨 자리에 붙인다. 사용한 표지 번호 범위를 `FallbackDeclared`·`FallbackEnded`에 기록한다. 이 투표지에는 기록·각인·`env_label`이 없으며 수령지에서 종이로만 집계된다(§10.6). 비상 투입구 사용은 법령 부속서 개정안 2의 장치 장애 대체 절차에 따른다.
+스캐너를 쓸 수 없고 예비 장치도 없으면 사무원 2인과 서로 다른 조직 참관인 2인이 `FallbackDeclared` 이벤트(본문 `FallbackBody` 0x002A: 사유 코드 1 스캐너 고장·2 전원·3 모듈 고장·4 기타, 참관인 진술 해시, 시작 구간, `ENCODING.md` §8.37)를 수록한 뒤 봉인된 비상 투입구로 투표지를 받는다. 업링크는 저장 후 전달이므로(§5.8) 선언 전에 서명된 기록이 선언 뒤에 장부에 실릴 수 있고, 검증기는 그 기록을 받는다. 비상 구간에 기록이 만들어지지 않았다는 사실은 마감 수량과 모듈 카운터 등식(§10.2)으로만 확인한다. 이 투표지에는 기록이 없으며 마감 때 `no_record_count`로 센다. 예비 장치가 오면 `FallbackEnded`를 수록한다. 관외·재외 프로필의 비상 투입에서는 투표지를 회송용 봉투에 넣고, 사전 인쇄된 일련번호 **비상 표지**를 라벨 자리에 붙인다. 사용한 표지 번호 범위를 `FallbackDeclared`·`FallbackEnded`에 기록한다. 이 투표지에는 기록·각인·`env_label`이 없으며 수령지에서 종이로만 집계된다(§10.6). 비상 투입구 사용은 법령 부속서 개정안 2의 장치 장애 대체 절차에 따른다.
 
 참관인이 요구하는 검증에는 실제 투표지가 아니라 **시험용 투표양식**(`ballot_style_id`가 `TEST-`로 시작)의 투표지를 쓴다. 시험용 기록은 `TallyScope`에서 `TEST_BALLOT` 사유로 제외되고 참여 장부와도 대조하지 않는다(VC-055).
 
@@ -417,19 +417,23 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 ## 10. 투표함 마감과 보관
 
 ### 10.1 개시
-`BoxOpened` 이벤트: `box_id`, 장치·모듈 ID와 봉인 번호 확인 결과, 초기 수량 0, 사무원 2인과 서로 다른 조직 참관인 2인의 서명. genesis에 없는 장치·모듈이면 개시할 수 없다(VC-037).
+`BoxOpened` 이벤트(본문 `BoxOpenedBody` 0x0029, `ENCODING.md` §8.36): `box_id`, 붙인 모듈 ID, 봉인 번호 목록 해시와 확인 결과, 초기 수량, 장치 서명과 사무원 2인·서로 다른 조직 참관인 2인의 서명(purpose `box-open`). genesis에 없는 장치·모듈이면 개시할 수 없다(VC-037). 봉인 불일치나 0이 아닌 초기 수량은 개시를 거부하지 않고 수록한 뒤 그 투표함을 `HOLD_REVIEW`로 둔다. 거부하면 불일치의 증거가 장부에 남지 않기 때문이다. 장치 서명이 없으면 개시하지 않고 예비 장치로 바꾼다.
 
 ### 10.2 마감
-마감 전에 투표소는 `IssuanceCount` 이벤트(공개: `station_id`, 교부 수, 훼손 수, 반납 수, 미사용 수, 관외 투표소면 회송용 봉투 교부 수와 빈 봉투 회수 수, 사무원 2·참관인 2 서명)를 수록한다. 원본 회계표는 `restricted`다.
+마감 전에 투표소는 `IssuanceCount` 이벤트(본문 `IssuanceCountBody` 0x002B, `ENCODING.md` §8.38. 공개: `station_id`, 받은 용지 수, 교부 수, 훼손 수, 반납 수, 미사용 수, 인쇄 실패 용지 수, 관외 투표소면 회송용 봉투 교부 수와 빈 봉투 회수 수, 사무원 2·서로 다른 조직 참관인 2 서명)를 수록한다. 원본 회계표는 `restricted`다. 세 등식을 확인한다. 용지 재고 `받은 용지 수 = 교부 수 + 미사용 수 + 인쇄 실패 용지 수`(현장 인쇄 투표소는 백지 수로 센다), 교부 `교부 수 = 기록 수 + 비상 투입 수 + 검증 폐기 수 + 격리 수 + 훼손 수 + 반납 수`, 참여 `확인 카운터 = 교부 수 − 훼손 수 − 검증 폐기 수`. 오른쪽 합계는 genesis에서 그 `station_id`를 가진 모든 투표함의 마감에서 더한다. 어긋나면 `HOLD_REVIEW`다(`FAILURE_CASES.md` §0).
 
-`BoxCloseBody`(스키마 0x0007; 이벤트 `BoxClose` 0x001A = 본문 바이트 + 장치·사무원·참관인 서명, `ENCODING.md` §8.16·§8.17), 공개: `election_id`, `box_id`, `paper_count`(사무원 2인이 독립 계수한 실물 투표지 수), `record_count`, `attested_count`, `no_record_count`(비상 투입구로 받은 수), `challenge_count`, `quarantine_count`, `visit_count`(넣은 표가 하나 이상인 방문 수, 커밋먼트 유닛이 센다), `envelope_count`(관외·재외 함의 회송 봉투 실물 수, 사람이 센다. 투표소 함은 0), `sticker_count`(관외·재외 함의 봉투에 붙은 라벨 스티커 수, 사람이 센다. 비상 표지는 세지 않는다. 투표소 함은 0), `record_set_root`(기록 해시 정렬 집합의 Merkle root), `journal_head: Hash512`, `seal_digest: Hash512`(적용된 봉인 번호 목록의 해시), `module_counters: Array<{module_id, final_counter}, 7>`, `open_batches: u8`, 장치 서명(장치가 살아 있을 때), 사무원 서명 2, 서로 다른 조직 참관인 서명 2 이상. 장치 서명이 없는 마감은 `BoxCloseManual`로 수록되며 자동으로 `HOLD_REVIEW`다. 뒤에 장치가 살아나 `LateBoxClose`(장치 서명 포함)를 수록하면 해소될 수 있다.
+`BoxCloseBody`(스키마 0x0007; 이벤트 `BoxClose` 0x001A = 본문 바이트 + 장치·사무원·참관인 서명, `ENCODING.md` §8.16·§8.17), 공개: `election_id`, `box_id`, `paper_count`(사무원 2인이 독립 계수한 실물 투표지 수), `record_count`, `attested_count`, `no_record_count`(비상 투입구로 받은 수), `challenge_count`, `quarantine_count`, `visit_count`(넣은 표가 하나 이상인 방문 수, 커밋먼트 유닛이 센다), `envelope_count`(관외·재외 함의 회송 봉투 실물 수, 사람이 센다. 투표소 함은 0), `sticker_count`(관외·재외 함의 봉투에 붙은 라벨 스티커 수, 사람이 센다. 비상 표지는 세지 않는다. 투표소 함은 0), `spoil_envelope_count`(폐기·격리 봉투 실물 수, 사무원 2인이 센다), `record_set_root`(기록 해시 정렬 집합의 Merkle root), `journal_head: Hash512`, `seal_digest: Hash512`(적용된 봉인 번호 목록의 해시), `module_counters: Array<{module_id, final_counter}, 7>`, `open_batches: u8`, `time_bucket`, 장치 서명(장치가 살아 있을 때), 사무원 서명 2, 서로 다른 조직 참관인 서명 2 이상. 사람의 서명도 장치 서명과 같은 purpose(`box-close`, 늦은 마감은 `late-box-close`)로 본문 바이트에 한다. 장치 서명이 없는 마감은 `BoxCloseManual`로 수록되며 자동으로 `HOLD_REVIEW`다.
 
-마감 불변식(VC-038): `paper_count == record_count + no_record_count`(투표소 함), `record_count == attested_count + (열린 배치의 기록 수)`, 격리 봉투 실물 수 `== challenge_count + quarantine_count`, 각 모듈의 `final_counter == record_count + challenge_count + quarantine_count`(틈 없음), `open_batches == 0`(아니면 `HOLD_REVIEW`이며 늦은 마감 대상), `visit_count ≤ record_count ≤ 8 · visit_count`, `no_record_count > 0`이면 대응하는 `FallbackDeclared`가 존재. 관외·재외 함은 투표지가 봉투 안에 있어 셀 수 없으므로 `paper_count`를 0으로 두고 대신 `sticker_count == visit_count`, `envelope_count == 회송용 봉투 교부 수 − 빈 봉투 회수 수`(`IssuanceCount`)를 쓴다. 확인 뒤 다시 찍은 유권자는 스티커가 둘 이상인 봉투 하나를 내므로 `envelope_count ≤ sticker_count + 비상 표지 봉투 수`이다. 스티커에 실린 라벨 값의 수는 `record_count`와 같으며 수령지 대조(§10.6)가 확인한다. 관외·재외 함의 `no_record_count`는 비상 구간에 교부한 투표지 수(교부 회계)로 적는다. 투표지 수는 수령지 개봉 후 등식(§10.6 7항)이 맡는다. 하나라도 어긋나면 마감은 수록되되 상태는 `HOLD_REVIEW`이며 참관인 진술 해시를 첨부한다. 마감 후 그 `box_id`로 새 기록은 수록되지 않는다(VC-039).
+**늦은 마감의 해소(VC-100).** 수동 마감 뒤 장치가 살아나면 `LateBoxClose`(장치 서명과 입회자 서명 모두 purpose `late-box-close`)를 수록한다. 수동 마감의 `time_bucket` 뒤 96구간(24시간) 안의 것만 받는다. 사람이 센 수(`paper_count`, `envelope_count`, `sticker_count`, `spoil_envelope_count`)가 수동 마감과 모두 같으면 늦은 마감의 판정이 수동 마감의 판정을 대신한다. 하나라도 다르면 앞의 보류를 모두 두고 "늦은 마감 불일치"를 더한다. 늦은 마감과 늦은 배치 마감은 개표 뒤에도 기한 안이면 받는다. 집계 범위(§11.1)는 그 투표양식의 마지막 마감 뒤 96구간이 지난 뒤에 확정한다.
 
-개표소에서 각인 판독기는 투표함별로 각인 없는 투표지 수와 중복 `cast_id` 수만 `ImprintAudit` 이벤트(공개)로 남기고, `cast_id` 목록 자체는 `restricted`다. 모듈 봉인 훼손이나 모듈 오동작은 `ModuleIncident` 이벤트(공개: 모듈 ID, 사유 코드, 참관인 2 서명)로 남기고 해당 장치를 교체한다.
+마감 불변식(VC-038): `paper_count == record_count + no_record_count`(투표소 함과 `RECEIPT_SCAN` 함. 수령 스캐너 함도 사람이 센 투표지 수를 같은 등식으로 대조하고 `envelope_count`·`sticker_count`는 0이다), `record_count == attested_count + (열린 배치의 기록 수)`, `spoil_envelope_count == challenge_count + quarantine_count`, 각 모듈의 `final_counter == record_count + challenge_count + quarantine_count`(틈 없음), `open_batches == 0`(아니면 `HOLD_REVIEW`이며 늦은 마감 대상), `visit_count ≤ record_count ≤ 8 · visit_count`, `no_record_count > 0`이면 대응하는 `FallbackDeclared`가 존재. 관외·재외 함은 투표지가 봉투 안에 있어 셀 수 없으므로 `paper_count`를 0으로 두고 대신 `sticker_count == visit_count`, `envelope_count == 회송용 봉투 교부 수 − 빈 봉투 회수 수`(`IssuanceCount`)를 쓴다. 확인 뒤 다시 찍은 유권자는 스티커가 둘 이상인 봉투 하나를 내므로 `envelope_count ≤ sticker_count + 비상 표지 봉투 수`이다. 스티커에 실린 라벨 값의 수는 `record_count`와 같으며 수령지 대조(§10.6)가 확인한다. 관외·재외 함의 `no_record_count`는 비상 구간에 교부한 투표지 수(교부 회계)로 적는다. 투표지 수는 수령지 개봉 후 등식(§10.6 7항)이 맡는다. 하나라도 어긋나면 마감은 수록되되 상태는 `HOLD_REVIEW`이며 참관인 진술 해시를 첨부한다. 격리마다 따로 공개하는 이벤트는 없다. 격리 수는 모듈 카운터 등식과 `spoil_envelope_count`로만 대조한다. 마감 후 그 `box_id`로 새 기록은 수록되지 않는다(VC-039).
+
+개표소에서 각인 판독기는 투표함별로 각인 없는 투표지 수와 중복 `cast_id` 수만 `ImprintAudit` 이벤트(본문 `ImprintAuditBody` 0x002C, 개표 사무원 2·서로 다른 조직 참관인 2 서명, 공개)로 남기고, `cast_id` 목록 자체는 `restricted`다. 모듈 봉인 훼손이나 모듈 오동작은 `ModuleIncident` 이벤트(공개: 모듈 ID, 사유 코드, 참관인 2 서명)로 남기고 해당 장치를 교체한다.
 
 ### 10.3 인계 사슬
-`CustodyHandoff`(스키마 0x0008): `election_id`, `box_id` 또는 용기 ID, `index`(1부터), `from_actor`, `to_actor`, `previous_handoff_hash`, `seal_digest`, `paper_count`, `time_bucket`, 송신자·수신자 서명. 송신자와 수신자는 서로 다른 조직이어야 하고 genesis의 `custody_routes`가 정한 순서를 따라야 한다(VC-040). 봉인 번호 변경은 사유 코드가 있는 `SealChange` 이벤트를 요구하며 그 이벤트가 없는 봉인 불일치는 `HOLD_REVIEW`다.
+`CustodyHandoff`(본문 `CustodyHandoffBody` 0x0008, `ENCODING.md` §8.33): `election_id`, `box_id` 또는 용기 ID, `index`(1부터), 송신자와 그 조직, 수신자와 그 조직, `previous_handoff_hash`(앞 인계 본문의 객체 해시, 첫 인계는 0), `seal_digest`, `count`(투표지 수, 관외·재외 함은 회송 봉투 수), `time_bucket`, 송신자·수신자 서명(purpose `handoff`). 송신자와 수신자는 서로 다른 조직이어야 하고 genesis의 `custody_routes`가 정한 순서를 따라야 하며, 앞 인계의 수신자(사람과 조직)가 다음 인계의 송신자다. 서명자는 genesis 명부에 그 조직의 사무원이나 보관 담당자로 등록된 사람이고 서명은 등록된 키로 한다(VC-040). 수량이 마감 수와 다르면 `HOLD_REVIEW`다. 인계 사슬이 경로 끝에 이르지 않은 채 개표하면 그 투표함은 `HOLD_REVIEW`다.
+
+봉인 번호 변경은 `SealChange` 이벤트(본문 `SealChangeBody` 0x002D, 사무원 2·서로 다른 조직 참관인 2 서명, purpose `seal-change`, `ENCODING.md` §8.40)를 요구한다. 사유 코드: 1 훼손 발견 후 재봉인, 2 참관 점검 뒤 재봉인, 3 용기 교체·합침, 4 법원·선관위 명령에 따른 개봉, 5 기타(진술). 사유 1은 설명된 변경이어도 언제나 `HOLD_REVIEW`다. `SealChange`가 없는 봉인 불일치도 `HOLD_REVIEW`다.
 
 ### 10.4 영상 앵커
 `VideoAnchor` 이벤트(공개): 카메라 ID, `time_bucket`, 영상 구간 해시. 영상 원본과 대응표는 `restricted`다. 구간 누락은 `VideoGap` 이벤트로 남긴다.
@@ -443,14 +447,14 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 3. 개봉은 회차 단위로 하며 봉투와 투표지를 분리해 섞은 뒤에만 투표지를 다룬다. (봉투, 투표지) 쌍을 기록하는 행위는 금지되며 참관인이 확인한다.
 4. **수령 시 분류**(봉투를 열지 않고). 라벨 판독기는 봉투마다 다음 중 하나로 분류하고 `ReceiptMark`에 종류별 봉투 수와 라벨 값 수를 싣는다. 라벨 값은 분류별로 따로 모은 집합에 넣는다: 정상(라벨 판독), 라벨 없음·판독 불가, 비상 표지(§7.3), 훼손·개봉 흔적, 기한 후 도착, 오배송(다른 관할 주소). 훼손·기한 후 봉투는 열지 않고 별도 봉인 보관하며, 오배송 봉투는 `CustodyHandoff`로 관할 선관위에 이송해 도착지의 `ReceiptMark`에 포함한다. 같은 봉투를 두 번 읽은 것은 집합이 중복을 없애므로, 카세트 실물 봉투 수와 라벨 값 수를 함께 기록해 구분한다.
 5. **수령 대조 절차의 결과.** 기록 쪽: `RECEIVED`(정상 라벨과 일치), `RECEIVED_DAMAGED`(훼손 봉투의 라벨과 일치), `RECEIVED_LATE`(기한 후 봉투의 라벨과 일치), `WRONG_DISTRICT`(라벨은 일치하나 기록의 투표양식이 수령 관할의 선거구가 아님: 발급기가 다른 선거구 투표지를 낸 경우), `CAST_NOT_RECEIVED`(일치하는 라벨 없음). 라벨 쪽: 어떤 기록과도 맞지 않는 라벨(위조 봉투 또는 장치 오류 의심)과 중복 라벨은 수만 공개하고 그 봉투를 열지 않은 채 격리해 조사한다(VC-060).
-6. **집계 반영.** 암호 집계는 `RECEIVED` 기록만 포함한다. `RECEIVED_LATE`는 법령의 도착 기한에 따라 제외한다. `RECEIVED_DAMAGED`와 `WRONG_DISTRICT`는 해당 선거구를 `HOLD_REVIEW`로 두고 법령에 따라 판정하며, 판정 결과를 공개 사유와 함께 `TallyScope`에 반영한다. 비상 표지 봉투의 투표지는 개표일에 참관인 입회 아래 손으로 세어 별도 줄로 공개하며, 비상 표지 봉투 수는 비상 표지 사용 범위와, 그 안의 투표지 수는 발송지 `no_record_count`와 같아야 한다.
+6. **집계 반영.** 암호 집계는 `RECEIVED` 기록만 포함한다. `RECEIVED_LATE`는 법령의 도착 기한에 따라 제외한다. `RECEIVED_DAMAGED`와 `WRONG_DISTRICT`는 해당 선거구를 `HOLD_REVIEW`로 두고 법령에 따라 판정한다. 선관위와 위원회는 그런 기록마다 그 기록을 지목한 `POSTAL` 분쟁(§13)을 접수하고, 판정은 그 분쟁의 `LegalDecisionRef`(집계 효과 1 포함 또는 2 제외)로만 들어온다. 기계는 판정하지 않는다. 판정이 모두 수록되기 전에는 그 투표양식의 `TallyScope`를 수록하지 않고, `TallyScope`는 판정을 따른다(포함, 또는 사유 `LEGAL_EXCLUDED`와 근거로 결정 해시)(VC-099). 비상 표지 봉투의 투표지는 개표일에 참관인 입회 아래 손으로 세어 별도 줄로 공개하며, 비상 표지 봉투 수는 비상 표지 사용 범위와, 그 안의 투표지 수는 발송지 `no_record_count`와 같아야 한다.
 7. **개봉 후 이상.** 봉투 안에 투표지가 없는 경우, 같은 투표양식의 투표지가 두 장 이상인 경우(한 사람은 투표양식마다 한 장만 받는다), 비상 표지가 아닌데 각인이 없는 투표지, 다른 선거구 투표지는 현행 유·무효 판정 규칙을 따르고 종류별 수를 공개한다. 개봉 후 투표지 수가 `RECEIVED` 기록 수 + 비상 표지 봉투 안의 투표지 수와 다르면 그 회차는 `HOLD_REVIEW`이며 종이 대조 감사(§12)의 표본을 늘린다.
 8. **묶음 정보의 한계.** 방문당 스티커 하나는 그 방문의 기록들이 같은 봉투로 왔다는 사실을 물리적으로 담는다. 봉투 하나에 한 사람의 투표지가 모두 들어가는 것은 현행 관외투표와 같다. 이 묶음이 선택과 이어지지 않게, 판독기는 값을 낱개 집합으로만 남기고(1항), 수령 대조 절차는 기록별 상태만 공개하며(`ReceiptResolution`에 묶음 없음), 복원한 라벨은 절차 끝에 소거하고(VC-041), 개봉한 투표지는 봉투와 분리해 섞은 뒤에만 다룬다(3항). 감사 표본 열람자(§12.3)는 라벨이나 스티커 정보를 받지 않는다.
 
 ## 11. 집계
 
 ### 11.1 범위
-`TallyScope` 이벤트(공개): 투표양식과 보고 단위(genesis `reporting_units[]`)별로 집계에 포함되는 기록 해시 집합의 root와 수, 제외 목록(`CHALLENGED_SPOILED`, `QUARANTINED`, `CAST_NOT_RECEIVED`, `SHARE_MISSING`, `UNATTESTED`, `TEST_BALLOT`)을 기록 해시로 명시. `no_record_count`는 기록이 없으므로 수량으로만 공개한다. 제외는 사유 코드와 근거 이벤트 해시를 가진다(VC-042). `TallyScope`는 그 투표양식이 쓰인 모든 투표함의 마감(`BoxClose` 또는 `BoxCloseManual`)과, 관외·재외 기록이 있으면 수령 대조 절차(§10.6)이 수록된 뒤에만 수록한다.
+`TallyScope` 이벤트(공개): 투표양식과 보고 단위(genesis `reporting_units[]`)별로 집계에 포함되는 기록 해시 집합의 root와 수, 제외 목록을 기록 해시로 명시. 제외 사유는 다음 순서로 매기며, 한 기록에 사유가 여럿이면 이 순서의 첫 사유 하나만 적는다: `TEST_BALLOT`, `CHALLENGED_SPOILED`, `QUARANTINED`, `CAST_NOT_RECEIVED`, `RECEIVED_LATE`, `LEGAL_EXCLUDED`, `SHARE_MISSING`, `UNATTESTED`. `no_record_count`는 기록이 없으므로 수량으로만 공개한다. 제외는 사유 코드와 근거 이벤트 해시를 가진다(VC-042). `TallyScope`는 그 투표양식이 쓰인 모든 투표함의 마감(`BoxClose` 또는 `BoxCloseManual`)과, 관외·재외 기록이 있으면 수령 대조 절차(§10.6), 법적 판정을 기다리는 기록이 있으면 그 판정(§10.6 6항, VC-099)이 수록되고, 마지막 마감 뒤 96구간이 지난 뒤에만 수록한다.
 
 ### 11.2 합계 열기
 투표양식 s, 보고 단위 u, 청크 j에 대해 `C_total,j = Σ_i C_{i,j}`(그 단위의 포함 기록 전체). 보고 단위는 종이 개표 결과가 법령에 따라 공개되는 단위와 같으며, 종이 결과가 공개되지 않는 더 작은 단위로는 열지 않는다. 그래서 단위별로 열어도 종이 결과보다 더 드러나는 것이 없다. 선거구나 전국 합계는 단위 합계를 더해 누구나 계산한다(ADR-0020). 구성원은 해당 `TallyScope`가 증인 체크포인트에 포함된 것을 확인하기 전에는 share 합을 내지 않는다. 따라서 사전투표 기록도 모든 투표가 끝나기 전에는 합계로도 열리지 않는다(VC-063). 정족수는 구성원 share의 합을 모아 `R_j = Σ r_{i,j}`와 `S = Σ cast_id_i`를 복원하고 `AggregateOpening` 이벤트(공개)를 수록한다: `ballot_style_id`, `reporting_unit_id`, `j`, `T_j`, `R_j`, `S`, 참여 구성원 목록, 각 참여 구성원의 서명. 누구나 `C_total,j == T_j·G_val + S·G_id + R_j·H`를 확인하고 `T_j`의 26비트 자릿수를 읽어 인덱스별 표 수를 얻는다(VC-043). `S`는 무작위 값들의 합이며 아무것도 드러내지 않는다.
@@ -502,31 +506,31 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 ## 13. 분쟁
 
-`DisputeEvent`(스키마 0x000E), 공개: `election_id`, `dispute_type`(1 INCLUSION_MISSING, 2 COUNT_MISMATCH, 3 CUSTODY, 4 CHALLENGE_FAIL, 5 POSTAL, 6 OTHER, 7 SPLIT_VIEW, 8 BUILD_MISMATCH), 대상(`box_id`, 선택적 `record_hash`), 증거 해시(슬립 이미지 등, 원본은 `restricted`), 접수 서명(선관위와 독립검증위원회 모두), 상태(OPEN, INVESTIGATING, RESOLVED_TECHNICAL, REFERRED_LEGAL), 처리 결과 해시.
+`DisputeEvent`(본문 `DisputeEventBody` 0x000E, `ENCODING.md` §8.34), 공개: `election_id`, `action`(1 접수, 2 조사, 3 기술 해결, 4 법적 회부), `dispute_type`(1 INCLUSION_MISSING, 2 COUNT_MISMATCH, 3 CUSTODY, 4 CHALLENGE_FAIL, 5 POSTAL, 6 OTHER, 7 SPLIT_VIEW, 8 BUILD_MISMATCH), 대상(선택적 `box_id`, `box_id`가 있을 때만 선택적 `record_hash`), 증거 해시(슬립 이미지 등, 원본은 `restricted`), 접수 본문의 객체 해시(접수 뒤 이벤트), 처리 결과 해시(기술 해결·법적 회부). 접수와 모든 상태 변경은 선관위와 독립검증위원회가 함께 서명하고(purpose `dispute`), 두 기관의 키는 두 반쪽 모두 달라야 한다(VC-098). 뒤 이벤트는 접수의 유형·대상·증거를 바꿀 수 없다. 상태는 앞으로만 간다: OPEN → INVESTIGATING, OPEN·INVESTIGATING → RESOLVED_TECHNICAL, OPEN·INVESTIGATING·RESOLVED_TECHNICAL → REFERRED_LEGAL(기술 해결에 대한 이의). 포함 분쟁(INCLUSION_MISSING)은 3단계부터, 그 밖의 분쟁은 0단계부터 접수한다(§17).
 
 포함 분쟁 절차(VC-048):
 1. 슬립의 `device_sig`를 genesis의 장치 키로 검증한다. 실패하면 위조로 기각하고 그 사실을 이벤트에 남긴다.
 2. 성공했는데 슬립의 추적코드 목록 가운데 공개원장에 없는 코드가 있으면 그 코드마다 시스템 장애다(VC-070). 해당 투표함은 `HOLD_REVIEW`, 봉인 저널과 `ShareReceipt`, 마감 수량을 대조하는 조사를 연다.
 3. "내 표 내용이 다르다"는 주장은 접수 대상이 아니다. 접수 화면과 문서는 그 이유(영수증 무증명성)를 설명한다.
-4. 법적 판단은 `LegalDecisionRef`(스키마 0x000F: 결정 기관 ID, 결정문 해시, 대상 분쟁 해시, 기관 서명)로만 장부에 들어온다. 어떤 기계 상태도 `LEGAL_CERTIFIED`를 만들지 않는다(VC-049).
+4. 법적 판단은 `LegalDecisionRef`(본문 `LegalDecisionRefBody` 0x000F: 결정 기관 ID, 결정문 해시, 대상 분쟁 접수 본문의 객체 해시, 결과 1 인용·2 일부 인용·3 기각·4 각하·5 기타, 집계 효과 0 없음·1 포함·2 제외, 결정일, 기관 서명 purpose `legal-decision`, `ENCODING.md` §8.35)로만 장부에 들어온다. 어떤 기계 상태도 `LEGAL_CERTIFIED`를 만들지 않는다(VC-049). `LegalDecisionRef`는 분쟁의 기계 상태를 바꾸지 않는다. 법적 회부된 분쟁은 기계에게는 계속 미해결이고(§14 9항), 검증기는 결정을 그 옆에 표시한다.
 
 ## 14. 공개 검증기
 
 검증기는 호출자가 제공한 genesis 핀과 증인 명부 핀만 신뢰하고 다음을 순서대로 수행한다.
 1. genesis 검증: 핀 일치, 선관위·위원회 서명, 증인 정족수·다양성, 임명 이벤트 참조, 정당 명부와 모듈 목록(VC-005, VC-006, VC-009, VC-014, VC-067).
 2. 체크포인트 사슬: 각 체크포인트의 서명 정족수, `previous_checkpoint_hash`, `tree_size` 단조, 일관성 증명(VC-011..014).
-3. 프레임과 이벤트: 모든 프레임의 해시 사슬, 이벤트 해시 일치, 스키마 정규성.
+3. 프레임과 이벤트: 모든 프레임의 해시 사슬, 이벤트 해시 일치, 스키마 정규성. 같은 객체 해시의 이벤트가 두 번 실리면 두 번째 프레임은 무효이고, 그 이벤트가 속한 투표함(없으면 장부 전체)은 `HOLD_REVIEW`다. 마감 뒤 프레임에 실린 그 투표함의 기록도 무효이며 `HOLD_REVIEW`다(VC-039, VC-101). 사람이 서명한 이벤트(`WitnessedEvent`, `BoxClose`)의 서명은 모두 genesis 명부가 그 사람·역할·조직에 등록한 키로 검증하고, 한 이벤트의 서명자들은 키의 어느 반쪽도 같아서는 안 된다(VC-098).
 4. 투표함: `BoxOpened`/`BoxClose` 완전성(genesis의 모든 예상 투표함에 마감이 정확히 하나), 마감 불변식(관외·재외의 봉투·스티커·방문 수 포함), 모듈 카운터 틈 없음, 인계 사슬 완전성(VC-037..040).
 5. 투함 기록: 모든 기록의 정형성 증명, 기록 서명, `BatchAttest` 포함과 카운터 연속성, 기록 집합 root 일치, `UNATTESTED` 목록(VC-025..027, VC-053, VC-057).
 6. 참여 장부: `ParticipationSet`의 서명·정렬·수량(VC-084), 가명 중복 없음, 수량 등식(VC-018). 정당마다 `PartyKeyCeremony`가 하나 있고 키 자료가 없으며(VC-092), 그 정당의 모든 확인 모듈 `ModuleProvisioned`의 `prf_key_check`가 같다(VC-093). 모든 `ModuleProvisioned`에 `entropy_commitment`가 있다(VC-095). `ParticipationRestriction`이 있으면 근거 도난 사건이 모든 정당에 있는지 확인하고, 이때 `ParticipationSet`은 공개부(수, 중복 수, root)만 확인한다(VC-094). 카운터·가명 유닛 교체 시 순번 연속(VC-073)은 `CheckinCounter`를 열람할 권한이 있는 검증기가 확인한다. `DuplicateIdentification`이 있으면 모든 정당 챔버의 서명과 대상 가명이 공개 중복 목록 안에 있는지(VC-076).
 7. 집계: `TallyScope` 제외 근거, 보고 단위별 `AggregateOpening` 등식과 자릿수 범위, 단위 합의 일관성(VC-042..043), `PaperCountReport`와의 부등식·총수 대조(VC-075).
 8. 감사: 시드 재계산, 표본 재계산, 표본마다 `SampleOpening` 프레임과 `SampleComparison`의 존재와 서명(공개 검증기), `SampleOpening` 재구성(열람 권한이 있는 검증기)(VC-045..047). 사유 코드 1·2가 나온 장치마다 전수 대조 기록이 있는지(VC-074).
-9. 분쟁: 미해결 분쟁 목록.
+9. 분쟁: 미해결 분쟁 목록. `RESOLVED_TECHNICAL`이 아닌 분쟁은 모두 미해결이다(법적 회부 포함). 법적 결정이 있으면 `LegalDecisionRef`를 그 옆에 표시한다.
 10. 분기 감시: 교환으로 받은 체크포인트들과 자기 사본 사이의 분기 검사와, 추적코드 확인 때의 2곳 대조(§5.7 3·4항, VC-065, VC-066).
 11. 연결: genesis의 연결 목록 형식과 TCB 장치의 한 방향성, `UplinkSession` 링크별 사슬 재계산과 세션 연속성, 장부의 장치 출처 객체가 모두 세션 프레임 안에 있는지, 참관인 캡처를 받은 경우 바이트 단위 대조, `CarrierReconciliation`·`RfCheck`·`TeardownReport`의 존재와 서명, 미해결 `ConnectivityIncident`(VC-077..083).
 12. 소프트웨어: 릴리스 목록의 형식, 빌더 셋 이상(서로 다른 조직)·인증기관·위원회 서명, 구성 해시 재계산과 genesis 핀(VC-085); 모든 `DeviceAttestation`의 증명 키 서명, 도전값의 참관인 서명, 측정 해시와 구성 해시가 목록과 일치, 모듈 진술(VC-088); 투표함과 카운터·가명 유닛마다 개시·마감 증명의 존재(VC-089); `AttestationIncident`가 있는 장치의 기록 전수 대조 기록(VC-090); 미해결 `BUILD_MISMATCH`(VC-091).
 
-출력 상태는 상태 어휘만 쓴다. 1–5가 통과하면 `LOG_CONSISTENT`, 4의 완전성까지 통과하면 `SOURCE_COMPLETENESS_CHECKED`, 7까지 통과하면 `CRYPTO_TALLY_VERIFIED`, 8의 `SampleComparison`이 규칙상 종료되면 `PAPER_AUDITED`. 미해결 분쟁, 분기 증거, 어떤 실패도 `HOLD_REVIEW`. `LEGAL_CERTIFIED`는 `LegalDecisionRef`가 있을 때 그 참조를 표시할 뿐 검증기가 판정하지 않는다(VC-049). 상태는 서로 바꿔 표시할 수 없다(VC-050).
+출력 상태는 상태 어휘만 쓴다. 4단계는 둘로 나누어 판정한다: 불변식(마감 불변식, 카운터 틈, 인계 사슬)과 완전성(genesis의 모든 예상 투표함에 마감이 정확히 하나). 1–3, 4의 불변식, 5가 통과하고 앵커가 충족되면 `LOG_CONSISTENT`, 4의 완전성까지 통과하면 `SOURCE_COMPLETENESS_CHECKED`, 6·7까지 통과하면 `CRYPTO_TALLY_VERIFIED`, 그 위에서 8의 `SampleComparison`이 규칙상 종료되면 `PAPER_AUDITED`. 사다리는 누적이며 단계를 건너뛰지 않는다(`RLA`가 `CRYPTO_TALLY_AID`를 전제하는 이유, §4.4). 미해결 분쟁, 분기 증거, 어떤 실패도 `HOLD_REVIEW`. `LEGAL_CERTIFIED`는 `LegalDecisionRef`가 있을 때 그 참조를 표시할 뿐 검증기가 판정하지 않는다(VC-049). 상태는 서로 바꿔 표시할 수 없다(VC-050).
 
 ## 15. 파기와 보존
 
@@ -555,7 +559,7 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 | 단계 | 활성 요소 | 비활성 |
 |---|---|---|
-| 0 | §5 장부·공개원장·체크포인트, §6 수량 부분(가명 없이 참관인 서명 카운터만), §10 보관·우편·영상 | §7–§9, §11–§13 |
+| 0 | §5 장부·공개원장·체크포인트, §6 수량 부분(가명 없이 참관인 서명 카운터만), §10 보관·우편·영상, §13 분쟁(포함 분쟁 제외) | §7–§9, §11–§12, §13 포함 분쟁 |
 | 1 | + 신뢰기관 키 생성·임명 절차, 모듈 발급 절차(패드) | §7 기록 생성 |
 | 2 | + §7 기록(슬립 제외), §8 검증, §9 share, §10.6 수령 대조, §11 집계, §12 감사, §6 가명 | §7.7 슬립 |
 | 3 | + §7.7 슬립, §13 포함 분쟁 | — |
@@ -592,21 +596,21 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | `ModuleProvisioned` | 0x0026 | 위원회, 챔버, 참관인 | public | §9.4.2 |
 | `PartyKeyCeremony` | 0x0027 | 위원회, 정당 챔버 구성원, 참관인 2(다른 조직) | public(키 자료 없음) | §6.4 |
 | `ParticipationRestriction` | — | 위원회, 증인 정족수 | public | §6.5 |
-| `BoxOpened` | — | 장치, 사무원 2, 참관인 2 | public | §10.1 |
-| `IssuanceCount` | — | 사무원 2, 참관인 2 | public | §10.2 |
-| `ImprintAudit` | — | 개표소, 참관인 2 | public | §10.2 |
+| `BoxOpened`(본문 0x0029) | 0x0028 | 장치, 사무원 2, 참관인 2(다른 조직) | public | §10.1 |
+| `IssuanceCount`(본문 0x002B) | 0x0028 | 사무원 2, 참관인 2(다른 조직) | public | §10.2 |
+| `ImprintAudit`(본문 0x002C) | 0x0028 | 개표 사무원 2, 참관인 2(다른 조직) | public | §10.2 |
 | `ModuleIncident` | — | 사무원, 참관인 2 | public | §10.2 |
 | `CastRecord`(본문 `CastRecordBody` 0x0005) | 0x0016 | 장치·모듈 Ed25519 기록 서명(양자내성은 BatchAttest) | public | §7.6 |
-| `BatchAttest`(본문 0x0012), `LateBatchClose` | 0x0017, — | 커밋먼트 유닛, 모듈들 (+입회자) | public | §7.2.1 |
+| `BatchAttest`(본문 0x0012), `LateBatchClose`(본문 0x002E) | 0x0017, 0x0028 | 커밋먼트 유닛, 모듈들; 늦은 마감은 입회 사무원 2, 참관인 2(다른 조직) | public | §7.2.1 |
 | `JournalMismatch` | — | 커밋먼트 유닛, 참관인 2 | public | §7.2.1 |
-| `FallbackDeclared`, `FallbackEnded` | — | 사무원 2, 참관인 2 | public | §7.3 |
+| `FallbackDeclared`, `FallbackEnded`(본문 0x002A) | 0x0028 | 사무원 2, 참관인 2(다른 조직) | public | §7.3 |
 | `ImprintFailure` | — | 커밋먼트 유닛, 참관인 | public | §7.3 |
 | `SharePackage` | 0x000B | 커밋먼트 유닛 | sealed | §9.3 |
 | `ShareReceipt` | — | 신뢰기관 구성원 | public | §9.4.4 |
 | `ChallengeOpening`(본문 0x0006) | 0x0018 | 커밋먼트 유닛 | public | §8 |
 | `ScannerQuarantine` | — | 참관인 2, 사무원 | public | §8 |
 | `BoxClose`, `BoxCloseManual`, `LateBoxClose`(본문 0x0007) | 0x001A | 장치(가능할 때), 사무원 2, 참관인 2 | public | §10.2 |
-| `CustodyHandoff`, `SealChange` | 0x0008 | 송신자, 수신자 | public | §10.3 |
+| `CustodyHandoff`(본문 0x0008), `SealChange`(본문 0x002D) | 0x0028 | 인계: 송신자, 수신자; 봉인 변경: 사무원 2, 참관인 2(다른 조직) | public | §10.3 |
 | `VideoAnchor`, `VideoGap` | — | 보관 책임자 | public(대응표 restricted) | §10.4 |
 | `PostalBatch`, `CassetteOpened`, `CassetteSealed` | — | 발송·우정·수령 | public | §10.5 |
 | `ReceiptMark` | 0x000C | 수령 선관위, 참관인 2 | public(라벨 restricted) | §10.6 |
@@ -618,8 +622,8 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 | `AuditManifestFreeze`, `AuditSeed` | 0x000D | 위원회, 참관인 | public | §12.1 |
 | `SampleOpening` | — | 정족수 | restricted(공개는 해시와 서명) | §12.3 |
 | `SampleComparison`, `AuditFinding` | — | 감사인 2 조직, 열람 정당 참관인 | public | §12.3 |
-| `DisputeEvent` | 0x000E | 선관위, 위원회 | public(증거 restricted) | §13 |
-| `LegalDecisionRef` | 0x000F | 법정 권한 기관 | public | §13 |
+| `DisputeEvent`(본문 0x000E) | 0x0028 | 선관위, 위원회 | public(증거 restricted) | §13 |
+| `LegalDecisionRef`(본문 0x000F) | 0x0028 | 법정 권한 기관 | public | §13 |
 | `DestructionAttest` | — | 구성원, 챔버, 위원회 | public | §15 |
 
 "—"로 표시된 스키마 ID는 v0.2에서 `ENCODING.md` §6 등록부에 추가한다.
@@ -630,4 +634,4 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 
 ## 부록 C. 검증 조건 목록
 
-VC-001 투함 기록에 시간·순번·유권자 정보 없음 · VC-002 하이브리드 서명 둘 다 검증 · VC-003 알고리즘 협상 없음 · VC-004 미등록 키 무효 · VC-005 genesis 핀 일치 · VC-006 법적 승인 두 서명, 두 키는 두 반쪽 모두 다름 · VC-007 승인 범위 없이 해당 객체 생성 불가 · VC-008 범위 전제 조건 · VC-009 임명 이벤트 참조 · VC-010 찢어진 꼬리 격리 · VC-011 Merkle 증명 알고리즘 · VC-012 증인 서명 전 확인 사항 · VC-013 같은 seq 이중 서명 금지 · VC-014 정족수·다양성 · VC-015 `voter_id` 소거 · VC-016 참관인 공동 서명 · VC-017 가명은 모든 정당 모듈 필요 · VC-018 참여 장부 공개 검증 · VC-019 가명·신원과 투함 ID·추적코드 분리 · VC-020 커밋먼트 유닛 소거 · VC-021 카운터 틈 공개 · VC-022 모듈 태그 검사 · VC-023 각인 실패 격리 · VC-024 자릿수 상한 · VC-025 OR 증명 검증 · VC-026 canonical 스칼라·점 · VC-027 투표함 기록은 정렬 집합으로만 공개 · VC-028 검증 공개값 재구성 · VC-029 폐기 봉투 수 일치 · VC-030 검증 실패 장치 격리·전수 대조 · VC-031 접근구조 밖 집합은 정보 없음 · VC-032 패키지 해시 결속 · VC-033 패드·해시 미게시 · VC-034 패드 구간 1회 사용·소거 · VC-035 선관위 부품에 패드 없음 · VC-036 share 수신 대조 · VC-037 미등록 장치 개시 불가 · VC-038 마감 불변식 · VC-039 마감 후 기록 금지 · VC-040 인계 조직 상이·경로 준수 · VC-041 라벨 복원 소거 · VC-042 제외 근거 · VC-043 합계 열기 등식 · VC-044 불일치 국소화 · VC-045 시드 구성 · VC-046 표본 재계산 · VC-047 표본 열기 재구성 · VC-048 포함 분쟁 절차 · VC-049 `LEGAL_CERTIFIED` 기계 생성 금지 · VC-050 상태 혼용 금지 · VC-051 파기 증명 · VC-052 스캔 카운터 참관 앵커와 마감의 단조 연속 · VC-053 모든 기록은 정확히 하나의 BatchAttest에 포함되고 카운터 구간이 틈 없이 이어짐 · VC-054 저널 영속화 전 각인·투입 금지 · VC-055 시험용 투표양식의 집계·참여 장부 제외 · VC-056 배치 서명 전 저널·메모리 대조 · VC-057 `UNATTESTED` 분류·제외·늦은 마감 복귀 · VC-058 은닉 채널 검사는 기록당 챔버 기여 하나만 복원 · VC-059 감사 표본 열기는 비공개 열람, 공개는 대조 결과만 · VC-060 관외 수령 분류와 봉투·라벨·기록 수량 등식 · VC-061 실시간 명부 조회·표시 실패 시 교부하지 않음 · VC-062 장치에 선택별 누계·직전 선택·순서 없음 · VC-063 `TallyScope` 체크포인트 포함 전 share 합 제출 금지 · VC-064 공개원장은 가입·식별 없이 같은 조건으로 공표, 보관·재공표 제한 없음 · VC-065 분기 증거(같은 seq 다른 본문, 같은 크기 다른 root, 일관성 증명 실패)와 그 이후 `HOLD_REVIEW` · VC-066 추적코드 확인은 독립 미러 2곳 또는 공표 지문과 대조 후에만 `LOG_CONSISTENT` · VC-067 genesis 정당 명부 형식(2 ≤ n ≤ 4, P1…Pn 연속, 의석순)과 모든 정당 챔버·모듈의 존재 · VC-068 방문 결정은 그 방문의 모든 기록이 장치·모듈 기록 서명으로 결속된 뒤에만 받고, 모듈은 한 카운터에 본문 해시 하나만 서명 · VC-069 방문 저널 순서(묶음 항목, 위치 항목, 방문 결정, 각인, 라벨 출력)와 재개 판정, 재개 뒤에도 소비한 카운터는 모두 기록·검증·격리 가운데 하나로 저널에 있음 · VC-070 슬립은 방문에서 넣은 표의 추적코드 목록(1–8)이며 분쟁 시 코드마다 확인 · VC-071 해석 유닛은 일련번호 바코드를 해독하지 않고 판독 전 지우며 영속 저장소 없음, 판정 규칙·임계값은 `policy_hash`에 고정 · VC-072 패드는 패드 카드에만, 카드는 파기 절차에서 0 덮기 후 파쇄, 본체 재발급 시 소거·변조 검사·펌웨어 측정 · VC-073 카운터·가명 유닛 교체 시 투표소 순번 연속 · VC-074 감사 사유 코드 1·2(확정 판정 불일치)가 나온 장치는 전수 대조 · VC-075 보고 단위별 종이 대조(후보마다 종이 ≥ 암호 확정, 총수 등식) · VC-076 중복 가명 조사는 영장과 모든 정당 모듈이 있을 때만, 결정문의 가명과 일치한 명부 항목만 출력 · VC-077 연결 목록이 모든 장치·게이트웨이·탭·중앙 시스템 포트를 덮고, TCB 장치에 무선과 들어오는 경로가 없으며, 양방향은 허용된 셋뿐 · VC-078 프레임 본문 1,048,576바이트 고정, 슬롯당 선언된 수, 채움 0, 장치 프레임 서명, 흐름 오프셋 연속, 개시 전·마감 후 송신 없음 · VC-079 기록·share 패키지는 닫힌 배치 단위와 기록 해시 순서로만, 어떤 객체도 공표 규칙보다 이르거나 세밀하게 나가지 않음 · VC-080 `UplinkSession` 링크별 사슬과 세션 연속, 장부의 장치 출처 객체가 모두 세션 프레임 안에 있음 · VC-081 참관인 캡처·통신사 기록·세션 기록의 프레임·바이트·접속 구간 일치 · VC-082 무선 점검 기록과 공개 시드 분해 표본의 결과 공개 · VC-083 연결 위반은 `ConnectivityIncident`, 해당 구간 전자 층 `HOLD_REVIEW`, 커밋먼트 유닛 연루 시 전수 대조, 종이 개표 영향 없음 · VC-084 `CheckinCounter`는 restricted이며 공개 링크로 보내지 않음, 가명 공개는 투표 종료 뒤 순번·시간 없는 `ParticipationSet`으로만 · VC-085 릴리스 목록의 형식, 독립 빌더 셋 이상·인증기관·위원회 서명, genesis 핀, 선거 기간 중 불변 · VC-086 부트 ROM의 서명 확인·롤백 방지, 실행 이미지에 결속된 증명 키, 부팅 횟수 · VC-087 모든 화면의 상시 표시(이름·버전·빌드·지문)와 개시·마감 출력, 표시는 측정값 · VC-088 현장 증명: 등록 참관인 서명이 있는 신선한 도전값만, 열린 방문 중과 30초 안 재요청 거부, 투표 값 없음, 측정·구성 해시가 목록과 일치, 모듈 진술 포함 · VC-089 투표함과 카운터·가명 유닛마다 개시·마감 증명 · VC-090 증명 불일치·거부·무응답·설명 없는 재부팅 시 `AttestationIncident`, 예비 교체, 기록 전수 대조, 전자 층 `HOLD_REVIEW` · VC-091 재현 빌드 공개와 `BUILD_MISMATCH` 분쟁 · VC-092 정당 열쇠 생성 절차의 기록(키 자료 없음, 몫 k-of-n, 평문 지움, 참관인 2 이상) · VC-093 한 정당의 모든 확인 모듈과 `PartyKeyCeremony`의 `prf_key_check` 일치, PRF는 보안 칩 안에서만 · VC-094 모든 정당에서 확인 모듈 도난이 확인되면 `ParticipationSet` 공개 제한 전환과 `ParticipationRestriction` · VC-095 모듈 키는 칩 난수원과 챔버 엔트로피를 섞어 모듈 안에서 생성하고 `entropy_commitment` 공개, 패드 카드·키 영역의 기기 고유 키 암호화, 변조 스위치 지움 · VC-096 정당 PRF 몫의 보존 기한과 파기 기록, 현장 사본은 선거 뒤 지움 · VC-097 시범 선정의 규칙 해시·후보군·시드 입력·층별 추출 재계산.
+VC-001 투함 기록에 시간·순번·유권자 정보 없음 · VC-002 하이브리드 서명 둘 다 검증 · VC-003 알고리즘 협상 없음 · VC-004 미등록 키 무효 · VC-005 genesis 핀 일치 · VC-006 법적 승인 두 서명, 두 키는 두 반쪽 모두 다름 · VC-007 승인 범위 없이 해당 객체 생성 불가 · VC-008 범위 전제 조건(`VOTER_CODE`는 2단계 범위 전부, `RLA`는 `CRYPTO_TALLY_AID`) · VC-009 임명 이벤트 참조 · VC-010 찢어진 꼬리 격리 · VC-011 Merkle 증명 알고리즘 · VC-012 증인 서명 전 확인 사항 · VC-013 같은 seq 이중 서명 금지 · VC-014 정족수·다양성 · VC-015 `voter_id` 소거 · VC-016 참관인 공동 서명 · VC-017 가명은 모든 정당 모듈 필요 · VC-018 참여 장부 공개 검증 · VC-019 가명·신원과 투함 ID·추적코드 분리 · VC-020 커밋먼트 유닛 소거 · VC-021 카운터 틈 공개 · VC-022 모듈 태그 검사 · VC-023 각인 실패 격리 · VC-024 자릿수 상한 · VC-025 OR 증명 검증 · VC-026 canonical 스칼라·점 · VC-027 투표함 기록은 정렬 집합으로만 공개 · VC-028 검증 공개값 재구성 · VC-029 폐기 봉투 수 일치 · VC-030 검증 실패 장치 격리·전수 대조 · VC-031 접근구조 밖 집합은 정보 없음 · VC-032 패키지 해시 결속 · VC-033 패드·해시 미게시 · VC-034 패드 구간 1회 사용·소거 · VC-035 선관위 부품에 패드 없음 · VC-036 share 수신 대조 · VC-037 미등록 장치 개시 불가 · VC-038 마감 불변식(폐기·격리 봉투 실물 수 `spoil_envelope_count` 포함) · VC-039 마감 후 기록 금지 · VC-040 인계 조직 상이·경로 준수·앞 인계 본문 해시 사슬·앞 수신자가 다음 송신자·등록된 사무원이나 보관 담당자의 서명 · VC-041 라벨 복원 소거 · VC-042 제외 근거와 사유 순서(첫 사유 하나만) · VC-043 합계 열기 등식 · VC-044 불일치 국소화 · VC-045 시드 구성 · VC-046 표본 재계산 · VC-047 표본 열기 재구성 · VC-048 포함 분쟁 절차 · VC-049 `LEGAL_CERTIFIED` 기계 생성 금지 · VC-050 상태 혼용 금지 · VC-051 파기 증명 · VC-052 스캔 카운터 참관 앵커와 마감의 단조 연속 · VC-053 모든 기록은 정확히 하나의 BatchAttest에 포함되고 카운터 구간이 틈 없이 이어짐 · VC-054 저널 영속화 전 각인·투입 금지 · VC-055 시험용 투표양식의 집계·참여 장부 제외 · VC-056 배치 서명 전 저널·메모리 대조 · VC-057 `UNATTESTED` 분류·제외·늦은 마감 복귀 · VC-058 은닉 채널 검사는 기록당 챔버 기여 하나만 복원 · VC-059 감사 표본 열기는 비공개 열람, 공개는 대조 결과만 · VC-060 관외 수령 분류와 봉투·라벨·기록 수량 등식 · VC-061 실시간 명부 조회·표시 실패 시 교부하지 않음 · VC-062 장치에 선택별 누계·직전 선택·순서 없음 · VC-063 `TallyScope` 체크포인트 포함 전 share 합 제출 금지 · VC-064 공개원장은 가입·식별 없이 같은 조건으로 공표, 보관·재공표 제한 없음 · VC-065 분기 증거(같은 seq 다른 본문, 같은 크기 다른 root, 일관성 증명 실패)와 그 이후 `HOLD_REVIEW` · VC-066 추적코드 확인은 독립 미러 2곳 또는 공표 지문과 대조 후에만 `LOG_CONSISTENT` · VC-067 genesis 정당 명부 형식(2 ≤ n ≤ 4, P1…Pn 연속, 의석순)과 모든 정당 챔버·모듈의 존재 · VC-068 방문 결정은 그 방문의 모든 기록이 장치·모듈 기록 서명으로 결속된 뒤에만 받고, 모듈은 한 카운터에 본문 해시 하나만 서명 · VC-069 방문 저널 순서(묶음 항목, 위치 항목, 방문 결정, 각인, 라벨 출력)와 재개 판정, 재개 뒤에도 소비한 카운터는 모두 기록·검증·격리 가운데 하나로 저널에 있음 · VC-070 슬립은 방문에서 넣은 표의 추적코드 목록(1–8)이며 분쟁 시 코드마다 확인 · VC-071 해석 유닛은 일련번호 바코드를 해독하지 않고 판독 전 지우며 영속 저장소 없음, 판정 규칙·임계값은 `policy_hash`에 고정 · VC-072 패드는 패드 카드에만, 카드는 파기 절차에서 0 덮기 후 파쇄, 본체 재발급 시 소거·변조 검사·펌웨어 측정 · VC-073 카운터·가명 유닛 교체 시 투표소 순번 연속 · VC-074 감사 사유 코드 1·2(확정 판정 불일치)가 나온 장치는 전수 대조 · VC-075 보고 단위별 종이 대조(후보마다 종이 ≥ 암호 확정, 총수 등식) · VC-076 중복 가명 조사는 영장과 모든 정당 모듈이 있을 때만, 결정문의 가명과 일치한 명부 항목만 출력 · VC-077 연결 목록이 모든 장치·게이트웨이·탭·중앙 시스템 포트를 덮고, TCB 장치에 무선과 들어오는 경로가 없으며, 양방향은 허용된 셋뿐 · VC-078 프레임 본문 1,048,576바이트 고정, 슬롯당 선언된 수, 채움 0, 장치 프레임 서명, 흐름 오프셋 연속, 개시 전·마감 후 송신 없음 · VC-079 기록·share 패키지는 닫힌 배치 단위와 기록 해시 순서로만, 어떤 객체도 공표 규칙보다 이르거나 세밀하게 나가지 않음 · VC-080 `UplinkSession` 링크별 사슬과 세션 연속, 장부의 장치 출처 객체가 모두 세션 프레임 안에 있음 · VC-081 참관인 캡처·통신사 기록·세션 기록의 프레임·바이트·접속 구간 일치 · VC-082 무선 점검 기록과 공개 시드 분해 표본의 결과 공개 · VC-083 연결 위반은 `ConnectivityIncident`, 해당 구간 전자 층 `HOLD_REVIEW`, 커밋먼트 유닛 연루 시 전수 대조, 종이 개표 영향 없음 · VC-084 `CheckinCounter`는 restricted이며 공개 링크로 보내지 않음, 가명 공개는 투표 종료 뒤 순번·시간 없는 `ParticipationSet`으로만 · VC-085 릴리스 목록의 형식, 독립 빌더 셋 이상·인증기관·위원회 서명, genesis 핀, 선거 기간 중 불변 · VC-086 부트 ROM의 서명 확인·롤백 방지, 실행 이미지에 결속된 증명 키, 부팅 횟수 · VC-087 모든 화면의 상시 표시(이름·버전·빌드·지문)와 개시·마감 출력, 표시는 측정값 · VC-088 현장 증명: 등록 참관인 서명이 있는 신선한 도전값만, 열린 방문 중과 30초 안 재요청 거부, 투표 값 없음, 측정·구성 해시가 목록과 일치, 모듈 진술 포함 · VC-089 투표함과 카운터·가명 유닛마다 개시·마감 증명 · VC-090 증명 불일치·거부·무응답·설명 없는 재부팅 시 `AttestationIncident`, 예비 교체, 기록 전수 대조, 전자 층 `HOLD_REVIEW` · VC-091 재현 빌드 공개와 `BUILD_MISMATCH` 분쟁 · VC-092 정당 열쇠 생성 절차의 기록(키 자료 없음, 몫 k-of-n, 평문 지움, 참관인 2 이상) · VC-093 한 정당의 모든 확인 모듈과 `PartyKeyCeremony`의 `prf_key_check` 일치, PRF는 보안 칩 안에서만 · VC-094 모든 정당에서 확인 모듈 도난이 확인되면 `ParticipationSet` 공개 제한 전환과 `ParticipationRestriction` · VC-095 모듈 키는 칩 난수원과 챔버 엔트로피를 섞어 모듈 안에서 생성하고 `entropy_commitment` 공개, 패드 카드·키 영역의 기기 고유 키 암호화, 변조 스위치 지움 · VC-096 정당 PRF 몫의 보존 기한과 파기 기록, 현장 사본은 선거 뒤 지움 · VC-097 시범 선정의 규칙 해시·후보군·시드 입력·층별 추출 재계산 · VC-098 사람이 서명한 이벤트의 모든 서명은 genesis 명부가 그 사람·역할·조직에 등록한 키에서 나온 것이고 한 이벤트의 서명자 키는 어느 반쪽도 겹치지 않음(선관위·위원회 키 포함) · VC-099 `RECEIVED_DAMAGED`·`WRONG_DISTRICT` 기록마다 `POSTAL` 분쟁과 집계 효과가 있는 `LegalDecisionRef`가 수록되기 전에는 그 투표양식의 `TallyScope` 없음, `TallyScope`는 그 효과를 따름 · VC-100 `LateBoxClose`·`LateBatchClose`는 마감 `time_bucket` 뒤 96구간 안에서만, 수동 마감은 사람이 센 네 수가 같을 때만 해소, 늦은 배치는 모든 기록이 증명될 때만 열린 배치 보류 해소 · VC-101 같은 객체 해시의 이벤트 재수록과 마감 뒤 프레임의 기록은 무효이며 `HOLD_REVIEW`.
