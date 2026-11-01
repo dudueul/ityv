@@ -114,13 +114,26 @@ jobs:
     name: cargo-mutants (V1, advisory until the suite is complete)
     runs-on: ubuntu-24.04
     continue-on-error: true
+    # Every mutant still runs; the larger crates are split into shards on
+    # separate runners and each runner tests two mutants at a time, so the
+    # whole workflow finishes in about an hour instead of over four.
     strategy:
+      fail-fast: false
       matrix:
-        crate: [ityv-encoding, ityv-crypto, ityv-ledger, ityv-cunit]
+        include:
+          - { crate: ityv-encoding, shard: 0/2 }
+          - { crate: ityv-encoding, shard: 1/2 }
+          - { crate: ityv-crypto, shard: 0/2 }
+          - { crate: ityv-crypto, shard: 1/2 }
+          - { crate: ityv-ledger, shard: 0/1 }
+          - { crate: ityv-cunit, shard: 0/4 }
+          - { crate: ityv-cunit, shard: 1/4 }
+          - { crate: ityv-cunit, shard: 2/4 }
+          - { crate: ityv-cunit, shard: 3/4 }
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.97.0
       - run: cargo install --locked cargo-mutants@27.1.0
-      - run: cargo mutants -p ${{ matrix.crate }} --timeout 300
+      - run: cargo mutants -p ${{ matrix.crate }} --shard ${{ matrix.shard }} --jobs 2 --timeout 300
