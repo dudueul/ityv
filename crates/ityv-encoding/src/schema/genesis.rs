@@ -1,6 +1,7 @@
 //! Field types of the genesis (`Genesis`, schema `0x0002`, PROTOCOL.md
-//! §4.1; ENCODING.md §8.43) that `ityv-state` needs: the expected boxes,
-//! the custody routes and the roster of people who sign box events.
+//! §4.1; ENCODING.md §8.43, §8.48) that `ityv-state` needs: the expected
+//! boxes, the custody routes, the roster of people who sign box events
+//! and the stations' progress-alarm limits.
 //!
 //! These are not objects of their own: they appear inside the genesis
 //! body, which pins them by its hash. The genesis object as a whole is a
@@ -354,6 +355,91 @@ impl<'a> Decode<'a> for RosterSigner<'a> {
             station_id,
             key,
             appointment_hash,
+        })
+    }
+}
+
+/// A station's progress-alarm policy (`progress_policies[]`, ENCODING.md
+/// §8.48, ADR-0027).
+///
+/// Rules: `booth_count ≥ 1` and `limit_sheets ≥ 1` (`ValueOutOfRange`).
+/// The genesis lists the policies by `station_id` in ascending order
+/// without duplicates; the genesis decoder checks that order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StationProgressPolicy<'a> {
+    station_id: StationId<'a>,
+    booth_count: u16,
+    limit_sheets: u32,
+}
+
+impl<'a> StationProgressPolicy<'a> {
+    /// Builds a policy.
+    ///
+    /// # Errors
+    /// `ValueOutOfRange` at 0 if a count is zero.
+    pub const fn new(
+        station_id: StationId<'a>,
+        booth_count: u16,
+        limit_sheets: u32,
+    ) -> Result<Self, Error> {
+        if booth_count == 0 || limit_sheets == 0 {
+            return Err(Error::new(Kind::ValueOutOfRange, 0));
+        }
+        Ok(Self {
+            station_id,
+            booth_count,
+            limit_sheets,
+        })
+    }
+
+    /// The station.
+    #[must_use]
+    pub const fn station_id(&self) -> StationId<'a> {
+        self.station_id
+    }
+
+    /// Booths at the station.
+    #[must_use]
+    pub const fn booth_count(&self) -> u16 {
+        self.booth_count
+    }
+
+    /// The alarm limit `L` in sheets.
+    #[must_use]
+    pub const fn limit_sheets(&self) -> u32 {
+        self.limit_sheets
+    }
+}
+
+impl Encode for StationProgressPolicy<'_> {
+    fn encoded_len(&self) -> usize {
+        self.station_id.encoded_len().saturating_add(6)
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        self.station_id.encode(w)?;
+        w.write_u16(self.booth_count)?;
+        w.write_u32(self.limit_sheets)
+    }
+}
+
+impl<'a> Decode<'a> for StationProgressPolicy<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        let station_id = StationId::decode(r)?;
+        let booth_at = r.position();
+        let booth_count = r.read_u16()?;
+        if booth_count == 0 {
+            return Err(Error::new(Kind::ValueOutOfRange, booth_at));
+        }
+        let limit_at = r.position();
+        let limit_sheets = r.read_u32()?;
+        if limit_sheets == 0 {
+            return Err(Error::new(Kind::ValueOutOfRange, limit_at));
+        }
+        Ok(Self {
+            station_id,
+            booth_count,
+            limit_sheets,
         })
     }
 }

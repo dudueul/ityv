@@ -59,6 +59,7 @@ pub mod config;
 pub mod error;
 pub mod link;
 pub mod port;
+pub mod progress;
 pub mod resume;
 pub mod rng;
 pub mod rules;
@@ -83,6 +84,7 @@ pub use port::{
     JournalError, JournalItem, JournalSink, JournalSource, ModuleAttestation, ModulePort,
     PortError, Sealed, Staged, StagingPort, module_may_sign_batch, module_may_sign_record,
 };
+pub use progress::{PROGRESS_WORK_LEN, ProgressOutput};
 pub use resume::ResumeInputs;
 pub use rng::DeviceRng;
 pub use rules::{

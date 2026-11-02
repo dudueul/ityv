@@ -19,6 +19,7 @@
 | `status` | 검증기 상태 어휘, 공표 기한 결과의 반영, `LegalReference` | §14, VC-049, VC-050 |
 | `hold` | 끈끈한 `HOLD_REVIEW` 사유 집합 | §10.2, §14 |
 | `sig` | 서명마다 검증 토큰과 등록 키 결속, 서명자 키 반쪽 중복 금지 | §14 3항, VC-098 |
+| `progress` | 투표 진행 기록: 장치 흐름(`BoxStream`, `CheckinStream`)과 투표소 평가기(`StationProgress`: 음수·과다·바닥 경보, 현장 확인, `PROGRESS_UNRESOLVED`·`CARRY_OUT`, 교부 번호 대조 깃발) | §7.10, ADR-0027, VC-102, VC-103 |
 
 보장하는 것:
 - `no_std`, 힙 없음, `unsafe` 없음, 패닉 없음(워크스페이스 lint 집합, Kani 하네스).
@@ -75,7 +76,8 @@ Provisioned ──open──▶ Open ◀──end_fallback── Fallback
 | V1 | 통합 테스트(`tests/boxes.rs`, `tests/auth.rs`) | 실제 하이브리드 서명으로 만든 모든 이벤트(개시, 비상 투입, 마감·늦은 마감, 늦은 배치, 인계, 봉인 변경, 교부 회계, 각인 판독, 분쟁, 법적 결정, 승인)의 토큰 결속, 서명자 키 반쪽 중복, 투표함 전 생애, 관외 함 |
 | V1 | 속성 테스트(`tests/proptests.rs`, `issuance`·`dispute` 단위 속성 테스트) | 무작위 이벤트열의 기록(법적 결정 포함)·분쟁 단조성, 128비트 참조 규칙과의 마감·교부 판정 일치, 상태 어휘 규칙(ITYV-BEH-063, ITYV-BEH-101) |
 | V1 | cargo-mutants | 놓친 변이 0 |
-| V2 | Kani(`kani/proofs.rs`) | 보류 집합, 512개 범위 집합의 전제 규칙, capability 부여, VC-038 수량 등식, 교부·참여 등식, 기록 기계, 분쟁 전진, 상태 어휘, 인계 첫 고리 |
+| V1 | 통합·속성 테스트(`tests/progress.rs`) | 실제 하이브리드 서명의 진행 기록 흐름, 경보와 현장 확인, 독립 참조 평가기와의 일치 |
+| V2 | Kani(`kani/proofs.rs`) | 보류 집합, 512개 범위 집합의 전제 규칙, capability 부여, VC-038 수량 등식, 교부·참여 등식, 기록 기계, 분쟁 전진, 상태 어휘, 인계 첫 고리, 진행 기록의 바깥 장수·흐름 규칙·경보 한 번 |
 | — | `compile_fail` doctest | 마감된 상자에 기록, 재개봉, capability 위조, `LEGAL_CERTIFIED` 생성·변환 |
 
 ```sh

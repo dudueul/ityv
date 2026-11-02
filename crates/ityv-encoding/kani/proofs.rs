@@ -625,3 +625,105 @@ fn fallback_rules_are_exact() {
     let expected = ended == (reason_code == 0) && (!with_markers || first <= last);
     assert_eq!(FallbackBody::new(&parts).is_ok(), expected);
 }
+
+use crate::primitives::UnitId;
+use crate::schema::SCHEMA_BOX_PROGRESS_BODY;
+use crate::schema::genesis::StationProgressPolicy;
+use crate::schema::progress::{
+    BoxProgressBody, BoxProgressParts, BoxProgressState, CheckinProgressBody, CheckinProgressParts,
+    CheckinProgressState, ProgressAlarm, ProgressCheckBody, ProgressCheckParts, ProgressFinding,
+};
+
+static ST1: StationId<'static> = match StationId::new(b"S") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+static U1: UnitId<'static> = match UnitId::new(b"U") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+/// A check-in progress body is built exactly when the spoiled and returned
+/// sheets together do not exceed the issued sheets, computed without
+/// overflow (ENCODING.md §8.45).
+#[kani::proof]
+fn checkin_progress_rules_are_exact() {
+    let issued: u64 = kani::any();
+    let spoiled: u64 = kani::any();
+    let returned: u64 = kani::any();
+    let parts = CheckinProgressParts {
+        election_id: E1,
+        station_id: ST1,
+        unit_id: U1,
+        slot: kani::any(),
+        checkins: kani::any(),
+        issued,
+        spoiled,
+        returned,
+        state: CheckinProgressState::Checking,
+    };
+    let expected = u128::from(spoiled) + u128::from(returned) <= u128::from(issued);
+    assert_eq!(CheckinProgressBody::new(&parts).is_ok(), expected);
+}
+
+/// A progress-check body is built exactly when sheets are named for a
+/// carried-out finding and only then (ENCODING.md §8.47).
+#[kani::proof]
+fn progress_check_rules_are_exact() {
+    let Some(finding) = ProgressFinding::from_code(kani::any()) else {
+        return;
+    };
+    let carried_out: u64 = kani::any();
+    let parts = ProgressCheckParts {
+        election_id: E1,
+        station_id: ST1,
+        alarm_slot: kani::any(),
+        alarm: ProgressAlarm::Floor,
+        holding: kani::any(),
+        finding,
+        carried_out,
+        statement_hash: Hash512([5; 64]),
+        time_bucket: TimeBucket::new(0),
+    };
+    let expected = (finding.code() == 2) == (carried_out >= 1);
+    assert_eq!(ProgressCheckBody::new(&parts).is_ok(), expected);
+}
+
+/// A box progress body with symbolic slot, count and state survives an
+/// object-level round trip.
+#[kani::proof]
+#[kani::unwind(70)]
+fn box_progress_round_trip() {
+    let Some(state) = BoxProgressState::from_code(kani::any()) else {
+        return;
+    };
+    let body = BoxProgressBody::new(&BoxProgressParts {
+        election_id: E1,
+        box_id: B1,
+        slot: kani::any(),
+        sheets_in: kani::any(),
+        state,
+    });
+    let mut buf = [0u8; 64];
+    let Ok(len) = encode(SCHEMA_BOX_PROGRESS_BODY, SCHEMA_VERSION_1, &body, &mut buf) else {
+        unreachable!("64 bytes suffice for one-byte identifiers");
+    };
+    assert_eq!(len, 16 + 5 + 5 + 17);
+    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+    let decoded: Result<BoxProgressBody<'_>, _> =
+        decode(SCHEMA_BOX_PROGRESS_BODY, SCHEMA_VERSION_1, bytes);
+    assert_eq!(decoded, Ok(body));
+}
+
+/// A station progress policy is built exactly when both counts are
+/// nonzero.
+#[kani::proof]
+fn station_progress_policy_rules_are_exact() {
+    let booths: u16 = kani::any();
+    let limit: u32 = kani::any();
+    assert_eq!(
+        StationProgressPolicy::new(ST1, booths, limit).is_ok(),
+        booths >= 1 && limit >= 1
+    );
+}

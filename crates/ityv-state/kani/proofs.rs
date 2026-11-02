@@ -137,10 +137,10 @@ fn scope_set(mask: u16) -> ScopeSet {
 /// Adding a reason never loses another; removing removes exactly one.
 #[kani::proof]
 fn hold_set_is_sticky() {
-    let mask: u32 = kani::any();
+    let mask: u64 = kani::any();
     let mut set = HoldSet::empty();
     for (i, reason) in HoldReason::ALL.iter().enumerate() {
-        if mask & (1 << i) != 0 {
+        if mask & (1u64 << i) != 0 {
             set = set.with(*reason);
         }
     }
@@ -579,4 +579,160 @@ fn custody_first_link_is_exact() {
     assert_eq!(result.is_ok(), expected);
     assert_eq!(chain.handoffs(), u32::from(expected));
     assert!(chain.holds().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The voting progress record (ADR-0027, VC-102, VC-103)
+
+use ityv_encoding::{
+    BoxProgressBody, BoxProgressParts, BoxProgressState, CheckinProgressBody, CheckinProgressParts,
+    CheckinProgressState, ProgressAlarm, StationProgressPolicy, UnitId,
+};
+
+use crate::progress::{StationProgress, Stream, out_of};
+
+static PBOX: BoxId<'static> = match BoxId::new(b"B1") {
+    Some(id) => id,
+    None => panic!("valid identifier"),
+};
+
+static UNIT: UnitId<'static> = match UnitId::new(b"U1") {
+    Some(id) => id,
+    None => panic!("valid identifier"),
+};
+
+/// The sheets outside are computed exactly for every count: no overflow,
+/// and the value of the signed expression.
+#[kani::proof]
+fn progress_out_is_exact() {
+    let issued: u64 = kani::any();
+    let sheets_in: u64 = kani::any();
+    let spoiled: u64 = kani::any();
+    let returned: u64 = kani::any();
+    let carried: u64 = kani::any();
+    let expected =
+        issued as i128 - sheets_in as i128 - spoiled as i128 - returned as i128 - carried as i128;
+    assert_eq!(
+        out_of(issued, sheets_in, spoiled, returned, carried),
+        Some(expected)
+    );
+}
+
+/// A device stream holds exactly when a tick comes for a slot already
+/// taken, before opening or after the closing tick, skips a slot, or
+/// lowers the count; at close it also holds without a closing tick or with
+/// a last count that differs from the close (VC-102). Counts are taken in
+/// the same cases the reference takes them.
+#[kani::proof]
+#[kani::unwind(10)]
+fn progress_stream_rules_are_exact() {
+    let first: u64 = kani::any();
+    kani::assume(first < 8);
+    let mut stream = Stream::<1>::new(first, [0]);
+    let mut next = first;
+    let mut last = 0u64;
+    let mut closed = false;
+    let mut held = false;
+    for _ in 0..3 {
+        let slot: u64 = kani::any();
+        kani::assume(slot < 16);
+        let count: u64 = kani::any();
+        kani::assume(count < 4);
+        let closing: bool = kani::any();
+        let taken = stream.accept(slot, [count], closing);
+        if closed || slot < next {
+            held = true;
+            assert_eq!(taken, Ok(false));
+        } else {
+            held = held || slot > next || count < last;
+            last = count;
+            next = slot + 1;
+            closed = closing;
+            assert_eq!(taken, Ok(true));
+        }
+        assert_eq!(
+            stream.finish([last]).contains(HoldReason::ProgressStream),
+            held || !closed
+        );
+    }
+    let expected: u64 = kani::any();
+    kani::assume(expected < 4);
+    assert_eq!(
+        stream
+            .finish([expected])
+            .contains(HoldReason::ProgressStream),
+        held || !closed || expected != last
+    );
+}
+
+/// Over four slots of symbolic counts, each alarm is raised exactly in
+/// the first slot of a run of its condition: negative and high after two
+/// slots beyond the bound, floor after two quiet slots with sheets outside
+/// (PROTOCOL.md §7.10 item 4, VC-103).
+#[kani::proof]
+#[kani::unwind(9)]
+fn progress_alarms_fire_once_per_run() {
+    const SLOTS: usize = 4;
+    let Ok(policy) = StationProgressPolicy::new(STATION, 1, 1) else {
+        panic!("valid policy");
+    };
+    let Ok(mut station) = StationProgress::new(ELECTION, &policy, &[PBOX]) else {
+        panic!("one box");
+    };
+    let mut issued = [0u64; SLOTS];
+    let mut sheets_in = [0u64; SLOTS];
+    for t in 0..SLOTS {
+        issued[t] = u64::from(kani::any::<u8>() % 4);
+        sheets_in[t] = u64::from(kani::any::<u8>() % 4);
+    }
+    let mut before = [false; 3];
+    for t in 0..SLOTS {
+        let Ok(checkin) = CheckinProgressBody::new(&CheckinProgressParts {
+            election_id: ELECTION,
+            station_id: STATION,
+            unit_id: UNIT,
+            slot: t as u64,
+            checkins: issued[t],
+            issued: issued[t],
+            spoiled: 0,
+            returned: 0,
+            state: CheckinProgressState::Checking,
+        }) else {
+            panic!("no sheets back");
+        };
+        assert!(station.record_checkin(&checkin).is_ok());
+        let tick = BoxProgressBody::new(&BoxProgressParts {
+            election_id: ELECTION,
+            box_id: PBOX,
+            slot: t as u64,
+            sheets_in: sheets_in[t],
+            state: BoxProgressState::Casting,
+        });
+        assert!(station.record_box(&tick).is_ok());
+        let Ok(outcome) = station.close_slot(t as u64) else {
+            panic!("slots in order");
+        };
+        let out = |i: usize| issued[i] as i128 - sheets_in[i] as i128;
+        let quiet =
+            |i: usize| i > 0 && issued[i] == issued[i - 1] && sheets_in[i] == sheets_in[i - 1];
+        assert_eq!(outcome.out, out(t));
+        let now = [
+            t > 0 && out(t) < 0 && out(t - 1) < 0,
+            t > 0 && out(t) > 1 && out(t - 1) > 1,
+            t > 1 && quiet(t) && quiet(t - 1) && out(t) > 0,
+        ];
+        assert_eq!(
+            outcome.raised.contains(ProgressAlarm::Negative),
+            now[0] && !before[0]
+        );
+        assert_eq!(
+            outcome.raised.contains(ProgressAlarm::High),
+            now[1] && !before[1]
+        );
+        assert_eq!(
+            outcome.raised.contains(ProgressAlarm::Floor),
+            now[2] && !before[2]
+        );
+        before = now;
+    }
 }

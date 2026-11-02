@@ -295,6 +295,8 @@ pub struct OpenBox<'c> {
     pub(crate) next_ticket: u64,
     pub(crate) phase: Phase,
     pub(crate) paper_incidents: u64,
+    /// The slot of the last progress tick (ADR-0027).
+    pub(crate) last_tick: Option<u64>,
 }
 
 impl<'c> OpenBox<'c> {
@@ -321,6 +323,7 @@ impl<'c> OpenBox<'c> {
             next_ticket: 1,
             phase: Phase::Open,
             paper_incidents: 0,
+            last_tick: None,
         }
     }
 
@@ -1036,6 +1039,8 @@ impl<'c> OpenBox<'c> {
                 journal_head: self.journal_head,
                 marks: self.marks,
                 token,
+                last_tick: self.last_tick,
+                closing_ticked: false,
             }),
             Phase::Open | Phase::Faulted | Phase::Closed { .. } => Err(Error::ForeignCloseToken),
         }
@@ -1071,6 +1076,8 @@ pub struct ClosedBox<'c> {
     journal_head: Hash512,
     marks: [u64; MAX_MODULES],
     token: CloseToken,
+    pub(crate) last_tick: Option<u64>,
+    pub(crate) closing_ticked: bool,
 }
 
 impl<'c> ClosedBox<'c> {

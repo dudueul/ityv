@@ -85,11 +85,24 @@ pub enum HoldReason {
     /// The station's paper stock does not add up: `stock_received ≠
     /// issued + unused + printer_waste` (§10.2, ITYV-BEH-089).
     IssuanceStockMismatch = 29,
+    /// A progress alarm was not resolved: the on-site check found the gap
+    /// unexplained, came too late or never came, or a claimed correction
+    /// did not remove the alarm condition (§7.10, VC-103). The station
+    /// switches to the counterfoil check until close.
+    ProgressUnresolved = 30,
+    /// The on-site check after a progress alarm confirmed sheets carried
+    /// out of the station (§7.10 finding 2, VC-103).
+    CarryOut = 31,
+    /// A device's progress stream broke a rule: a count went down, a slot
+    /// had two ticks or none, a tick came before opening or after the
+    /// closing tick, or the last tick differs from the close counts
+    /// (§7.10 item 8, VC-102).
+    ProgressStream = 32,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 33] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -120,6 +133,9 @@ impl HoldReason {
         Self::BoxUnderReview,
         Self::SealBroken,
         Self::IssuanceStockMismatch,
+        Self::ProgressUnresolved,
+        Self::CarryOut,
+        Self::ProgressStream,
     ];
 
     /// The reason's code.
@@ -128,16 +144,16 @@ impl HoldReason {
         self as u8
     }
 
-    const fn bit(self) -> u32 {
-        // Codes are below 32 (pinned by a test), so the shift cannot overflow.
-        1u32 << self.code()
+    const fn bit(self) -> u64 {
+        // Codes are below 64 (pinned by a test), so the shift cannot overflow.
+        1u64 << self.code()
     }
 }
 
 /// A set of hold reasons. Empty means not under review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct HoldSet {
-    mask: u32,
+    mask: u64,
 }
 
 impl HoldSet {
@@ -190,7 +206,7 @@ impl HoldSet {
     /// Number of reasons.
     #[must_use]
     pub const fn len(self) -> usize {
-        // At most 32 bits are set, which always fits in usize.
+        // At most 64 bits are set, which always fits in usize.
         self.mask.count_ones() as usize
     }
 
@@ -216,10 +232,10 @@ mod tests {
     use super::{HoldReason, HoldSet};
 
     #[test]
-    fn codes_are_dense_and_below_32() {
+    fn codes_are_dense_and_below_64() {
         for (index, reason) in HoldReason::ALL.iter().enumerate() {
             assert_eq!(usize::from(reason.code()), index);
-            assert!(reason.code() < 32);
+            assert!(reason.code() < 64);
         }
     }
 

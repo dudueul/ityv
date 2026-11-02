@@ -30,9 +30,12 @@ use ityv_cunit::link::{JournalEntry, JournalKind, SCHEMA_JOURNAL_ENTRY};
 use ityv_cunit::rules::{CloseFacts, EnvelopeCounts, close_verdict};
 use ityv_cunit::visit::Decision;
 use ityv_cunit::{Error, JournalError, PortError, Staged};
+use ityv_cunit::{PROGRESS_WORK_LEN, ProgressOutput};
 use ityv_encoding::{
-    BatchAttest, BoxCloseBody, Decode, Hash512, Reader, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE_BODY,
-    SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, ScanCountAttestBody, decode_object,
+    BatchAttest, BoxCloseBody, BoxProgressBody, BoxProgressState, Decode, HEADER_LEN,
+    HYBRID_SIG_LEN, Hash512, Reader, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE_BODY,
+    SCHEMA_BOX_PROGRESS_BODY, SCHEMA_SCAN_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, ScanCountAttestBody,
+    decode_object,
 };
 use ityv_ledger::merkle::sorted_set_root;
 
@@ -492,6 +495,15 @@ fn a_journal_mismatch_latches_the_box() {
         b.scan_count_body(tb(1), &mut small).unwrap_err(),
         Error::JournalMismatch
     );
+    // A latched box gives no progress tick: the missing slots hold the
+    // stream (VC-102).
+    let mut tick_sig = [0u8; HYBRID_SIG_LEN];
+    assert_eq!(
+        b.progress_tick(9, false, signer(&w), &mut small, &mut tick_sig)
+            .unwrap_err(),
+        Error::JournalMismatch
+    );
+    assert_eq!(b.last_tick(), None);
     let mut close_out = std::vec![0u8; CLOSE_WORK_LEN];
     let inputs = CloseInputs {
         paper: 1,
@@ -1675,4 +1687,148 @@ fn an_open_batch_and_a_module_gap_are_reported_at_close() {
     let verdict = close_verdict(&b.close_facts(&inputs));
     assert!(verdict.contains(Invariant::ModuleCounters));
     assert_eq!(verdict.count(), 1);
+}
+
+/// Decodes a tick and checks its device signature under `box-progress`.
+fn tick_body<'a>(w: &World, out: &ProgressOutput<'a>) -> BoxProgressBody<'a> {
+    let sig = HybridSignature::decode(&mut Reader::new(out.device_sig)).unwrap();
+    let _ = verify_hybrid(
+        &w.device_hybrid.verifying_key(),
+        &Purpose::new(b"box-progress").unwrap(),
+        out.body,
+        &sig,
+    )
+    .unwrap();
+    decode_object(SCHEMA_BOX_PROGRESS_BODY, SCHEMA_VERSION_1, out.body).unwrap()
+}
+
+#[test]
+fn progress_ticks_carry_only_the_sheet_count() {
+    let w = world(Profile::InPerson, false);
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let (mut b, mut codes) = busy_box(&w, &mut m, &mut j, 2);
+    let t = b.totals();
+    let expected = t.records + t.challenged + t.quarantined;
+    assert_eq!((t.records, t.challenged, t.quarantined), (2, 1, 1));
+    assert_eq!(b.last_tick(), None);
+    let mut work_buf = std::vec![0u8; PROGRESS_WORK_LEN];
+    let mut sig = [0u8; HYBRID_SIG_LEN];
+    let out = b
+        .progress_tick(5, false, signer(&w), &mut work_buf, &mut sig)
+        .unwrap();
+    let body = tick_body(&w, &out);
+    let p = body.parts();
+    assert_eq!(p.election_id.as_bytes(), b"E-2026");
+    assert_eq!(p.box_id.as_bytes(), w.config.box_id().as_bytes());
+    assert_eq!(
+        (p.slot, p.sheets_in, p.state),
+        (5, expected, BoxProgressState::Casting)
+    );
+    // Nothing but the five fields: header, two identifiers, two u64, one
+    // state byte.
+    let ids = 4 + p.election_id.as_bytes().len() + 4 + p.box_id.as_bytes().len();
+    assert_eq!(out.body.len(), HEADER_LEN + ids + 17);
+    assert_eq!(b.last_tick(), Some(5));
+    // The same slot or an earlier one is refused and changes nothing.
+    let mut sig2 = [0u8; HYBRID_SIG_LEN];
+    let mut work2 = std::vec![0u8; PROGRESS_WORK_LEN];
+    assert_eq!(
+        b.progress_tick(5, false, signer(&w), &mut work2, &mut sig2)
+            .unwrap_err(),
+        Error::TimeRegression
+    );
+    assert_eq!(
+        b.progress_tick(4, false, signer(&w), &mut work2, &mut sig2)
+            .unwrap_err(),
+        Error::TimeRegression
+    );
+    assert_eq!(b.last_tick(), Some(5));
+    // Fallback is reported as such.
+    let out = b
+        .progress_tick(6, true, signer(&w), &mut work2, &mut sig2)
+        .unwrap();
+    assert_eq!(
+        tick_body(&w, &out).parts().state,
+        BoxProgressState::Fallback
+    );
+    // A buffer too small is an encoding error and leaves the slot.
+    let mut tiny = [0u8; 8];
+    let mut sig3 = [0u8; HYBRID_SIG_LEN];
+    assert!(
+        b.progress_tick(7, false, signer(&w), &mut tiny, &mut sig3)
+            .is_err()
+    );
+    assert_eq!(b.last_tick(), Some(6));
+
+    // Close: no more open ticks; one closing tick with the final count.
+    let inputs = good_inputs(&mut codes);
+    let mut close_out = std::vec![0u8; CLOSE_WORK_LEN];
+    let token = b
+        .prepare_close(&inputs, signer(&w), &mut j, tb(2), &mut close_out)
+        .unwrap()
+        .token;
+    let mut sig4 = [0u8; HYBRID_SIG_LEN];
+    let mut work4 = std::vec![0u8; PROGRESS_WORK_LEN];
+    assert_eq!(
+        b.progress_tick(8, false, signer(&w), &mut work4, &mut sig4)
+            .unwrap_err(),
+        Error::BoxClosed
+    );
+    let mut closed = b.into_closed(token).unwrap();
+    assert_eq!(
+        closed
+            .closing_tick(6, signer(&w), &mut work4, &mut sig4)
+            .unwrap_err(),
+        Error::TimeRegression
+    );
+    let out = closed
+        .closing_tick(8, signer(&w), &mut work4, &mut sig4)
+        .unwrap();
+    let body = tick_body(&w, &out);
+    assert_eq!(
+        (
+            body.parts().slot,
+            body.parts().sheets_in,
+            body.parts().state
+        ),
+        (8, expected, BoxProgressState::Closed)
+    );
+    let mut sig5 = [0u8; HYBRID_SIG_LEN];
+    let mut work5 = std::vec![0u8; PROGRESS_WORK_LEN];
+    assert_eq!(
+        closed
+            .closing_tick(9, signer(&w), &mut work5, &mut sig5)
+            .unwrap_err(),
+        Error::BoxClosed
+    );
+}
+
+#[test]
+fn a_fresh_box_ticks_zero_and_a_box_closed_without_ticks_ticks_once() {
+    let w = world(Profile::InPerson, false);
+    let mut b = OpenBox::open(w.config, tb(1));
+    let mut work_buf = std::vec![0u8; PROGRESS_WORK_LEN];
+    let mut sig = [0u8; HYBRID_SIG_LEN];
+    let out = b
+        .progress_tick(0, false, signer(&w), &mut work_buf, &mut sig)
+        .unwrap();
+    assert_eq!(tick_body(&w, &out).parts().sheets_in, 0);
+    // A closed box that never ticked gives its closing tick at slot 0.
+    let mut m = mocks(&w);
+    let mut j = MemJournal::default();
+    let (mut b, mut codes) = busy_box(&w, &mut m, &mut j, 1);
+    let inputs = good_inputs(&mut codes);
+    let mut close_out = std::vec![0u8; CLOSE_WORK_LEN];
+    let token = b
+        .prepare_close(&inputs, signer(&w), &mut j, tb(2), &mut close_out)
+        .unwrap()
+        .token;
+    let mut closed = b.into_closed(token).unwrap();
+    let mut sig2 = [0u8; HYBRID_SIG_LEN];
+    let mut work2 = std::vec![0u8; PROGRESS_WORK_LEN];
+    let out = closed
+        .closing_tick(0, signer(&w), &mut work2, &mut sig2)
+        .unwrap();
+    assert_eq!(tick_body(&w, &out).parts().state, BoxProgressState::Closed);
 }

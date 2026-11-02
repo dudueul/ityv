@@ -763,4 +763,4 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 
 `station_id: Ident<64>` ‖ `booth_count: u16`(1 이상) ‖ `limit_sheets: u32`(1 이상). `station_id` 오름차순, 중복 없음. 기본값은 `limit_sheets = booth_count × 2 × 한 방문의 최대 장수`이고, 다른 값이면 위원회가 사유를 genesis 근거 문서에 적는다.
 
-시험 벡터는 `box_progress_body.txt`, `checkin_progress_body.txt`, `progress_tick.txt`, `progress_check_body.txt`로 같은 디렉터리에 둔다(M5 2단계).
+시험 벡터는 `crates/ityv-encoding/vectors/`의 `box_progress_body.txt`, `checkin_progress_body.txt`, `progress_tick.txt`, `progress_check_body.txt`다. `unit_id`의 형은 `UnitId`(`Ident<64>`)다.

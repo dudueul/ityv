@@ -17,6 +17,7 @@ pub mod checkpoint;
 pub mod events;
 pub mod genesis;
 pub mod ledger_frame;
+pub mod progress;
 pub mod scan_count;
 pub mod share_package;
 pub mod slip;
@@ -117,3 +118,15 @@ pub const SCHEMA_SEAL_CHANGE_BODY: SchemaId = SchemaId::new(0x002D);
 
 /// `LateBatchCloseBody` (ENCODING.md §6, `0x002E`).
 pub const SCHEMA_LATE_BATCH_CLOSE_BODY: SchemaId = SchemaId::new(0x002E);
+
+/// `BoxProgressBody` (ENCODING.md §8.44, `0x002F`).
+pub const SCHEMA_BOX_PROGRESS_BODY: SchemaId = SchemaId::new(0x002F);
+
+/// `CheckinProgressBody` (ENCODING.md §8.45, `0x0030`).
+pub const SCHEMA_CHECKIN_PROGRESS_BODY: SchemaId = SchemaId::new(0x0030);
+
+/// `ProgressTick` (ENCODING.md §8.46, `0x0031`).
+pub const SCHEMA_PROGRESS_TICK: SchemaId = SchemaId::new(0x0031);
+
+/// `ProgressCheckBody` (ENCODING.md §8.47, `0x0032`).
+pub const SCHEMA_PROGRESS_CHECK_BODY: SchemaId = SchemaId::new(0x0032);
