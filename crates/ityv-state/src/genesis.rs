@@ -36,7 +36,7 @@
 //! every unit's module is registered, and so on), or that every roster
 //! entry's appointment is in the appointment set. An inclusion proof shows
 //! one entry, not the absence of another; those checks need every entry
-//! and belong to the full verifier (`ityv-verify`, VC-104).
+//! and belong to the full verifier (`ityv-verify`, VC-104, ADR-0029).
 
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Verified};
@@ -260,7 +260,7 @@ fn check_seal(
 /// A genesis whose body hash is the pin, not yet checked for signatures.
 #[derive(Debug, Clone, Copy)]
 pub struct Pinned<'a> {
-    signed: &'a SignedGenesis<'a>,
+    signed: SignedGenesis<'a>,
     body: GenesisBody<'a>,
     hash: Hash512,
 }
@@ -274,13 +274,17 @@ impl<'a> Pinned<'a> {
     /// # Errors
     /// [`Error::Mismatch`] for an amendment, [`Error::Pin`] for another
     /// hash.
-    pub fn new(pin: &Hash512, signed: &'a SignedGenesis<'a>) -> Result<Self, Error> {
+    pub fn new(pin: &Hash512, signed: &SignedGenesis<'a>) -> Result<Self, Error> {
         let body = signed.genesis().ok_or(Error::Mismatch)?;
         let hash = object_hash(signed.body_bytes());
         if hash != *pin {
             return Err(Error::Pin);
         }
-        Ok(Self { signed, body, hash })
+        Ok(Self {
+            signed: *signed,
+            body,
+            hash,
+        })
     }
 
     /// Proves one witness entry, for [`Self::seal`].
@@ -312,7 +316,7 @@ impl<'a> Pinned<'a> {
         tokens: &[Verified<HybridSigned<'_>>],
         witnesses: &[Entry<WitnessRosterEntry<'_>>],
     ) -> Result<Genesis<'a>, Error> {
-        check_seal(self.signed, &self.body, &self.hash, tokens, witnesses)?;
+        check_seal(&self.signed, &self.body, &self.hash, tokens, witnesses)?;
         Ok(Genesis {
             body: self.body,
             hash: self.hash,

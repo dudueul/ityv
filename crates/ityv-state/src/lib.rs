@@ -5,8 +5,8 @@
 //! are allowed. It covers the ledger side of the protocol: the device side
 //! (the commitment unit's own box and visit typestates) is `ityv-cunit`,
 //! the frames, checkpoints and publication deadlines are `ityv-ledger`, and
-//! the full public verifier that drives these machines from a ledger is the
-//! future `ityv-verify` (M5).
+//! the full public verifier that drives these machines from a ledger is
+//! `ityv-verify` (ADR-0029).
 //!
 //! | Module | What it decides | Specification |
 //! |---|---|---|
@@ -56,9 +56,9 @@
 //! What this crate does **not** prove: that a signature is valid (it
 //! consumes `ityv-crypto`'s `Verified` tokens), that an object is well
 //! formed (`ityv-encoding`), that a ledger is consistent (`ityv-ledger`),
-//! that a genesis set is sorted and agrees with the other sets (the full
-//! verifier recomputes every set, VC-104), or anything about paper the
-//! inputs do not report.
+//! that a genesis set is sorted and agrees with the other sets (`ityv-verify`
+//! recomputes every set, VC-104), or anything about paper the inputs do not
+//! report.
 #![no_std]
 #![forbid(unsafe_code)]
 
