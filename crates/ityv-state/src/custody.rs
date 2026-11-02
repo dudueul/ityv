@@ -24,7 +24,7 @@ use ityv_encoding::{
 
 use crate::close::{RosterEntry, check_witnesses};
 use crate::error::Error;
-use crate::genesis::Entry;
+use crate::genesis::{Entry, one_head};
 use crate::hold::{HoldReason, HoldSet};
 use crate::sig::{Key, Signed, check_event};
 
@@ -35,6 +35,7 @@ fn custody_key<'r>(
     id: SignerId<'_>,
     org: OrgId<'_>,
 ) -> Result<&'r Key, Error> {
+    one_head(roster)?;
     roster
         .iter()
         .map(Entry::get)

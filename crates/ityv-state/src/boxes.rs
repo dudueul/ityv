@@ -83,7 +83,7 @@ use crate::close::{
 };
 use crate::custody::CustodyChain;
 use crate::error::Error;
-use crate::genesis::{Entry, Genesis};
+use crate::genesis::{Anchor, Entry, Genesis};
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::{EnvelopeIssuance, IssuanceCount};
 use crate::record::{Profile, RecordState, is_test_style};
@@ -101,6 +101,7 @@ pub const PURPOSE_LATE_BOX_CLOSE: &[u8] = b"late-box-close";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoxSpec<'a> {
     election_id: ElectionId<'a>,
+    anchor: Anchor,
     entry: GenesisBox<'a>,
     route: CustodyRoute<'a>,
     roster: &'a [RosterEntry<'a>],
@@ -108,22 +109,30 @@ pub struct BoxSpec<'a> {
 
 impl<'a> BoxSpec<'a> {
     /// The spec of the box `entry` names, with its custody route and the
-    /// roster (clerks, observers and custodians, as proved entries).
+    /// roster (clerks, observers and custodians), all proved against the
+    /// current state of `genesis`.
     ///
     /// # Errors
-    /// [`Error::Mismatch`] if `route` is not the route the box names.
+    /// [`Error::StaleEntry`] if an entry was proved against another
+    /// genesis state, [`Error::Mismatch`] if `route` is not the route the
+    /// box names.
     pub fn new(
         genesis: &Genesis<'a>,
         entry: &Entry<GenesisBox<'a>>,
         route: &Entry<CustodyRoute<'a>>,
         roster: &'a [RosterEntry<'a>],
     ) -> Result<Self, Error> {
+        let anchor = genesis.anchor();
+        anchor.admits(entry)?;
+        anchor.admits(route)?;
+        roster.iter().try_for_each(|r| anchor.admits(r))?;
         let (entry, route) = (*entry.get(), *route.get());
         if route.route_id().as_bytes() != entry.route_id.as_bytes() {
             return Err(Error::Mismatch);
         }
         Ok(Self {
             election_id: genesis.election_id(),
+            anchor,
             entry,
             route,
             roster,
@@ -134,6 +143,12 @@ impl<'a> BoxSpec<'a> {
     #[must_use]
     pub const fn election_id(&self) -> ElectionId<'a> {
         self.election_id
+    }
+
+    /// The genesis state the spec was built from.
+    #[must_use]
+    pub const fn anchor(&self) -> &Anchor {
+        &self.anchor
     }
 
     /// The box.
@@ -554,6 +569,31 @@ impl<'a> Base<'a> {
 }
 
 impl<'a, S> BallotBox<'a, S> {
+    /// Follows an amendment: from now on the box uses `spec`, built from
+    /// a later state of the same genesis (a replaced device key, a changed
+    /// roster). A closed box keeps the custody route of its close.
+    ///
+    /// # Errors
+    /// [`Error::Mismatch`] for a spec of another election or box,
+    /// [`Error::StaleEntry`] unless `spec` comes from a later state of the
+    /// same genesis. On error nothing changes.
+    pub fn follow(&mut self, spec: &BoxSpec<'a>) -> Result<(), Error> {
+        let own = &self.base.spec;
+        if spec.election_id.as_bytes() != own.election_id.as_bytes()
+            || spec.entry.box_id.as_bytes() != own.entry.box_id.as_bytes()
+        {
+            return Err(Error::Mismatch);
+        }
+        own.anchor.advance(&spec.anchor)?;
+        self.base.spec = *spec;
+        Ok(())
+    }
+
+    /// The spec the box uses.
+    #[must_use]
+    pub const fn spec(&self) -> &BoxSpec<'a> {
+        &self.base.spec
+    }
     /// The election.
     #[must_use]
     pub const fn election_id(&self) -> ElectionId<'a> {

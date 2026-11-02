@@ -20,6 +20,17 @@
 //!    (VC-105). It replaces the amendable set commitments; entries proved
 //!    earlier stay valid for what they signed before (§4.3).
 //!
+//! Every entry records the head of the genesis it was proved against
+//! (the hash of the last body applied, [`Genesis::head`]). A function
+//! that takes entries together refuses entries of different heads, and
+//! one that also takes the [`Genesis`] refuses entries not proved against
+//! its current head ([`Error::StaleEntry`]). After an amendment that
+//! replaces a device key, an entry proved before it can no longer build a
+//! state machine; a machine built earlier follows the amendment only
+//! through an explicit step with entries proved again
+//! ([`crate::boxes::BallotBox::follow`], [`crate::progress::BoxStream::swap`]),
+//! and only forward ([`Anchor::advance`]).
+//!
 //! What it does not prove: that a set is sorted and free of duplicate
 //! keys, that the sets agree with each other (every box's station exists,
 //! every unit's module is registered, and so on), or that every roster
@@ -44,13 +55,18 @@ const MAX_GENESIS_SIGNERS: usize = 66;
 
 const _: () = assert!(MAX_GENESIS_SIGNERS == MAX_GENESIS_WITNESSES + 2);
 
+/// The head every entry built by [`Entry::unproved`] records.
+#[cfg(any(test, kani))]
+pub(crate) const TEST_HEAD: Hash512 = Hash512([0x7E; 64]);
+
 /// A genesis entry whose inclusion in its set was proved against a pinned,
-/// signed genesis.
+/// signed genesis, with the head of that genesis at proof time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry<T> {
     value: T,
     hash: Hash512,
     index: u64,
+    head: Hash512,
 }
 
 impl<T> Entry<T> {
@@ -72,6 +88,12 @@ impl<T> Entry<T> {
         self.index
     }
 
+    /// The head of the genesis the entry was proved against.
+    #[must_use]
+    pub const fn head(&self) -> &Hash512 {
+        &self.head
+    }
+
     /// An entry without a proof, for unit tests and Kani harnesses only.
     #[cfg(any(test, kani))]
     pub(crate) const fn unproved(value: T) -> Self {
@@ -79,6 +101,71 @@ impl<T> Entry<T> {
             value,
             hash: Hash512([0; 64]),
             index: 0,
+            head: TEST_HEAD,
+        }
+    }
+}
+
+/// Refuses `entries` unless all were proved against one head.
+///
+/// # Errors
+/// [`Error::StaleEntry`].
+pub(crate) fn one_head<T>(entries: &[Entry<T>]) -> Result<(), Error> {
+    match entries.split_first() {
+        Some((first, rest)) if rest.iter().any(|e| e.head != first.head) => Err(Error::StaleEntry),
+        _ => Ok(()),
+    }
+}
+
+/// Where a genesis stands: its pin, the amendments applied and the head.
+/// A state machine records the anchor it was built with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Anchor {
+    pin: Hash512,
+    seq: u64,
+    head: Hash512,
+}
+
+impl Anchor {
+    /// The genesis pin.
+    #[must_use]
+    pub const fn pin(&self) -> &Hash512 {
+        &self.pin
+    }
+
+    /// Amendments applied.
+    #[must_use]
+    pub const fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// The hash of the last body applied.
+    #[must_use]
+    pub const fn head(&self) -> &Hash512 {
+        &self.head
+    }
+
+    /// Refuses `entry` unless it was proved against this head.
+    ///
+    /// # Errors
+    /// [`Error::StaleEntry`].
+    pub fn admits<T>(&self, entry: &Entry<T>) -> Result<(), Error> {
+        if entry.head == self.head {
+            Ok(())
+        } else {
+            Err(Error::StaleEntry)
+        }
+    }
+
+    /// Refuses `newer` unless it is a later state of the same genesis.
+    ///
+    /// # Errors
+    /// [`Error::StaleEntry`].
+    pub fn advance(&self, newer: &Self) -> Result<(), Error> {
+        if newer.pin == self.pin && newer.seq > self.seq {
+            Ok(())
+        } else {
+            Err(Error::StaleEntry)
         }
     }
 }
@@ -87,6 +174,7 @@ impl<T> Entry<T> {
 /// against `sets`.
 fn prove<'a, T: GenesisEntry<'a>>(
     sets: &[SetCommitment; ENTRY_SET_COUNT],
+    head: Hash512,
     bytes: &'a [u8],
     index: u64,
     proof: &InclusionProof,
@@ -101,6 +189,7 @@ fn prove<'a, T: GenesisEntry<'a>>(
         value,
         hash,
         index: included.get().index(),
+        head,
     })
 }
 
@@ -120,13 +209,18 @@ fn distinct<'v>(values: impl Iterator<Item = &'v [u8]>) -> usize {
 }
 
 /// Checks the signatures of a genesis or amendment against `body`'s keys
-/// and quorum (VC-104, VC-105).
+/// and quorum (VC-104, VC-105), with witness entries proved against
+/// `head`.
 fn check_seal(
     signed: &SignedGenesis<'_>,
     body: &GenesisBody<'_>,
+    head: &Hash512,
     tokens: &[Verified<HybridSigned<'_>>],
     witnesses: &[Entry<WitnessRosterEntry<'_>>],
 ) -> Result<(), Error> {
+    if witnesses.iter().any(|w| w.head != *head) {
+        return Err(Error::StaleEntry);
+    }
     let count = signed.witness_count();
     let named = witnesses.len() == count
         && signed
@@ -199,7 +293,7 @@ impl<'a> Pinned<'a> {
         index: u64,
         proof: &InclusionProof,
     ) -> Result<Entry<WitnessRosterEntry<'a>>, Error> {
-        prove(self.body.sets(), bytes, index, proof)
+        prove(self.body.sets(), self.hash, bytes, index, proof)
     }
 
     /// Checks the signatures. `tokens` are the verification tokens of the
@@ -208,6 +302,7 @@ impl<'a> Pinned<'a> {
     /// order of their signatures.
     ///
     /// # Errors
+    /// [`Error::StaleEntry`] for a witness entry proved elsewhere,
     /// [`Error::NotRegistered`] if the witness entries do not name the
     /// signing witnesses one to one, [`Error::SignersShort`] for fewer than
     /// `q` witnesses or too little diversity, and the errors of
@@ -217,7 +312,7 @@ impl<'a> Pinned<'a> {
         tokens: &[Verified<HybridSigned<'_>>],
         witnesses: &[Entry<WitnessRosterEntry<'_>>],
     ) -> Result<Genesis<'a>, Error> {
-        check_seal(self.signed, &self.body, tokens, witnesses)?;
+        check_seal(self.signed, &self.body, &self.hash, tokens, witnesses)?;
         Ok(Genesis {
             body: self.body,
             hash: self.hash,
@@ -254,12 +349,12 @@ impl<'a> Genesis<'a> {
         index: u64,
         proof: &InclusionProof,
     ) -> Result<Entry<T>, Error> {
-        prove(&self.sets, bytes, index, proof)
+        prove(&self.sets, self.head, bytes, index, proof)
     }
 
     /// Applies the next amendment (PROTOCOL.md §4.3, VC-105). `tokens` and
     /// `witnesses` are as for [`Pinned::seal`]; the witness entries are
-    /// proved with [`Self::entry`].
+    /// proved with [`Self::entry`] against this state.
     ///
     /// # Errors
     /// [`Error::Mismatch`] for a genesis body, another election, a number
@@ -280,7 +375,7 @@ impl<'a> Genesis<'a> {
         {
             return Err(Error::Mismatch);
         }
-        check_seal(signed, &self.body, tokens, witnesses)?;
+        check_seal(signed, &self.body, &self.head, tokens, witnesses)?;
         let mut sets = self.sets;
         for (slot, new) in sets.iter_mut().zip(p.sets) {
             *slot = new;
@@ -323,6 +418,17 @@ impl<'a> Genesis<'a> {
     #[must_use]
     pub const fn seq(&self) -> u64 {
         self.seq
+    }
+
+    /// The pin, amendments applied and head, as a state machine records
+    /// them.
+    #[must_use]
+    pub const fn anchor(&self) -> Anchor {
+        Anchor {
+            pin: self.hash,
+            seq: self.seq,
+            head: self.head,
+        }
     }
 
     /// The current set commitments, in `EntrySet` order.

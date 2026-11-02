@@ -170,6 +170,93 @@ fn spec_is_the_genesis_entry() {
     assert_ne!(s2.device_key(), s.device_key());
 }
 
+#[test]
+fn a_box_follows_an_amendment_only_forward() {
+    let b = common::fixture();
+    let (amended, spare) = b.amended();
+    let route_now = b.entry_in::<CustodyRoute<'static>>(amended, b"R-1");
+    let roster_now = b.roster_in(amended);
+    let box_then = b.entry::<GenesisBox<'static>>(common::BOX);
+    // Entries of the original state cannot build a spec on the amended
+    // genesis: not the box (whose device key was replaced), not the route,
+    // not the roster, not a roster mixing both states.
+    assert_eq!(
+        BoxSpec::new(amended, &box_then, &route_now, roster_now).unwrap_err(),
+        Error::StaleEntry
+    );
+    assert_eq!(
+        BoxSpec::new(
+            amended,
+            &spare,
+            &b.entry::<CustodyRoute<'static>>(b"R-1"),
+            roster_now
+        )
+        .unwrap_err(),
+        Error::StaleEntry
+    );
+    assert_eq!(
+        BoxSpec::new(amended, &spare, &route_now, b.roster()).unwrap_err(),
+        Error::StaleEntry
+    );
+    let mut mixed = roster_now.to_vec();
+    mixed[0] = b.roster()[0];
+    let mixed = common::leak_slice(mixed);
+    assert_eq!(
+        BoxSpec::new(amended, &spare, &route_now, mixed).unwrap_err(),
+        Error::StaleEntry
+    );
+    // Re-proved entries build the new spec.
+    let now = BoxSpec::new(amended, &spare, &route_now, roster_now).unwrap();
+    assert_eq!(now.anchor(), &amended.anchor());
+    assert_eq!(now.anchor().seq(), 1);
+    assert_eq!(
+        now.device_key(),
+        common::genesis::key_bytes(&common::genesis::spare_device_key().verifying_key())
+    );
+    // A provisioned box follows it forward, once.
+    let auth = authorization();
+    let cap = auth.grant::<PublicBoard>(today()).unwrap();
+    let then = spec(Profile::InPerson);
+    assert_eq!(then.anchor().seq(), 0);
+    let mut provisioned = BallotBox::provision(&then, &cap).unwrap();
+    assert_eq!(provisioned.follow(&then), Err(Error::StaleEntry));
+    let other = BoxSpec::new(
+        amended,
+        &b.amended_box(b"BOX-002"),
+        &b.entry_in::<CustodyRoute<'static>>(amended, b"R-2"),
+        roster_now,
+    )
+    .unwrap();
+    assert_eq!(provisioned.follow(&other), Err(Error::Mismatch));
+    assert_eq!(provisioned.spec(), &then);
+    provisioned.follow(&now).unwrap();
+    assert_eq!(provisioned.spec(), &now);
+    assert_eq!(provisioned.follow(&now), Err(Error::StaleEntry));
+    assert_eq!(provisioned.follow(&then), Err(Error::StaleEntry));
+    // The replaced device can no longer open the box; the spare can.
+    let opened = opened_body(box_id(), modules(), true, 0);
+    let refused = match provisioned.open(leak(witnessed(opened, &with_device(&WITNESSES)))) {
+        Transition::Refused(b, error) => {
+            assert_eq!(error, Error::SignatureSigner);
+            b
+        }
+        Transition::Done(_) => panic!("the replaced device opened the box"),
+    };
+    let mut by_spare = std::vec![By::Other(
+        common::BOX,
+        EventRole::Device,
+        b"NEC",
+        common::genesis::spare_device_key(),
+    )];
+    by_spare.extend_from_slice(&WITNESSES);
+    assert!(
+        refused
+            .open(leak(witnessed(opened, &by_spare)))
+            .into_result()
+            .is_ok()
+    );
+}
+
 fn other_box_2() -> ityv_encoding::BoxId<'static> {
     ityv_encoding::BoxId::new(b"BOX-002").unwrap()
 }

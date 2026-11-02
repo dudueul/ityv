@@ -44,7 +44,7 @@ pub use ityv_encoding::MAX_STATION_BOXES;
 
 use crate::close::{RosterEntry, check_observers, check_witnesses};
 use crate::error::Error;
-use crate::genesis::{Entry, Genesis};
+use crate::genesis::{Anchor, Entry, Genesis};
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::IssuanceCount;
 use crate::sig::{Key, Signed, check_token};
@@ -285,6 +285,7 @@ impl<const N: usize> Stream<N> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoxStream<'a> {
     election_id: ElectionId<'a>,
+    anchor: Anchor,
     box_id: BoxId<'a>,
     key: &'a Key,
     inner: Stream<1>,
@@ -294,19 +295,25 @@ impl<'a> BoxStream<'a> {
     /// Opens the stream of the box `entry` names, whose first tick belongs
     /// to `first_slot` (the slot of `BoxOpened`), with the device key of
     /// the entry.
-    #[must_use]
-    pub const fn open(
+    ///
+    /// # Errors
+    /// [`Error::StaleEntry`] if `entry` was not proved against the current
+    /// state of `genesis`.
+    pub fn open(
         genesis: &Genesis<'a>,
         entry: &Entry<GenesisBox<'a>>,
         first_slot: u64,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        let anchor = genesis.anchor();
+        anchor.admits(entry)?;
         let entry = entry.get();
-        Self {
+        Ok(Self {
             election_id: genesis.election_id(),
+            anchor,
             box_id: entry.box_id,
             key: entry.device_key,
             inner: Stream::new(first_slot, [0]),
-        }
+        })
     }
 
     /// Takes one tick of this box and returns its body for the station
@@ -337,19 +344,27 @@ impl<'a> BoxStream<'a> {
         Ok(usable.then_some(body))
     }
 
-    /// Continues with a spare commitment unit: its key from the amended
-    /// genesis entry `entry` (PROTOCOL.md §4.3), and the slot and
-    /// sheets-in count the on-site `swap` record confirms (§7.10 item 8).
-    /// A count the signers could not read holds the stream.
+    /// Continues with a spare commitment unit: its key from the entry
+    /// `entry` of `amended`, a later state of the genesis the stream was
+    /// opened with (PROTOCOL.md §4.3), and the slot and sheets-in count
+    /// the on-site `swap` record confirms (§7.10 item 8). A count the
+    /// signers could not read holds the stream.
     ///
     /// # Errors
+    /// [`Error::StaleEntry`] unless `amended` is a later state of the
+    /// stream's genesis and `entry` was proved against it,
     /// [`Error::Mismatch`] if the entry or the swap names another box or
-    /// election, or the entry still has the current key.
+    /// election, or the entry still has the current key. On error nothing
+    /// changes.
     pub fn swap(
         &mut self,
+        amended: &Genesis<'a>,
         entry: &Entry<GenesisBox<'a>>,
         swap: &BoxUnitSwap<'_>,
     ) -> Result<(), Error> {
+        let anchor = amended.anchor();
+        self.anchor.advance(&anchor)?;
+        anchor.admits(entry)?;
         let (e, p) = (entry.get(), swap.parts());
         if e.box_id.as_bytes() != self.box_id.as_bytes()
             || p.box_id.as_bytes() != self.box_id.as_bytes()
@@ -358,6 +373,7 @@ impl<'a> BoxStream<'a> {
         {
             return Err(Error::Mismatch);
         }
+        self.anchor = anchor;
         self.key = e.device_key;
         self.inner.swap(p.at_slot, [p.sheets_in]);
         self.inner.holds = self
@@ -411,22 +427,26 @@ const fn checkin_counts(body: &CheckinProgressBody<'_>) -> [u64; 4] {
 impl<'a> CheckinStream<'a> {
     /// Opens the stream of the station `station` names, with the key of
     /// its check-in unit in service.
-    #[must_use]
-    pub const fn open(
+    ///
+    /// # Errors
+    /// [`Error::StaleEntry`] if `station` was not proved against the
+    /// current state of `genesis`.
+    pub fn open(
         genesis: &Genesis<'a>,
         station: &Entry<StationEntry<'a>>,
         first_slot: u64,
-    ) -> Self {
+    ) -> Result<Self, Error> {
+        genesis.anchor().admits(station)?;
         let station = station.get();
         let primary = station.primary();
-        Self {
+        Ok(Self {
             election_id: genesis.election_id(),
             station_id: station.station_id(),
             unit_id: primary.unit_id,
             key: primary.key,
             spare: *station.spare(),
             inner: Stream::new(first_slot, [0; 4]),
-        }
+        })
     }
 
     /// Takes one tick of this station's unit; see [`BoxStream::accept`].
@@ -622,12 +642,17 @@ impl<'a> StationProgress<'a> {
     /// and the limit of its progress policy.
     ///
     /// # Errors
-    /// [`Error::Mismatch`] if the policy is another station's.
+    /// [`Error::StaleEntry`] if an entry was not proved against the
+    /// current state of `genesis`, [`Error::Mismatch`] if the policy is
+    /// another station's.
     pub fn new(
         genesis: &Genesis<'a>,
         station: &Entry<StationEntry<'a>>,
         policy: &Entry<StationProgressPolicy<'a>>,
     ) -> Result<Self, Error> {
+        let anchor = genesis.anchor();
+        anchor.admits(station)?;
+        anchor.admits(policy)?;
         let (station, policy) = (station.get(), policy.get());
         if station.station_id().as_bytes() != policy.station_id().as_bytes() {
             return Err(Error::Mismatch);

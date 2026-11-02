@@ -200,6 +200,26 @@ fn entries_need_their_proof() {
             .map(|e| e.index()),
         Ok(other_index)
     );
+    // Witness entries proved against another genesis state are refused
+    // when sealing.
+    let (amended, _) = b.amended();
+    let elsewhere = b.witnesses_in(amended, &SIGNERS);
+    let (_, tokens) = seal(b.signed.body_bytes(), b"genesis", &SIGNERS);
+    assert_eq!(
+        Pinned::new(&b.pin, b.signed)
+            .unwrap()
+            .seal(tokens, elsewhere)
+            .unwrap_err(),
+        Error::StaleEntry
+    );
+    // The anchor of a state.
+    let anchor = amended.anchor();
+    assert_eq!(anchor.pin(), &b.pin);
+    assert_eq!(anchor.seq(), 1);
+    assert_eq!(anchor.head(), amended.head());
+    assert_eq!(g.anchor().seq(), 0);
+    assert_eq!(g.anchor().head(), &b.pin);
+    assert_eq!(entry.head(), g.head());
     // A witness entry through the pinned body.
     let pinned = Pinned::new(&b.pin, b.signed).unwrap();
     let (w, w_index, w_proof) = b.raw(EntrySet::Witnesses, b"W01");
@@ -288,10 +308,19 @@ fn amendments_chain_and_replace_sets() {
             .entry::<StationEntry<'static>>(station, s_index, s_proof)
             .is_ok()
     );
-    // The next amendment names the last body.
+    // The next amendment names the last body, with witness entries
+    // proved against the amended state; entries of the original state are
+    // stale.
     let next = amendment(b, common::election(), 2, *amended.head());
     let (signed, tokens) = seal(next, b"genesis-amendment", &SIGNERS);
-    let twice = amended.amend(signed, tokens, witnesses).unwrap();
+    assert_eq!(
+        amended.amend(signed, tokens, witnesses).unwrap_err(),
+        Error::StaleEntry
+    );
+    let current = b.witnesses_in(amended, &SIGNERS);
+    assert!(current.iter().all(|w| w.head() == amended.head()));
+    assert!(witnesses.iter().all(|w| w.head() == &b.pin));
+    let twice = amended.amend(signed, tokens, current).unwrap();
     assert_eq!(twice.seq(), 2);
     assert_eq!(twice.head(), &object_hash(next));
     // Refusals: a skipped number, a repeated number, another previous
@@ -305,7 +334,7 @@ fn amendments_chain_and_replace_sets() {
         let body = amendment(b, election, seq, previous);
         let (signed, tokens) = seal(body, b"genesis-amendment", &SIGNERS);
         assert_eq!(
-            amended.amend(signed, tokens, witnesses).unwrap_err(),
+            amended.amend(signed, tokens, current).unwrap_err(),
             Error::Mismatch
         );
     }

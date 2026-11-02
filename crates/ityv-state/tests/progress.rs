@@ -54,11 +54,16 @@ fn station_entry() -> &'static Entry<StationEntry<'static>> {
 }
 
 fn open_box(first: u64) -> BoxStream<'static> {
-    BoxStream::open(genesis(), box_entry(), first)
+    BoxStream::open(genesis(), box_entry(), first).unwrap()
 }
 
 fn open_checkin(first: u64) -> CheckinStream<'static> {
-    CheckinStream::open(genesis(), station_entry(), first)
+    CheckinStream::open(genesis(), station_entry(), first).unwrap()
+}
+
+/// The genesis after the amendment that registers the spare device.
+fn amended() -> &'static Genesis<'static> {
+    fixture().amended().0
 }
 
 /// The box entry the amendment registers for the spare device.
@@ -401,7 +406,7 @@ fn box_stream_close_and_swap() {
     let spare = spare_device_key();
     let mut s = open_box(10);
     feed(&mut s, 10, 4, BoxProgressState::Casting);
-    s.swap(spare_box(), box_swap(14, 5)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(14, 5)).unwrap();
     let (t, k) = tick(
         SCHEMA_BOX_PROGRESS_BODY,
         box_body(box_id(), 14, 12, BoxProgressState::Closed),
@@ -412,33 +417,33 @@ fn box_stream_close_and_swap() {
     assert!(s.finish(&close.close).is_empty());
     // The old device's key no longer works.
     let mut s = open_box(10);
-    s.swap(spare_box(), box_swap(10, 0)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(10, 0)).unwrap();
     let (t, k) = box_tick(10, 1, BoxProgressState::Casting);
     assert_eq!(s.accept(t, k), Err(Error::SignatureSigner));
     // A swap that lowers the count, comes after close, or claims a slot
     // before the last tick holds.
     let mut s = open_box(10);
     feed(&mut s, 10, 4, BoxProgressState::Casting);
-    s.swap(spare_box(), box_swap(11, 3)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(11, 3)).unwrap();
     assert_eq!(s.holds(), stream_hold());
     let mut s = open_box(10);
     feed(&mut s, 10, 4, BoxProgressState::Closed);
-    s.swap(spare_box(), box_swap(11, 4)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(11, 4)).unwrap();
     assert_eq!(s.holds(), stream_hold());
     let mut s = open_box(10);
     feed(&mut s, 10, 4, BoxProgressState::Casting);
     feed(&mut s, 11, 4, BoxProgressState::Casting);
     feed(&mut s, 12, 4, BoxProgressState::Casting);
-    s.swap(spare_box(), box_swap(11, 4)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(11, 4)).unwrap();
     assert_eq!(s.holds(), stream_hold());
     // A swap at the slot after the last tick is clean.
     let mut s = open_box(10);
     feed(&mut s, 10, 4, BoxProgressState::Casting);
-    s.swap(spare_box(), box_swap(11, 4)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(11, 4)).unwrap();
     assert!(s.holds().is_empty());
     let mut s = open_box(10);
     feed(&mut s, 10, 4, BoxProgressState::Casting);
-    s.swap(spare_box(), box_swap(10, 4)).unwrap();
+    s.swap(amended(), spare_box(), box_swap(10, 4)).unwrap();
     assert!(s.holds().is_empty());
     // A count the signers could not read holds.
     let mut s = open_box(10);
@@ -448,7 +453,8 @@ fn box_stream_close_and_swap() {
         sheets_in: 0,
         ..box_swap_parts(11, 0)
     };
-    s.swap(spare_box(), box_swap_of(&unread)).unwrap();
+    s.swap(amended(), spare_box(), box_swap_of(&unread))
+        .unwrap();
     assert_eq!(s.holds(), stream_hold());
 }
 
@@ -460,24 +466,73 @@ fn box_swap_refusals() {
         s.accept(t, k).unwrap();
         s
     };
-    // The entry must carry a new key: the unamended entry is refused.
+    // The entry must be proved against the amended state: the entry of
+    // the original state, whose key the amendment replaced, is stale.
     let mut s = fresh();
     let before = s;
-    assert_eq!(s.swap(box_entry(), box_swap(11, 4)), Err(Error::Mismatch));
+    assert_eq!(
+        s.swap(amended(), box_entry(), box_swap(11, 4)),
+        Err(Error::StaleEntry)
+    );
+    // The genesis must be a later state than the stream's.
+    assert_eq!(
+        s.swap(genesis(), spare_box(), box_swap(11, 4)),
+        Err(Error::StaleEntry)
+    );
+    let mut later = BoxStream::open(amended(), spare_box(), 10).unwrap();
+    assert_eq!(
+        later.swap(amended(), spare_box(), box_swap(11, 4)),
+        Err(Error::StaleEntry)
+    );
+    // Opening needs an entry of the genesis given.
+    assert_eq!(
+        BoxStream::open(amended(), box_entry(), 10).unwrap_err(),
+        Error::StaleEntry
+    );
+    assert_eq!(
+        BoxStream::open(genesis(), spare_box(), 10).unwrap_err(),
+        Error::StaleEntry
+    );
+    // A later state of the same genesis that the stream already has is
+    // not a swap.
+    let same_key: &'static Entry<GenesisBox<'static>> = leak(fixture().amended_box(b"BOX-002"));
+    let mut s2 = BoxStream::open(amended(), same_key, 10).unwrap();
+    assert_eq!(
+        s2.swap(amended(), same_key, box_swap(11, 4)),
+        Err(Error::StaleEntry)
+    );
+    // An amended entry that keeps the current key is not a swap either:
+    // `BOX-002` keeps its device across the amendment.
+    let unchanged: &'static Entry<GenesisBox<'static>> = leak(fixture().entry(b"BOX-002"));
+    let mut s3 = BoxStream::open(genesis(), unchanged, 10).unwrap();
+    let swap_002 = box_swap_of(&BoxUnitSwapParts {
+        box_id: BoxId::new(b"BOX-002").unwrap(),
+        ..box_swap_parts(11, 4)
+    });
+    assert_eq!(s3.swap(amended(), same_key, swap_002), Err(Error::Mismatch));
     // The entry of another box.
-    let other: &'static Entry<GenesisBox<'static>> = leak(fixture().entry(b"BOX-002"));
-    assert_eq!(s.swap(other, box_swap(11, 4)), Err(Error::Mismatch));
+    let other: &'static Entry<GenesisBox<'static>> = leak(fixture().amended_box(b"BOX-002"));
+    assert_eq!(
+        s.swap(amended(), other, box_swap(11, 4)),
+        Err(Error::Mismatch)
+    );
     // A swap record of another box or election.
     let elsewhere = box_swap_of(&BoxUnitSwapParts {
         box_id: other_box(),
         ..box_swap_parts(11, 4)
     });
-    assert_eq!(s.swap(spare_box(), elsewhere), Err(Error::Mismatch));
+    assert_eq!(
+        s.swap(amended(), spare_box(), elsewhere),
+        Err(Error::Mismatch)
+    );
     let foreign = box_swap_of(&BoxUnitSwapParts {
         election_id: other_election(),
         ..box_swap_parts(11, 4)
     });
-    assert_eq!(s.swap(spare_box(), foreign), Err(Error::Mismatch));
+    assert_eq!(
+        s.swap(amended(), spare_box(), foreign),
+        Err(Error::Mismatch)
+    );
     assert_eq!(s, before);
     // The swap record must be signed by registered witnesses.
     let body = object(
@@ -497,6 +552,50 @@ fn box_swap_refusals() {
         Error::Decode
     );
     assert_eq!(box_swap(11, 4).parts(), &box_swap_parts(11, 4));
+}
+
+#[test]
+fn station_entries_follow_the_genesis_state() {
+    let station_now: &'static Entry<StationEntry<'static>> =
+        leak(fixture().entry_in(amended(), common::STATION));
+    let policy_then: &'static Entry<StationProgressPolicy<'static>> =
+        leak(fixture().entry(common::STATION));
+    let policy_now: &'static Entry<StationProgressPolicy<'static>> =
+        leak(fixture().entry_in(amended(), common::STATION));
+    // Entries of the original state on the amended genesis, and mixed.
+    assert_eq!(
+        CheckinStream::open(amended(), station_entry(), 10).unwrap_err(),
+        Error::StaleEntry
+    );
+    assert!(CheckinStream::open(amended(), station_now, 10).is_ok());
+    assert_eq!(
+        StationProgress::new(amended(), station_entry(), policy_now).unwrap_err(),
+        Error::StaleEntry
+    );
+    assert_eq!(
+        StationProgress::new(amended(), station_now, policy_then).unwrap_err(),
+        Error::StaleEntry
+    );
+    assert!(StationProgress::new(amended(), station_now, policy_now).is_ok());
+    // A roster mixing two states is refused wherever a key is looked up.
+    let mut mixed = roster().to_vec();
+    mixed.extend_from_slice(fixture().roster_in(amended()));
+    let mixed = common::leak_slice(mixed);
+    assert_eq!(
+        ObserverCount::check(
+            &witnessed(count_body(38, ObserverCountKind::Final), &OBSERVERS),
+            mixed
+        )
+        .unwrap_err(),
+        Error::StaleEntry
+    );
+    assert!(
+        ObserverCount::check(
+            &witnessed(count_body(38, ObserverCountKind::Final), &OBSERVERS),
+            fixture().roster_in(amended())
+        )
+        .is_ok()
+    );
 }
 
 #[test]

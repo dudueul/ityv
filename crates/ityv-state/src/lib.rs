@@ -102,7 +102,7 @@ pub use close::{
 pub use custody::CustodyChain;
 pub use dispute::{Dispute, DisputeEvent, DisputeStatus, DisputeType};
 pub use error::Error;
-pub use genesis::{Entry, Genesis, Pinned};
+pub use genesis::{Anchor, Entry, Genesis, Pinned};
 pub use hold::{HoldReason, HoldSet};
 pub use issuance::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict};
 pub use progress::{

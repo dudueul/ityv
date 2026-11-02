@@ -20,7 +20,7 @@ use ityv_encoding::{
 };
 
 use crate::error::Error;
-use crate::genesis::Entry;
+use crate::genesis::{Entry, one_head};
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::EnvelopeIssuance;
 use crate::record::Profile;
@@ -179,13 +179,15 @@ pub struct Named<'a> {
 /// The key `roster` registers for `id` in `role` and `org`.
 ///
 /// # Errors
-/// [`Error::NotRegistered`] if no entry matches all three.
+/// [`Error::StaleEntry`] if the roster mixes entries of different genesis
+/// states, [`Error::NotRegistered`] if no entry matches all three.
 pub fn roster_key<'r>(
     roster: &'r [RosterEntry<'r>],
     id: SignerId<'_>,
     role: RosterRole,
     org: OrgId<'_>,
 ) -> Result<&'r Key, Error> {
+    one_head(roster)?;
     roster
         .iter()
         .map(Entry::get)
@@ -611,7 +613,7 @@ mod tests {
         })
     }
 
-    fn named(entry: RosterEntry<'static>) -> Named<'static> {
+    fn named(entry: &RosterEntry<'static>) -> Named<'static> {
         Named {
             signer_id: entry.get().signer_id,
             role: entry.get().role,
@@ -630,7 +632,7 @@ mod tests {
         let j1 = person(b"j1", RosterRole::Authority, b"COURT");
         let roster = [c1, c2, o1, o2, o3, k1, j1];
         let check = |set: &[RosterEntry<'static>]| {
-            let named: std::vec::Vec<_> = set.iter().map(|e| named(*e)).collect();
+            let named: std::vec::Vec<_> = set.iter().map(|e| named(e)).collect();
             check_witness_set(&named, &roster)
         };
         assert_eq!(check(&[c1, c2, o1, o2]), Ok(()));
@@ -661,8 +663,8 @@ mod tests {
                 .collect();
         let mut roster_many = std::vec![c1, c2];
         roster_many.extend(many.iter().copied());
-        let mut set: std::vec::Vec<_> = std::vec![named(c1), named(c2)];
-        set.extend(many.iter().map(|e| named(*e)));
+        let mut set: std::vec::Vec<_> = std::vec![named(&c1), named(&c2)];
+        set.extend(many.iter().map(|e| named(e)));
         assert_eq!(check_witness_set(&set, &roster_many), Ok(()));
         // The registered key is found by all three of id, role, organisation.
         let c = c1.get();

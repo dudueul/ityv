@@ -5,7 +5,7 @@
 //! and leaked.
 
 use std::boxed::Box;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
@@ -324,6 +324,7 @@ pub(crate) struct Built {
     pub(crate) pin: Hash512,
     pub(crate) sets: Vec<Set>,
     pub(crate) profile: CaptureProfile,
+    amended: OnceLock<(&'static Genesis<'static>, Entry<GenesisBox<'static>>)>,
 }
 
 /// Signatures of the commission, the committee and the witnesses `who`
@@ -404,11 +405,30 @@ impl Built {
 
     /// Every roster entry, proved.
     pub(crate) fn roster(&self) -> &'static [RosterEntry<'static>] {
+        self.roster_in(&self.genesis)
+    }
+
+    /// Every roster entry, proved against `genesis` (the roster set is the
+    /// same in every state of the fixture).
+    pub(crate) fn roster_in(&self, genesis: &Genesis<'static>) -> &'static [RosterEntry<'static>] {
         leak_slice(
             self.set(EntrySet::Roster)
                 .keys
                 .iter()
-                .map(|k| self.entry::<RosterSigner<'static>>(k))
+                .map(|k| self.entry_in::<RosterSigner<'static>>(genesis, k))
+                .collect(),
+        )
+    }
+
+    /// The witness entries of `who`, proved against `genesis`.
+    pub(crate) fn witnesses_in(
+        &self,
+        genesis: &Genesis<'static>,
+        who: &[usize],
+    ) -> &'static [Entry<WitnessRosterEntry<'static>>] {
+        leak_slice(
+            who.iter()
+                .map(|i| self.entry_in::<WitnessRosterEntry<'static>>(genesis, WITNESS_IDS[*i]))
                 .collect(),
         )
     }
@@ -441,6 +461,17 @@ impl Built {
     /// The genesis amended to the spare device for `BOX-001`, and the new
     /// box entry.
     pub(crate) fn amended(&self) -> (&'static Genesis<'static>, Entry<GenesisBox<'static>>) {
+        *self.amended.get_or_init(|| self.amend_once())
+    }
+
+    /// The box entry with `key` of the amended state.
+    pub(crate) fn amended_box(&self, key: &[u8]) -> Entry<GenesisBox<'static>> {
+        let new_boxes = boxes(self.profile, key_bytes(&spare_device_key().verifying_key()));
+        let (bytes, index, proof) = new_boxes.find(key);
+        self.amended().0.entry(bytes, index, proof).unwrap()
+    }
+
+    fn amend_once(&self) -> (&'static Genesis<'static>, Entry<GenesisBox<'static>>) {
         let body = self.amendment_body(1, self.pin);
         let (signed, tokens) = seal(body, b"genesis-amendment", &SIGNERS);
         let amended = leak(
@@ -597,6 +628,7 @@ pub(crate) fn built(legal: Hash512, profile: CaptureProfile) -> &'static Built {
         pin,
         sets,
         profile,
+        amended: OnceLock::new(),
     };
     let built: &'static Built = Box::leak(Box::new(built));
     cache.push((key, built));

@@ -100,6 +100,11 @@ pub enum Error {
     Pin,
     /// A genesis entry's inclusion proof does not lead to its set's root.
     NotIncluded,
+    /// Genesis entries proved against different genesis states were used
+    /// together, an entry is not proved against the genesis given, or a
+    /// state machine was asked to follow a genesis state that is not later
+    /// than its own (ADR-0028).
+    StaleEntry,
 }
 
 impl core::fmt::Display for Error {
@@ -139,6 +144,7 @@ impl core::fmt::Display for Error {
             Self::Overflow => f.write_str("counter overflow"),
             Self::Pin => f.write_str("genesis does not match the pin"),
             Self::NotIncluded => f.write_str("entry not included in the genesis set"),
+            Self::StaleEntry => f.write_str("entry of another genesis state"),
         }
     }
 }
@@ -197,6 +203,7 @@ mod tests {
             Error::Overflow,
             Error::Pin,
             Error::NotIncluded,
+            Error::StaleEntry,
         ];
         let texts: BTreeSet<_> = all.iter().map(ToString::to_string).collect();
         assert_eq!(texts.len(), all.len());
