@@ -18,8 +18,8 @@ mod common;
 use std::vec::Vec;
 
 use common::{
-    Draft, SIGNERS, amendment, checkin_unit, leak_slice, object, sign, sign_genesis,
-    sign_genesis_with, signing, standard, station,
+    Draft, SIGNERS, amendment, checkin_unit, leak_slice, object, sign, sign_genesis_with, signing,
+    standard, station,
 };
 use ityv_crypto::object_hash;
 use ityv_encoding::{
@@ -243,7 +243,7 @@ fn indexes_a_clean_ledger() {
         Scope::Station(StationId::new(b"ST-1").unwrap())
     );
     assert_eq!(idx.events()[0].scope, Scope::Election);
-    assert_eq!(idx.events()[1].bytes, b);
+    assert_eq!(idx.events()[1].bytes, Some(b));
     assert_eq!(idx.tree_size(), 4);
     assert_eq!(idx.head().unwrap().seq().get(), 4);
     let mut acc = Accumulator::empty();
@@ -309,7 +309,9 @@ fn a_replayed_station_event_holds_every_box_of_the_station() {
 }
 
 #[test]
-fn refuses_a_record_after_its_box_closed() {
+fn a_batch_after_the_close_is_a_late_batch_and_indexed() {
+    // A late batch close (PROTOCOL.md §7.2.1) puts a BatchAttest after the
+    // box's close; the box stage judges it with its LateBatchClose.
     let c = close(b"BOX-1", B1, 50);
     let late = batch(b"BOX-1", B1, 1);
     let elsewhere = batch(b"BOX-2", B2, 0);
@@ -321,24 +323,12 @@ fn refuses_a_record_after_its_box_closed() {
         .push_as(SCHEMA_BATCH_ATTEST, elsewhere)
         .push_as(SCHEMA_BOX_CLOSE, second_close);
     let idx = index(&ledger, &[c, late, elsewhere, second_close]);
-    let f = idx.findings();
-    assert_eq!(f.len(), 1);
-    assert_eq!(
-        f[0].kind,
-        FindingKind::AfterClose {
-            close: Seq::new(1).unwrap()
-        }
-    );
-    assert_eq!(f[0].seq, Seq::new(2));
-    assert!(
-        idx.box_holds(b"BOX-1")
-            .contains(HoldReason::RecordAfterClose)
-    );
-    assert!(!idx.box_holds(b"BOX-1").contains(HoldReason::EventReplayed));
-    assert!(idx.box_holds(b"BOX-2").is_empty());
-    // A record of another box, and a second close, are indexed: the
-    // second close is the state machine's to judge.
-    assert_eq!(idx.events().len(), 3);
+    assert!(idx.findings().is_empty(), "{:?}", idx.findings());
+    assert!(idx.box_holds(b"BOX-1").is_empty());
+    assert_eq!(idx.events().len(), 4);
+    assert_eq!(idx.box_events(b"BOX-1").count(), 3);
+    assert_eq!(idx.box_events(b"BOX-2").count(), 1);
+    assert_eq!(idx.box_events(b"BOX-3").count(), 0);
 }
 
 #[test]
@@ -350,7 +340,7 @@ fn a_missing_or_invalid_event_holds_the_ledger_and_the_index_goes_on() {
     ledger
         .push_as(SCHEMA_BATCH_ATTEST, b) // not supplied
         .push_as(SCHEMA_CAST_RECORD, c) // a close presented as a cast record
-        .push_as(SchemaId::new(0x0009), t) // not a ledger event schema
+        .push_as(SchemaId::new(0x0013), t) // a body schema, not a ledger event
         .push_as(SCHEMA_PROGRESS_TICK, t);
     let idx = index(&ledger, &[c, t]);
     let kinds: Vec<FindingKind> = idx.findings().iter().map(|f| f.kind).collect();
@@ -545,8 +535,9 @@ fn vector(name: &str) -> &'static [u8] {
     leak_slice(bytes)
 }
 
-/// A genesis whose first box and station carry the identifiers the
-/// encoding vectors use (`box-11-0042` at `st-11-0042`).
+/// A genesis of the encoding vectors' election whose first box and
+/// station carry the identifiers the vectors use (`box-11-0042` at
+/// `st-11-0042`).
 fn vector_genesis() -> &'static VerifiedGenesis<'static> {
     let mut draft = Draft::standard();
     let st = StationId::new(b"st-11-0042").unwrap();
@@ -567,8 +558,22 @@ fn vector_genesis() -> &'static VerifiedGenesis<'static> {
             r.station_id = Some(st);
         }
     }
-    let built = common::leak(sign_genesis(&draft, draft.raw()));
+    let built = common::leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+        p.election_id = vector_election();
+    }));
     common::leak(verify_genesis(&built.pin, &built.input(), &[]).unwrap())
+}
+
+/// The election of the encoding vectors.
+fn vector_election() -> ElectionId<'static> {
+    ElectionId::new(b"KR-2030-PRES").unwrap()
+}
+
+/// A ledger of the vectors' election.
+fn vector_ledger() -> Ledger {
+    let mut ledger = Ledger::new();
+    ledger.election = vector_election();
+    ledger
 }
 
 /// `body` in a witnessed event signed by the role set its schema needs.
@@ -642,7 +647,7 @@ fn every_witnessed_body_is_scoped_to_its_box_station_or_election() {
         .iter()
         .map(|(name, signers, _)| witnessed(vector(name), signers))
         .collect();
-    let mut ledger = Ledger::new();
+    let mut ledger = vector_ledger();
     for e in &events {
         ledger.push_as(SCHEMA_WITNESSED_EVENT, e);
     }
@@ -651,4 +656,248 @@ fn every_witnessed_body_is_scoped_to_its_box_station_or_election() {
     let scopes: Vec<Scope<'static>> = idx.events().iter().map(|e| e.scope).collect();
     let expected: Vec<Scope<'static>> = cases.iter().map(|c| c.2).collect();
     assert_eq!(scopes, expected);
+}
+
+#[test]
+fn records_after_the_close_are_refused_and_other_box_events_scoped() {
+    let close = vector("box_close");
+    let record = vector("cast_record");
+    let opening = vector("challenge_opening");
+    let late_batch = vector("batch_attest");
+    let tick = vector("progress_tick");
+    let scan = vector("scan_count_attest");
+    let mut ledger = vector_ledger();
+    ledger
+        .push_as(ityv_encoding::SCHEMA_SCAN_COUNT_ATTEST, scan)
+        .push_as(SCHEMA_BOX_CLOSE, close)
+        .push_as(SCHEMA_CAST_RECORD, record)
+        .push_as(ityv_encoding::SCHEMA_CHALLENGE_OPENING, opening)
+        .push_as(SCHEMA_BATCH_ATTEST, late_batch)
+        .push_as(SCHEMA_PROGRESS_TICK, tick);
+    let idx = build_index(
+        vector_genesis(),
+        ledger.bytes(),
+        &[close, record, opening, late_batch, tick, scan],
+    );
+    let refused: Vec<(Option<Seq>, FindingKind)> =
+        idx.findings().iter().map(|f| (f.seq, f.kind)).collect();
+    let after = FindingKind::AfterClose {
+        close: Seq::new(2).unwrap(),
+    };
+    assert_eq!(refused, [(Seq::new(3), after), (Seq::new(4), after)]);
+    let the_box = Scope::Box(BoxId::new(b"box-11-0042").unwrap());
+    assert!(idx.events().iter().all(|e| e.scope == the_box));
+    let kept: Vec<u64> = idx.events().iter().map(|e| e.seq.get()).collect();
+    assert_eq!(kept, [1, 2, 5, 6]);
+    assert!(
+        idx.box_holds(b"box-11-0042")
+            .contains(HoldReason::RecordAfterClose)
+    );
+    assert!(idx.box_holds(b"BOX-2").is_empty());
+}
+
+#[test]
+fn frames_of_restricted_events_are_kept_by_hash() {
+    let counter = SchemaId::new(0x0009);
+    let mut ledger = Ledger::new();
+    ledger.push_raw(counter, Hash512([0x91; 64]), Hash512::ZERO);
+    let prev = ledger.prev;
+    ledger.push_raw(
+        ityv_encoding::SCHEMA_SHARE_PACKAGE,
+        Hash512([0x92; 64]),
+        prev,
+    );
+    // No body is supplied, and none is needed.
+    let idx = build_index(verified(), ledger.bytes(), &[]);
+    assert!(idx.findings().is_empty(), "{:?}", idx.findings());
+    assert_eq!(idx.events().len(), 2);
+    assert!(idx.events().iter().all(|e| e.bytes.is_none()));
+    assert_eq!(ityv_verify::OPAQUE_SCHEMAS[0], counter);
+    // A restricted frame recorded twice is still a replay.
+    let prev = ledger.prev;
+    ledger.push_raw(counter, Hash512([0x91; 64]), prev);
+    let idx = build_index(verified(), ledger.bytes(), &[]);
+    assert_eq!(
+        idx.findings()[0].kind,
+        FindingKind::Replayed {
+            first: Seq::new(1).unwrap()
+        }
+    );
+    assert!(idx.ledger_holds().contains(HoldReason::EventReplayed));
+    // A ledger hold applies to every box.
+    assert!(idx.box_holds(b"BOX-3").contains(HoldReason::EventReplayed));
+}
+
+#[test]
+fn an_event_of_another_election_holds_the_ledger() {
+    // A vector close (election KR-2030-PRES) on this genesis's ledger.
+    let foreign = vector("box_close");
+    let mut ledger = Ledger::new();
+    ledger.push_as(SCHEMA_BOX_CLOSE, foreign);
+    let idx = index(&ledger, &[foreign]);
+    assert_eq!(idx.findings()[0].kind, FindingKind::OtherElection);
+    assert_eq!(idx.findings()[0].scope, Scope::Election);
+    assert!(idx.ledger_holds().contains(HoldReason::LedgerUnchecked));
+    // This genesis's batch (E-2028-GEN) on the vectors' ledger.
+    let ours = batch(b"box-11-0042", B1, 0);
+    let mut ledger = vector_ledger();
+    ledger.push_as(SCHEMA_BATCH_ATTEST, ours);
+    let idx = build_index(vector_genesis(), ledger.bytes(), &[ours]);
+    assert_eq!(idx.findings()[0].kind, FindingKind::OtherElection);
+}
+
+/// A device attestation from `device`.
+fn attestation(device: &'static [u8]) -> &'static [u8] {
+    use ityv_encoding::{
+        AttestationChallenge, ChallengePath, DeviceAttestation, DeviceAttestationBody,
+        DeviceAttestationParts, Ident, MeasuredImage, ObserverId, SCHEMA_DEVICE_ATTESTATION,
+        SCHEMA_DEVICE_ATTESTATION_BODY,
+    };
+    let images = leak_slice(std::vec![MeasuredImage {
+        component_id: Ident::new(b"cunit", 64).unwrap(),
+        version: Ident::new(b"1.4.2", 32).unwrap(),
+        build: 7,
+        image_hash: Hash512([0x41; 64]),
+    }]);
+    let body = DeviceAttestationBody::new(&DeviceAttestationParts {
+        election_id: election(),
+        device_id: Ident::new(device, 64).unwrap(),
+        device_class: 2,
+        challenge: AttestationChallenge {
+            path: ChallengePath::Token,
+            observer_id: ObserverId::new(b"obs-a").unwrap(),
+            nonce: common::leak([0x10; 32]),
+            challenge_sig: common::leak([0x20; 64]),
+        },
+        time_bucket: TimeBucket::new(30),
+        boot_count: 5,
+        components: images,
+        bundle_hash: Hash512([0x70; 64]),
+        modules: &[],
+    })
+    .unwrap();
+    let body = object(SCHEMA_DEVICE_ATTESTATION_BODY, SCHEMA_VERSION_1, &body);
+    let sig = common::leak([0x5B; HYBRID_SIG_LEN]);
+    object(
+        SCHEMA_DEVICE_ATTESTATION,
+        SCHEMA_VERSION_1,
+        &DeviceAttestation::new(body, sig).unwrap(),
+    )
+}
+
+#[test]
+fn a_device_attestation_is_scoped_to_its_device() {
+    let of_box = attestation(b"BOX-1");
+    let of_unit = attestation(b"U-2B");
+    let of_module = attestation(b"M-B1-P1");
+    let mut ledger = Ledger::new();
+    ledger
+        .push_as(ityv_encoding::SCHEMA_DEVICE_ATTESTATION, of_box)
+        .push_as(ityv_encoding::SCHEMA_DEVICE_ATTESTATION, of_unit)
+        .push_as(ityv_encoding::SCHEMA_DEVICE_ATTESTATION, of_module);
+    let idx = index(&ledger, &[of_box, of_unit, of_module]);
+    assert!(idx.findings().is_empty(), "{:?}", idx.findings());
+    let scopes: Vec<Scope<'static>> = idx.events().iter().map(|e| e.scope).collect();
+    assert_eq!(
+        scopes,
+        [
+            Scope::Box(BoxId::new(b"BOX-1").unwrap()),
+            Scope::Station(StationId::new(b"ST-2").unwrap()),
+            Scope::Election
+        ]
+    );
+}
+
+#[test]
+fn a_signed_checkpoint_is_an_election_event_of_this_election() {
+    use ityv_encoding::{
+        CheckpointBody, CheckpointParts, KeysetId, LedgerId, SCHEMA_CHECKPOINT_BODY, TreeSize,
+    };
+    use ityv_ledger::{SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry};
+    let checkpoint = |e: ElectionId<'static>| -> &'static [u8] {
+        let body = CheckpointBody::new(&CheckpointParts {
+            election_id: e,
+            ledger_id: LedgerId::new(b"L-1").unwrap(),
+            keyset_id: KeysetId::new(b"K-1").unwrap(),
+            checkpoint_seq: Seq::new(1).unwrap(),
+            tree_size: TreeSize::new(1),
+            root_hash: Hash512([0x81; 64]),
+            previous_checkpoint_hash: Hash512::ZERO,
+            box_close_root: Hash512([0x82; 64]),
+            dispute_root: Hash512([0x83; 64]),
+            genesis_hash: standard().pin,
+            time_bucket: TimeBucket::new(12),
+        })
+        .unwrap();
+        let body = object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &body);
+        let signature = common::leak(ityv_crypto::HybridSignature::from_parts(
+            &[0x11; 4627],
+            [0x22; 64],
+        ));
+        let entries = leak_slice(std::vec![WitnessSignatureEntry {
+            witness_id: common::id(b"W01"),
+            signature,
+        }]);
+        let parts = SignedCheckpointParts::new(body, entries).unwrap();
+        object(SCHEMA_SIGNED_CHECKPOINT, SCHEMA_VERSION_1, &parts)
+    };
+    let ours = checkpoint(election());
+    let theirs = checkpoint(vector_election());
+    let mut ledger = Ledger::new();
+    ledger
+        .push_as(SCHEMA_SIGNED_CHECKPOINT, ours)
+        .push_as(SCHEMA_SIGNED_CHECKPOINT, theirs);
+    let idx = index(&ledger, &[ours, theirs]);
+    assert_eq!(idx.events().len(), 1);
+    assert_eq!(idx.events()[0].scope, Scope::Election);
+    assert_eq!(idx.findings()[0].kind, FindingKind::OtherElection);
+}
+
+#[test]
+fn an_amendment_the_verified_genesis_did_not_apply_is_not_pinned() {
+    let built = standard();
+    let amended = amendment(1, built.pin, &built.raw, &SIGNERS);
+    let mut ledger = Ledger::new();
+    ledger
+        .push_as(SCHEMA_SIGNED_GENESIS, built.signed)
+        .push_as(SCHEMA_SIGNED_GENESIS, amended.signed);
+    // `verified()` applied no amendment.
+    let idx = index(&ledger, &[built.signed, amended.signed]);
+    assert_eq!(idx.events().len(), 1);
+    assert_eq!(idx.findings()[0].kind, FindingKind::NotPinned);
+}
+
+#[test]
+fn events_of_a_box_an_amendment_replaced_are_still_known() {
+    let built = standard();
+    let mut draft = Draft::standard();
+    draft.boxes[2] = common::genesis_box(
+        2,
+        b"BOX-4",
+        b"ST-2",
+        b"RU-2",
+        &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
+    );
+    draft.stations[1] = station(
+        b"ST-2",
+        StationKind::EarlyVoting,
+        checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        &[b"BOX-4"],
+        &[],
+    );
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let verified = common::leak(verify_genesis(&built.pin, &built.input(), &[a]).unwrap());
+    let old_box = batch(b"BOX-3", [b"M-B3-P1", b"M-B3-P2"], 0);
+    let old_unit = attestation(b"U-2B");
+    let mut ledger = Ledger::new();
+    ledger
+        .push_as(SCHEMA_BATCH_ATTEST, old_box)
+        .push_as(ityv_encoding::SCHEMA_DEVICE_ATTESTATION, old_unit);
+    let idx = build_index(verified, ledger.bytes(), &[old_box, old_unit]);
+    assert!(idx.findings().is_empty(), "{:?}", idx.findings());
+    assert_eq!(
+        idx.events()[1].scope,
+        Scope::Station(StationId::new(b"ST-2").unwrap())
+    );
 }

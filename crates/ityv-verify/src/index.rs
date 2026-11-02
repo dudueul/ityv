@@ -9,19 +9,24 @@
 //!    genesis's election). A torn tail is isolated and not read (VC-010);
 //!    a corrupt record or a broken link ends the index there, because the
 //!    frames after it are not provably part of this ledger;
-//! 2. finds the event whose object hash is the frame's `event_hash` and
-//!    decodes it as the canonical object of the frame's
-//!    `event_schema_id`, which must be a ledger event this verifier knows;
-//! 3. works out whom the event concerns: a box, a station (all its
-//!    boxes), or the whole election, and refuses a box or station the
-//!    genesis does not have, a genesis or amendment whose body the
-//!    verified genesis did not apply, and a legal authorization other than
-//!    the one the genesis pins;
+//! 2. keeps a frame of a restricted or sealed event by its hash alone
+//!    ([`OPAQUE_SCHEMAS`]); otherwise finds the event whose object hash
+//!    is the frame's `event_hash` and decodes it as the canonical object
+//!    of the frame's `event_schema_id`, which must be a ledger event this
+//!    verifier knows;
+//! 3. refuses an event that names another election; works out whom the
+//!    event concerns: a box, a station (all its boxes), or the whole
+//!    election, and refuses a box or station no state of the genesis has,
+//!    a genesis or amendment whose body the verified genesis did not
+//!    apply, and a legal authorization other than the one the genesis
+//!    pins;
 //! 4. refuses an event already carried by an earlier frame: the later
 //!    frame is invalid (VC-101);
-//! 5. refuses a record of a box (cast record, challenge opening, batch
-//!    attestation) in a frame after the first frame carrying that box's
-//!    close: the record is invalid (VC-039, VC-101).
+//! 5. refuses a record of a box (cast record, challenge opening) in a
+//!    frame after the first frame carrying that box's close: the record is
+//!    invalid (VC-039, VC-101). A batch attestation after the close is a
+//!    late batch close (§7.2.1, VC-100), which the box stage judges with
+//!    its `LateBatchClose`.
 //!
 //! A refused frame is not indexed. It becomes a [`Finding`] and puts what
 //! it concerns under `HOLD_REVIEW`: its box, every box of its station, or
@@ -41,7 +46,7 @@ use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
     CheckinUnitSwapBody, CustodyHandoffBody, Decode, DeviceAttestation, DisputeEventBody,
-    FallbackBody, Hash512, ImprintAuditBody, IssuanceCountBody, LateBatchCloseBody,
+    ElectionId, FallbackBody, Hash512, ImprintAuditBody, IssuanceCountBody, LateBatchCloseBody,
     LegalAuthorizationBody, LegalDecisionRefBody, ObserverCountAttestBody, ProgressBody,
     ProgressCheckBody, ProgressTick, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY,
     SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
@@ -49,9 +54,9 @@ use ityv_encoding::{
     SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
     SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_AUTHORIZATION,
     SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY,
-    SCHEMA_PROGRESS_TICK, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody, Seq,
-    SignedGenesis, StationId, WitnessedEvent, decode_object,
+    SCHEMA_PROGRESS_TICK, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId,
+    SealChangeBody, Seq, SignedGenesis, StationId, WitnessedEvent, decode_object,
 };
 use ityv_ledger::{
     ChainHead, ChainState, Error as LedgerError, FrameStream, Record, SCHEMA_SIGNED_CHECKPOINT,
@@ -72,6 +77,15 @@ pub enum Scope<'a> {
     Election,
 }
 
+/// Ledger event schemas whose bodies are not public (PROTOCOL.md §5.2,
+/// §12.3): the public ledger carries their frames and event hashes, and
+/// only restricted or sealed verifiers hold the bodies. The index keeps
+/// such a frame by its hash (replays still count) and asks for no body:
+/// `CheckinCounter` (0x0009, restricted) and `SharePackage` (0x000B,
+/// sealed). Restricted events without a schema yet (`SampleOpening`) join
+/// the list when they get one.
+pub const OPAQUE_SCHEMAS: [SchemaId; 2] = [SchemaId::new(0x0009), SCHEMA_SHARE_PACKAGE];
+
 /// What is wrong with a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FindingKind {
@@ -86,7 +100,9 @@ pub enum FindingKind {
     /// The event is not the canonical object of the frame's schema, or the
     /// schema is not a ledger event this verifier knows.
     EventInvalid,
-    /// The event names a box or station the genesis does not have.
+    /// The event names an election other than the genesis's.
+    OtherElection,
+    /// The event names a box or station no state of the genesis has.
     UnknownSubject,
     /// The event is a genesis or amendment whose body the verified genesis
     /// did not apply, or a legal authorization other than the one the
@@ -97,8 +113,8 @@ pub enum FindingKind {
         /// The frame that first carried the event.
         first: Seq,
     },
-    /// A record of a box in a frame after the frame `close` that carried
-    /// the box's close (VC-039, VC-101).
+    /// A record of a box (cast record, challenge opening) in a frame after
+    /// the frame `close` that carried the box's close (VC-039, VC-101).
     AfterClose {
         /// The frame of the box's first close.
         close: Seq,
@@ -123,7 +139,8 @@ pub struct Finding<'a> {
 /// The coarse kind of an event, for the index's own rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Role {
-    /// A record of the box: invalid after the box's close.
+    /// A record of the box (a cast record or challenge opening): invalid
+    /// after the box's close.
     Record,
     /// The box's close.
     Close,
@@ -133,6 +150,8 @@ enum Role {
     /// A legal authorization, with its object hash: it must be the one the
     /// genesis pins.
     Authorization(Hash512),
+    /// A frame of a restricted or sealed event: the body is not public.
+    Opaque,
     /// Anything else.
     Other,
 }
@@ -148,8 +167,10 @@ pub struct IndexedEvent<'a> {
     pub schema: SchemaId,
     /// The event's object hash.
     pub hash: Hash512,
-    /// The event object's bytes, a canonical object of `schema`.
-    pub bytes: &'a [u8],
+    /// The event object's bytes, a canonical object of `schema`; `None`
+    /// for a frame of a restricted or sealed event, whose body the public
+    /// ledger does not carry ([`OPAQUE_SCHEMAS`]).
+    pub bytes: Option<&'a [u8]>,
     /// Whom the event concerns.
     pub scope: Scope<'a>,
 }
@@ -158,6 +179,7 @@ pub struct IndexedEvent<'a> {
 #[derive(Debug, Clone)]
 pub struct LedgerIndex<'a> {
     events: Vec<IndexedEvent<'a>>,
+    by_box: BTreeMap<&'a [u8], Vec<usize>>,
     findings: Vec<Finding<'a>>,
     boxes: BTreeMap<&'a [u8], HoldSet>,
     ledger: HoldSet,
@@ -172,14 +194,16 @@ impl<'a> LedgerIndex<'a> {
     }
 
     /// The accepted events that concern box `box_id` directly, in frame
-    /// order.
+    /// order, without reading the whole ledger again.
     pub fn box_events<'s>(
         &'s self,
-        box_id: &'s [u8],
+        box_id: &[u8],
     ) -> impl Iterator<Item = &'s IndexedEvent<'a>> + 's {
-        self.events
-            .iter()
-            .filter(move |e| matches!(e.scope, Scope::Box(b) if b.as_bytes() == box_id))
+        self.by_box
+            .get(box_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|&i| self.events.get(i))
     }
 
     /// The refused frames and the end of the stream, in stream order.
@@ -188,10 +212,15 @@ impl<'a> LedgerIndex<'a> {
         &self.findings
     }
 
-    /// The hold reasons the index puts on box `box_id` (empty if none).
+    /// The hold reasons that apply to box `box_id`: the index's holds on
+    /// the box, its station, and the whole ledger (empty if none).
     #[must_use]
     pub fn box_holds(&self, box_id: &[u8]) -> HoldSet {
-        self.boxes.get(box_id).copied().unwrap_or(HoldSet::empty())
+        self.boxes
+            .get(box_id)
+            .copied()
+            .unwrap_or(HoldSet::empty())
+            .union(self.ledger)
     }
 
     /// The hold reasons the index puts on the whole ledger.
@@ -238,6 +267,16 @@ impl<'a> LedgerIndex<'a> {
         }
     }
 
+    fn push(&mut self, event: IndexedEvent<'a>) {
+        if let Scope::Box(b) = event.scope {
+            self.by_box
+                .entry(b.as_bytes())
+                .or_default()
+                .push(self.events.len());
+        }
+        self.events.push(event);
+    }
+
     fn refuse(&mut self, genesis: &VerifiedGenesis<'a>, finding: Finding<'a>, reason: HoldReason) {
         self.hold(genesis, finding.scope, reason);
         self.findings.push(finding);
@@ -248,157 +287,159 @@ fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
     decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
 }
 
-/// The scope of a witnessed event, from its body.
-fn witnessed_scope<'a>(event: &WitnessedEvent<'a>) -> Option<Scope<'a>> {
-    let schema = event.body_schema();
-    let scope = if schema == SCHEMA_CUSTODY_HANDOFF_BODY {
-        Scope::Box(
-            event
-                .body::<CustodyHandoffBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .box_id,
-        )
-    } else if schema == SCHEMA_DISPUTE_EVENT_BODY {
-        match event
-            .body::<DisputeEventBody<'a>>(schema)
-            .ok()?
-            .parts()
-            .box_id
-        {
-            Some(b) => Scope::Box(b),
-            None => Scope::Election,
-        }
-    } else if schema == SCHEMA_LEGAL_DECISION_REF_BODY {
-        event.body::<LegalDecisionRefBody<'a>>(schema).ok()?;
-        Scope::Election
-    } else if schema == SCHEMA_BOX_OPENED_BODY {
-        Scope::Box(event.body::<BoxOpenedBody<'a>>(schema).ok()?.parts().box_id)
-    } else if schema == SCHEMA_FALLBACK_BODY {
-        Scope::Box(event.body::<FallbackBody<'a>>(schema).ok()?.parts().box_id)
-    } else if schema == SCHEMA_ISSUANCE_COUNT_BODY {
-        Scope::Station(
-            event
-                .body::<IssuanceCountBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .station_id,
-        )
-    } else if schema == SCHEMA_IMPRINT_AUDIT_BODY {
-        Scope::Box(
-            event
-                .body::<ImprintAuditBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .box_id,
-        )
-    } else if schema == SCHEMA_SEAL_CHANGE_BODY {
-        Scope::Box(
-            event
-                .body::<SealChangeBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .box_id,
-        )
-    } else if schema == SCHEMA_LATE_BATCH_CLOSE_BODY {
-        Scope::Box(
-            event
-                .body::<LateBatchCloseBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .box_id,
-        )
-    } else if schema == SCHEMA_PROGRESS_CHECK_BODY {
-        Scope::Station(
-            event
-                .body::<ProgressCheckBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .station_id,
-        )
-    } else if schema == SCHEMA_OBSERVER_COUNT_ATTEST_BODY {
-        Scope::Station(
-            event
-                .body::<ObserverCountAttestBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .station_id,
-        )
-    } else if schema == SCHEMA_CHECKIN_UNIT_SWAP_BODY {
-        Scope::Station(
-            event
-                .body::<CheckinUnitSwapBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .station_id,
-        )
-    } else if schema == SCHEMA_BOX_UNIT_SWAP_BODY {
-        Scope::Box(
-            event
-                .body::<BoxUnitSwapBody<'a>>(schema)
-                .ok()?
-                .parts()
-                .box_id,
-        )
+/// Whom a witnessed event concerns, and its election, from its body.
+#[allow(clippy::too_many_lines)] // One branch per witnessed body schema.
+fn witnessed<'a>(event: &WitnessedEvent<'a>) -> Option<(Scope<'a>, ElectionId<'a>)> {
+    let s = event.body_schema();
+    let found = if s == SCHEMA_CUSTODY_HANDOFF_BODY {
+        let b = event.body::<CustodyHandoffBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_DISPUTE_EVENT_BODY {
+        let b = event.body::<DisputeEventBody<'a>>(s).ok()?;
+        let scope = b.parts().box_id.map_or(Scope::Election, Scope::Box);
+        (scope, b.parts().election_id)
+    } else if s == SCHEMA_LEGAL_DECISION_REF_BODY {
+        let b = event.body::<LegalDecisionRefBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_BOX_OPENED_BODY {
+        let b = event.body::<BoxOpenedBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_FALLBACK_BODY {
+        let b = event.body::<FallbackBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_ISSUANCE_COUNT_BODY {
+        let b = event.body::<IssuanceCountBody<'a>>(s).ok()?;
+        (Scope::Station(b.parts().station_id), b.parts().election_id)
+    } else if s == SCHEMA_IMPRINT_AUDIT_BODY {
+        let b = event.body::<ImprintAuditBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_SEAL_CHANGE_BODY {
+        let b = event.body::<SealChangeBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_LATE_BATCH_CLOSE_BODY {
+        let b = event.body::<LateBatchCloseBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_PROGRESS_CHECK_BODY {
+        let b = event.body::<ProgressCheckBody<'a>>(s).ok()?;
+        (Scope::Station(b.parts().station_id), b.parts().election_id)
+    } else if s == SCHEMA_OBSERVER_COUNT_ATTEST_BODY {
+        let b = event.body::<ObserverCountAttestBody<'a>>(s).ok()?;
+        (Scope::Station(b.parts().station_id), b.parts().election_id)
+    } else if s == SCHEMA_CHECKIN_UNIT_SWAP_BODY {
+        let b = event.body::<CheckinUnitSwapBody<'a>>(s).ok()?;
+        (Scope::Station(b.parts().station_id), b.parts().election_id)
+    } else if s == SCHEMA_BOX_UNIT_SWAP_BODY {
+        let b = event.body::<BoxUnitSwapBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().box_id), b.parts().election_id)
     } else {
         return None;
     };
-    Some(scope)
+    Some(found)
 }
 
-/// Decodes `bytes` as the ledger event of `schema` and returns whom it
-/// concerns and its role; `None` if it is not one.
+/// What the index learns from an event that decoded.
+#[derive(Debug, Clone, Copy)]
+struct Classified<'a> {
+    scope: Scope<'a>,
+    role: Role,
+    /// The election the event names (`None` for an opaque frame).
+    election: Option<ElectionId<'a>>,
+}
+
+impl<'a> Classified<'a> {
+    const fn new(scope: Scope<'a>, role: Role, election: ElectionId<'a>) -> Self {
+        Self {
+            scope,
+            role,
+            election: Some(election),
+        }
+    }
+}
+
+/// Decodes `bytes` as the ledger event of `schema`; `None` if it is not
+/// one.
 fn classify<'a>(
     genesis: &VerifiedGenesis<'a>,
     schema: SchemaId,
     bytes: &'a [u8],
-) -> Option<(Scope<'a>, Role)> {
+) -> Option<Classified<'a>> {
     let found = if schema == SCHEMA_CAST_RECORD {
-        (
-            Scope::Box(decode::<CastRecord<'a>>(schema, bytes)?.body().box_id()),
+        let r = decode::<CastRecord<'a>>(schema, bytes)?;
+        Classified::new(
+            Scope::Box(r.body().box_id()),
             Role::Record,
+            r.body().election_id(),
         )
     } else if schema == SCHEMA_CHALLENGE_OPENING {
         let c = decode::<ChallengeOpening<'a>>(schema, bytes)?;
-        (Scope::Box(c.body().box_id()), Role::Record)
+        Classified::new(
+            Scope::Box(c.body().box_id()),
+            Role::Record,
+            c.body().election_id(),
+        )
     } else if schema == SCHEMA_BATCH_ATTEST {
+        // Not a record for the after-close rule: a late batch close is a
+        // batch attestation after the box's close (PROTOCOL.md §7.2.1,
+        // VC-100), judged by the box stage with its `LateBatchClose`.
         let b = decode::<BatchAttest<'a>>(schema, bytes)?;
-        (Scope::Box(b.body().box_id()), Role::Record)
+        Classified::new(
+            Scope::Box(b.body().box_id()),
+            Role::Other,
+            b.body().election_id(),
+        )
     } else if schema == SCHEMA_BOX_CLOSE {
-        (
-            Scope::Box(decode::<BoxClose<'a>>(schema, bytes)?.body().box_id()),
+        let c = decode::<BoxClose<'a>>(schema, bytes)?;
+        Classified::new(
+            Scope::Box(c.body().box_id()),
             Role::Close,
+            c.body().election_id(),
         )
     } else if schema == SCHEMA_SCAN_COUNT_ATTEST {
-        let s = decode::<ScanCountAttest<'a>>(schema, bytes)?;
-        (Scope::Box(s.body().box_id()), Role::Other)
+        let a = decode::<ScanCountAttest<'a>>(schema, bytes)?;
+        Classified::new(
+            Scope::Box(a.body().box_id()),
+            Role::Other,
+            a.body().election_id(),
+        )
     } else if schema == SCHEMA_PROGRESS_TICK {
-        let scope = match decode::<ProgressTick<'a>>(schema, bytes)?.body() {
-            ProgressBody::Box(b) => Scope::Box(b.parts().box_id),
-            ProgressBody::Checkin(c) => Scope::Station(c.parts().station_id),
-        };
-        (scope, Role::Other)
+        match *decode::<ProgressTick<'a>>(schema, bytes)?.body() {
+            ProgressBody::Box(b) => Classified::new(
+                Scope::Box(b.parts().box_id),
+                Role::Other,
+                b.parts().election_id,
+            ),
+            ProgressBody::Checkin(c) => Classified::new(
+                Scope::Station(c.parts().station_id),
+                Role::Other,
+                c.parts().election_id,
+            ),
+        }
     } else if schema == SCHEMA_DEVICE_ATTESTATION {
         let a = decode::<DeviceAttestation<'a>>(schema, bytes)?;
-        (
-            device_scope(genesis, a.body().device_id().as_bytes()),
-            Role::Other,
-        )
+        let scope = device_scope(genesis, a.body().device_id().as_bytes());
+        Classified::new(scope, Role::Other, a.body().election_id())
     } else if schema == SCHEMA_WITNESSED_EVENT {
-        let w = decode::<WitnessedEvent<'a>>(schema, bytes)?;
-        (witnessed_scope(&w)?, Role::Other)
+        let (scope, election) = witnessed(&decode::<WitnessedEvent<'a>>(schema, bytes)?)?;
+        Classified::new(scope, Role::Other, election)
     } else if schema == SCHEMA_SIGNED_GENESIS {
         let signed = decode::<SignedGenesis<'a>>(schema, bytes)?;
-        (
-            Scope::Election,
-            Role::Pinned(object_hash(signed.body_bytes())),
-        )
+        let election = match (signed.genesis(), signed.amendment()) {
+            (Some(g), _) => g.election_id(),
+            (None, Some(a)) => a.parts().election_id,
+            (None, None) => return None,
+        };
+        let role = Role::Pinned(object_hash(signed.body_bytes()));
+        Classified::new(Scope::Election, role, election)
     } else if schema == SCHEMA_SIGNED_CHECKPOINT {
-        decode::<SignedCheckpoint<'a>>(schema, bytes)?;
-        (Scope::Election, Role::Other)
+        let c = decode::<SignedCheckpoint<'a>>(schema, bytes)?;
+        Classified::new(Scope::Election, Role::Other, c.body().parts().election_id)
     } else if schema == SCHEMA_LEGAL_AUTHORIZATION {
-        decode::<LegalAuthorizationBody<'a>>(schema, bytes)?;
-        (Scope::Election, Role::Authorization(object_hash(bytes)))
+        let a = decode::<LegalAuthorizationBody<'a>>(schema, bytes)?;
+        Classified::new(
+            Scope::Election,
+            Role::Authorization(object_hash(bytes)),
+            a.election_id(),
+        )
     } else {
         return None;
     };
@@ -407,7 +448,8 @@ fn classify<'a>(
 
 /// The scope of an attesting device: its box, its station's check-in
 /// unit, or the election for a module or gateway. Device identifiers are
-/// distinct within a genesis state, so at most one applies.
+/// distinct within a genesis state, so at most one applies; a unit is
+/// found in any state of the genesis.
 fn device_scope<'a>(genesis: &VerifiedGenesis<'a>, device_id: &[u8]) -> Scope<'a> {
     if let Some(b) = genesis.expected_box(device_id) {
         return Scope::Box(b.box_id);
@@ -417,11 +459,12 @@ fn device_scope<'a>(genesis: &VerifiedGenesis<'a>, device_id: &[u8]) -> Scope<'a
         .map_or(Scope::Election, Scope::Station)
 }
 
-/// Whether the genesis has the box or station `scope` names.
+/// Whether some state of the genesis has the box or station `scope`
+/// names.
 fn known(genesis: &VerifiedGenesis<'_>, scope: &Scope<'_>) -> bool {
     match scope {
-        Scope::Box(b) => genesis.expected_box(b.as_bytes()).is_some(),
-        Scope::Station(s) => genesis.station(s.as_bytes()).is_some(),
+        Scope::Box(b) => genesis.knows_box(b.as_bytes()),
+        Scope::Station(s) => genesis.knows_station(s.as_bytes()),
         Scope::Election => true,
     }
 }
@@ -485,28 +528,42 @@ impl<'a> Builder<'_, 'a> {
         };
         let hash = *frame.event_hash();
         let schema = frame.event_schema_id();
-        let refusal = match self.supply.get(hash.as_bytes()).copied() {
-            None => Err((FindingKind::EventMissing, HoldReason::LedgerUnchecked)),
-            Some(bytes) => match classify(self.genesis, schema, bytes) {
-                None => Err((FindingKind::EventInvalid, HoldReason::LedgerUnchecked)),
-                Some((scope, role)) => {
-                    finding.scope = scope;
-                    self.admit(frame.seq(), &hash, scope, role)
-                        .map(|()| IndexedEvent {
-                            seq: frame.seq(),
-                            frame_hash,
-                            schema,
-                            hash,
-                            bytes,
-                            scope,
-                        })
-                }
-            },
+        let found = if OPAQUE_SCHEMAS.contains(&schema) {
+            // The public ledger carries the frame, not the body.
+            Ok((
+                None,
+                Classified {
+                    scope: Scope::Election,
+                    role: Role::Opaque,
+                    election: None,
+                },
+            ))
+        } else {
+            match self.supply.get(hash.as_bytes()).copied() {
+                None => Err((FindingKind::EventMissing, HoldReason::LedgerUnchecked)),
+                Some(bytes) => classify(self.genesis, schema, bytes)
+                    .map(|c| (Some(bytes), c))
+                    .ok_or((FindingKind::EventInvalid, HoldReason::LedgerUnchecked)),
+            }
         };
-        match refusal {
-            Ok(event) => self.index.events.push(event),
+        let accepted = found.and_then(|(bytes, c)| {
+            finding.scope = c.scope;
+            self.admit(frame.seq(), &hash, &c).map(|()| IndexedEvent {
+                seq: frame.seq(),
+                frame_hash,
+                schema,
+                hash,
+                bytes,
+                scope: c.scope,
+            })
+        });
+        match accepted {
+            Ok(event) => self.index.push(event),
             Err((kind, reason)) => {
-                if kind == FindingKind::UnknownSubject {
+                if matches!(
+                    kind,
+                    FindingKind::UnknownSubject | FindingKind::OtherElection
+                ) {
                     finding.scope = Scope::Election;
                 }
                 finding.kind = kind;
@@ -516,24 +573,28 @@ impl<'a> Builder<'_, 'a> {
         true
     }
 
-    /// Applies the subject, replay and after-close rules to an event that
-    /// decoded.
+    /// Applies the election, subject, pin, replay and after-close rules to
+    /// an event that decoded.
     fn admit(
         &mut self,
         seq: Seq,
         hash: &Hash512,
-        scope: Scope<'a>,
-        role: Role,
+        c: &Classified<'a>,
     ) -> Result<(), (FindingKind, HoldReason)> {
-        if !known(self.genesis, &scope) {
+        if c.election
+            .is_some_and(|e| e.as_bytes() != self.genesis.election_id().as_bytes())
+        {
+            return Err((FindingKind::OtherElection, HoldReason::LedgerUnchecked));
+        }
+        if !known(self.genesis, &c.scope) {
             return Err((FindingKind::UnknownSubject, HoldReason::LedgerUnchecked));
         }
-        let pinned = match role {
+        let pinned = match c.role {
             Role::Pinned(body) => self.genesis.is_applied_body(&body),
             Role::Authorization(hash) => {
                 hash == *self.genesis.genesis().body().legal_authorization_hash()
             }
-            Role::Record | Role::Close | Role::Other => true,
+            Role::Record | Role::Close | Role::Opaque | Role::Other => true,
         };
         if !pinned {
             return Err((FindingKind::NotPinned, HoldReason::LedgerUnchecked));
@@ -542,8 +603,8 @@ impl<'a> Builder<'_, 'a> {
             return Err((FindingKind::Replayed { first }, HoldReason::EventReplayed));
         }
         self.seen.insert(hash.0, seq);
-        if let Scope::Box(b) = scope {
-            match (role, self.closed.get(b.as_bytes()).copied()) {
+        if let Scope::Box(b) = c.scope {
+            match (c.role, self.closed.get(b.as_bytes()).copied()) {
                 (Role::Record, Some(close)) => {
                     return Err((
                         FindingKind::AfterClose { close },
@@ -558,6 +619,7 @@ impl<'a> Builder<'_, 'a> {
                     | Role::Close
                     | Role::Pinned(_)
                     | Role::Authorization(_)
+                    | Role::Opaque
                     | Role::Other,
                     _,
                 ) => {}
@@ -586,6 +648,7 @@ pub fn build_index<'a>(
         closed: BTreeMap::new(),
         index: LedgerIndex {
             events: Vec::new(),
+            by_box: BTreeMap::new(),
             findings: Vec::new(),
             boxes: BTreeMap::new(),
             ledger: HoldSet::empty(),

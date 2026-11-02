@@ -57,4 +57,6 @@ pub use error::{Error, Reference, Rule};
 pub use genesis::{
     AmendableSets, AmendmentInput, FixedSets, GenesisInput, VerifiedGenesis, verify_genesis,
 };
-pub use index::{Finding, FindingKind, IndexedEvent, LedgerIndex, Scope, build_index};
+pub use index::{
+    Finding, FindingKind, IndexedEvent, LedgerIndex, OPAQUE_SCHEMAS, Scope, build_index,
+};

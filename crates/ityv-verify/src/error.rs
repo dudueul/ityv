@@ -65,16 +65,26 @@ pub enum Rule {
     UnitBoxCount,
     /// An appointment hash is not in the appointment set (VC-009).
     Appointment,
+    /// Two roster, trustee or witness entries name one appointment: an
+    /// appointment event appoints one person (PROTOCOL.md §4.5).
+    AppointmentReused,
     /// A device's modules are not one module of each party chamber (with,
     /// for a box, at most one each of `J`, `A`, `C` and none of `N`), or
     /// a module belongs to a chamber the genesis has no place for
     /// (VC-067, VC-017).
     Chambers,
+    /// A module is listed by two devices (boxes or check-in units): a
+    /// module is provisioned for the one device it plugs into.
+    SharedModule,
     /// A chamber's trustees are not exactly its `n_c` members (VC-067).
     Trustees,
     /// An observer token names someone who is not an observer of the
-    /// token's organisation on the roster.
+    /// token's organisation at the token's station on the roster, or its
+    /// check key is another token's.
     ObserverToken,
+    /// A registered key is not a valid key (its Ed25519 half does not
+    /// decode or is a weak key): nothing could ever verify under it.
+    InvalidKey,
     /// Two keys in one genesis state share a half.
     SharedKey,
     /// Two devices of one genesis state share an identifier: a check-in

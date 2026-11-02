@@ -10,7 +10,7 @@ use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     EntrySet, GenesisEntry, Hash512, SCHEMA_VERSION_1, SetCommitment, decode_object,
 };
-use ityv_ledger::{Accumulator, InclusionProof, inclusion_proof, sorted_set_root};
+use ityv_ledger::{Accumulator, InclusionProof, leaf_hash, node_hash, sorted_set_root};
 
 use crate::error::{Error, Rule};
 
@@ -36,7 +36,45 @@ pub(crate) struct Item<'a, T> {
 #[derive(Debug, Clone)]
 pub(crate) struct Set<'a, T> {
     items: Vec<Item<'a, T>>,
-    leaves: Vec<Hash512>,
+    /// The tree, bottom up: the leaf hashes, then each level of node
+    /// hashes, an odd last node carried up unchanged (the same tree as
+    /// RFC 9162's recursive split). A proof reads one hash per level.
+    levels: Vec<Vec<Hash512>>,
+}
+
+/// The levels of the tree over `leaf_inputs`.
+fn levels_of(leaf_inputs: &[Hash512]) -> Vec<Vec<Hash512>> {
+    let mut levels = Vec::new();
+    let mut level: Vec<Hash512> = leaf_inputs.iter().map(leaf_hash).collect();
+    while level.len() > 1 {
+        let next = level
+            .chunks(2)
+            .filter_map(|pair| match pair {
+                [left, right] => Some(node_hash(left, right)),
+                [odd] => Some(*odd),
+                _ => None,
+            })
+            .collect();
+        levels.push(level);
+        level = next;
+    }
+    levels.push(level);
+    levels
+}
+
+/// The inclusion path of leaf `index` read from `levels`, bottom up.
+fn path(levels: &[Vec<Hash512>], index: usize) -> Option<InclusionProof> {
+    let mut hashes = Vec::new();
+    let mut i = index;
+    for level in levels {
+        // A node without a sibling (the odd last one) is carried up and
+        // adds nothing to the path.
+        if let Some(sibling) = level.get(i ^ 1) {
+            hashes.push(*sibling);
+        }
+        i >>= 1;
+    }
+    InclusionProof::from_hashes(&hashes)
 }
 
 fn count_of(len: usize) -> Option<u64> {
@@ -60,7 +98,7 @@ impl<'a, T: GenesisEntry<'a>> Set<'a, T> {
         let set = T::SET;
         let schema = set.schema().ok_or(Error::set(state, set, Rule::Decode))?;
         let mut items: Vec<Item<'a, T>> = Vec::with_capacity(entries.len());
-        let mut leaves = Vec::with_capacity(entries.len());
+        let mut leaves: Vec<Hash512> = Vec::with_capacity(entries.len());
         let mut tree = Accumulator::empty();
         for (index, &bytes) in entries.iter().enumerate() {
             let at = |rule| Error::entry(state, set, index, rule);
@@ -83,7 +121,10 @@ impl<'a, T: GenesisEntry<'a>> Set<'a, T> {
         if tree.root() != commitment.root {
             return Err(Error::set(state, set, Rule::Root));
         }
-        Ok(Self { items, leaves })
+        Ok(Self {
+            items,
+            levels: levels_of(&leaves),
+        })
     }
 
     /// The entries in key order.
@@ -105,14 +146,13 @@ impl<'a, T: GenesisEntry<'a>> Set<'a, T> {
             .map(|item| &item.value)
     }
 
-    /// The bytes, position and inclusion proof of the entry with `key`.
+    /// The bytes, position and inclusion proof of the entry with `key`,
+    /// in `O(log n)`. The proof is checked again when `ityv-state` proves
+    /// the entry against the genesis root.
     pub(crate) fn proof(&self, key: &[u8]) -> Option<(&'a [u8], u64, InclusionProof)> {
         let i = self.position(key)?;
         let item = self.items.get(i)?;
-        let size = count_of(self.leaves.len())?;
-        let index = count_of(i)?;
-        let proof = inclusion_proof(&self.leaves.as_slice(), size, index).ok()?;
-        Some((item.bytes, index, proof))
+        Some((item.bytes, count_of(i)?, path(&self.levels, i)?))
     }
 }
 
@@ -160,5 +200,37 @@ impl Appointments {
         self.hashes
             .binary_search_by(|h| h.as_bytes().cmp(hash.as_bytes()))
             .is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use ityv_encoding::Hash512;
+    use ityv_ledger::{inclusion_proof, root_of_leaves};
+
+    use super::{levels_of, path};
+
+    /// The levels give the reference tree's root and proofs for every size
+    /// up to 70 and every leaf.
+    #[test]
+    fn levels_match_the_reference_tree() {
+        for n in 1..=70usize {
+            let leaves: Vec<Hash512> = (0..n)
+                .map(|i| Hash512([u8::try_from(i).unwrap(); 64]))
+                .collect();
+            let size = u64::try_from(n).unwrap();
+            let levels = levels_of(&leaves);
+            assert_eq!(
+                levels.last().unwrap()[0],
+                root_of_leaves(&leaves.as_slice(), size).unwrap()
+            );
+            for i in 0..n {
+                let index = u64::try_from(i).unwrap();
+                let expected = inclusion_proof(&leaves.as_slice(), size, index).unwrap();
+                assert_eq!(path(&levels, i).unwrap().hashes(), expected.hashes());
+            }
+        }
     }
 }

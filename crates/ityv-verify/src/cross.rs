@@ -13,18 +13,21 @@
 //! * every station has exactly one progress policy and every policy names
 //!   a station;
 //! * every reporting unit's box count is the number of boxes that name it;
-//! * every roster signer's station exists, and every observer token of a
-//!   station names an observer of the token's organisation on the roster;
+//! * every roster signer's station exists; every observer token of a
+//!   station names an observer of the token's organisation registered at
+//!   that station, and no two tokens share a check key;
 //! * every roster, trustee and witness entry's appointment is in the
-//!   appointment set (VC-009);
-//! * every box carries one module of each party chamber `P1`…`Pn`, at
-//!   most one each of `J`, `A` and `C`, and none of `N`; every check-in
-//!   unit carries exactly one module of each party chamber; no module
-//!   belongs to `N` or to a party chamber the genesis does not have; and
-//!   each chamber has exactly `n_c` trustees (VC-067, VC-017);
+//!   appointment set (VC-009), and no two entries share one;
+//! * every box carries one module of each party chamber `P1`…`Pn` and at
+//!   most one each of `J`, `A` and `C` (a module of `N` does not decode);
+//!   every check-in unit carries exactly one module of each party chamber;
+//!   no module is listed by two devices; no module belongs to a party
+//!   chamber the genesis does not have; and each chamber has exactly
+//!   `n_c` trustees (VC-067, VC-017);
 //! * no two devices share an identifier (boxes, check-in units and
 //!   modules), so a device attestation names exactly one device;
-//! * no two keys of the state share a half: the two authorities, every
+//! * every registered key is a valid key, and no two keys of the state
+//!   share a half: the two authorities, every
 //!   box's device and attestation keys, every check-in unit's keys, every
 //!   roster signer, module, trustee and witness.
 //!
@@ -38,6 +41,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 
 use ityv_encoding::{
     ChamberCode, EntrySet, GenesisBody, HYBRID_VK_LEN, MLDSA87_VK_HALF, ModuleIds, RosterRole,
+    RosterSigner,
 };
 
 use crate::error::{Error, Reference, Rule};
@@ -56,16 +60,21 @@ fn is_party(code: ChamberCode, parties: usize) -> bool {
     c >= 1 && c <= parties
 }
 
-/// Counts the chambers of `modules`.
-fn tally(
+/// Counts the chambers of `modules`, and records each module in `used`:
+/// a module already listed by another device is refused.
+fn tally<'a>(
     state: u64,
     set: EntrySet,
     index: usize,
-    modules: &ModuleIds<'_>,
+    modules: &ModuleIds<'a>,
     a: &Amendable<'_>,
+    used: &mut BTreeSet<&'a [u8]>,
 ) -> Result<ChamberTally, Error> {
     let mut counts: ChamberTally = [0; CHAMBER_CODES];
     for id in modules.iter() {
+        if !used.insert(id.as_bytes()) {
+            return Err(Error::entry(state, set, index, Rule::SharedModule));
+        }
         let module = a.modules.find(id.as_bytes()).ok_or(Error::entry(
             state,
             set,
@@ -133,6 +142,12 @@ impl<'k> Keys<'k> {
             Some(s) => Error::entry(self.state, s, index, Rule::SharedKey),
             None => Error::body(self.state, Rule::SharedKey),
         };
+        if crate::sigs::verifying_key(key).is_none() {
+            return Err(match set {
+                Some(s) => Error::entry(self.state, s, index, Rule::InvalidKey),
+                None => Error::body(self.state, Rule::InvalidKey),
+            });
+        }
         let (ml, ed) = halves(key).ok_or_else(err)?;
         // The two halves have different lengths, so one map holds both
         // without an ML-DSA-87 half ever equalling an Ed25519 half.
@@ -151,13 +166,14 @@ impl<'k> Keys<'k> {
 /// # Errors
 /// The first broken rule, at the entry that breaks it.
 #[allow(clippy::too_many_lines)] // One pass per set, in the order of the module docs.
-pub(crate) fn check(
+pub(crate) fn check<'a>(
     state: u64,
-    a: &Amendable<'_>,
-    f: &Fixed<'_>,
+    a: &Amendable<'a>,
+    f: &Fixed<'a>,
     body: &GenesisBody<'_>,
 ) -> Result<(), Error> {
     let parties = body.parties().count();
+    let mut used: BTreeSet<&'a [u8]> = BTreeSet::new();
 
     // Boxes: references, modules, and per-station and per-unit counts.
     let mut unit_boxes: BTreeMap<&[u8], u32> = BTreeMap::new();
@@ -183,7 +199,7 @@ pub(crate) fn check(
         if a.units.find(b.reporting_unit_id.as_bytes()).is_none() {
             return Err(at(Rule::Missing(Reference::ReportingUnit)));
         }
-        let counts = tally(state, EntrySet::Boxes, i, &b.modules, a)?;
+        let counts = tally(state, EntrySet::Boxes, i, &b.modules, a, &mut used)?;
         if !box_modules_valid(counts, parties) {
             return Err(at(Rule::Chambers));
         }
@@ -194,7 +210,8 @@ pub(crate) fn check(
     }
 
     // Stations: the box list names boxes that name the station back, one
-    // policy each, and the check-in units' modules.
+    // policy each, the check-in units' modules, and the observer tokens.
+    let mut token_keys: BTreeSet<&'a [u8]> = BTreeSet::new();
     for (i, item) in a.stations.items().iter().enumerate() {
         let s = &item.value;
         let at = |rule| Error::entry(state, EntrySet::Stations, i, rule);
@@ -211,17 +228,23 @@ pub(crate) fn check(
             return Err(at(Rule::StationPolicy));
         }
         for unit in [s.primary(), s.spare()] {
-            let counts = tally(state, EntrySet::Stations, i, &unit.modules, a)?;
+            let counts = tally(state, EntrySet::Stations, i, &unit.modules, a, &mut used)?;
             if !unit_modules_valid(counts, parties) {
                 return Err(at(Rule::Chambers));
             }
         }
         for token in s.tokens() {
             let observer = a.roster.find(token.observer_id.as_bytes());
+            let here = |o: &RosterSigner<'_>| {
+                o.station_id
+                    .is_some_and(|st| st.as_bytes() == s.station_id().as_bytes())
+            };
             let valid = observer.is_some_and(|o| {
-                o.role == RosterRole::Observer && o.org_id.as_bytes() == token.org_id.as_bytes()
+                o.role == RosterRole::Observer
+                    && o.org_id.as_bytes() == token.org_id.as_bytes()
+                    && here(o)
             });
-            if !valid {
+            if !valid || !token_keys.insert(token.check_key.as_slice()) {
                 return Err(at(Rule::ObserverToken));
             }
         }
@@ -319,8 +342,40 @@ pub(crate) fn check(
         }
     }
 
+    check_appointments(state, a, f)?;
     check_devices(state, a)?;
     check_keys(state, a, f, body)
+}
+
+/// No two roster, trustee or witness entries share an appointment.
+fn check_appointments(state: u64, a: &Amendable<'_>, f: &Fixed<'_>) -> Result<(), Error> {
+    let mut seen: BTreeSet<[u8; 64]> = BTreeSet::new();
+    let entries = a
+        .roster
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (EntrySet::Roster, i, e.value.appointment_hash))
+        .chain(
+            f.trustees
+                .items()
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (EntrySet::Trustees, i, e.value.appointment_hash)),
+        )
+        .chain(
+            f.witnesses
+                .items()
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (EntrySet::Witnesses, i, e.value.appointment_hash)),
+        );
+    for (set, i, hash) in entries {
+        if !seen.insert(hash.0) {
+            return Err(Error::entry(state, set, i, Rule::AppointmentReused));
+        }
+    }
+    Ok(())
 }
 
 /// No two devices of one state share an identifier (boxes, check-in units

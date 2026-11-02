@@ -490,10 +490,12 @@
 | 305 | 핀은 `verify_genesis`의 필수 인자 | 타입으로 강제 |
 | 306, 307 | `Pinned::seal`을 검증기가 만든 토큰으로 호출(`refuses_too_little_diversity`, `refuses_a_signing_witness_outside_the_witness_set`); 중복 서명자는 `SignedGenesis` 디코더와 키 반쪽 겹침 금지가 거부 | VC-014, VC-098 |
 | 308, 310 | 집합마다 수와 root 재계산(`refuses_a_count_or_root_the_entries_do_not_give`), 변경이 준 집합과 약속한 root 대조(`refuses_an_amendment_whose_sets_break_a_rule`) | VC-104, VC-105 |
-| —(VC-104 집합 규칙) | `sets::Set::parse`(정규 디코딩, 열쇠 엄격 오름차순, 수와 root), `Appointments::parse`, `cross::check`(참조 대상, 투표소 목록, 경보 기준, 보고 단위 수, 근무 투표소, 임명, 모듈 챔버, 신뢰기관 수, 참관인 토큰, 장치 식별자, 키 반쪽); `tests/genesis.rs` 규칙별 테스트, Kani `set_order_rule_is_exact`, `box_chamber_rule_is_exact`, `unit_chamber_rule_is_exact` | VC-009, VC-067, VC-104 |
+| —(VC-104 집합 규칙) | `sets::Set::parse`(정규 디코딩, 열쇠 엄격 오름차순, 수와 root), `Appointments::parse`, `cross::check`(참조 대상, 투표소 목록, 경보 기준, 보고 단위 수, 근무 투표소, 임명, 모듈 챔버, 신뢰기관 수, 참관인 토큰의 명부·투표소·확인 키, 임명 공유 금지, 모듈 하나에 장치 하나, 장치 식별자, 키 유효성, 키 반쪽); `tests/genesis.rs` 규칙별 테스트, Kani `set_order_rule_is_exact`, `box_chamber_rule_is_exact`, `unit_chamber_rule_is_exact` | VC-009, VC-067, VC-104 |
 | —(VC-105) | 변경마다 서명 검증, `Genesis::amend`, 새 상태의 집합 전체(`applies_amendments_in_order_and_proves_against_the_last_state`, `refuses_an_amendment_out_of_sequence_or_off_the_chain`, `refuses_an_amendment_with_too_little_diversity`, `an_amended_state_must_keep_the_appointments_of_the_fixed_sets`) | |
 | 083 | `index::build_index`의 재수록 거부와 범위별 `EventReplayed`(`tests/index.rs` `refuses_a_replayed_box_event_and_holds_only_that_box`, `a_replayed_election_event_holds_the_ledger`, `a_replayed_station_event_holds_every_box_of_the_station`) | VC-101 |
 | 202(보강) | 장부의 `SignedGenesis`는 적용된 본문, 법적 승인은 고정된 객체만(`a_genesis_or_authorization_the_pin_does_not_name_holds_the_ledger`, `the_pinned_genesis_its_amendments_and_its_authorization_are_indexed`) | |
-| 026, 034(보강) | 첫 `BoxClose` 프레임 뒤의 기록 거부와 `RecordAfterClose`(`refuses_a_record_after_its_box_closed`) | VC-039 |
+| 026, 034(보강) | 첫 `BoxClose` 프레임 뒤의 `CastRecord`·`ChallengeOpening` 거부와 `RecordAfterClose`(`records_after_the_close_are_refused_and_other_box_events_scoped`, 인코딩 시험 벡터의 이벤트) | VC-039 |
+| 047, 100(보강) | 마감 뒤 `BatchAttest`는 늦은 배치 마감으로 색인(`a_batch_after_the_close_is_a_late_batch_and_indexed`) | VC-100 |
+| —(색인 범위) | 이벤트의 선거(`an_event_of_another_election_holds_the_ledger`), 비공개 프레임(`frames_of_restricted_events_are_kept_by_hash`), 장치 증명·체크포인트·사람 서명 이벤트 13종의 대상(`a_device_attestation_is_scoped_to_its_device`, `a_signed_checkpoint_is_an_election_event_of_this_election`, `every_witnessed_body_is_scoped_to_its_box_station_or_election`), 변경 전 상태의 투표함·유닛(`events_of_a_box_an_amendment_replaced_are_still_known`) | §14 3항 |
 | 060(일부) | 찢어진 꼬리 격리, 끊긴 고리 뒤 읽지 않음(`a_torn_tail_is_isolated_without_a_hold`, `a_broken_chain_ends_the_index`, `a_corrupt_record_ends_the_index_with_a_hold`) | 절단 탐지 전체는 체크포인트 사슬(2단계) |
 | 014, 056, 057, 058, 059 | — | M5 2c 이후: 상태 사다리와 투표함 완전성 |

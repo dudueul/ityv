@@ -10,19 +10,20 @@
     clippy::indexing_slicing,
     clippy::too_many_lines,
     clippy::missing_panics_doc,
-    clippy::type_complexity
+    clippy::type_complexity,
+    clippy::arithmetic_side_effects
 )]
 
 mod common;
 
 use common::{
-    Draft, NARROW_SIGNERS, Raw, SIGNERS, SPARE_BASE, amendment, appointment, body_hash,
-    checkin_unit, genesis_box, module_entry, object, registered, sign_genesis, sign_genesis_with,
-    standard, station, token,
+    Draft, NARROW_SIGNERS, Raw, SIGNERS, SPARE_BASE, amendment, amendment_for, appointment,
+    body_hash, checkin_unit, genesis_box, module_entry, object, registered, sign_genesis,
+    sign_genesis_with, standard, station, token,
 };
 use ityv_encoding::{
-    ChamberCode, EntrySet, GenesisBox, Hash512, RouteId, SCHEMA_VERSION_1, StationId, StationKind,
-    StationProgressPolicy,
+    ChamberCode, EntrySet, GenesisBox, HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, RouteId,
+    SCHEMA_VERSION_1, StationId, StationKind, StationProgressPolicy,
 };
 use ityv_verify::{Error, Reference, Rule, verify_genesis};
 
@@ -411,11 +412,29 @@ fn refuses_devices_without_one_module_per_party() {
 
     // A check-in unit with a J module.
     let mut draft = Draft::standard();
+    draft
+        .modules
+        .push(module_entry(64, b"M-U2A-J", ChamberCode::J));
     draft.stations[1] = station(
         b"ST-2",
         StationKind::EarlyVoting,
-        checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2", b"M-B2-J"]),
+        checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2", b"M-U2A-J"]),
         checkin_unit(3, b"U-2B", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        &[b"BOX-3"],
+        &[],
+    );
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::Chambers)
+    );
+
+    // A spare check-in unit with only a P1 module.
+    let mut draft = Draft::standard();
+    draft.stations[1] = station(
+        b"ST-2",
+        StationKind::EarlyVoting,
+        checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        checkin_unit(3, b"U-2B", &[b"M-U2B-P1"]),
         &[b"BOX-3"],
         &[],
     );
@@ -704,4 +723,298 @@ fn refuses_two_devices_with_one_identifier() {
         verify(&draft).unwrap_err(),
         at(EntrySet::Modules, 0, Rule::DeviceId)
     );
+}
+
+#[test]
+fn refuses_a_module_listed_by_two_devices() {
+    // BOX-2 lists BOX-1's modules.
+    let mut draft = Draft::standard();
+    draft.boxes[1].modules = common::modules(&[b"M-B1-P1", b"M-B1-P2", b"M-B2-J"]);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 1, Rule::SharedModule)
+    );
+
+    // The spare check-in unit lists the primary's modules.
+    let mut draft = Draft::standard();
+    draft.stations[1] = station(
+        b"ST-2",
+        StationKind::EarlyVoting,
+        checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        checkin_unit(3, b"U-2B", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        &[b"BOX-3"],
+        &[],
+    );
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedModule)
+    );
+
+    // A check-in unit lists a box's module.
+    let mut draft = Draft::standard();
+    draft.stations[1] = station(
+        b"ST-2",
+        StationKind::EarlyVoting,
+        checkin_unit(2, b"U-2A", &[b"M-B3-P1", b"M-U2A-P2"]),
+        checkin_unit(3, b"U-2B", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        &[b"BOX-3"],
+        &[],
+    );
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedModule)
+    );
+}
+
+#[test]
+fn refuses_an_appointment_named_twice() {
+    // A trustee (T-P1-1 sorts at 4) with a roster signer's appointment.
+    let mut draft = Draft::standard();
+    draft.trustees[0].appointment_hash = draft.roster[0].appointment_hash;
+    draft.appointments = draft.referenced_appointments();
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Trustees, 4, Rule::AppointmentReused)
+    );
+    // Two witnesses with one appointment.
+    let mut draft = Draft::standard();
+    draft.witnesses[5].appointment_hash = draft.witnesses[4].appointment_hash;
+    draft.appointments = draft.referenced_appointments();
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Witnesses, 5, Rule::AppointmentReused)
+    );
+    // Two roster signers with one appointment.
+    let mut draft = Draft::standard();
+    draft.roster[1].appointment_hash = draft.roster[0].appointment_hash;
+    draft.appointments = draft.referenced_appointments();
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Roster, 1, Rule::AppointmentReused)
+    );
+}
+
+#[test]
+fn refuses_a_token_of_an_observer_of_another_station_or_a_shared_check_key() {
+    // obs-a is registered at ST-2 but holds a token at ST-1.
+    let mut draft = Draft::standard();
+    draft.roster[2].station_id = Some(StationId::new(b"ST-2").unwrap());
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 0, Rule::ObserverToken)
+    );
+    // Two tokens with one check key.
+    let mut draft = Draft::standard();
+    draft.stations[0] = station(
+        b"ST-1",
+        StationKind::ElectionDay,
+        checkin_unit(0, b"U-1A", &[b"M-U1A-P1", b"M-U1A-P2"]),
+        checkin_unit(1, b"U-1B", &[b"M-U1B-P1", b"M-U1B-P2"]),
+        &[b"BOX-1", b"BOX-2"],
+        &[
+            token(b"obs-a", b"PARTY-A", 0xC1),
+            token(b"obs-b", b"PARTY-B", 0xC1),
+        ],
+    );
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 0, Rule::ObserverToken)
+    );
+}
+
+/// `key` with its Ed25519 half replaced by the identity point, a weak key.
+fn weak(key: &[u8; HYBRID_VK_LEN]) -> &'static [u8; HYBRID_VK_LEN] {
+    let mut out = *key;
+    let n = out.len();
+    out[n - 32..].copy_from_slice(&[0; 32]);
+    out[n - 32] = 1;
+    common::leak(out)
+}
+
+#[test]
+fn refuses_a_key_nothing_could_verify_under() {
+    let mut draft = Draft::standard();
+    draft.boxes[1].device_key = weak(registered(SPARE_BASE + 3));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 1, Rule::InvalidKey)
+    );
+    let mut draft = Draft::standard();
+    // M-B2-P2 sorts fifth in the module set.
+    draft.modules[3].attest_key = weak(registered(SPARE_BASE + 3));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Modules, 4, Rule::InvalidKey)
+    );
+}
+
+/// `key` with its ML-DSA-87 half replaced by `donor`'s.
+fn ml_dsa_of(
+    key: &[u8; HYBRID_VK_LEN],
+    donor: &[u8; HYBRID_VK_LEN],
+) -> &'static [u8; HYBRID_VK_LEN] {
+    let mut out = *key;
+    out[..MLDSA87_VK_HALF].copy_from_slice(&donor[..MLDSA87_VK_HALF]);
+    common::leak(out)
+}
+
+#[test]
+fn refuses_keys_sharing_either_half_wherever_they_are() {
+    // Only the ML-DSA-87 half shared (a module's key with box 0's).
+    let mut draft = Draft::standard();
+    draft.modules[0].key = ml_dsa_of(registered(SPARE_BASE + 4), draft.boxes[0].device_key);
+    let err = verify(&draft).unwrap_err();
+    assert_eq!(
+        (err.set, err.rule),
+        (Some(EntrySet::Modules), Rule::SharedKey)
+    );
+    // Two roster signers (sorted: clerk-1, clerk-2).
+    let mut draft = Draft::standard();
+    draft.roster[1].key = draft.roster[0].key;
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Roster, 1, Rule::SharedKey)
+    );
+    // A witness that does not sign (W13) with a trustee's key (trustees are
+    // checked first).
+    let mut draft = Draft::standard();
+    draft.witnesses[12].key = draft.trustees[5].key;
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Witnesses, 12, Rule::SharedKey)
+    );
+    // Two trustees (T-A sorts first, T-C second).
+    let mut draft = Draft::standard();
+    draft.trustees[6].key = draft.trustees[5].key;
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Trustees, 1, Rule::SharedKey)
+    );
+    // A roster signer with a check-in unit's key (units come first).
+    let mut draft = Draft::standard();
+    draft.roster[0].key = registered(200);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Roster, 0, Rule::SharedKey)
+    );
+    // A spare unit's attestation key sharing the primary's ML-DSA-87 half.
+    let mut draft = Draft::standard();
+    let mut spare = checkin_unit(1, b"U-1B", &[b"M-U1B-P1", b"M-U1B-P2"]);
+    spare.attest_key = ml_dsa_of(registered(SPARE_BASE + 5), registered(200));
+    draft.stations[0] = station(
+        b"ST-1",
+        StationKind::ElectionDay,
+        checkin_unit(0, b"U-1A", &[b"M-U1A-P1", b"M-U1A-P2"]),
+        spare,
+        &[b"BOX-1", b"BOX-2"],
+        &[
+            token(b"obs-a", b"PARTY-A", 0xC1),
+            token(b"obs-b", b"PARTY-B", 0xC2),
+        ],
+    );
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 0, Rule::SharedKey)
+    );
+}
+
+#[test]
+fn an_amendment_must_be_signed_and_of_this_election() {
+    let built = standard();
+    let (_, raw) = amended_raw();
+    let good = amendment(1, built.pin, &raw, &SIGNERS);
+    let mut bytes = good.signed.to_vec();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    let forged = ityv_verify::AmendmentInput {
+        signed: common::leak_slice(bytes),
+        sets: good.sets,
+    };
+    let err = verify_genesis(&built.pin, &built.input(), &[forged]).unwrap_err();
+    assert_eq!(
+        err,
+        Error {
+            state: 1,
+            set: None,
+            index: None,
+            rule: Rule::Signature
+        }
+    );
+    let other = amendment_for(
+        ityv_encoding::ElectionId::new(b"E-OTHER").unwrap(),
+        1,
+        built.pin,
+        &raw,
+        &SIGNERS,
+    );
+    let err = verify_genesis(&built.pin, &built.input(), &[other]).unwrap_err();
+    assert_eq!(err.rule, Rule::Chain(ityv_state::Error::Mismatch));
+}
+
+#[test]
+fn an_amended_state_meets_every_cross_set_rule() {
+    let built = standard();
+    let cases: [(fn(&mut Draft), EntrySet, Rule); 4] = [
+        (
+            |d| d.roster[4].key = d.boxes[0].device_key,
+            EntrySet::Roster,
+            Rule::SharedKey,
+        ),
+        (
+            |d| d.modules.push(module_entry(65, b"BOX-2", ChamberCode::C)),
+            EntrySet::Modules,
+            Rule::DeviceId,
+        ),
+        (
+            |d| d.roster[2].station_id = Some(StationId::new(b"ST-2").unwrap()),
+            EntrySet::Stations,
+            Rule::ObserverToken,
+        ),
+        (
+            |d| d.boxes[1].modules = common::modules(&[b"M-B1-P1", b"M-B1-P2"]),
+            EntrySet::Boxes,
+            Rule::SharedModule,
+        ),
+    ];
+    for (change, set, rule) in cases {
+        let mut draft = Draft::standard();
+        change(&mut draft);
+        let bad = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+        let err = verify_genesis(&built.pin, &built.input(), &[bad]).unwrap_err();
+        assert_eq!((err.state, err.set, err.rule), (1, Some(set), rule));
+    }
+}
+
+#[test]
+fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
+    let built = standard();
+    // The amendment replaces BOX-3 by BOX-4 and ST-2's spare unit U-2B by
+    // U-2C.
+    let mut draft = Draft::standard();
+    draft.boxes[2] = genesis_box(
+        2,
+        b"BOX-4",
+        b"ST-2",
+        b"RU-2",
+        &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
+    );
+    draft.stations[1] = station(
+        b"ST-2",
+        StationKind::EarlyVoting,
+        checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        &[b"BOX-4"],
+        &[],
+    );
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let verified = verify_genesis(&built.pin, &built.input(), &[a]).unwrap();
+    assert!(verified.expected_box(b"BOX-3").is_none());
+    assert!(verified.knows_box(b"BOX-3"));
+    assert!(verified.knows_box(b"BOX-4"));
+    assert!(!verified.knows_box(b"BOX-9"));
+    assert!(verified.knows_station(b"ST-2"));
+    assert!(!verified.knows_station(b"ST-9"));
+    let st2 = Some(StationId::new(b"ST-2").unwrap());
+    assert_eq!(verified.unit_station(b"U-2B"), st2);
+    assert_eq!(verified.unit_station(b"U-2C"), st2);
 }

@@ -56,7 +56,7 @@
 //! authorization, connectivity and release manifests) say what they
 //! should; anything about the ledger.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use ityv_crypto::Purpose;
@@ -260,7 +260,36 @@ pub struct VerifiedGenesis<'a> {
     anchors: Vec<Anchor>,
     sets: Amendable<'a>,
     fixed: Fixed<'a>,
+    /// Every state's devices and places, for scoping ledger events signed
+    /// before an amendment changed them.
+    seen: Seen<'a>,
+}
+
+/// The boxes, stations and check-in units of every genesis state.
+#[derive(Debug, Clone, Default)]
+struct Seen<'a> {
+    boxes: BTreeSet<&'a [u8]>,
+    stations: BTreeSet<&'a [u8]>,
     units: BTreeMap<&'a [u8], StationId<'a>>,
+}
+
+impl<'a> Seen<'a> {
+    /// Adds the boxes, stations and units of one state. A unit keeps the
+    /// station of the earliest state that has it.
+    fn add(&mut self, sets: &Amendable<'a>) {
+        for item in sets.boxes.items() {
+            self.boxes.insert(item.value.box_id.as_bytes());
+        }
+        for item in sets.stations.items() {
+            let s = &item.value;
+            self.stations.insert(s.station_id().as_bytes());
+            for unit in [s.primary(), s.spare()] {
+                self.units
+                    .entry(unit.unit_id.as_bytes())
+                    .or_insert(s.station_id());
+            }
+        }
+    }
 }
 
 /// Verifies a genesis and its amendments whole (PROTOCOL.md §14 1).
@@ -309,6 +338,8 @@ pub fn verify_genesis<'a>(
 
     let mut sets = Amendable::parse(0, &input.sets, genesis.sets())?;
     cross::check(0, &sets, &fixed, genesis.body())?;
+    let mut seen = Seen::default();
+    seen.add(&sets);
     let mut anchors = Vec::with_capacity(amendments.len().saturating_add(1));
     anchors.push(genesis.anchor());
 
@@ -323,25 +354,17 @@ pub fn verify_genesis<'a>(
         let next = amend(state, &genesis, &fixed, amendment)?;
         sets = Amendable::parse(state, &amendment.sets, next.sets())?;
         cross::check(state, &sets, &fixed, next.body())?;
+        seen.add(&sets);
         anchors.push(next.anchor());
         genesis = next;
     }
 
-    let units = sets
-        .stations
-        .items()
-        .iter()
-        .flat_map(|item| {
-            let s = &item.value;
-            [s.primary(), s.spare()].map(|u| (u.unit_id.as_bytes(), s.station_id()))
-        })
-        .collect();
     Ok(VerifiedGenesis {
         genesis,
         anchors,
         sets,
         fixed,
-        units,
+        seen,
     })
 }
 
@@ -419,10 +442,22 @@ impl<'a> VerifiedGenesis<'a> {
     }
 
     /// The station whose check-in unit (in service or spare) is `unit_id`
-    /// in the last state, if any.
+    /// in any state of the genesis, if any.
     #[must_use]
     pub fn unit_station(&self, unit_id: &[u8]) -> Option<StationId<'a>> {
-        self.units.get(unit_id).copied()
+        self.seen.units.get(unit_id).copied()
+    }
+
+    /// Whether any state of the genesis has the box `box_id`.
+    #[must_use]
+    pub fn knows_box(&self, box_id: &[u8]) -> bool {
+        self.seen.boxes.contains(box_id)
+    }
+
+    /// Whether any state of the genesis has the station `station_id`.
+    #[must_use]
+    pub fn knows_station(&self, station_id: &[u8]) -> bool {
+        self.seen.stations.contains(station_id)
     }
 
     /// Whether `body_hash` is the body of the genesis or of one of the

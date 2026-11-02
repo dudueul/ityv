@@ -101,15 +101,16 @@ pub enum HoldReason {
     /// An event already on the ledger was recorded again: the later frame
     /// is invalid (§14 3, VC-101).
     EventReplayed = 33,
-    /// A record of the box (a cast record, challenge opening or batch
-    /// attestation) is in a frame after the frame of the box's close: the
-    /// record is invalid (§10.2, §14 3, VC-039, VC-101).
+    /// A record of the box (a cast record or challenge opening) is in a
+    /// frame after the frame of the box's close: the record is invalid
+    /// (§10.2, §14 3, VC-039, VC-101). A batch attestation after the close
+    /// is a late batch close, not a record.
     RecordAfterClose = 34,
     /// A frame or its event could not be accepted: the frame chain broke,
     /// the event is missing, not canonical, of a schema the verifier does
-    /// not know, names a box or station the genesis does not have, or is a
-    /// genesis, amendment or legal authorization other than the pinned
-    /// ones (§5.1, §14 3).
+    /// not know, of another election, names a box or station no state of
+    /// the genesis has, or is a genesis, amendment or legal authorization
+    /// other than the pinned ones (§5.1, §14 3).
     LedgerUnchecked = 35,
 }
 

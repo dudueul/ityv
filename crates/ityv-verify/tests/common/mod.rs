@@ -683,6 +683,17 @@ pub fn standard() -> &'static Built {
 /// An amendment numbered `seq` after the body hashing to `previous`,
 /// committing to the amendable sets of `raw`.
 pub fn amendment(seq: u64, previous: Hash512, raw: &Raw, who: &[usize]) -> AmendmentInput<'static> {
+    amendment_for(election(), seq, previous, raw, who)
+}
+
+/// As [`amendment`], for `election`.
+pub fn amendment_for(
+    election: ElectionId<'static>,
+    seq: u64,
+    previous: Hash512,
+    raw: &Raw,
+    who: &[usize],
+) -> AmendmentInput<'static> {
     let all = raw.commitments();
     let mut sets = [SetCommitment {
         count: 0,
@@ -690,7 +701,7 @@ pub fn amendment(seq: u64, previous: Hash512, raw: &Raw, who: &[usize]) -> Amend
     }; AMENDABLE_SET_COUNT];
     sets.copy_from_slice(&all[..AMENDABLE_SET_COUNT]);
     let body = GenesisAmendmentBody::new(&GenesisAmendmentParts {
-        election_id: election(),
+        election_id: election,
         seq,
         previous_hash: previous,
         reason: AmendmentReason::DeviceReplacement,
