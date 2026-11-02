@@ -543,4 +543,9 @@ impl<'a> VerifiedGenesis<'a> {
     pub fn witness_entry(&self, key: &[u8]) -> Option<Entry<WitnessRosterEntry<'a>>> {
         self.prove(&self.fixed.witnesses, key)
     }
+
+    /// The witness set, in key order (it is fixed for the election).
+    pub fn witnesses(&self) -> impl Iterator<Item = &WitnessRosterEntry<'a>> + '_ {
+        self.fixed.witnesses.items().iter().map(|i| &i.value)
+    }
 }

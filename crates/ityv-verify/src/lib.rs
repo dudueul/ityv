@@ -11,6 +11,7 @@
 //! | Module | Stage | Specification |
 //! |---|---|---|
 //! | [`genesis`] | 1. Pin, signatures, every entry set whole, cross-set agreement, amendments | §4, §14 1, ADR-0028, VC-005, VC-009, VC-014, VC-067, VC-104, VC-105 |
+//! | [`checkpoint`] | 2. Checkpoint chain: witness quorum and diversity, successor rules, roots recomputed from the ledger | §5.3, §5.4, §14 2, VC-011..014 |
 //! | [`index`] | 3. Frame chain, event hashes, canonical events, replayed events, records after close | §5.1, §14 3, VC-010, VC-039, VC-101 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -40,6 +41,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod checkpoint;
 mod cross;
 pub mod error;
 pub mod genesis;
@@ -53,6 +55,10 @@ mod sigs;
 #[path = "../kani/proofs.rs"]
 mod proofs;
 
+pub use checkpoint::{
+    CheckpointChain, CheckpointFinding, CheckpointFindingKind, VerifiedCheckpoint,
+    verify_checkpoints,
+};
 pub use error::{Error, Reference, Rule};
 pub use genesis::{
     AmendableSets, AmendmentInput, FixedSets, GenesisInput, VerifiedGenesis, verify_genesis,

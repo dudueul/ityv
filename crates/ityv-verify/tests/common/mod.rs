@@ -729,3 +729,19 @@ pub fn body_hash(signed: &[u8]) -> Hash512 {
 pub fn set_of<'a, T: GenesisEntry<'a>>() -> EntrySet {
     T::SET
 }
+
+/// The signing key of witness `i` (`W01` is 0).
+pub fn witness_signing(i: usize) -> &'static HybridSigningKey {
+    signing(WITNESS_BASE + i as u16)
+}
+
+/// `key`'s hybrid signature over `object` under `purpose`.
+pub fn hybrid_signature(
+    key: &HybridSigningKey,
+    purpose: &[u8],
+    object: &[u8],
+) -> &'static HybridSignature {
+    let purpose = Purpose::new(purpose).unwrap();
+    let mut rng = ChaCha20Rng::seed_from_u64(object.len() as u64);
+    leak(sign_hybrid(key, &purpose, object, &mut rng).unwrap())
+}
