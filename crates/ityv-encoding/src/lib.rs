@@ -46,8 +46,8 @@ pub use envelope::{
 pub use error::{Error, Kind as ErrorKind};
 pub use primitives::{
     BallotStyleId, BoxId, Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident, KeysetId,
-    LedgerId, ModuleId, ObserverId, OrgId, Point32, RouteId, Scalar32, SchemaId, Seq, SignerId,
-    StationId, TimeBucket, Token192, TreeSize, TrusteeId, UnitId,
+    LedgerId, ModuleId, ObserverId, OrgId, Point32, ReportingUnitId, RouteId, Scalar32, SchemaId,
+    Seq, SignerId, StationId, TimeBucket, Token192, TreeSize, TrusteeId, UnitId,
 };
 pub use reader::Reader;
 pub use schema::attestation::{
@@ -76,6 +76,10 @@ pub use schema::challenge::{
     ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_CHALLENGE_BODY_LEN,
     MAX_OPTION_INDEX, ModuleOpening,
 };
+pub use schema::checkin::{
+    BoxUnitSwapBody, BoxUnitSwapParts, CheckinUnitSwapBody, CheckinUnitSwapParts,
+    ObserverCountAttestBody, ObserverCountKind, ObserverCountParts,
+};
 pub use schema::checkpoint::{CheckpointBody, CheckpointParts};
 pub use schema::events::{
     BoxOpenedBody, BoxOpenedParts, CustodyHandoffBody, CustodyHandoffParts, DisputeAction,
@@ -86,8 +90,18 @@ pub use schema::events::{
     SealChangeParts, SealChangeReason, TallyEffect,
 };
 pub use schema::genesis::{
-    CaptureProfile, CustodyRoute, GenesisBox, MAX_ROUTE_STOPS, MIN_ROUTE_STOPS, RosterRole,
-    RosterSigner, StationProgressPolicy,
+    AMENDABLE_SET_COUNT, BallotStyleEntry, CaptureProfile, CheckinUnit, CustodyRoute,
+    ENTRY_SET_COUNT, EntrySet, GenesisBox, GenesisEntry, MAX_OBSERVER_TOKENS, MAX_ROUTE_STOPS,
+    MAX_STATION_BOXES, MIN_ROUTE_STOPS, ModuleEntry, ObserverToken, ReportingUnitEntry, RosterRole,
+    RosterSigner, StationEntry, StationKind, StationParts, StationProgressPolicy,
+    TOKEN_CHECK_KEY_LEN, TrusteeEntry, WitnessRosterEntry, chunks_for,
+};
+pub use schema::genesis_body::{
+    AmendmentReason, ChamberThreshold, GenesisAmendmentBody, GenesisAmendmentParts, GenesisBody,
+    GenesisKind, GenesisParts, GenesisWitnessSig, MAX_CHAMBERS, MAX_GENESIS_BODY_LEN,
+    MAX_GENESIS_WITNESSES, MAX_PARTIES, MAX_PARTY_NAME_LEN, MIN_DIVERSITY, MIN_PARTIES, MIN_QUORUM,
+    MIN_WITNESSES, PURPOSE_GENESIS, PURPOSE_GENESIS_AMENDMENT, PartyEntry, SCHEMA_VERSION_GENESIS,
+    SetCommitment, SignedGenesis, WitnessQuorum,
 };
 pub use schema::ledger_frame::LedgerFrame;
 pub use schema::progress::{
@@ -107,23 +121,28 @@ pub use schema::share_package::{
 pub use schema::slip::{MAX_SLIP_BODY_LEN, MAX_TRACKING_CODES, Slip, SlipBody};
 pub use schema::util::{
     Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, HYBRID_VK_LEN, MAX_CHUNKS, MAX_MODULES,
-    ModuleCounter, ModuleCounters, ModuleIds, Scalars, TAG_LEN,
+    MLDSA87_VK_HALF, ModuleCounter, ModuleCounters, ModuleIds, Scalars, TAG_LEN, keys_share_half,
 };
 pub use schema::witnessed::{
     EventRole, EventSig, MAX_EVENT_SIGS, MAX_WITNESSED_BODY_LEN, MIN_EVENT_CLERKS,
     MIN_EVENT_OBSERVER_ORGS, WITNESSED_BODY_SCHEMAS, WitnessedEvent, purpose_of, roles_satisfied,
 };
 pub use schema::{
-    SCHEMA_ATTESTATION_SUMMARY, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE,
-    SCHEMA_BOX_CLOSE_BODY, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_PROGRESS_BODY, SCHEMA_CAST_RECORD,
+    SCHEMA_ATTESTATION_SUMMARY, SCHEMA_BALLOT_STYLE_ENTRY, SCHEMA_BATCH_ATTEST,
+    SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_BOX_OPENED_BODY,
+    SCHEMA_BOX_PROGRESS_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD,
     SCHEMA_CAST_RECORD_BODY, SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY,
-    SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_CHECKPOINT_BODY, SCHEMA_CUSTODY_HANDOFF_BODY,
-    SCHEMA_DEVICE_ATTESTATION, SCHEMA_DEVICE_ATTESTATION_BODY, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_LEGAL_AUTHORIZATION,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_MEMBER_SHARE, SCHEMA_PROGRESS_CHECK_BODY,
-    SCHEMA_PROGRESS_TICK, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY,
-    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT,
+    SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CHECKPOINT_BODY,
+    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_CUSTODY_ROUTE, SCHEMA_DEVICE_ATTESTATION,
+    SCHEMA_DEVICE_ATTESTATION_BODY, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
+    SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_GENESIS_BODY, SCHEMA_GENESIS_BOX,
+    SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
+    SCHEMA_LEDGER_FRAME, SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_LEGAL_DECISION_REF_BODY,
+    SCHEMA_MEMBER_SHARE, SCHEMA_MODULE_ENTRY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK, SCHEMA_REPORTING_UNIT_ENTRY,
+    SCHEMA_ROSTER_SIGNER, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY,
+    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS, SCHEMA_SLIP,
+    SCHEMA_SLIP_BODY, SCHEMA_STATION_ENTRY, SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TRUSTEE_ENTRY,
+    SCHEMA_VERSION_1, SCHEMA_WITNESS_ROSTER_ENTRY, SCHEMA_WITNESSED_EVENT,
 };
 pub use writer::Writer;

@@ -5,11 +5,12 @@
 //! are allowed. It covers the ledger side of the protocol: the device side
 //! (the commitment unit's own box and visit typestates) is `ityv-cunit`,
 //! the frames, checkpoints and publication deadlines are `ityv-ledger`, and
-//! the full public verifier that drives these machines from a ledger is the
-//! future `ityv-verify` (M5).
+//! the full public verifier that drives these machines from a ledger is
+//! `ityv-verify` (ADR-0029).
 //!
 //! | Module | What it decides | Specification |
 //! |---|---|---|
+//! | [`genesis`] | The pinned, signed genesis and its proved entries | §4, ADR-0028, VC-005, VC-104, VC-105 |
 //! | [`auth`] | Legal-scope capabilities from a `LegalAuthorization` | PROTOCOL.md §4.4, ADR-0002, VC-006..008 |
 //! | [`record`] | Record statuses and tally disposition | §7.2.1, §8, §10.6, §11.1, VC-042, VC-055, VC-057 |
 //! | [`close`] | Close invariants and independent signers | §10.1, §10.2, VC-037, VC-038 |
@@ -19,6 +20,7 @@
 //! | [`tally`] | Tally-scope and aggregate-opening gates | §11.1, §11.2, VC-057, VC-063 |
 //! | [`dispute`] | Dispute life cycle | §13, VC-048, VC-049 |
 //! | [`status`] | The verifier status vocabulary | §14, VC-049, VC-050 |
+//! | [`progress`] | Progress streams, alarms, observer counts and device swaps | §6.2, §6.3, §7.10, VC-102, VC-103 |
 //! | [`hold`] | Sticky `HOLD_REVIEW` reasons | §10.2, §14 |
 //! | [`sig`] | Binding verification tokens to an event's signatures | §3.1, VC-006, VC-016, VC-098 |
 //! | [`error`] | Typed refusals | — |
@@ -45,12 +47,18 @@
 //!   registers for that signer and role; no two signers of one event share
 //!   a key half ([`sig`]).
 //!
+//! * Every key, box, station, route, roster signer and limit a machine
+//!   uses comes from a genesis entry proved against a pinned genesis whose
+//!   signatures were checked ([`genesis`]); a check-in total comes from the
+//!   observers' signed final count, and the counts a spare device continues
+//!   from come from the signed swap record ([`progress`]).
+//!
 //! What this crate does **not** prove: that a signature is valid (it
 //! consumes `ityv-crypto`'s `Verified` tokens), that an object is well
 //! formed (`ityv-encoding`), that a ledger is consistent (`ityv-ledger`),
-//! that the keys it is given are the genesis's (the caller passes them from
-//! the verified genesis, [`boxes::BoxSpec::check_genesis`]), or anything
-//! about paper the inputs do not report.
+//! that a genesis set is sorted and agrees with the other sets (`ityv-verify`
+//! recomputes every set, VC-104), or anything about paper the inputs do not
+//! report.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -63,6 +71,7 @@ pub mod close;
 pub mod custody;
 pub mod dispute;
 pub mod error;
+pub mod genesis;
 pub mod hold;
 pub mod issuance;
 pub mod progress;
@@ -87,23 +96,25 @@ pub use boxes::{
     PURPOSE_LATE_BOX_CLOSE, Provisioned, Transition,
 };
 pub use close::{
-    CountFacts, MAX_VISIT_BALLOTS, Named, Observed, RosterEntry, check_witness_set,
-    check_witnesses, count_verdict, modules_gap_free, roster_key,
+    CountFacts, MAX_VISIT_BALLOTS, Named, Observed, RosterEntry, check_observers,
+    check_witness_set, check_witnesses, count_verdict, modules_gap_free, roster_key,
 };
 pub use custody::CustodyChain;
-pub use dispute::{Bodies, Dispute, DisputeEvent, DisputeStatus, DisputeType};
+pub use dispute::{Dispute, DisputeEvent, DisputeStatus, DisputeType};
 pub use error::Error;
+pub use genesis::{Anchor, Entry, Genesis, Pinned};
 pub use hold::{HoldReason, HoldSet};
 pub use issuance::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict};
 pub use progress::{
-    Alarms, BoxStream, CHECK_WINDOW_SLOTS, CheckinStream, MAX_PENDING, MAX_STATION_BOXES,
-    SlotOutcome, StationProgress, check_tick, out_of,
+    Alarms, BoxStream, BoxUnitSwap, CHECK_WINDOW_SLOTS, CheckinStream, CheckinUnitSwap,
+    MAX_PENDING, MAX_STATION_BOXES, ObserverCount, SlotOutcome, StationProgress, check_tick,
+    out_of,
 };
 pub use record::{
     Disposition, Exclusion, Primary, Profile, Receipt, RecordEvent, RecordState, RecordStatus,
     TEST_STYLE_PREFIX, is_test_style,
 };
-pub use sig::{Signed, check_event, halves_differ};
+pub use sig::{Key, Signed, check_event, halves_differ};
 pub use status::{
     Evidence, LegalReference, Outcome, PURPOSE_LEGAL_DECISION, Publication, Status, StatusReport,
     Step, evaluate,

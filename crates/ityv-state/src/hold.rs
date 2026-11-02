@@ -98,11 +98,25 @@ pub enum HoldReason {
     /// closing tick, or the last tick differs from the close counts
     /// (§7.10 item 8, VC-102).
     ProgressStream = 32,
+    /// An event already on the ledger was recorded again: the later frame
+    /// is invalid (§14 3, VC-101).
+    EventReplayed = 33,
+    /// A record of the box (a cast record or challenge opening) is in a
+    /// frame after the frame of the box's close: the record is invalid
+    /// (§10.2, §14 3, VC-039, VC-101). A batch attestation after the close
+    /// is a late batch close, not a record.
+    RecordAfterClose = 34,
+    /// A frame or its event could not be accepted: the frame chain broke,
+    /// the event is missing, not canonical, of a schema the verifier does
+    /// not know, of another election, names a box or station no state of
+    /// the genesis has, or is a genesis, amendment or legal authorization
+    /// other than the pinned ones (§5.1, §14 3).
+    LedgerUnchecked = 35,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 36] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -136,6 +150,9 @@ impl HoldReason {
         Self::ProgressUnresolved,
         Self::CarryOut,
         Self::ProgressStream,
+        Self::EventReplayed,
+        Self::RecordAfterClose,
+        Self::LedgerUnchecked,
     ];
 
     /// The reason's code.

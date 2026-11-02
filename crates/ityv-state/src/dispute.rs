@@ -25,7 +25,6 @@
 //! takes the `VOTER_CODE` capability; every other type takes `PUBLIC_BOARD`
 //! from stage 0 (§17).
 
-use ityv_crypto::HybridVerifyingKey;
 use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     BoxId, DisputeAction, DisputeEventBody, DisputeEventParts, ElectionId, EventRole, Hash512,
@@ -36,7 +35,8 @@ pub use ityv_encoding::DisputeType;
 
 use crate::auth::{Cap, PublicBoard, VoterCode};
 use crate::error::Error;
-use crate::sig::{Signed, check_event, halves_differ};
+use crate::genesis::Genesis;
+use crate::sig::{Signed, check_event};
 
 /// The dispute statuses of §13.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,16 +76,6 @@ pub enum DisputeEvent {
     ReferLegal,
 }
 
-/// The keys the genesis registers for the two bodies that sign every
-/// dispute event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Bodies<'k> {
-    /// The election commission (선관위).
-    pub commission: &'k HybridVerifyingKey,
-    /// The Independent Verification Committee (독립검증위원회).
-    pub committee: &'k HybridVerifyingKey,
-}
-
 /// A dispute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Dispute<'a> {
@@ -98,16 +88,14 @@ pub struct Dispute<'a> {
     status: DisputeStatus,
 }
 
-/// Checks both bodies' signatures on a dispute event.
-fn check_bodies(signed: &Signed<'_>, bodies: &Bodies<'_>) -> Result<(), Error> {
-    if !halves_differ(bodies.commission, bodies.committee) {
-        return Err(Error::SignatureSigner);
-    }
+/// Checks both bodies' signatures on a dispute event, under the keys the
+/// genesis registers for them (which share no half).
+fn check_bodies(signed: &Signed<'_>, genesis: &Genesis<'_>) -> Result<(), Error> {
     // The envelope admits a dispute event only with exactly one commission
     // and one committee signature (`ityv_encoding::roles_satisfied`).
     check_event(signed, |s| match s.role {
-        EventRole::Commission => Ok(bodies.commission),
-        EventRole::Committee => Ok(bodies.committee),
+        EventRole::Commission => Ok(genesis.commission_key()),
+        EventRole::Committee => Ok(genesis.committee_key()),
         EventRole::Clerk
         | EventRole::Observer
         | EventRole::Sender
@@ -128,7 +116,7 @@ fn decode<'a>(signed: &Signed<'a>) -> Result<DisputeEventParts<'a>, Error> {
 impl<'a> Dispute<'a> {
     fn filed(
         signed: &Signed<'a>,
-        bodies: &Bodies<'_>,
+        genesis: &Genesis<'_>,
         election_id: ElectionId<'_>,
         inclusion: bool,
     ) -> Result<Self, Error> {
@@ -147,7 +135,7 @@ impl<'a> Dispute<'a> {
             (true, false) => return Err(Error::Mismatch),
             (false, false) | (true, true) => {}
         }
-        check_bodies(signed, bodies)?;
+        check_bodies(signed, genesis)?;
         Ok(Self {
             election_id: p.election_id,
             kind: p.dispute_type,
@@ -167,15 +155,15 @@ impl<'a> Dispute<'a> {
     /// [`Error::DisputeFiling`] unless it is a filing (the envelope admits
     /// only one signature of each body), [`Error::ScopeMissing`] with
     /// `VOTER_CODE` for an inclusion
-    /// dispute (use [`Self::file_inclusion`]), [`Error::SignatureSigner`]
-    /// if the two bodies' keys share a half, and the errors of
-    /// [`check_event`].
+    /// dispute (use [`Self::file_inclusion`]), and the errors of
+    /// [`check_event`] under the keys `genesis` registers for the two
+    /// bodies.
     pub fn file(
         signed: &Signed<'a>,
-        bodies: &Bodies<'_>,
+        genesis: &Genesis<'_>,
         cap: &Cap<'_, PublicBoard>,
     ) -> Result<Self, Error> {
-        Self::filed(signed, bodies, cap.election_id(), false)
+        Self::filed(signed, genesis, cap.election_id(), false)
     }
 
     /// Files an inclusion dispute (stage 3, VC-048).
@@ -184,10 +172,10 @@ impl<'a> Dispute<'a> {
     /// As [`Self::file`]; [`Error::Mismatch`] for another type.
     pub fn file_inclusion(
         signed: &Signed<'a>,
-        bodies: &Bodies<'_>,
+        genesis: &Genesis<'_>,
         cap: &Cap<'_, VoterCode>,
     ) -> Result<Self, Error> {
-        Self::filed(signed, bodies, cap.election_id(), true)
+        Self::filed(signed, genesis, cap.election_id(), true)
     }
 
     /// Applies a signed status change.
@@ -198,7 +186,7 @@ impl<'a> Dispute<'a> {
     /// election, type, target or evidence, [`Error::DisputeFiling`] for a
     /// second filing, the signature errors of [`Self::file`], and
     /// [`Error::DisputeTransition`] if the change does not apply.
-    pub fn record(self, signed: &Signed<'_>, bodies: &Bodies<'_>) -> Result<Self, Error> {
+    pub fn record(self, signed: &Signed<'_>, genesis: &Genesis<'_>) -> Result<Self, Error> {
         let p = decode(signed)?;
         let same = p.election_id.as_bytes() == self.election_id.as_bytes()
             && p.filing_hash == self.filing_hash
@@ -215,7 +203,7 @@ impl<'a> Dispute<'a> {
             DisputeAction::ResolvedTechnical => DisputeEvent::ResolveTechnical,
             DisputeAction::ReferredLegal => DisputeEvent::ReferLegal,
         };
-        check_bodies(signed, bodies)?;
+        check_bodies(signed, genesis)?;
         self.apply(event)
     }
 

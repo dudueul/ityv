@@ -29,7 +29,8 @@
 - 상태 어휘는 `evaluate`만 정하고, `Status`에는 `LEGAL_CERTIFIED`가 없으며 상태 사이 변환이 없다. 법적 결과는 권한 기관 서명이 확인된 `LegalReference`로만 옆에 표시된다.
 
 보장하지 않는 것:
-- 서명의 유효성. 이 크레이트는 `ityv-crypto`의 토큰을 받아, 이벤트가 싣는 서명마다 purpose·본문 바이트·서명 바이트·genesis 명부가 그 사람·역할·조직에 등록한 키가 맞는지만 본다(`sig::check_event`, 마감은 `CloseTokens`). 한 이벤트의 서명자 키는 어느 반쪽도 겹칠 수 없다(VC-098). 넘겨받은 키가 genesis의 것인지는 호출자가 확인한다(`BoxSpec::check_genesis`).
+- 서명의 유효성. 이 크레이트는 `ityv-crypto`의 토큰을 받아, 이벤트가 싣는 서명마다 purpose·본문 바이트·서명 바이트·genesis 명부가 그 사람·역할·조직에 등록한 키가 맞는지만 본다(`sig::check_event`, 마감은 `CloseTokens`). 한 이벤트의 서명자 키는 어느 반쪽도 겹칠 수 없다(VC-098). 키·투표함·투표소·명부는 핀이 맞고 서명이 확인된 genesis에서 포함 증명으로 꺼낸 항목으로만 받는다(`genesis` 모듈, ADR-0028). 항목은 증명한 genesis head를 기록하며, head가 섞이거나 현재 head가 아닌 항목은 거부하고 변경은 `BallotBox::follow`·`BoxStream::swap`으로 앞으로만 따른다.
+- genesis 집합 전체의 정렬·중복 없음·집합 사이 일치. 포함 증명은 항목 하나만 보이므로 전체 확인은 검증기 `ityv-verify`가 한다(VC-104, ADR-0029). 검증기의 `VerifiedGenesis`가 넘기는 항목은 그 확인을 거친 것이다.
 - 장부의 정합성(`ityv-ledger`), 객체의 정규성(`ityv-encoding`), 장부를 읽어 `Evidence`를 만드는 검증 파이프라인(M5).
 - 수량이 같다는 것은 같은 수의 교체가 없었다는 증명이 아니다. 보고서의 `count_only`가 이를 표시한다.
 
@@ -43,7 +44,7 @@ Provisioned ──open──▶ Open ◀──end_fallback── Fallback
 
 | 전이 | 입력 | 거부 | 보류 |
 |---|---|---|---|
-| `provision` | genesis의 투표함 정보, `Cap<PublicBoard>` | 다른 선거, 경로 2곳 미만 | — |
+| `provision` | 증명된 genesis 항목으로 만든 `BoxSpec`, `Cap<PublicBoard>` | 다른 선거 | — |
 | `open` | 서명된 `BoxOpenedBody`(장치·사무원·참관인) | 다른 상자, 미등록 모듈, 장치 서명 없음, 서명자 부족·미등록, 토큰 불일치 | 봉인 불일치, 초기 수량 0 아님 |
 | `record` (Open, Fallback) | `CastRecordBody`, `Cap<BallotMark>` | 다른 선거·상자, 열지 않은 모듈 | — |
 | `challenge` (Open, Fallback) | `ChallengeOpeningBody` | `RECEIPT_SCAN`, 다른 상자 | — |

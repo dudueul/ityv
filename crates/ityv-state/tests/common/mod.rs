@@ -19,6 +19,7 @@
 use std::boxed::Box;
 use std::vec::Vec;
 
+use ityv_crypto::hash::object_hash;
 use ityv_crypto::{
     HybridSignature, HybridSigned, HybridSigningKey, HybridVerifyingKey, Purpose, Verified,
     sign_hybrid, verify_hybrid,
@@ -39,7 +40,12 @@ use ityv_encoding::{
     SealChangeParts, SealChangeReason, SignerId, SignerRole, StationId, TimeBucket, Token192,
     WitnessedEvent, encode_object, purpose_of,
 };
+use ityv_encoding::{CaptureProfile, CustodyRoute, GenesisBox};
 use ityv_state::{Authorization, BoxSpec, CloseTokens, Profile, RosterEntry, Signed};
+
+pub(crate) mod genesis;
+
+use genesis::{Built, built, commission, committee};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
@@ -95,7 +101,7 @@ pub(crate) fn modules() -> ModuleIds<'static> {
 }
 
 /// The people of the roster: identifier, role, organisation, key seed.
-const PEOPLE: [(&[u8], RosterRole, &[u8], u8); 8] = [
+pub(crate) const PEOPLE: [(&[u8], RosterRole, &[u8], u8); 8] = [
     (b"clerk-1", RosterRole::Clerk, b"NEC", 20),
     (b"clerk-2", RosterRole::Clerk, b"NEC", 22),
     (b"obs-a", RosterRole::Observer, b"PARTY-A", 24),
@@ -123,43 +129,42 @@ pub(crate) fn person_org(id: &[u8]) -> &'static [u8] {
     PEOPLE[person_index(id)].2
 }
 
+/// The proved roster of the default genesis.
 pub(crate) fn roster() -> &'static [RosterEntry<'static>] {
-    leak_slice(
-        PEOPLE
-            .iter()
-            .map(|(id, role, o, _)| RosterEntry {
-                signer_id: signer(id),
-                role: *role,
-                org_id: org(o),
-                key: leak(person_key(id).verifying_key()),
-            })
-            .collect(),
-    )
-}
-
-pub(crate) fn route() -> &'static [OrgId<'static>] {
-    leak_slice(std::vec![org(b"STATION"), org(b"POLICE"), org(b"CENTRE")])
+    fixture().roster()
 }
 
 pub(crate) fn device_key() -> &'static HybridSigningKey {
     leak(HybridSigningKey::from_seeds([4; 32], [5; 32]))
 }
 
+/// The default genesis: it pins the full legal authorization and has an
+/// in-person `BOX-001`.
+pub(crate) fn fixture() -> &'static Built {
+    fixture_for(Profile::InPerson)
+}
+
+/// The genesis pinning the full legal authorization, with a `BOX-001` of
+/// `profile`.
+pub(crate) fn fixture_for(profile: Profile) -> &'static Built {
+    let capture = match profile {
+        Profile::InPerson => CaptureProfile::InPerson,
+        Profile::Absentee => CaptureProfile::Absentee,
+        Profile::ReceiptScan => CaptureProfile::ReceiptScan,
+    };
+    built(object_hash(legal_object(election(), all_scopes())), capture)
+}
+
+/// The spec of `BOX-001` with `profile`, from proved genesis entries.
 pub(crate) fn spec(profile: Profile) -> BoxSpec<'static> {
-    BoxSpec {
-        election_id: election(),
-        box_id: box_id(),
-        station_id: station(),
-        profile,
-        registered_modules: leak_slice(std::vec![
-            module(b"MOD-P1"),
-            module(b"MOD-P2"),
-            module(b"MOD-P3"),
-        ]),
-        device_key: leak(device_key().verifying_key()),
-        roster: roster(),
-        route: route(),
-    }
+    let b = fixture_for(profile);
+    BoxSpec::new(
+        &b.genesis,
+        &b.entry::<GenesisBox<'static>>(BOX),
+        &b.entry::<CustodyRoute<'static>>(b"R-1"),
+        b.roster(),
+    )
+    .unwrap()
 }
 
 /// Every scope of stages 0–3.
@@ -187,7 +192,8 @@ pub(crate) fn signed_authorization(scopes: ScopeSet) -> Authorization<'static> {
     authorization_of(election(), scopes)
 }
 
-fn authorization_of(election_id: ElectionId<'static>, scopes: ScopeSet) -> Authorization<'static> {
+/// A legal authorization object of `election_id` with `scopes`.
+pub(crate) fn legal_object(election_id: ElectionId<'static>, scopes: ScopeSet) -> &'static [u8] {
     use ityv_encoding::{LegalAuthorizationBody, SCHEMA_LEGAL_AUTHORIZATION};
     let body = LegalAuthorizationBody::new(
         election_id,
@@ -197,17 +203,19 @@ fn authorization_of(election_id: ElectionId<'static>, scopes: ScopeSet) -> Autho
         Day::new(110),
     )
     .unwrap();
-    let object = object(SCHEMA_LEGAL_AUTHORIZATION, &body);
-    let commission = leak(HybridSigningKey::from_seeds([10; 32], [11; 32]));
-    let committee = leak(HybridSigningKey::from_seeds([12; 32], [13; 32]));
-    let commission_vk = leak(commission.verifying_key());
-    let committee_vk = leak(committee.verifying_key());
-    let purpose = leak(Purpose::new(b"legal-auth").unwrap());
-    let s1 = leak(sign(commission, purpose, object));
-    let s2 = leak(sign(committee, purpose, object));
-    let t1 = verify_hybrid(commission_vk, purpose, object, s1).unwrap();
-    let t2 = verify_hybrid(committee_vk, purpose, object, s2).unwrap();
-    ityv_state::authorize(object, &t1, commission_vk, &t2, committee_vk).unwrap()
+    object(SCHEMA_LEGAL_AUTHORIZATION, &body)
+}
+
+/// The genesis that pins `object` as its legal authorization.
+pub(crate) fn genesis_pinning(object: &[u8]) -> &'static Built {
+    built(object_hash(object), CaptureProfile::InPerson)
+}
+
+fn authorization_of(election_id: ElectionId<'static>, scopes: ScopeSet) -> Authorization<'static> {
+    let object = legal_object(election_id, scopes);
+    let (_, t1) = signed_by(commission(), b"legal-auth", object);
+    let (_, t2) = signed_by(committee(), b"legal-auth", object);
+    ityv_state::authorize(&genesis_pinning(object).genesis, object, &t1, &t2).unwrap()
 }
 
 pub(crate) fn sign(

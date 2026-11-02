@@ -80,7 +80,7 @@ offset  size  field
 | `schema_id` | 이름 | 깊이 | 비고 |
 |---|---|---|---|
 | 0x0001 | `LedgerFrame` | 1 | 장부 프레임 헤더: seq, prev_hash, event_hash |
-| 0x0002 | `Genesis` | 5 | 명부·키·경로·법적 승인. 버전 3에서 `connectivity_manifest_hash: Hash512` 추가(ADR-0022), 버전 4에서 `release_manifest_hash: Hash512`와 장치·모듈 증명 공개키, 참관인 토큰별 확인 키(Ed25519) 추가(ADR-0023), 버전 5에서 `progress_policies[]` 추가(§8.48, ADR-0027) |
+| 0x0002 | `GenesisBody` | 6 | genesis 본문: 핀·키·정족수·정당 명부·챔버, 항목 집합 11개의 (수, root)(§8.54, ADR-0028). 버전 1–5는 내용만 나열한 명세 초안(3에서 연결 목록 해시, 4에서 릴리스 목록 해시와 증명 키·참관인 확인 키, 5에서 `progress_policies[]`)이었고 인코딩된 적이 없다. 버전 6이 처음 인코딩된 형식이다 |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
@@ -129,6 +129,21 @@ offset  size  field
 | 0x0030 | `CheckinProgressBody` | 1 | 투표소 진행 기록 본문: 슬롯, 본인 확인·교부·훼손 회수·반납 누계, 상태(§8.45) |
 | 0x0031 | `ProgressTick` | 1 | 진행 기록 본문 바이트 + 장치 하이브리드 서명(§8.46) |
 | 0x0032 | `ProgressCheckBody` | 1 | 진행 경보의 현장 확인 본문(§8.47). 서명은 `WitnessedEvent` |
+| 0x0033 | `SignedGenesis` | 1 | genesis 또는 변경 본문 바이트 + 선관위·위원회·증인 서명(§8.56, ADR-0028) |
+| 0x0034 | `GenesisAmendmentBody` | 1 | genesis 변경 본문: 번호, 이전 본문 해시, 사유, 바뀔 수 있는 집합 8개의 (수, root)(§8.55) |
+| 0x0035 | `GenesisBox` | 1 | genesis 항목: 예정 투표함(§8.43) |
+| 0x0036 | `StationEntry` | 1 | genesis 항목: 투표소(§8.49) |
+| 0x0037 | `StationProgressPolicy` | 1 | genesis 항목: 투표소 진행 경보 기준(§8.48) |
+| 0x0038 | `ReportingUnitEntry` | 1 | genesis 항목: 보고 단위(§8.50) |
+| 0x0039 | `CustodyRoute` | 1 | genesis 항목: 보관 경로(§8.43) |
+| 0x003A | `RosterSigner` | 1 | genesis 항목: 서명자 명부(§8.43) |
+| 0x003B | `ModuleEntry` | 1 | genesis 항목: 챔버 모듈(§8.51) |
+| 0x003C | `BallotStyleEntry` | 1 | genesis 항목: 투표양식(§8.52) |
+| 0x003D | `TrusteeEntry` | 1 | genesis 항목: 신뢰기관 구성원(§8.53) |
+| 0x003E | `WitnessRosterEntry` | 1 | genesis 항목: 증인(§8.53) |
+| 0x003F | `ObserverCountAttestBody` | 1 | 참관인 확인 인원 증명 본문(§8.57). 서명은 `WitnessedEvent` |
+| 0x0040 | `CheckinUnitSwapBody` | 1 | 카운터·가명 유닛 교체 본문(§8.58). 서명은 `WitnessedEvent` |
+| 0x0041 | `BoxUnitSwapBody` | 1 | 커밋먼트 유닛 교체 본문(§8.59). 서명은 `WitnessedEvent` |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -138,7 +153,7 @@ offset  size  field
 
 ## 7. 시험 벡터
 
-`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다.
+`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 6), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다.
 
 ## 8. 예시 스키마 필드 정의
 
@@ -551,7 +566,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 
 ### 8.33–8.43 사람이 서명하는 이벤트와 genesis 항목 (M5 1단계, ADR-0025)
 
-> English summary: the human-signed ledger events get canonical bodies (0x0008, 0x000E, 0x000F, 0x0029–0x002E) and one common envelope, `WitnessedEvent` (0x0028), that carries the body object bytes and role-tagged hybrid signatures; every signature covers exactly the body bytes under the body's purpose. The decoder enforces each body's rules and the signer roles each body needs; `ityv-state` binds every signature to a verification token from the key the genesis registers. Three genesis entry types (`GenesisBox`, `CustodyRoute`, `RosterSigner`) fix the encoding of the expected boxes, custody routes and the signer roster inside `Genesis` (0x0002).
+> English summary: the human-signed ledger events get canonical bodies (0x0008, 0x000E, 0x000F, 0x0029–0x002E) and one common envelope, `WitnessedEvent` (0x0028), that carries the body object bytes and role-tagged hybrid signatures; every signature covers exactly the body bytes under the body's purpose. The decoder enforces each body's rules and the signer roles each body needs; `ityv-state` binds every signature to a verification token from the key the genesis registers. Three genesis entry types (`GenesisBox`, `CustodyRoute`, `RosterSigner`) fix the encoding of the expected boxes, custody routes and the signer roster; since ADR-0028 they are objects of their own in the genesis entry sets (§8.54).
 
 모든 본문은 `election_id: Ident<64>`가 첫 필드이고, 서명은 `WitnessedEvent`(§8.42)가 싣는다. 서명 메시지는 본문 객체 바이트이며 purpose는 본문마다 하나다(아래 표). 수량은 디코더가 서로 비교하지 않는다. 어긋난 수량도 수록되고 `ityv-state`가 보류로 판정한다(PROTOCOL §10.2).
 
@@ -567,6 +582,9 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 0x002D | `SealChangeBody` | `seal-change` | 같음 |
 | 0x002E | `LateBatchCloseBody` | `late-batch-close` | 같음 |
 | 0x0032 | `ProgressCheckBody` | `progress-check` | 같음 |
+| 0x003F | `ObserverCountAttestBody` | `observer-count` | 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음 |
+| 0x0040 | `CheckinUnitSwapBody` | `checkin-swap` | 사무원 2 이상, 서로 다른 조직 참관인 2 이상 |
+| 0x0041 | `BoxUnitSwapBody` | `box-swap` | 같음 |
 
 #### 8.33 `CustodyHandoffBody` (0x0008)
 
@@ -694,15 +712,15 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 
 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
 
-#### 8.43 genesis 항목 (`Genesis` 0x0002의 필드형)
+#### 8.43 genesis 항목 `GenesisBox`(0x0035), `CustodyRoute`(0x0039), `RosterSigner`(0x003A)
 
-자체 스키마 ID가 없는 필드형이다. genesis 본문 안에 정렬 배열로 들어가고 genesis 해시가 고정한다.
+M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다. 집합에 넣는 방식은 §8.54를 따른다.
 
-`GenesisBox`(`expected_boxes[]`): `box_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `profile: u8`(1 투표소, 2 관외·재외, 3 수령 스캐너) ‖ `route_id: Ident<64>` ‖ `device_key: [u8; 2624]`(하이브리드 공개키, ML-DSA-87 2592 ‖ Ed25519 32) ‖ `modules: Array<Ident<64>, 7>`(오름차순).
+`GenesisBox`(`expected_boxes[]`, 열쇠 `box_id`): `box_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `profile: u8`(1 투표소, 2 관외·재외, 3 수령 스캐너) ‖ `route_id: Ident<64>` ‖ `reporting_unit_id: Ident<64>` ‖ `device_key: [u8; 2624]`(하이브리드 공개키, ML-DSA-87 2592 ‖ Ed25519 32) ‖ `attest_key: [u8; 2624]`(증명 키, PROTOCOL §7.9) ‖ `modules: Array<Ident<64>, 7>`(오름차순).
 
-`CustodyRoute`(`custody_routes[]`): `route_id: Ident<64>` ‖ `count_at_origin: bool` ‖ `stops: Array<Ident<64>, 8>`(조직 순서, 2개 이상, 이웃한 두 조직이 같으면 `InvariantViolation`).
+`CustodyRoute`(`custody_routes[]`, 열쇠 `route_id`): `route_id: Ident<64>` ‖ `count_at_origin: bool` ‖ `stops: Array<Ident<64>, 8>`(조직 순서, 2개 이상, 이웃한 두 조직이 같으면 `InvariantViolation`).
 
-`RosterSigner`(서명자 명부): `signer_id: Ident<64>` ‖ `role: u8`(1 사무원, 2 참관인, 3 보관 담당자) ‖ `org_id: Ident<64>` ‖ `station_id: Option<Ident<64>>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님, VC-009).
+`RosterSigner`(서명자 명부, 열쇠 `signer_id`): `signer_id: Ident<64>` ‖ `role: u8`(1 사무원, 2 참관인, 3 보관 담당자, 4 법정 권한 기관) ‖ `org_id: Ident<64>` ‖ `station_id: Option<Ident<64>>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님, VC-009).
 
 시험 벡터는 `crates/ityv-encoding/vectors/`의 `custody_handoff_body.txt`, `dispute_event_body.txt`, `legal_decision_ref_body.txt`, `box_opened_body.txt`, `fallback_body.txt`, `issuance_count_body.txt`, `imprint_audit_body.txt`, `seal_change_body.txt`, `late_batch_close_body.txt`, `witnessed_event.txt`다.
 
@@ -759,8 +777,115 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 8 | `statement_hash` | `Hash512` | 서명자 진술 해시 |
 | 9 | `time_bucket` | `u64` | |
 
-#### 8.48 `StationProgressPolicy` (`Genesis` 0x0002의 필드형, `progress_policies[]`)
+#### 8.48 `StationProgressPolicy` (0x0037, genesis `progress_policies[]`)
 
-`station_id: Ident<64>` ‖ `booth_count: u16`(1 이상) ‖ `limit_sheets: u32`(1 이상). `station_id` 오름차순, 중복 없음. 기본값은 `limit_sheets = booth_count × 2 × 한 방문의 최대 장수`이고, 다른 값이면 위원회가 사유를 genesis 근거 문서에 적는다.
+`station_id: Ident<64>` ‖ `booth_count: u16`(1 이상) ‖ `limit_sheets: u32`(1 이상). 열쇠는 `station_id`이고 투표소마다 하나다. 기본값은 `limit_sheets = booth_count × 2 × 한 방문의 최대 장수`이고, 다른 값이면 위원회가 사유를 genesis 근거 문서에 적는다.
 
 시험 벡터는 `crates/ityv-encoding/vectors/`의 `box_progress_body.txt`, `checkin_progress_body.txt`, `progress_tick.txt`, `progress_check_body.txt`다. `unit_id`의 형은 `UnitId`(`Ident<64>`)다.
+
+### 8.49–8.59 genesis와 투표소 사건 (ADR-0028)
+
+> English summary: the genesis is a bounded body (`GenesisBody`, 0x0002 version 6) with the scalar fields, pins, the two authority keys, the witness quorum, the party roster and chamber thresholds, and the count and Merkle root of eleven entry sets. Each entry is its own object (0x0035–0x003E); a set is strictly ascending by the entry key, its leaves are the entries' object hashes, and its root is the RFC 9162-shaped SHA3-512 root. `SignedGenesis` (0x0033) carries the body with the commission's, the committee's and at least `q` witness signatures; `GenesisAmendmentBody` (0x0034) replaces the eight amendable set commitments. Three witnessed station events: `ObserverCountAttestBody` (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041).
+
+#### 8.49 `StationEntry` (0x0036, genesis `stations[]`, 열쇠 `station_id`)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `station_id` | `Ident<64>` | |
+| 2 | `kind` | `u8` | 1 선거일 투표소, 2 사전투표소, 3 수령 선관위. 그 밖은 `ValueOutOfRange` |
+| 3 | `primary` | 유닛 | 사용 중인 카운터·가명 유닛 |
+| 4 | `spare` | 유닛 | 봉인된 예비 유닛. `unit_id`가 `primary`와 같거나 `key`가 반쪽 하나라도 같으면 `InvariantViolation`(위치는 이 필드) |
+| 5 | `boxes` | `Array<Ident<64>, 8>` | 이 투표소의 모든 투표함, 1개 이상(0이면 `InvariantViolation`), 엄격 오름차순 |
+| 6 | `id_terminals_hash` | `Hash512` | 신원 확인 단말 목록 문서 해시(단말은 TCB 밖이며 등록 키가 없다) |
+| 7 | `tokens` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, check_key: [u8; 32]}, 16>` | 참관인 토큰과 Ed25519 확인 키, `observer_id` 엄격 오름차순 |
+
+유닛 = `unit_id: Ident<64>` ‖ `key: [u8; 2624]` ‖ `attest_key: [u8; 2624]` ‖ `modules: Array<Ident<64>, 7>`(그 유닛에 꽂힌 정당 모듈, 오름차순).
+
+#### 8.50 `ReportingUnitEntry` (0x0038, 열쇠 `unit_id`)
+
+`unit_id: Ident<64>` ‖ `box_count: u32`(1 이상, 0이면 `ValueOutOfRange`). 투표함은 `GenesisBox.reporting_unit_id`로 자기 단위를 가리키고, 단위는 그런 투표함의 수를 적는다.
+
+#### 8.51 `ModuleEntry` (0x003B, 열쇠 `module_id`)
+
+`module_id: Ident<64>` ‖ `chamber: u8`(1–4 `P1`–`P4`, 5 `J`, 6 `A`, 7 `C`. `N`(8)은 모듈이 없어 `ValueOutOfRange`) ‖ `key: [u8; 2624]`(배치 서명, Ed25519 반쪽은 기록 서명) ‖ `attest_key: [u8; 2624]` ‖ `provisioned_hash: Hash512`(`ModuleProvisioned` 객체 해시, 0이 아님).
+
+#### 8.52 `BallotStyleEntry` (0x003C, 열쇠 `ballot_style_id`)
+
+`ballot_style_id: Ident<64>` ‖ `choices: u16` ‖ `chunks: u8` ‖ `layout_hash: Hash512`. `1 ≤ choices ≤ 70`(벗어나면 `ValueOutOfRange`), `chunks = ⌈(choices + 2)/9⌉`(다르면 `InvariantViolation`, PROTOCOL §7.4).
+
+#### 8.53 `TrusteeEntry` (0x003D), `WitnessRosterEntry` (0x003E)
+
+`TrusteeEntry`(열쇠 `trustee_id`): `trustee_id: Ident<64>` ‖ `chamber: u8`(1–8) ‖ `org_id: Ident<64>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님).
+
+`WitnessRosterEntry`(열쇠 `witness_id`): `witness_id: Ident<64>` ‖ `org_id: Ident<64>` ‖ `provider: Ident<64>` ‖ `region: Ident<64>` ‖ `key: [u8; 2624]`(purpose `checkpoint`, `genesis`, `genesis-amendment`) ‖ `appointment_hash: Hash512`(0이 아님).
+
+#### 8.54 `GenesisBody` (0x0002, 버전 6)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `election_epoch_day` | `u64` | |
+| 3 | `policy_hash` | `Hash512` | 0이 아님(`InvalidPreviousHash`) |
+| 4 | `proof_system_id` | `Ident<64>` | |
+| 5 | `legal_authorization_hash` | `Hash512` | `LegalAuthorizationBody` 객체 해시, 0이 아님 |
+| 6 | `connectivity_manifest_hash` | `Hash512` | 0이 아님 |
+| 7 | `release_manifest_hash` | `Hash512` | 0이 아님 |
+| 8 | `commission_key` | `[u8; 2624]` | 선관위 하이브리드 공개키 |
+| 9 | `committee_key` | `[u8; 2624]` | 위원회 하이브리드 공개키. 선관위 키와 반쪽 하나라도 같으면 `InvariantViolation` |
+| 10 | `quorum` | `u8` × 6 | `n`, `q`, `f`, 조직·공급자·지역 하한. `13 ≤ n ≤ 64`, `9 ≤ q ≤ n`, `2q − n > f`, 하한은 7·4·3 이상 `q` 이하(아니면 `ValueOutOfRange`) |
+| 11 | `parties` | `Array<{chamber: u8, name: Bytes<128>, seats: u16, evidence_hash: Hash512}, 4>` | 2–4개(1개 이하 `InvariantViolation`), i번째의 `chamber`는 `P(i+1)`, 이름은 비지 않은 UTF-8(아니면 `ValueOutOfRange`), 의석 내림차순(어기면 `InvariantViolation`, VC-067), `evidence_hash` 0이 아님 |
+| 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`) |
+| 13 | `sets` | `{count: u64, root: Hash512}` × 11 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
+
+집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`). 1–8은 변경할 수 있고 9–11은 선거 동안 고정이다.
+
+집합의 리프 입력은 항목 객체의 §4 객체 해시이고, 항목은 열쇠 바이트 엄격 오름차순이다. 임명 집합은 해시 자체를 바이트 오름차순으로 둔다. root는 PROTOCOL §5.3의 트리 root(리프 접두 0x00, 노드 접두 0x01, 빈 집합은 빈 트리의 root)다. genesis 핀은 이 본문 객체의 객체 해시다.
+
+#### 8.55 `GenesisAmendmentBody` (0x0034)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `seq` | `u64` | 1 이상(0이면 `ValueOutOfRange`) |
+| 3 | `previous_hash` | `Hash512` | 1번이면 genesis 핀, 그 뒤는 직전 변경 본문의 객체 해시. 0이 아님 |
+| 4 | `reason` | `u8` | 1 장치 교체, 2 명부 변경, 3 릴리스 변경, 4 기타 |
+| 5 | `reason_hash` | `Hash512` | 공표한 사유 문서 해시, 0이 아님 |
+| 6 | `time_bucket` | `u64` | 시행 구간 |
+| 7 | `release_manifest_hash` | `Hash512` | 이후 적용할 릴리스 목록, 0이 아님 |
+| 8 | `sets` | `{count: u64, root: Hash512}` × 8 | 집합 1–8의 새 값(바뀌지 않는 집합도 다시 적는다) |
+
+#### 8.56 `SignedGenesis` (0x0033)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<16384>` | `GenesisBody`(버전 6) 또는 `GenesisAmendmentBody` 객체 전체. 다른 스키마는 `SchemaMismatch` |
+| 2 | `commission_sig` | `[u8; 4691]` | |
+| 3 | `committee_sig` | `[u8; 4691]` | |
+| 4 | `witness_sigs` | `Array<{witness_id: Ident<64>, sig: [u8; 4691]}, 64>` | `witness_id` 엄격 오름차순. genesis면 본문의 `q` 이상, 변경이면 9 이상(모자라면 `InvariantViolation`, 위치는 개수 필드) |
+
+모든 서명의 메시지는 `body` 바이트이고 purpose는 genesis면 `genesis`, 변경이면 `genesis-amendment`다. 서명 바이트의 유효성, 증인 항목과의 결속, 정족수(변경은 genesis의 `q`)와 다양성, 서명자 사이 키 반쪽 중복 금지는 `ityv-state`의 `genesis` 모듈이 검증 토큰으로 확인한다.
+
+#### 8.57 `ObserverCountAttestBody` (0x003F)
+
+`election_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `unit_id: Ident<64>` ‖ `count: u64`(확인 인원 누계 = 마지막 순번) ‖ `kind: u8`(1 정기, 2 마감. 그 밖은 `ValueOutOfRange`) ‖ `time_bucket: u64`.
+
+#### 8.58 `CheckinUnitSwapBody` (0x0040)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `failed_unit` | `Ident<64>` | |
+| 4 | `spare_unit` | `Ident<64>` | `failed_unit`과 같으면 `InvariantViolation` |
+| 5 | `at_slot` | `u64` | 예비 유닛이 진행 기록을 시작하는 슬롯 |
+| 6 | `confirmed` | `bool` | 고장 유닛의 마지막 값을 확인했는지 |
+| 7 | `next_seq` | `u64` | 예비 유닛의 첫 순번, 1 이상(0이면 `ValueOutOfRange`) |
+| 8 | `issued` | `u64` | |
+| 9 | `spoiled` | `u64` | |
+| 10 | `returned` | `u64` | 확인하지 못했으면 8–10이 모두 0(아니면 `InvariantViolation`, 위치는 8) |
+
+예비 유닛이 이어 세는 진행 기록 누계는 `[next_seq − 1, issued, spoiled, returned]`다.
+
+#### 8.59 `BoxUnitSwapBody` (0x0041)
+
+`election_id: Ident<64>` ‖ `box_id: Ident<64>` ‖ `at_slot: u64` ‖ `confirmed: bool` ‖ `sheets_in: u64`(확인하지 못했으면 0, 아니면 `InvariantViolation`). 예비 커밋먼트 유닛의 키는 이 사건이 아니라 `GenesisAmendment`가 등록한다.

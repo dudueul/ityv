@@ -31,7 +31,14 @@
 | 교부 번호 대조 | counterfoil check | — | 진행 경보에서 반출이 확인되거나 설명되지 않은 투표소가 마감까지 쓰는 절차. 투입 직전에 투표지 번호를 이름 없는 교부표와 맞춰 보고 떼어 파쇄한다. 번호는 전자 기록에 들어가지 않는다. |
 | 체크포인트 지문 | checkpoint fingerprint | — | 체크포인트 해시 앞 20바이트를 Base32 32자로 적은 값. 관보·방송·신문에 공표해 사람이 읽고 대조한다. |
 | 공개 검증자 | public verifier | `verifier` | 누구나 돌릴 수 있는 검증 프로그램과 그것을 운영하는 기관. 법으로 지정된 최소 3개 독립기관은 기한 내 결과 공표 의무를 진다. |
-| 기준정보 | genesis | `genesis` | 선거 시작 전 고정되는 명부. 선거 ID, 정책 해시, 예상 투표함·장치·참관인·인계자·증인·신뢰기관 공개키, 보관 경로, 법적 승인 객체. 대역 외 핀으로 배포한다. |
+| 기준정보 | genesis | `genesis` | 선거 시작 전 고정되는 명부. 선거 ID, 정책 해시, 예상 투표함·장치·참관인·인계자·증인·신뢰기관 공개키, 보관 경로, 법적 승인 객체. 본문(`GenesisBody`)과 항목 집합으로 이루어지고, 본문의 객체 해시를 대역 외 핀으로 배포한다(ADR-0028). |
+| genesis 본문 | genesis body | `GenesisBody` | genesis의 고정 크기 부분(스키마 0x0002, 버전 6). 문서 해시, 선관위·위원회 키, 증인 정족수, 정당 명부, 챔버 문턱, 항목 집합마다 항목 수와 Merkle root를 담는다. |
+| 항목 집합 | entry set | `EntrySet` | genesis에서 수가 많은 것(투표함, 투표소, 진행 경보 기준, 보고 단위, 경로, 명부, 모듈, 임명, 투표양식, 신뢰기관, 증인)을 항목 객체로 나누어 열쇠 순으로 정렬하고 Merkle root로 고정한 것. 항목은 포함 증명과 함께 쓴다. |
+| 장부 색인 | ledger index | `LedgerIndex` | 검증기가 확인한 genesis 위에서 프레임 스트림을 처음부터 읽어 만든 이벤트 목록(ADR-0029). 고리, 이벤트 해시, 정규 디코딩, 대상(투표함·투표소·선거), 재수록(VC-101), 마감 뒤 기록(VC-039)을 확인하고, 거부한 프레임은 발견으로 남겨 그 범위를 `HOLD_REVIEW`로 둔다. |
+| 증명된 항목 | proved entry | `Entry` | 핀이 맞고 서명이 확인된 genesis의 root에 포함 증명으로 대조한 항목. 상태 기계는 키·투표함·투표소·명부를 이 형태로만 받는다. |
+| genesis 변경 | genesis amendment | `GenesisAmendment` | 장치 교체·명부 변경처럼 피할 수 없는 변경. 번호와 이전 본문 해시로 이어지고, 바뀔 수 있는 집합 여덟의 새 root를 담으며, genesis와 같이 선관위·위원회·증인 정족수가 서명한다(스키마 0x0034). |
+| 참관인 확인 인원 증명 | observer count attestation | `ObserverCountAttest` | 카운터·가명 유닛의 확인 인원 누계를 서로 다른 조직 참관인 둘 이상이 서명한 사건(스키마 0x003F). 마감 구분의 수가 마감 대조의 확인 인원이다. |
+| 장치 교체 기록 | device swap record | `CheckinUnitSwap`, `BoxUnitSwap` | 카운터·가명 유닛(0x0040)이나 커밋먼트 유닛(0x0041)을 예비로 바꿀 때 사무원과 참관인이 확인한 마지막 누계와 시작 슬롯. 예비 장치는 이 누계에서 이어 센다. |
 | 법적 승인 객체 | legal authorization | `legal_authorization` | genesis 안의 객체. 승인 범위 집합, 조문 참조, 시행일, 선관위 서명, 독립검증위원회 서명. 모듈 활성화의 유일한 게이트. |
 | 승인 범위 | authorization scope | `scope` | `PUBLIC_BOARD`, `TRUSTEE_BODY`, `BALLOT_MARK`, `CRYPTO_TALLY_AID`, `RLA`, `OBSERVER_ACCESS`, `DEPLOY_AUTH`, `STAGE_GATE`, `VOTER_CODE`. |
 | 배포 프로필 | deployment profile | `L0`, `L1` | L0 증거 계층(현행법), L1 E2E 계층(법 개정 후). 한 코드베이스이며 게이트로만 구분된다. |
@@ -76,6 +83,7 @@
 | 서명 이벤트 봉투 | witnessed event | `WitnessedEvent` | 사람이 서명하는 장부 이벤트(개시, 비상 투입, 교부 회계, 각인 판독, 인계, 봉인 변경, 늦은 배치 마감, 분쟁, 법적 결정)의 공통 형식. 본문 객체 바이트와 역할이 붙은 하이브리드 서명들을 담는다(스키마 0x0028). |
 | 서명 결속 | signature binding | `sig::check_event` | 이벤트의 서명마다 검증 토큰을 받아 purpose·본문 바이트·서명 바이트·genesis가 그 사람·역할·조직에 등록한 키가 모두 맞는지 보는 확인. 한 이벤트의 서명자 키는 어느 반쪽도 겹칠 수 없다(VC-098). |
 | 보관 담당자 | custodian | `RosterRole::Custodian` | 투표함을 옮기거나 받는 사람(경찰, 우정, 개표소 직원). genesis 명부에 등록되며 인계에만 서명한다. |
+| 법정 권한 기관 | legal authority | `RosterRole::Authority` | 법이 분쟁 판단 권한을 준 법원 등. genesis 명부에 등록되며 `LegalDecisionRef`에만 서명한다. |
 | 법적 제외 | legal exclusion | `LEGAL_EXCLUDED` | 훼손·오배송 기록을 법적 결정이 집계에서 뺀 제외 사유. 결정의 집계 효과(포함·제외)로만 정해지고 기계는 판정하지 않는다(VC-099). |
 | 보류 사유 | hold reason | `HoldReason` | `HOLD_REVIEW`를 일으킨 개별 사유. 사유는 쌓이기만 하고, 명세가 해소 이벤트로 정한 늦은 마감과 늦은 배치만 해당 사유를 지운다(ADR-0025). |
 | 승인 토큰 | capability | `Cap` | 승인 범위 하나의 연산 자격을 나타내는 값. 두 기관이 서명한 법적 승인 객체를 확인한 뒤 효력 기간 안에서만 만들어지며, 범위가 막는 연산은 이 값을 인자로 요구한다(CONSTITUTION §1.7, ADR-0025). |

@@ -12,10 +12,17 @@
 //! (ML-DSA-87 or Ed25519) with another signer's key: one person registered
 //! twice, or two bodies sharing a key half, must not count as two
 //! independent signatures (VC-006, VC-016, VC-098).
+//!
+//! A registered key is the genesis's own bytes ([`Key`]): the key fields of
+//! the genesis entries and the genesis body, compared half by half with
+//! the key a token names.
 
 use ityv_crypto::sig::MLDSA87_SIG_LEN;
 use ityv_crypto::{HybridSignature, HybridSigned, HybridVerifyingKey, Verified};
-use ityv_encoding::{EventSig, HYBRID_SIG_LEN, MAX_EVENT_SIGS, WitnessedEvent};
+use ityv_encoding::{
+    EventSig, HYBRID_SIG_LEN, HYBRID_VK_LEN, MAX_EVENT_SIGS, MLDSA87_VK_HALF, WitnessedEvent,
+    keys_share_half,
+};
 
 use crate::error::Error;
 
@@ -29,10 +36,22 @@ pub struct Signed<'s> {
     pub tokens: &'s [Verified<HybridSigned<'s>>],
 }
 
-/// Whether two keys share neither half.
+/// A hybrid verifying key as the genesis registers it: `mldsa87[2592] ‖
+/// ed25519[32]`.
+pub type Key = [u8; HYBRID_VK_LEN];
+
+/// Whether two registered keys share neither half.
 #[must_use]
-pub fn halves_differ(a: &HybridVerifyingKey, b: &HybridVerifyingKey) -> bool {
-    a.mldsa87() != b.mldsa87() && a.ed25519() != b.ed25519()
+pub fn halves_differ(a: &Key, b: &Key) -> bool {
+    !keys_share_half(a, b)
+}
+
+/// Whether `key` is the registered key `bytes`.
+pub(crate) fn key_is(key: &HybridVerifyingKey, bytes: &Key) -> bool {
+    match bytes.split_first_chunk::<MLDSA87_VK_HALF>() {
+        Some((mldsa87, ed25519)) => mldsa87 == key.mldsa87() && ed25519 == key.ed25519().as_slice(),
+        None => false,
+    }
 }
 
 /// Whether `bytes` is the encoding of `signature`.
@@ -56,7 +75,7 @@ pub(crate) fn check_token(
     object: &[u8],
     purpose: &[u8],
     sig: &[u8; HYBRID_SIG_LEN],
-    key: &HybridVerifyingKey,
+    key: &Key,
 ) -> Result<(), Error> {
     let signed = token.get();
     if signed.purpose().as_bytes() != purpose
@@ -65,7 +84,7 @@ pub(crate) fn check_token(
     {
         return Err(Error::SignatureObject);
     }
-    if signed.key() != key {
+    if !key_is(signed.key(), key) {
         return Err(Error::SignatureSigner);
     }
     Ok(())
@@ -82,11 +101,11 @@ pub(crate) fn check_token(
 /// if two signers' keys share a half.
 pub fn check_event<'k, F>(signed: &Signed<'_>, key_of: F) -> Result<(), Error>
 where
-    F: Fn(&EventSig<'_>) -> Result<&'k HybridVerifyingKey, Error>,
+    F: Fn(&EventSig<'_>) -> Result<&'k Key, Error>,
 {
     let event = signed.event;
     let pairs = event.sigs().map(|s| key_of(&s).map(|key| (s.sig, key)));
-    check_pairs(
+    check_pairs::<MAX_EVENT_SIGS, _>(
         event.body_bytes(),
         event.purpose(),
         signed.tokens,
@@ -97,11 +116,11 @@ where
 
 /// Checks `count` (signature bytes, registered key) pairs over `object`
 /// under `purpose` against `tokens`, in order, and that no two keys share
-/// a half.
+/// a half. At most `N` pairs can be compared.
 ///
 /// # Errors
 /// As [`check_event`].
-pub(crate) fn check_pairs<'s, 'k, I>(
+pub(crate) fn check_pairs<'s, 'k, const N: usize, I>(
     object: &[u8],
     purpose: &[u8],
     tokens: &[Verified<HybridSigned<'_>>],
@@ -109,12 +128,12 @@ pub(crate) fn check_pairs<'s, 'k, I>(
     pairs: I,
 ) -> Result<(), Error>
 where
-    I: Iterator<Item = Result<(&'s [u8; HYBRID_SIG_LEN], &'k HybridVerifyingKey), Error>>,
+    I: Iterator<Item = Result<(&'s [u8; HYBRID_SIG_LEN], &'k Key), Error>>,
 {
     if tokens.len() != count {
         return Err(Error::Unverified);
     }
-    let mut keys: [Option<&HybridVerifyingKey>; MAX_EVENT_SIGS] = [None; MAX_EVENT_SIGS];
+    let mut keys: [Option<&Key>; N] = [None; N];
     for (index, (pair, token)) in pairs.zip(tokens).enumerate() {
         let (sig, key) = pair?;
         check_token(token, object, purpose, sig, key)?;
@@ -125,8 +144,8 @@ where
         if shared {
             return Err(Error::SignatureSigner);
         }
-        // Both envelopes carry at most eight signatures; more cannot be
-        // compared for shared halves, so they are refused.
+        // The callers' objects carry at most `N` signatures; more cannot
+        // be compared for shared halves, so they are refused.
         let Some(slot) = keys.get_mut(index) else {
             return Err(Error::Unverified);
         };

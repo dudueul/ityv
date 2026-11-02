@@ -459,7 +459,7 @@
 | 047, 100, 317 | 마감 장치 서명 토큰 결속(`tests/boxes.rs` `close_signature_binding`), 수동 마감 보류, 늦은 마감의 서명 요구 | |
 | 063, 101 | `tests/proptests.rs` | |
 | 077, 152, 170, 216 | `StatusReport::count_only` | |
-| 083 | — | 명세 결정(PROTOCOL §14 3항, VC-101). 확인은 M5 검증기의 장부 색인 |
+| 083 | — | 명세 결정(PROTOCOL §14 3항, VC-101). 확인은 `ityv-verify`의 장부 색인(§12) |
 | 089 | `issuance::issuance_verdict`의 `IssuanceStockMismatch`(용지 재고 등식; Kani `issuance_verdict_is_exact`, 속성 테스트) | PROTOCOL §10.2 |
 | 090 | `issuance::issuance_verdict`(Kani `issuance_verdict_is_exact`) | |
 | 132, 133, 135, 136, 137, 138 | `dispute`(두 기관이 서명한 `DisputeEvent`, `OPEN`으로만 시작, 접수 해시로 이어지는 상태 변경, 기술 해결 뒤 법적 회부; `tests/auth.rs` `disputes_need_both_bodies`, `dispute_status_changes_are_signed`), `LegalReference::from_signed`(본문 디코딩, 결과·집계 효과) | VC-098 |
@@ -474,3 +474,28 @@
 | 047, 100(보강) | 늦은 마감·늦은 배치의 24시간 기한(`Error::LateWindow`), 사람이 센 네 수 비교 | VC-100 |
 | —(VC-102) | `progress::BoxStream`·`CheckinStream`(장치 키 토큰, 슬롯 하나, 누계 단조, 개시 전·마감 뒤 거부, 마감 수 대조, 교체 이어받기; `tests/progress.rs` `box_stream_*`, `checkin_stream_rules`, Kani `progress_stream_rules_are_exact`) | ADR-0027. 행 번호 없는 새 규칙 |
 | —(VC-103) | `progress::StationProgress`(음수·과다는 두 슬롯, 바닥은 조용한 두 슬롯과 바깥 장수; 조건의 한 구간에 한 번; 현장 확인 판정과 기한; 정지; `tests/progress.rs` `evaluator_matches_reference`(독립 참조 평가기), `findings`, `check_window_and_identity`, Kani `progress_alarms_fire_once_per_run`, `progress_out_is_exact`) | ADR-0027. 경보는 기록 상태를 바꾸지 않음 |
+| —(VC-005, VC-104) | `genesis::Pinned::new`(핀과 본문 객체 해시), `Pinned::seal`(선관위·위원회·증인 `q` 이상의 토큰, 증인 항목과 하나씩 대응, 조직·공급자·지역 하한, 키 반쪽 겹침 없음), `Genesis::entry`(항목 디코딩과 포함 증명); `tests/genesis.rs` `the_pin_decides`, `seal_needs_the_quorum`, `seal_needs_diverse_witnesses`, `entries_need_their_proof`. 본문 규칙은 `ityv-encoding` `tests/m5_genesis.rs`, Kani `witness_quorum_rule_is_exact` | ADR-0028. 집합 전체(정렬·중복·집합 사이 일치)는 M5 2b 이후 검증기 |
+| —(VC-105) | `genesis::Genesis::amend`(번호, 이전 본문 해시, 같은 서명 규칙과 genesis의 `q`, 현재 head로 증명한 증인 항목, 바뀔 수 있는 집합만 교체; `tests/genesis.rs` `amendments_chain_and_replace_sets`, `amendment_needs_the_genesis_quorum`) | ADR-0028 |
+| —(VC-104, VC-105 항목의 출처) | `Entry::head`, `Anchor::admits`·`advance`, `BoxSpec::new`·`BoxStream::open`·`CheckinStream::open`·`StationProgress::new`(현재 head가 아닌 항목 거부), `roster_key`(head가 섞인 명부 거부), `BallotBox::follow`·`BoxStream::swap`(같은 핀의 더 큰 번호로만); `tests/boxes.rs` `a_box_follows_an_amendment_only_forward`(바뀐 장치 키의 변경 전 항목 거부, 섞인 명부 거부, 다시 증명한 항목 수용, 바뀐 장치로는 개시 불가), `tests/progress.rs` `box_swap_refusals`, `station_entries_follow_the_genesis_state` | ADR-0028 7항. `Error::StaleEntry` |
+| —(VC-106) | `progress::ObserverCount`(참관인만, 마감 구분), `CheckinUnitSwap`·`BoxUnitSwap`(사무원 2·참관인 2, 예비 키는 genesis 항목, 확인 못 한 누계는 보류), `CheckinStream::finish`·`issuance_verdict`의 마감 수; `tests/progress.rs` `box_stream_close_and_swap`, `box_swap_refusals`, `checkin_swap_and_count_refusals`, `observer_counts_are_signed_by_observers` | ADR-0028 |
+| 025, 082, 267(보강) | 명부·투표소 키·두 기관 키·법정 권한 기관 키는 증명된 genesis 항목과 본문에서만 옴(`RosterEntry` = 증명된 `RosterSigner`, `BoxSpec::new`, `authorize`가 genesis가 고정한 승인 객체만 받음, `LegalReference::from_signed`는 `Authority` 역할의 명부 항목; `tests/auth.rs` `authorize_takes_keys_and_object_from_the_genesis`, `legal_reference_needs_the_authority_signature`, `tests/boxes.rs` `spec_is_the_genesis_entry`) | VC-004, VC-098 |
+
+## 12. `ityv-verify` 대응 (M5 2b, ADR-0029)
+
+경로는 `crates/ityv-verify/` 기준이다. genesis 시험은 규칙마다 그 규칙만 어긴 genesis를 실제 하이브리드 서명으로 만들어 거부를 확인한다(`tests/common/mod.rs`의 `Draft`).
+
+| 행 | 구현 | 비고 |
+|---|---|---|
+| 202, 304 | `verify_genesis`: 핀과 본문 객체 해시, 서명 검증(`tests/genesis.rs` `refuses_another_pin`, `refuses_a_signature_that_does_not_verify`, `refuses_bytes_that_are_not_a_signed_genesis`) | VC-005 |
+| 305 | 핀은 `verify_genesis`의 필수 인자 | 타입으로 강제 |
+| 306, 307 | `Pinned::seal`을 검증기가 만든 토큰으로 호출(`refuses_too_little_diversity`, `refuses_a_signing_witness_outside_the_witness_set`); 중복 서명자는 `SignedGenesis` 디코더와 키 반쪽 겹침 금지가 거부 | VC-014, VC-098 |
+| 308, 310 | 집합마다 수와 root 재계산(`refuses_a_count_or_root_the_entries_do_not_give`), 변경이 준 집합과 약속한 root 대조(`refuses_an_amendment_whose_sets_break_a_rule`) | VC-104, VC-105 |
+| —(VC-104 집합 규칙) | `sets::Set::parse`(정규 디코딩, 열쇠 엄격 오름차순, 수와 root), `Appointments::parse`, `cross::check`(참조 대상, 투표소 목록, 경보 기준, 보고 단위 수, 근무 투표소, 임명, 모듈 챔버, 신뢰기관 수, 참관인 토큰의 명부·투표소·확인 키, 임명 공유 금지, 모듈 하나에 장치 하나, 장치 식별자, 키 유효성, 키 반쪽); `tests/genesis.rs` 규칙별 테스트, Kani `set_order_rule_is_exact`, `box_chamber_rule_is_exact`, `unit_chamber_rule_is_exact` | VC-009, VC-067, VC-104 |
+| —(VC-105) | 변경마다 서명 검증, `Genesis::amend`, 새 상태의 집합 전체(`applies_amendments_in_order_and_proves_against_the_last_state`, `refuses_an_amendment_out_of_sequence_or_off_the_chain`, `refuses_an_amendment_with_too_little_diversity`, `an_amended_state_must_keep_the_appointments_of_the_fixed_sets`) | |
+| 083 | `index::build_index`의 재수록 거부와 범위별 `EventReplayed`(`tests/index.rs` `refuses_a_replayed_box_event_and_holds_only_that_box`, `a_replayed_election_event_holds_the_ledger`, `a_replayed_station_event_holds_every_box_of_the_station`) | VC-101 |
+| 202(보강) | 장부의 `SignedGenesis`는 적용된 본문, 법적 승인은 고정된 객체만(`a_genesis_or_authorization_the_pin_does_not_name_holds_the_ledger`, `the_pinned_genesis_its_amendments_and_its_authorization_are_indexed`) | |
+| 026, 034(보강) | 첫 `BoxClose` 프레임 뒤의 `CastRecord`·`ChallengeOpening` 거부와 `RecordAfterClose`(`records_after_the_close_are_refused_and_other_box_events_scoped`, 인코딩 시험 벡터의 이벤트) | VC-039 |
+| 047, 100(보강) | 마감 뒤 `BatchAttest`는 늦은 배치 마감으로 색인(`a_batch_after_the_close_is_a_late_batch_and_indexed`) | VC-100 |
+| —(색인 범위) | 이벤트의 선거(`an_event_of_another_election_holds_the_ledger`), 비공개 프레임(`frames_of_restricted_events_are_kept_by_hash`), 장치 증명·체크포인트·사람 서명 이벤트 13종의 대상(`a_device_attestation_is_scoped_to_its_device`, `a_signed_checkpoint_is_an_election_event_of_this_election`, `every_witnessed_body_is_scoped_to_its_box_station_or_election`), 변경 전 상태의 투표함·유닛(`events_of_a_box_an_amendment_replaced_are_still_known`) | §14 3항 |
+| 060(일부) | 찢어진 꼬리 격리, 끊긴 고리 뒤 읽지 않음(`a_torn_tail_is_isolated_without_a_hold`, `a_broken_chain_ends_the_index`, `a_corrupt_record_ends_the_index_with_a_hold`) | 절단 탐지 전체는 체크포인트 사슬(2단계) |
+| 014, 056, 057, 058, 059 | — | M5 2c 이후: 상태 사다리와 투표함 완전성 |

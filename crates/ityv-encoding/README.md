@@ -79,12 +79,17 @@ assert_eq!(decoded, frame);
 | 0x002D | `SealChangeBody`, `SealChangeParts`, `SealChangeReason` | §8.40 | 새 봉인 해시는 앞과 다름 |
 | 0x002E | `LateBatchCloseBody`, `LateBatchCloseParts`, `LateBatchReason` | §8.41 | 배치 본문 해시 0 아님 |
 | 0x0028 | `WitnessedEvent`, `EventSig`, `EventRole` | §8.42 | 위 본문 9종의 봉투. 서명자 오름차순, 본문별 역할 조합(`roles_satisfied`), purpose는 `purpose_of` |
-| — | `GenesisBox`, `CustodyRoute`, `RosterSigner`, `CaptureProfile`, `RosterRole` | §8.43 | genesis(0x0002) 안의 필드형. 경로는 2–8곳이고 이웃이 다름, 임명 해시 0 아님 |
+| 0x0035, 0x0039, 0x003A | `GenesisBox`, `CustodyRoute`, `RosterSigner`, `CaptureProfile`, `RosterRole` | §8.43 | genesis 항목 객체. 경로는 2–8곳이고 이웃이 다름, 임명 해시 0 아님, 역할 4는 법정 권한 기관 |
 | 0x002F | `BoxProgressBody`, `BoxProgressParts`, `BoxProgressState` | §8.44 | 투표함 진행 기록. 누계와 상태만 |
 | 0x0030 | `CheckinProgressBody`, `CheckinProgressParts`, `CheckinProgressState`, `UnitId` | §8.45 | `spoiled ≤ issued`, `spoiled + returned ≤ issued` |
 | 0x0031 | `ProgressTick`, `ProgressBody` | §8.46 | 두 진행 기록 본문 가운데 하나와 장치 서명. purpose는 본문 스키마로 정함 |
 | 0x0032 | `ProgressCheckBody`, `ProgressCheckParts`, `ProgressAlarm`, `ProgressFinding` | §8.47 | `WitnessedEvent`에 실림. 반출 장수는 판정 2에만 |
-| — | `StationProgressPolicy` | §8.48 | genesis 필드형. 기표소 수와 기준 장수는 1 이상 |
+| 0x0037 | `StationProgressPolicy` | §8.48 | genesis 항목 객체. 기표소 수와 기준 장수는 1 이상 |
+| 0x0036, 0x0038, 0x003B–0x003E | `StationEntry`, `CheckinUnit`, `ObserverToken`, `StationKind`, `ReportingUnitEntry`, `ModuleEntry`, `BallotStyleEntry`, `TrusteeEntry`, `WitnessRosterEntry`, `EntrySet`, `GenesisEntry` | §8.49–§8.53 | genesis 항목 객체. 예비 유닛은 ID와 키 반쪽이 모두 다름, 투표함 1–8, `k = ⌈(m+2)/9⌉`, 모듈은 `N` 챔버 아님 |
+| 0x0002 | `GenesisBody`, `GenesisParts`, `PartyEntry`, `ChamberThreshold`, `WitnessQuorum`, `SetCommitment` | §8.54 | 버전 6. 두 기관 키 반쪽이 다름, 정족수 프로필, 정당 2–4와 챔버 목록, 증인 수 = `n` |
+| 0x0034 | `GenesisAmendmentBody`, `GenesisAmendmentParts`, `AmendmentReason` | §8.55 | 번호 1부터, 해시 0 아님, 바뀔 수 있는 집합 8개만 |
+| 0x0033 | `SignedGenesis`, `GenesisWitnessSig`, `GenesisKind` | §8.56 | 증인 서명 오름차순, genesis는 `q` 이상, 변경은 9 이상 |
+| 0x003F–0x0041 | `ObserverCountAttestBody`, `CheckinUnitSwapBody`, `BoxUnitSwapBody` | §8.57–§8.59 | `WitnessedEvent`에 실림. 참관인만(0x003F), 확인 못 한 교체는 누계 0 |
 
 0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103·0x0104·0x0105는 `ityv-cunit`가 구현한다(ENCODING §6).
 
