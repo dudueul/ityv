@@ -18,18 +18,20 @@ mod common;
 use std::vec::Vec;
 
 use common::{
-    Draft, SIGNERS, amendment, leak_slice, object, sign, sign_genesis_with, signing, standard,
+    Draft, SIGNERS, amendment, checkin_unit, leak_slice, object, sign, sign_genesis,
+    sign_genesis_with, signing, standard, station,
 };
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     Attestation, BatchAttest, BatchAttestBody, BatchAttestParts, BoxClose, BoxCloseBody,
     BoxCloseParts, BoxId, CheckinProgressBody, CheckinProgressParts, CheckinProgressState,
-    CloseCounts, Day, ElectionId, Hash512, LedgerFrame, LegalAuthorizationBody, ModuleBatchSig,
-    ModuleCounter, ModuleCounters, ModuleIds, ModuleRange, OrgId, ProgressTick,
-    SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY,
-    SCHEMA_CAST_RECORD, SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_LEDGER_FRAME,
+    CloseCounts, Day, ElectionId, EventRole, EventSig, HYBRID_SIG_LEN, Hash512, LedgerFrame,
+    LegalAuthorizationBody, ModuleBatchSig, ModuleCounter, ModuleCounters, ModuleIds, ModuleRange,
+    OrgId, ProgressTick, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE,
+    SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD, SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_LEDGER_FRAME,
     SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_PROGRESS_TICK, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1,
-    SchemaId, ScopeSet, Seq, SignerId, SignerRole, StationId, TimeBucket, UnitId,
+    SCHEMA_WITNESSED_EVENT, SchemaId, ScopeSet, Seq, SignerId, SignerRole, StationId, StationKind,
+    TimeBucket, UnitId, WitnessedEvent,
 };
 use ityv_ledger::Accumulator;
 use ityv_state::HoldReason;
@@ -525,4 +527,125 @@ fn a_device_attestation_is_held_on_its_device() {
     );
     assert_eq!(v.unit_station(b"BOX-1"), None);
     assert!(v.expected_box(b"BOX-1").is_some());
+}
+
+/// The first valid object of an `ityv-encoding` test-vector file.
+fn vector(name: &str) -> &'static [u8] {
+    let path = std::format!(
+        "{}/../ityv-encoding/vectors/{name}.txt",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    let line = text.lines().find(|l| l.starts_with("VALID")).unwrap();
+    let hex = line.split_whitespace().last().unwrap();
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    leak_slice(bytes)
+}
+
+/// A genesis whose first box and station carry the identifiers the
+/// encoding vectors use (`box-11-0042` at `st-11-0042`).
+fn vector_genesis() -> &'static VerifiedGenesis<'static> {
+    let mut draft = Draft::standard();
+    let st = StationId::new(b"st-11-0042").unwrap();
+    draft.boxes[0].box_id = BoxId::new(b"box-11-0042").unwrap();
+    draft.boxes[0].station_id = st;
+    draft.boxes[1].station_id = st;
+    draft.stations[0] = station(
+        b"st-11-0042",
+        StationKind::ElectionDay,
+        checkin_unit(0, b"U-1A", &[b"M-U1A-P1", b"M-U1A-P2"]),
+        checkin_unit(1, b"U-1B", &[b"M-U1B-P1", b"M-U1B-P2"]),
+        &[b"BOX-2", b"box-11-0042"],
+        &[],
+    );
+    draft.policies[0] = ityv_encoding::StationProgressPolicy::new(st, 4, 12).unwrap();
+    for r in &mut draft.roster {
+        if r.station_id.is_some() {
+            r.station_id = Some(st);
+        }
+    }
+    let built = common::leak(sign_genesis(&draft, draft.raw()));
+    common::leak(verify_genesis(&built.pin, &built.input(), &[]).unwrap())
+}
+
+/// `body` in a witnessed event signed by the role set its schema needs.
+fn witnessed(
+    body: &'static [u8],
+    signers: &[(&'static [u8], EventRole, &'static [u8])],
+) -> &'static [u8] {
+    let sig: &'static [u8; HYBRID_SIG_LEN] = common::leak([0x5A; HYBRID_SIG_LEN]);
+    let sigs: Vec<EventSig<'static>> = signers
+        .iter()
+        .map(|(id, role, o)| EventSig {
+            signer_id: SignerId::new(id).unwrap(),
+            role: *role,
+            org_id: OrgId::new(o).unwrap(),
+            sig,
+        })
+        .collect();
+    let event = WitnessedEvent::new(body, &sigs).unwrap();
+    object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event)
+}
+
+#[test]
+fn every_witnessed_body_is_scoped_to_its_box_station_or_election() {
+    const CLERKS_OBSERVERS: &[(&[u8], EventRole, &[u8])] = &[
+        (b"clerk-1", EventRole::Clerk, b"ORG-ST"),
+        (b"clerk-2", EventRole::Clerk, b"ORG-ST"),
+        (b"obs-a", EventRole::Observer, b"PARTY-A"),
+        (b"obs-b", EventRole::Observer, b"PARTY-B"),
+    ];
+    const OPENING: &[(&[u8], EventRole, &[u8])] = &[
+        (b"box-11-0042", EventRole::Device, b"NEC"),
+        (b"clerk-1", EventRole::Clerk, b"ORG-ST"),
+        (b"clerk-2", EventRole::Clerk, b"ORG-ST"),
+        (b"obs-a", EventRole::Observer, b"PARTY-A"),
+        (b"obs-b", EventRole::Observer, b"PARTY-B"),
+    ];
+    const OBSERVERS: &[(&[u8], EventRole, &[u8])] = &[
+        (b"obs-a", EventRole::Observer, b"PARTY-A"),
+        (b"obs-b", EventRole::Observer, b"PARTY-B"),
+    ];
+    const HANDOFF: &[(&[u8], EventRole, &[u8])] = &[
+        (b"clerk-1", EventRole::Sender, b"ORG-ST"),
+        (b"police-1", EventRole::Receiver, b"POLICE"),
+    ];
+    const AUTHORITIES: &[(&[u8], EventRole, &[u8])] = &[
+        (b"commission", EventRole::Commission, b"NEC"),
+        (b"committee", EventRole::Committee, b"IVC"),
+    ];
+    const COURT: &[(&[u8], EventRole, &[u8])] = &[(b"court", EventRole::Authority, b"COURT")];
+    let the_box = Scope::Box(BoxId::new(b"box-11-0042").unwrap());
+    let the_station = Scope::Station(StationId::new(b"st-11-0042").unwrap());
+    let cases: [(&str, &[(&[u8], EventRole, &[u8])], Scope<'static>); 13] = [
+        ("custody_handoff_body", HANDOFF, the_box),
+        ("dispute_event_body", AUTHORITIES, the_box),
+        ("legal_decision_ref_body", COURT, Scope::Election),
+        ("box_opened_body", OPENING, the_box),
+        ("fallback_body", CLERKS_OBSERVERS, the_box),
+        ("issuance_count_body", CLERKS_OBSERVERS, the_station),
+        ("imprint_audit_body", CLERKS_OBSERVERS, the_box),
+        ("seal_change_body", CLERKS_OBSERVERS, the_box),
+        ("late_batch_close_body", CLERKS_OBSERVERS, the_box),
+        ("progress_check_body", CLERKS_OBSERVERS, the_station),
+        ("observer_count_attest_body", OBSERVERS, the_station),
+        ("checkin_unit_swap_body", CLERKS_OBSERVERS, the_station),
+        ("box_unit_swap_body", CLERKS_OBSERVERS, the_box),
+    ];
+    let events: Vec<&'static [u8]> = cases
+        .iter()
+        .map(|(name, signers, _)| witnessed(vector(name), signers))
+        .collect();
+    let mut ledger = Ledger::new();
+    for e in &events {
+        ledger.push_as(SCHEMA_WITNESSED_EVENT, e);
+    }
+    let idx = build_index(vector_genesis(), ledger.bytes(), &events);
+    assert!(idx.findings().is_empty(), "{:?}", idx.findings());
+    let scopes: Vec<Scope<'static>> = idx.events().iter().map(|e| e.scope).collect();
+    let expected: Vec<Scope<'static>> = cases.iter().map(|c| c.2).collect();
+    assert_eq!(scopes, expected);
 }
