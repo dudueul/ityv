@@ -180,3 +180,6 @@ pub const SCHEMA_CHECKIN_UNIT_SWAP_BODY: SchemaId = SchemaId::new(0x0040);
 
 /// `BoxUnitSwapBody` (ENCODING.md §8.59, `0x0041`).
 pub const SCHEMA_BOX_UNIT_SWAP_BODY: SchemaId = SchemaId::new(0x0041);
+
+/// `SignedLegalAuthorization` (ENCODING.md §8.60, `0x0042`).
+pub const SCHEMA_SIGNED_LEGAL_AUTHORIZATION: SchemaId = SchemaId::new(0x0042);

@@ -5,15 +5,18 @@
 //! `effective_from_day`, `effective_until_day`.
 //!
 //! The signatures of the election commission and the Independent
-//! Verification Committee are not part of this body; they are carried by the
-//! enclosing genesis object and verified by the cryptographic crate. Decoding
-//! this body proves nothing about authorization: it only yields a well-formed
-//! statement of what *would* be authorized if the signatures verify.
+//! Verification Committee are not part of this body; the ledger carries them
+//! in [`SignedLegalAuthorization`] (schema `0x0042`), and the cryptographic
+//! crate verifies them. Decoding proves nothing about authorization: it only
+//! yields a well-formed statement of what *would* be authorized if the
+//! signatures verify.
 
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Kind};
 use crate::primitives::{Day, ElectionId, Hash512};
 use crate::reader::Reader;
+use crate::schema::SCHEMA_LEGAL_AUTHORIZATION;
+use crate::schema::util::{HYBRID_SIG_LEN, check_embedded, read_fixed};
 use crate::writer::Writer;
 
 /// Maximum number of scope codes in the `scopes` array.
@@ -284,5 +287,121 @@ impl<'a> Decode<'a> for LegalAuthorizationBody<'a> {
             effective_until_day,
         )
         .ok_or_else(|| Error::new(Kind::ValueOutOfRange, until_at))
+    }
+}
+
+/// Maximum length of the embedded `LegalAuthorizationBody` object bytes
+/// (a full scope set and a 64-byte election identifier take 190 bytes).
+pub const MAX_LEGAL_AUTHORIZATION_LEN: usize = 512;
+
+/// The signature purpose of a legal authorization (PROTOCOL.md §4.4,
+/// Appendix B).
+pub const PURPOSE_LEGAL_AUTHORIZATION: &[u8] = b"legal-auth";
+
+/// A legal authorization as the ledger carries it (schema `0x0042`): the
+/// complete `LegalAuthorizationBody` object bytes, the election
+/// commission's and the committee's hybrid signatures over exactly those
+/// bytes under purpose `legal-auth` (PROTOCOL.md §4.4, VC-006).
+///
+/// Rules: the body is a complete `LegalAuthorizationBody` object of at most
+/// [`MAX_LEGAL_AUTHORIZATION_LEN`] bytes. Whether the signatures verify
+/// under the two keys the genesis registers, and whether the body is the
+/// one the genesis pins, is checked by the consumer of the `Verified`
+/// tokens (`ityv_state::authorize`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SignedLegalAuthorization<'a> {
+    body_bytes: &'a [u8],
+    body: LegalAuthorizationBody<'a>,
+    commission_sig: &'a [u8; HYBRID_SIG_LEN],
+    committee_sig: &'a [u8; HYBRID_SIG_LEN],
+}
+
+impl<'a> SignedLegalAuthorization<'a> {
+    /// Builds the object from a complete body object and the two
+    /// signatures.
+    ///
+    /// # Errors
+    /// `LengthExceedsMax` at 0 if the body is too long, or the body's
+    /// decoding error.
+    pub fn new(
+        body_bytes: &'a [u8],
+        commission_sig: &'a [u8; HYBRID_SIG_LEN],
+        committee_sig: &'a [u8; HYBRID_SIG_LEN],
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            body: check_embedded(
+                body_bytes,
+                MAX_LEGAL_AUTHORIZATION_LEN,
+                SCHEMA_LEGAL_AUTHORIZATION,
+            )?,
+            body_bytes,
+            commission_sig,
+            committee_sig,
+        })
+    }
+
+    /// The body object bytes (the signed message).
+    #[must_use]
+    pub const fn body_bytes(&self) -> &'a [u8] {
+        self.body_bytes
+    }
+
+    /// The decoded body.
+    #[must_use]
+    pub const fn body(&self) -> &LegalAuthorizationBody<'a> {
+        &self.body
+    }
+
+    /// The election commission's signature.
+    #[must_use]
+    pub const fn commission_sig(&self) -> &'a [u8; HYBRID_SIG_LEN] {
+        self.commission_sig
+    }
+
+    /// The Independent Verification Committee's signature.
+    #[must_use]
+    pub const fn committee_sig(&self) -> &'a [u8; HYBRID_SIG_LEN] {
+        self.committee_sig
+    }
+}
+
+impl Encode for SignedLegalAuthorization<'_> {
+    fn encoded_len(&self) -> usize {
+        self.body_bytes
+            .len()
+            .saturating_add(4)
+            .saturating_add(HYBRID_SIG_LEN)
+            .saturating_add(HYBRID_SIG_LEN)
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        w.write_bytes(self.body_bytes, MAX_LEGAL_AUTHORIZATION_LEN)?;
+        w.write_array(self.commission_sig)?;
+        w.write_array(self.committee_sig)
+    }
+}
+
+impl<'a> Decode<'a> for SignedLegalAuthorization<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        let at = r.position();
+        let body_bytes = r.read_bytes(MAX_LEGAL_AUTHORIZATION_LEN)?;
+        let body = check_embedded(
+            body_bytes,
+            MAX_LEGAL_AUTHORIZATION_LEN,
+            SCHEMA_LEGAL_AUTHORIZATION,
+        )
+        .map_err(|inner| {
+            let offset = at
+                .checked_add(4)
+                .and_then(|p| p.checked_add(inner.offset()))
+                .unwrap_or(at);
+            Error::new(inner.kind(), offset)
+        })?;
+        Ok(Self {
+            body_bytes,
+            body,
+            commission_sig: read_fixed::<HYBRID_SIG_LEN>(r)?,
+            committee_sig: read_fixed::<HYBRID_SIG_LEN>(r)?,
+        })
     }
 }

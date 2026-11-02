@@ -25,8 +25,8 @@ use common::{Vector, check_file, encode_to_vec, render, self_check};
 use ityv_encoding::{
     CheckpointBody, CheckpointParts, Day, ElectionId, Encode, Hash512, KeysetId, LedgerFrame,
     LedgerId, LegalAuthorizationBody, SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME,
-    SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SchemaId, Scope, ScopeSet, Seq, TimeBucket,
-    TreeSize, decode_object,
+    SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SchemaId,
+    Scope, ScopeSet, Seq, SignedLegalAuthorization, TimeBucket, TreeSize, decode_object,
 };
 use std::vec::Vec;
 
@@ -314,6 +314,78 @@ fn authorization_vectors_are_current_and_self_consistent() {
             &v,
         ))
     });
+}
+
+fn signed_authorization_vectors() -> Vec<Vector> {
+    let body = authorization_vectors().remove(0).bytes;
+    let commission = [0x31u8; 4691];
+    let committee = [0x32u8; 4691];
+    let signed = SignedLegalAuthorization::new(&body, &commission, &committee).unwrap();
+    let valid = encode_to_vec(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, &signed);
+    let mut v = std::vec![Vector {
+        label: "two signatures over a stage 0-2 body",
+        bytes: valid.clone(),
+        expected: None,
+    }];
+    // header 16, body length 4, then the embedded body object: its schema
+    // identifier sits 4 bytes into its own header.
+    let mut other_schema = valid.clone();
+    other_schema[24..26].copy_from_slice(&0x0004u16.to_be_bytes());
+    v.push(Vector {
+        label: "embedded object of another schema",
+        bytes: other_schema,
+        expected: Some(("SchemaMismatch", 24)),
+    });
+    let mut too_long = valid;
+    too_long[16..20].copy_from_slice(&513u32.to_be_bytes());
+    v.push(Vector {
+        label: "embedded body longer than 512 bytes",
+        bytes: too_long,
+        expected: Some(("LengthExceedsMax", 16)),
+    });
+    v
+}
+
+#[test]
+fn signed_authorization_vectors_are_current_and_self_consistent() {
+    let content = render(
+        "SignedLegalAuthorization",
+        SCHEMA_SIGNED_LEGAL_AUTHORIZATION,
+        &signed_authorization_vectors(),
+    );
+    check_file("signed_legal_authorization.txt", &content);
+    self_check(&content, |b| {
+        let v: SignedLegalAuthorization<'_> =
+            decode_object(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, b)?;
+        Ok(encode_to_vec(
+            SCHEMA_SIGNED_LEGAL_AUTHORIZATION,
+            SCHEMA_VERSION_1,
+            &v,
+        ))
+    });
+    let v = &signed_authorization_vectors()[0].bytes;
+    let decoded: SignedLegalAuthorization<'_> =
+        decode_object(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, v).unwrap();
+    assert_eq!(
+        decoded.body_bytes(),
+        authorization_vectors()[0].bytes.as_slice()
+    );
+    assert_eq!(decoded.commission_sig(), &[0x31u8; 4691]);
+    assert_eq!(decoded.committee_sig(), &[0x32u8; 4691]);
+    assert_eq!(decoded.body().election_id().as_bytes(), b"KR-2030-PRES");
+    assert_eq!(decoded.encoded_len() + 16, v.len());
+    // The constructor applies the same rules as the decoder.
+    let body = &authorization_vectors()[0].bytes;
+    let long = std::vec![0u8; 513];
+    assert_eq!(
+        SignedLegalAuthorization::new(&long, &[0; 4691], &[0; 4691])
+            .unwrap_err()
+            .kind(),
+        ityv_encoding::ErrorKind::LengthExceedsMax
+    );
+    assert!(
+        SignedLegalAuthorization::new(&body[..body.len() - 1], &[0; 4691], &[0; 4691]).is_err()
+    );
 }
 
 #[test]
