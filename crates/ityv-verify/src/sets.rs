@@ -10,7 +10,7 @@ use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     EntrySet, GenesisEntry, Hash512, SCHEMA_VERSION_1, SetCommitment, decode_object,
 };
-use ityv_ledger::{Accumulator, InclusionProof, leaf_hash, node_hash, sorted_set_root};
+use ityv_ledger::{Accumulator, InclusionProof, MAX_DEPTH, leaf_hash, node_hash, sorted_set_root};
 
 use crate::error::{Error, Rule};
 
@@ -42,11 +42,18 @@ pub(crate) struct Set<'a, T> {
     levels: Vec<Vec<Hash512>>,
 }
 
-/// The levels of the tree over `leaf_inputs`.
+/// The levels of the tree over `leaf_inputs`: one for an empty or
+/// one-leaf set, `depth + 1` otherwise.
 fn levels_of(leaf_inputs: &[Hash512]) -> Vec<Vec<Hash512>> {
     let mut levels = Vec::new();
     let mut level: Vec<Hash512> = leaf_inputs.iter().map(leaf_hash).collect();
-    while level.len() > 1 {
+    // A tree has at most `MAX_DEPTH + 1` levels. The bound keeps the loop
+    // finite whatever its exit test says (CONSTITUTION.md §1: no unbounded
+    // work in the TCB).
+    for _ in 0..MAX_DEPTH {
+        if level.len() <= 1 {
+            break;
+        }
         let next = level
             .chunks(2)
             .filter_map(|pair| match pair {
@@ -208,20 +215,24 @@ mod tests {
     use alloc::vec::Vec;
 
     use ityv_encoding::Hash512;
-    use ityv_ledger::{inclusion_proof, root_of_leaves};
+    use ityv_ledger::{depth_for_size, inclusion_proof, root_of_leaves};
 
     use super::{levels_of, path};
 
-    /// The levels give the reference tree's root and proofs for every size
-    /// up to 70 and every leaf.
+    /// The levels give the reference tree's depth, root and proofs for
+    /// every size up to 70 and every leaf; the empty set has one empty
+    /// level.
     #[test]
     fn levels_match_the_reference_tree() {
+        assert_eq!(levels_of(&[]), [Vec::<Hash512>::new()]);
         for n in 1..=70usize {
             let leaves: Vec<Hash512> = (0..n)
                 .map(|i| Hash512([u8::try_from(i).unwrap(); 64]))
                 .collect();
             let size = u64::try_from(n).unwrap();
             let levels = levels_of(&leaves);
+            let depth = usize::try_from(depth_for_size(size)).unwrap();
+            assert_eq!(levels.len(), depth + 1);
             assert_eq!(
                 levels.last().unwrap()[0],
                 root_of_leaves(&leaves.as_slice(), size).unwrap()
