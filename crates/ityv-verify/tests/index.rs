@@ -590,6 +590,9 @@ fn witnessed(
     object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event)
 }
 
+/// A signer set: (identifier, role, organisation) in identifier order.
+type Signers = &'static [(&'static [u8], EventRole, &'static [u8])];
+
 #[test]
 fn every_witnessed_body_is_scoped_to_its_box_station_or_election() {
     const CLERKS_OBSERVERS: &[(&[u8], EventRole, &[u8])] = &[
@@ -620,7 +623,7 @@ fn every_witnessed_body_is_scoped_to_its_box_station_or_election() {
     const COURT: &[(&[u8], EventRole, &[u8])] = &[(b"court", EventRole::Authority, b"COURT")];
     let the_box = Scope::Box(BoxId::new(b"box-11-0042").unwrap());
     let the_station = Scope::Station(StationId::new(b"st-11-0042").unwrap());
-    let cases: [(&str, &[(&[u8], EventRole, &[u8])], Scope<'static>); 13] = [
+    let cases: [(&str, Signers, Scope<'static>); 13] = [
         ("custody_handoff_body", HANDOFF, the_box),
         ("dispute_event_body", AUTHORITIES, the_box),
         ("legal_decision_ref_body", COURT, Scope::Election),
