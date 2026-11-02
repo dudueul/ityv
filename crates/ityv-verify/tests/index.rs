@@ -25,12 +25,12 @@ use ityv_crypto::object_hash;
 use ityv_encoding::{
     Attestation, BatchAttest, BatchAttestBody, BatchAttestParts, BoxClose, BoxCloseBody,
     BoxCloseParts, BoxId, CheckinProgressBody, CheckinProgressParts, CheckinProgressState,
-    CloseCounts, Day, ElectionId, EventRole, EventSig, HYBRID_SIG_LEN, Hash512, LedgerFrame,
-    LegalAuthorizationBody, ModuleBatchSig, ModuleCounter, ModuleCounters, ModuleIds, ModuleRange,
-    OrgId, ProgressTick, SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE,
-    SCHEMA_BOX_CLOSE_BODY, SCHEMA_CAST_RECORD, SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_LEDGER_FRAME,
-    SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_PROGRESS_TICK, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, SchemaId, ScopeSet, Seq, SignerId, SignerRole, StationId, StationKind,
+    CloseCounts, ElectionId, EventRole, EventSig, HYBRID_SIG_LEN, Hash512, LedgerFrame,
+    ModuleBatchSig, ModuleCounter, ModuleCounters, ModuleIds, ModuleRange, OrgId, ProgressTick,
+    SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY,
+    SCHEMA_CAST_RECORD, SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_PROGRESS_TICK,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
+    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, SignerId, SignerRole, StationId, StationKind,
     TimeBucket, UnitId, WitnessedEvent,
 };
 use ityv_ledger::Accumulator;
@@ -251,6 +251,8 @@ fn indexes_a_clean_ledger() {
         acc.push(&object_hash(f)).unwrap();
     }
     assert_eq!(idx.root(), acc.root());
+    let hashes: Vec<Hash512> = ledger.frames.iter().map(|f| object_hash(f)).collect();
+    assert_eq!(idx.frame_hashes(), hashes.as_slice());
     assert_eq!(idx.events()[2].frame_hash, object_hash(ledger.frames[2]));
 }
 
@@ -447,16 +449,8 @@ fn an_empty_ledger_has_nothing() {
     assert_eq!(idx.tree_size(), 0);
 }
 
-fn authorization() -> &'static [u8] {
-    let body = LegalAuthorizationBody::new(
-        election(),
-        ScopeSet::empty(),
-        Hash512([0x31; 64]),
-        Day::new(20_000),
-        Day::new(20_100),
-    )
-    .unwrap();
-    object(SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, &body)
+fn authorization() -> (&'static [u8], &'static [u8]) {
+    common::legal_authorization(&[], 20_000, 20_100)
 }
 
 #[test]
@@ -467,11 +461,11 @@ fn a_genesis_or_authorization_the_pin_does_not_name_holds_the_ledger() {
         p.policy_hash = Hash512([0x09; 64]);
     });
     // A legal authorization the genesis does not pin (it pins 0x02…).
-    let auth = authorization();
+    let (_, auth) = authorization();
     let mut ledger = Ledger::new();
     ledger
         .push_as(SCHEMA_SIGNED_GENESIS, other.signed)
-        .push_as(SCHEMA_LEGAL_AUTHORIZATION, auth);
+        .push_as(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, auth);
     let idx = index(&ledger, &[other.signed, auth]);
     let kinds: Vec<FindingKind> = idx.findings().iter().map(|f| f.kind).collect();
     assert_eq!(kinds, [FindingKind::NotPinned, FindingKind::NotPinned]);
@@ -482,9 +476,9 @@ fn a_genesis_or_authorization_the_pin_does_not_name_holds_the_ledger() {
 #[test]
 fn the_pinned_genesis_its_amendments_and_its_authorization_are_indexed() {
     let draft = Draft::standard();
-    let auth = authorization();
+    let (body, auth) = authorization();
     let built = common::leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
-        p.legal_authorization_hash = object_hash(auth);
+        p.legal_authorization_hash = object_hash(body);
     }));
     let amended = amendment(1, built.pin, &built.raw, &SIGNERS);
     let verified = common::leak(verify_genesis(&built.pin, &built.input(), &[amended]).unwrap());
@@ -494,7 +488,7 @@ fn the_pinned_genesis_its_amendments_and_its_authorization_are_indexed() {
     let mut ledger = Ledger::new();
     ledger
         .push_as(SCHEMA_SIGNED_GENESIS, built.signed)
-        .push_as(SCHEMA_LEGAL_AUTHORIZATION, auth)
+        .push_as(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, auth)
         .push_as(SCHEMA_SIGNED_GENESIS, amended.signed)
         .push_as(SCHEMA_SIGNED_GENESIS, resigned);
     let idx = build_index(

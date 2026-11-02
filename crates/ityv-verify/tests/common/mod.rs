@@ -123,11 +123,11 @@ pub const COMMISSION: u16 = 1;
 pub const COMMITTEE: u16 = 2;
 const WITNESS_BASE: u16 = 10;
 const TRUSTEE_BASE: u16 = 30;
-const BOX_DEVICE_BASE: u16 = 100;
+pub const BOX_DEVICE_BASE: u16 = 100;
 const BOX_ATTEST_BASE: u16 = 150;
 const UNIT_BASE: u16 = 200;
 const UNIT_ATTEST_BASE: u16 = 250;
-const ROSTER_BASE: u16 = 300;
+pub const ROSTER_BASE: u16 = 300;
 const MODULE_BASE: u16 = 400;
 const MODULE_ATTEST_BASE: u16 = 500;
 /// Keys a test may use for new entries without colliding.
@@ -728,4 +728,124 @@ pub fn body_hash(signed: &[u8]) -> Hash512 {
 /// Which set an entry set is, for assertions.
 pub fn set_of<'a, T: GenesisEntry<'a>>() -> EntrySet {
     T::SET
+}
+
+/// The signing key of witness `i` (`W01` is 0).
+pub fn witness_signing(i: usize) -> &'static HybridSigningKey {
+    signing(WITNESS_BASE + i as u16)
+}
+
+/// `key`'s hybrid signature over `object` under `purpose`.
+pub fn hybrid_signature(
+    key: &HybridSigningKey,
+    purpose: &[u8],
+    object: &[u8],
+) -> &'static HybridSignature {
+    let purpose = Purpose::new(purpose).unwrap();
+    let mut rng = ChaCha20Rng::seed_from_u64(object.len() as u64);
+    leak(sign_hybrid(key, &purpose, object, &mut rng).unwrap())
+}
+
+/// A legal authorization of `scopes` effective from day `from` to day
+/// `until`: the body object and the ledger object carrying it with the
+/// commission's and the committee's signatures.
+pub fn legal_authorization(
+    scopes: &[ityv_encoding::Scope],
+    from: u64,
+    until: u64,
+) -> (&'static [u8], &'static [u8]) {
+    let body = ityv_encoding::LegalAuthorizationBody::new(
+        election(),
+        ityv_encoding::ScopeSet::from_slice(scopes),
+        Hash512([0x31; 64]),
+        Day::new(from),
+        Day::new(until),
+    )
+    .unwrap();
+    let body = object(
+        ityv_encoding::SCHEMA_LEGAL_AUTHORIZATION,
+        SCHEMA_VERSION_1,
+        &body,
+    );
+    let signed = ityv_encoding::SignedLegalAuthorization::new(
+        body,
+        sign(signing(COMMISSION), b"legal-auth", body),
+        sign(signing(COMMITTEE), b"legal-auth", body),
+    )
+    .unwrap();
+    (
+        body,
+        object(
+            ityv_encoding::SCHEMA_SIGNED_LEGAL_AUTHORIZATION,
+            SCHEMA_VERSION_1,
+            &signed,
+        ),
+    )
+}
+
+/// The standard genesis pinning a legal authorization of `PUBLIC_BOARD`,
+/// `TRUSTEE_BODY` and `BALLOT_MARK` for days 20 000..20 100, built once,
+/// with the signed authorization object for the ledger.
+pub fn authorized() -> &'static (Built, &'static [u8]) {
+    static BUILT: OnceLock<&'static (Built, &'static [u8])> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let draft = Draft::standard();
+        let (body, signed) = legal_authorization(
+            &[
+                ityv_encoding::Scope::PublicBoard,
+                ityv_encoding::Scope::TrusteeBody,
+                ityv_encoding::Scope::BallotMark,
+            ],
+            20_000,
+            20_100,
+        );
+        let built = sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+            p.legal_authorization_hash = ityv_crypto::object_hash(body);
+        });
+        leak((built, signed))
+    })
+}
+
+/// A frame stream: frames chained in order, each naming one event.
+pub struct Ledger {
+    stream: Vec<u8>,
+    prev: Hash512,
+    seq: u64,
+    /// The events, in frame order.
+    pub events: Vec<&'static [u8]>,
+}
+
+impl Ledger {
+    pub fn new() -> Self {
+        Self {
+            stream: Vec::new(),
+            prev: Hash512::ZERO,
+            seq: 0,
+            events: Vec::new(),
+        }
+    }
+
+    /// Appends a frame carrying `event` as `schema`.
+    pub fn push(&mut self, schema: SchemaId, event: &'static [u8]) -> &mut Self {
+        self.seq += 1;
+        let frame = ityv_encoding::LedgerFrame::new(
+            election(),
+            ityv_encoding::Seq::new(self.seq).unwrap(),
+            self.prev,
+            schema,
+            ityv_crypto::object_hash(event),
+        );
+        let bytes = object(ityv_encoding::SCHEMA_LEDGER_FRAME, SCHEMA_VERSION_1, &frame);
+        self.prev = ityv_crypto::object_hash(bytes);
+        self.stream
+            .extend_from_slice(&u32::try_from(bytes.len()).unwrap().to_be_bytes());
+        self.stream.extend_from_slice(bytes);
+        self.events.push(event);
+        self
+    }
+
+    /// The encoded frame stream.
+    pub fn bytes(&self) -> &'static [u8] {
+        leak_slice(self.stream.clone())
+    }
 }

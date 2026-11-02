@@ -18,8 +18,8 @@
 //!    event concerns: a box, a station (all its boxes), or the whole
 //!    election, and refuses a box or station no state of the genesis has,
 //!    a genesis or amendment whose body the verified genesis did not
-//!    apply, and a legal authorization other than the one the genesis
-//!    pins;
+//!    apply, and a signed legal authorization (`0x0042`) whose body is
+//!    not the one the genesis pins;
 //! 4. refuses an event already carried by an earlier frame: the later
 //!    frame is invalid (VC-101);
 //! 5. refuses a record of a box (cast record, challenge opening) in a
@@ -47,16 +47,17 @@ use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
     CheckinUnitSwapBody, CustodyHandoffBody, Decode, DeviceAttestation, DisputeEventBody,
     ElectionId, FallbackBody, Hash512, ImprintAuditBody, IssuanceCountBody, LateBatchCloseBody,
-    LegalAuthorizationBody, LegalDecisionRefBody, ObserverCountAttestBody, ProgressBody,
-    ProgressCheckBody, ProgressTick, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY,
-    SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
-    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DEVICE_ATTESTATION,
-    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
-    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_AUTHORIZATION,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY,
-    SCHEMA_PROGRESS_TICK, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE,
-    SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId,
-    SealChangeBody, Seq, SignedGenesis, StationId, WitnessedEvent, decode_object,
+    LegalDecisionRefBody, ObserverCountAttestBody, ProgressBody, ProgressCheckBody, ProgressTick,
+    SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
+    SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
+    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DEVICE_ATTESTATION, SCHEMA_DISPUTE_EVENT_BODY,
+    SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
+    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK,
+    SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS,
+    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, ScanCountAttest,
+    SchemaId, SealChangeBody, Seq, SignedGenesis, SignedLegalAuthorization, StationId,
+    WitnessedEvent, decode_object,
 };
 use ityv_ledger::{
     ChainHead, ChainState, Error as LedgerError, FrameStream, Record, SCHEMA_SIGNED_CHECKPOINT,
@@ -180,10 +181,12 @@ pub struct IndexedEvent<'a> {
 pub struct LedgerIndex<'a> {
     events: Vec<IndexedEvent<'a>>,
     by_box: BTreeMap<&'a [u8], Vec<usize>>,
+    by_station: BTreeMap<&'a [u8], Vec<usize>>,
     findings: Vec<Finding<'a>>,
     boxes: BTreeMap<&'a [u8], HoldSet>,
     ledger: HoldSet,
     chain: ChainState<'a>,
+    frame_hashes: Vec<Hash512>,
 }
 
 impl<'a> LedgerIndex<'a> {
@@ -201,6 +204,24 @@ impl<'a> LedgerIndex<'a> {
     ) -> impl Iterator<Item = &'s IndexedEvent<'a>> + 's {
         self.by_box
             .get(box_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|&i| self.events.get(i))
+    }
+
+    /// The boxes that have accepted events, in identifier order.
+    pub fn boxes_with_events(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
+        self.by_box.keys().copied()
+    }
+
+    /// The accepted events that concern station `station_id` as a whole
+    /// (not one of its boxes), in frame order.
+    pub fn station_events<'s>(
+        &'s self,
+        station_id: &[u8],
+    ) -> impl Iterator<Item = &'s IndexedEvent<'a>> + 's {
+        self.by_station
+            .get(station_id)
             .into_iter()
             .flatten()
             .filter_map(|&i| self.events.get(i))
@@ -248,6 +269,14 @@ impl<'a> LedgerIndex<'a> {
         self.chain.accumulator().root()
     }
 
+    /// The hash of every frame in the chain, in order (`frame_hashes()[i]`
+    /// is the frame with `seq = i + 1`), refused frames included: the
+    /// leaves of the ledger tree.
+    #[must_use]
+    pub fn frame_hashes(&self) -> &[Hash512] {
+        &self.frame_hashes
+    }
+
     fn hold(&mut self, genesis: &VerifiedGenesis<'a>, scope: Scope<'a>, reason: HoldReason) {
         match scope {
             Scope::Box(b) => {
@@ -268,11 +297,11 @@ impl<'a> LedgerIndex<'a> {
     }
 
     fn push(&mut self, event: IndexedEvent<'a>) {
-        if let Scope::Box(b) = event.scope {
-            self.by_box
-                .entry(b.as_bytes())
-                .or_default()
-                .push(self.events.len());
+        let at = self.events.len();
+        match event.scope {
+            Scope::Box(b) => self.by_box.entry(b.as_bytes()).or_default().push(at),
+            Scope::Station(s) => self.by_station.entry(s.as_bytes()).or_default().push(at),
+            Scope::Election => {}
         }
         self.events.push(event);
     }
@@ -433,12 +462,12 @@ fn classify<'a>(
     } else if schema == SCHEMA_SIGNED_CHECKPOINT {
         let c = decode::<SignedCheckpoint<'a>>(schema, bytes)?;
         Classified::new(Scope::Election, Role::Other, c.body().parts().election_id)
-    } else if schema == SCHEMA_LEGAL_AUTHORIZATION {
-        let a = decode::<LegalAuthorizationBody<'a>>(schema, bytes)?;
+    } else if schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION {
+        let a = decode::<SignedLegalAuthorization<'a>>(schema, bytes)?;
         Classified::new(
             Scope::Election,
-            Role::Authorization(object_hash(bytes)),
-            a.election_id(),
+            Role::Authorization(object_hash(a.body_bytes())),
+            a.body().election_id(),
         )
     } else {
         return None;
@@ -526,6 +555,7 @@ impl<'a> Builder<'_, 'a> {
                 .refuse(self.genesis, finding, HoldReason::LedgerUnchecked);
             return false;
         };
+        self.index.frame_hashes.push(frame_hash);
         let hash = *frame.event_hash();
         let schema = frame.event_schema_id();
         let found = if OPAQUE_SCHEMAS.contains(&schema) {
@@ -649,10 +679,12 @@ pub fn build_index<'a>(
         index: LedgerIndex {
             events: Vec::new(),
             by_box: BTreeMap::new(),
+            by_station: BTreeMap::new(),
             findings: Vec::new(),
             boxes: BTreeMap::new(),
             ledger: HoldSet::empty(),
             chain: ChainState::empty(),
+            frame_hashes: Vec::new(),
         },
     };
     let mut stream = FrameStream::new(frames);

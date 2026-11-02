@@ -112,11 +112,33 @@ pub enum HoldReason {
     /// the genesis has, or is a genesis, amendment or legal authorization
     /// other than the pinned ones (§5.1, §14 3).
     LedgerUnchecked = 35,
+    /// A checkpoint on the ledger is not a valid successor, is not signed
+    /// by a diverse quorum of the witness set, or commits to a root, box
+    /// close root or dispute root the ledger does not give (§5.4, §14 2,
+    /// VC-011..014).
+    CheckpointInvalid = 36,
+    /// An expected box has no close on the ledger, or more than one first
+    /// close (§14 4, completeness).
+    CloseMissing = 37,
+    /// The box's state machine refused one of its events: a signature
+    /// that does not bind to its registered signer, an event out of order,
+    /// a missing capability (§14 3, §14 4).
+    BoxEventRefused = 38,
+    /// The ledger carries no valid legal authorization (the pinned body
+    /// with both authorities' signatures), so no gated stage can run
+    /// (§4.4, VC-006..008).
+    AuthorizationMissing = 39,
+    /// The ledger carries a legal authorization object that cannot be
+    /// taken: a signature does not verify under the authority's key the
+    /// genesis registers, or its scopes break the prerequisite rules. A
+    /// forged or broken authorization is evidence, even when a valid one is
+    /// also on the ledger (§4.4, VC-006..008).
+    AuthorizationInvalid = 40,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 41] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -153,6 +175,11 @@ impl HoldReason {
         Self::EventReplayed,
         Self::RecordAfterClose,
         Self::LedgerUnchecked,
+        Self::CheckpointInvalid,
+        Self::CloseMissing,
+        Self::BoxEventRefused,
+        Self::AuthorizationMissing,
+        Self::AuthorizationInvalid,
     ];
 
     /// The reason's code.

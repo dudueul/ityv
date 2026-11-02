@@ -480,9 +480,9 @@
 | —(VC-106) | `progress::ObserverCount`(참관인만, 마감 구분), `CheckinUnitSwap`·`BoxUnitSwap`(사무원 2·참관인 2, 예비 키는 genesis 항목, 확인 못 한 누계는 보류), `CheckinStream::finish`·`issuance_verdict`의 마감 수; `tests/progress.rs` `box_stream_close_and_swap`, `box_swap_refusals`, `checkin_swap_and_count_refusals`, `observer_counts_are_signed_by_observers` | ADR-0028 |
 | 025, 082, 267(보강) | 명부·투표소 키·두 기관 키·법정 권한 기관 키는 증명된 genesis 항목과 본문에서만 옴(`RosterEntry` = 증명된 `RosterSigner`, `BoxSpec::new`, `authorize`가 genesis가 고정한 승인 객체만 받음, `LegalReference::from_signed`는 `Authority` 역할의 명부 항목; `tests/auth.rs` `authorize_takes_keys_and_object_from_the_genesis`, `legal_reference_needs_the_authority_signature`, `tests/boxes.rs` `spec_is_the_genesis_entry`) | VC-004, VC-098 |
 
-## 12. `ityv-verify` 대응 (M5 2b, ADR-0029)
+## 12. `ityv-verify` 대응 (M5 2b·2c, ADR-0029·ADR-0030)
 
-경로는 `crates/ityv-verify/` 기준이다. genesis 시험은 규칙마다 그 규칙만 어긴 genesis를 실제 하이브리드 서명으로 만들어 거부를 확인한다(`tests/common/mod.rs`의 `Draft`).
+경로는 `crates/ityv-verify/` 기준이다. genesis 시험은 규칙마다 그 규칙만 어긴 genesis를 실제 하이브리드 서명으로 만들어 거부를 확인한다(`tests/common/mod.rs`의 `Draft`). 체크포인트·승인·투표함 시험의 이벤트도 모두 실제 하이브리드 서명이다.
 
 | 행 | 구현 | 비고 |
 |---|---|---|
@@ -498,4 +498,17 @@
 | 047, 100(보강) | 마감 뒤 `BatchAttest`는 늦은 배치 마감으로 색인(`a_batch_after_the_close_is_a_late_batch_and_indexed`) | VC-100 |
 | —(색인 범위) | 이벤트의 선거(`an_event_of_another_election_holds_the_ledger`), 비공개 프레임(`frames_of_restricted_events_are_kept_by_hash`), 장치 증명·체크포인트·사람 서명 이벤트 13종의 대상(`a_device_attestation_is_scoped_to_its_device`, `a_signed_checkpoint_is_an_election_event_of_this_election`, `every_witnessed_body_is_scoped_to_its_box_station_or_election`), 변경 전 상태의 투표함·유닛(`events_of_a_box_an_amendment_replaced_are_still_known`) | §14 3항 |
 | 060(일부) | 찢어진 꼬리 격리, 끊긴 고리 뒤 읽지 않음(`a_torn_tail_is_isolated_without_a_hold`, `a_broken_chain_ends_the_index`, `a_corrupt_record_ends_the_index_with_a_hold`) | 절단 탐지 전체는 체크포인트 사슬(2단계) |
-| 014, 056, 057, 058, 059 | — | M5 2c 이후: 상태 사다리와 투표함 완전성 |
+| —(VC-011..014, 체크포인트 사슬) | `checkpoint::verify_checkpoints`(증인 정족수·다양성 `evaluate`, `validate_successor`, 자기 프레임 앞, root·마감 root·분쟁 root 재계산, 첫 위반에서 사슬 종료와 `CheckpointInvalid`); `tests/checkpoint.rs` `accepts_a_chain_whose_roots_the_ledger_gives`, `refuses_a_signature_that_does_not_verify`, `refuses_too_few_or_too_narrow_or_unknown_signers`, `refuses_a_checkpoint_that_does_not_follow`, `refuses_a_checkpoint_of_another_genesis`, `refuses_a_checkpoint_of_its_own_frame`, `refuses_roots_the_ledger_does_not_give`, `a_resolved_dispute_leaves_the_root_and_a_referral_brings_it_back`, `a_dispute_leaves_the_root_only_by_a_signed_forward_transition`, `a_filing_the_authorities_did_not_sign_opens_no_dispute`, `the_chain_stops_at_the_first_invalid_checkpoint`; 분쟁 root는 `disputes::dispute_steps`(서명 검증, `ityv_state::Dispute`의 앞으로만 가는 전이) | §14 2항, ADR-0030 |
+| 060(보강) | 체크포인트 root를 장부 프레임에서 다시 계산(`refuses_roots_the_ledger_does_not_give`) | 미러 절단·변조 탐지의 기반 |
+| —(VC-006..008, 장부의 승인) | `authority::authorize_ledger`(`SignedLegalAuthorization` 0x0042의 두 서명을 genesis 키로 검증, `ityv_state::authorize`, 없으면 `AuthorizationMissing`); `tests/boxes.rs` `the_ledger_carries_a_valid_authorization`, `without_an_authorization_the_ledger_is_held_and_no_box_opens`, `an_authorization_whose_signature_does_not_verify_is_not_taken`(위조 사본은 `AuthorizationInvalid`로 남음); 인코딩 `tests/vectors.rs`의 `signed_legal_authorization` 벡터 | ADR-0030 2항 |
+| —(VC-007, 능력의 날) | 개시의 날 `PUBLIC_BOARD`, 기록은 개시의 날 `BALLOT_MARK`(`an_opening_needs_the_capability_for_its_day`, `records_need_the_ballot_mark_capability`) | ADR-0030 3항 |
+| 056 | `boxes::verify_boxes`의 완전성: 마감 없는 예상 투표함은 `CloseMissing`(`a_clean_box_runs_from_opening_to_count`, `every_box_closed_is_complete`, `an_open_box_without_a_close_is_held`) | VC-037 |
+| 057 | 서명이 등록 키로 검증되지 않거나 서명자가 명부에 없으면 이벤트 거부와 `BoxEventRefused`(`a_forged_or_unregistered_signature_is_refused`, `a_signer_unknown_to_the_roster_leaves_no_tokens`, `a_refused_close_leaves_the_box_open_for_the_next`) | VC-098 |
+| 058 | 보관 사슬 미완성·봉인 파손은 개표 때 보류(`custody_and_seal_changes_follow_the_close`) | VC-040 |
+| 047, 100(보강) | 수동 마감과 늦은 마감, 늦은 배치 마감의 짝과 기한(마감보다 앞선 구간 거부), 늦은 마감은 한 번, 마감 전 늦은 배치 마감 거부, 같은 배치 본문 두 번 거부(`a_manual_close_is_held_until_its_late_close`, `a_late_batch_close_resolves_the_open_batch`, `a_box_takes_one_late_close`; `ityv-state` `tests/boxes.rs` `manual_close_and_late_close`, `late_batch_resolves_open_batches`) | VC-100 |
+| —(같은 본문) | 투표함 안에서 기록·검증 공개·배치 본문은 한 번(`a_record_or_challenge_body_counts_once`) | 서명 바이트만 다른 사본 |
+| —(빠진 투표함) | 변경으로 빠진 투표함의 이벤트는 거부·보류(`events_of_a_box_an_amendment_removed_are_held`) | |
+| —(VC-038, 관외) | 마감 앞 그 투표소의 마지막 `IssuanceCount`로 봉투 수 대조(`an_out_of_district_box_closes_with_its_station_issuance`) | |
+| —(상태 순서) | 상태에 맞지 않는 이벤트 거부, 대체 상태 출입, 수량 불일치 보류, 색인 보류의 전달(`events_out_of_their_state_are_refused`, `a_fallback_comes_and_goes_while_the_box_is_open`, `counts_that_disagree_with_the_ledger_hold_the_close`, `the_index_holds_reach_the_box`, `a_refused_opening_leaves_the_box_to_the_next_one`) | |
+| —(장치 교체) | `BoxUnitSwap`은 `Unsupported`로 거부, 투표함 보류(`a_device_swap_is_not_yet_followed`) | 변경 추적은 다음 단계 |
+| 014, 059 | — | M5 2d 이후: 상태 사다리 |
