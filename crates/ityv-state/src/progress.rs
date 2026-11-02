@@ -105,9 +105,8 @@ impl<'a> ObserverCount<'a> {
         })
     }
 
-    /// An observer count without signatures, for unit tests and Kani
-    /// harnesses only.
-    #[cfg(any(test, kani))]
+    /// An observer count without signatures, for unit tests only.
+    #[cfg(test)]
     pub(crate) const fn unsigned(parts: ObserverCountParts<'a>) -> Self {
         Self { parts }
     }

@@ -56,7 +56,7 @@ const MAX_GENESIS_SIGNERS: usize = 66;
 const _: () = assert!(MAX_GENESIS_SIGNERS == MAX_GENESIS_WITNESSES + 2);
 
 /// The head every entry built by [`Entry::unproved`] records.
-#[cfg(any(test, kani))]
+#[cfg(test)]
 pub(crate) const TEST_HEAD: Hash512 = Hash512([0x7E; 64]);
 
 /// A genesis entry whose inclusion in its set was proved against a pinned,
@@ -94,8 +94,8 @@ impl<T> Entry<T> {
         &self.head
     }
 
-    /// An entry without a proof, for unit tests and Kani harnesses only.
-    #[cfg(any(test, kani))]
+    /// An entry without a proof, for unit tests only.
+    #[cfg(test)]
     pub(crate) const fn unproved(value: T) -> Self {
         Self {
             value,
