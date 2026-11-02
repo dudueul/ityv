@@ -24,18 +24,18 @@ use common::{
 };
 use ityv_crypto::HybridSigningKey;
 use ityv_encoding::{
-    BoxClose, CustodyRoute, EnvelopeIssuance, EventRole, FallbackKind, GenesisBox, HYBRID_VK_LEN,
-    Hash512, ModuleIds, RouteId, SealChangeReason, SignerRole, StationId,
+    BoxClose, CustodyRoute, EnvelopeIssuance, EventRole, FallbackKind, GenesisBox, Hash512,
+    ModuleIds, RouteId, SealChangeReason, SignerRole, StationId,
 };
 use ityv_state::{
-    BallotBox, BallotMark, CloseTokens, Closed, Error, HoldReason, HoldSet, Observed, Open,
-    Profile, Provisioned, PublicBoard, Rla, Signed, Transition,
+    BallotBox, BallotMark, BoxSpec, CloseTokens, Closed, Error, HoldReason, HoldSet, Observed,
+    Open, Profile, Provisioned, PublicBoard, Rla, Signed, Transition,
 };
 
 fn provisioned(profile: Profile) -> BallotBox<'static, Provisioned> {
     let auth = authorization();
     let cap = auth.grant::<PublicBoard>(today()).unwrap();
-    BallotBox::provision(spec(profile), &cap).unwrap()
+    BallotBox::provision(&spec(profile), &cap).unwrap()
 }
 
 fn open(profile: Profile) -> BallotBox<'static, Open> {
@@ -123,105 +123,55 @@ fn clean_life_cycle() {
 
 #[test]
 fn provisioning_refusals() {
+    // A capability of another election.
+    let other = common::signed_authorization_for(other_election());
+    let foreign = other.grant::<PublicBoard>(today()).unwrap();
+    assert_eq!(
+        BallotBox::provision(&spec(Profile::InPerson), &foreign).unwrap_err(),
+        Error::Mismatch
+    );
     let auth = authorization();
     let cap = auth.grant::<PublicBoard>(today()).unwrap();
-    let mut s = spec(Profile::InPerson);
-    s.election_id = other_election();
-    assert_eq!(BallotBox::provision(s, &cap).unwrap_err(), Error::Mismatch);
-    let mut s = spec(Profile::InPerson);
-    s.route = &s.route[..1];
-    assert_eq!(
-        BallotBox::provision(s, &cap).unwrap_err(),
-        Error::CustodyRoute
-    );
-    let mut s = spec(Profile::InPerson);
-    s.route = &s.route[..2];
-    assert!(BallotBox::provision(s, &cap).is_ok());
+    assert!(BallotBox::provision(&spec(Profile::InPerson), &cap).is_ok());
 }
 
 #[test]
-fn spec_matches_the_genesis() {
+fn spec_is_the_genesis_entry() {
+    let b = common::fixture_for(Profile::Absentee);
     let s = spec(Profile::Absentee);
-    let mut key = [0u8; HYBRID_VK_LEN];
-    let vk = device_key().verifying_key();
-    key[..ityv_crypto::sig::MLDSA87_VK_LEN].copy_from_slice(vk.mldsa87());
-    key[ityv_crypto::sig::MLDSA87_VK_LEN..].copy_from_slice(vk.ed25519());
-    let key = leak(key);
-    let registered = ModuleIds::new(s.registered_modules).unwrap();
-    let entry = GenesisBox {
-        box_id: box_id(),
-        station_id: station(),
-        ballot_style_id: ityv_encoding::BallotStyleId::new(b"S-1").unwrap(),
-        profile: ityv_encoding::CaptureProfile::Absentee,
-        route_id: RouteId::new(b"R-1").unwrap(),
-        device_key: key,
-        modules: registered,
-    };
-    let route = CustodyRoute::new(RouteId::new(b"R-1").unwrap(), false, s.route).unwrap();
-    assert_eq!(s.check_genesis(&entry, &route), Ok(()));
-    let differs = |e: GenesisBox<'static>, r: &CustodyRoute<'static>| {
-        assert_eq!(s.check_genesis(&e, r), Err(Error::Mismatch));
-    };
-    differs(
-        GenesisBox {
-            box_id: other_box(),
-            ..entry
-        },
-        &route,
+    assert_eq!(s.election_id(), election());
+    assert_eq!(s.box_id(), box_id());
+    assert_eq!(s.station_id(), station());
+    assert_eq!(s.profile(), Profile::Absentee);
+    assert_eq!(
+        s.registered_modules(),
+        &ModuleIds::new(&[module(b"MOD-P1"), module(b"MOD-P2"), module(b"MOD-P3")]).unwrap()
     );
-    differs(
-        GenesisBox {
-            station_id: StationId::new(b"ST-2").unwrap(),
-            ..entry
-        },
-        &route,
+    assert_eq!(
+        s.device_key(),
+        common::genesis::key_bytes(&device_key().verifying_key())
     );
-    differs(
-        GenesisBox {
-            profile: ityv_encoding::CaptureProfile::InPerson,
-            ..entry
-        },
-        &route,
+    assert_eq!(s.route().route_id(), RouteId::new(b"R-1").unwrap());
+    assert_eq!(s.route().stop_count(), 3);
+    assert_eq!(s.roster(), b.roster());
+    // The route must be the one the box names.
+    let entry = b.entry::<GenesisBox<'static>>(common::BOX);
+    let other_route = b.entry::<CustodyRoute<'static>>(b"R-2");
+    assert_eq!(
+        BoxSpec::new(&b.genesis, &entry, &other_route, b.roster()).unwrap_err(),
+        Error::Mismatch
     );
-    for index in [0, HYBRID_VK_LEN - 1] {
-        let mut other = *key;
-        other[index] ^= 1;
-        differs(
-            GenesisBox {
-                device_key: leak(other),
-                ..entry
-            },
-            &route,
-        );
-    }
-    differs(
-        GenesisBox {
-            modules: modules(),
-            ..entry
-        },
-        &route,
-    );
-    let mut swapped = registered;
-    swapped = ModuleIds::new(&[module(b"MOD-P1"), module(b"MOD-P2"), module(b"MOD-P4")])
-        .unwrap_or(swapped);
-    differs(
-        GenesisBox {
-            modules: swapped,
-            ..entry
-        },
-        &route,
-    );
-    let other_route = CustodyRoute::new(RouteId::new(b"R-2").unwrap(), false, s.route).unwrap();
-    differs(entry, &other_route);
-    let short = CustodyRoute::new(RouteId::new(b"R-1").unwrap(), false, &s.route[..2]).unwrap();
-    differs(entry, &short);
-    let reordered = CustodyRoute::new(
-        RouteId::new(b"R-1").unwrap(),
-        false,
-        &[s.route[0], s.route[2], s.route[1]],
-    )
-    .unwrap();
-    differs(entry, &reordered);
+    // Another box of the same genesis gets its own station and key.
+    let second = b.entry::<GenesisBox<'static>>(b"BOX-002");
+    let s2 = BoxSpec::new(&b.genesis, &second, &other_route, b.roster()).unwrap();
+    assert_eq!(s2.box_id(), other_box_2());
+    assert_eq!(s2.station_id(), StationId::new(b"ST-2").unwrap());
+    assert_eq!(s2.profile(), Profile::InPerson);
+    assert_ne!(s2.device_key(), s.device_key());
+}
+
+fn other_box_2() -> ityv_encoding::BoxId<'static> {
+    ityv_encoding::BoxId::new(b"BOX-002").unwrap()
 }
 
 fn refused_opening(o: Signed<'static>) -> Error {
@@ -308,23 +258,10 @@ fn opening_refusals_and_holds() {
 #[test]
 fn shared_key_halves_count_once() {
     // Two observers whose keys share the Ed25519 half are one signer.
+    // The genesis registers obs-x and obs-y with such keys.
     let a = leak(HybridSigningKey::from_seeds([60; 32], [61; 32]));
     let b = leak(HybridSigningKey::from_seeds([62; 32], [61; 32]));
-    let mut s = spec(Profile::InPerson);
-    let mut people = roster().to_vec();
-    people.push(ityv_state::RosterEntry {
-        signer_id: ityv_encoding::SignerId::new(b"obs-x").unwrap(),
-        role: ityv_encoding::RosterRole::Observer,
-        org_id: ityv_encoding::OrgId::new(b"PARTY-X").unwrap(),
-        key: leak(a.verifying_key()),
-    });
-    people.push(ityv_state::RosterEntry {
-        signer_id: ityv_encoding::SignerId::new(b"obs-y").unwrap(),
-        role: ityv_encoding::RosterRole::Observer,
-        org_id: ityv_encoding::OrgId::new(b"PARTY-Y").unwrap(),
-        key: leak(b.verifying_key()),
-    });
-    s.roster = common::leak_slice(people);
+    let s = spec(Profile::InPerson);
     let auth = authorization();
     let cap = auth.grant::<PublicBoard>(today()).unwrap();
     let signers = [
@@ -338,7 +275,7 @@ fn shared_key_halves_count_once() {
         opened_body(box_id(), modules(), true, 0),
         &signers,
     ));
-    let refused = BallotBox::provision(s, &cap).unwrap().open(event);
+    let refused = BallotBox::provision(&s, &cap).unwrap().open(event);
     assert_eq!(refused.error(), Some(Error::SignatureSigner));
 }
 

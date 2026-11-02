@@ -20,6 +20,26 @@ pub const HYBRID_SIG_LEN: usize = 4691;
 /// Length of one hybrid verifying key (`mldsa87[2592] ‖ ed25519[32]`).
 pub const HYBRID_VK_LEN: usize = 2624;
 
+/// Length of the ML-DSA-87 half of a hybrid verifying key; the Ed25519
+/// half follows it.
+pub const MLDSA87_VK_HALF: usize = 2592;
+
+/// Whether two hybrid verifying keys share their ML-DSA-87 half or their
+/// Ed25519 half. Two signatures that must be independent may not come
+/// from keys sharing a half (VC-006, VC-098): one broken algorithm would
+/// let one holder produce both.
+#[must_use]
+pub fn keys_share_half(a: &[u8; HYBRID_VK_LEN], b: &[u8; HYBRID_VK_LEN]) -> bool {
+    match (
+        a.split_first_chunk::<MLDSA87_VK_HALF>(),
+        b.split_first_chunk::<MLDSA87_VK_HALF>(),
+    ) {
+        (Some((a_ml, a_ed)), Some((b_ml, b_ed))) => a_ml == b_ml || a_ed == b_ed,
+        // Not reachable: both keys are longer than the half.
+        _ => true,
+    }
+}
+
 /// Length of one Ed25519 signature.
 pub const ED25519_SIG_LEN: usize = 64;
 

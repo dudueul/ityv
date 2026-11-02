@@ -9,8 +9,8 @@
 use crate::error::{Error, Kind};
 use crate::primitives::{
     BallotStyleId, BoxId, Day, ElectionId, Hash512, KeysetId, LedgerId, ModuleId, ObserverId,
-    OrgId, Point32, RouteId, Scalar32, SchemaId, Seq, SignerId, StationId, TimeBucket, Token192,
-    TreeSize, TrusteeId, UnitId,
+    OrgId, Point32, ReportingUnitId, RouteId, Scalar32, SchemaId, Seq, SignerId, StationId,
+    TimeBucket, Token192, TreeSize, TrusteeId, UnitId,
 };
 use crate::reader::Reader;
 use crate::writer::Writer;
@@ -191,6 +191,7 @@ ident_newtype_codec!(OrgId);
 ident_newtype_codec!(SignerId);
 ident_newtype_codec!(RouteId);
 ident_newtype_codec!(UnitId);
+ident_newtype_codec!(ReportingUnitId);
 
 impl<T: Encode> Encode for Option<T> {
     fn encoded_len(&self) -> usize {

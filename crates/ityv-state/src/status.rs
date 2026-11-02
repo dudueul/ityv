@@ -34,16 +34,18 @@
 //! checkpoint not anchored within the hour leaves the status `UNVERIFIED`,
 //! a board not published within 24 hours is `HOLD_REVIEW`.
 
-use ityv_crypto::{HybridSigned, HybridVerifyingKey, Verified};
+use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
-    LegalDecisionRefBody, LegalDecisionRefParts, LegalOutcome, SCHEMA_LEGAL_DECISION_REF_BODY,
-    SCHEMA_VERSION_1, Scope, ScopeSet, TallyEffect, decode_object,
+    LegalDecisionRefBody, LegalDecisionRefParts, LegalOutcome, RosterRole,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_VERSION_1, Scope, ScopeSet, TallyEffect, decode_object,
 };
 use ityv_ledger::{Breach, Error as LedgerError, Status as LedgerStatus};
 
+use crate::close::RosterEntry;
 use crate::dispute::Dispute;
 use crate::error::Error;
 use crate::hold::{HoldReason, HoldSet};
+use crate::sig::key_is;
 
 /// Signature purpose of a legal decision reference (PROTOCOL.md Appendix B).
 pub const PURPOSE_LEGAL_DECISION: &[u8] = b"legal-decision";
@@ -349,15 +351,15 @@ pub fn evaluate(evidence: &Evidence) -> StatusReport {
 /// status as `LEGAL_CERTIFIED`; it never derives it (VC-049), and it does
 /// not change the dispute's machine status (PROTOCOL.md §13).
 ///
-/// What it does not prove: that the authority is the one the law empowers
-/// for this dispute (the caller passes the key from the verified genesis or
-/// appointment, M5), or that the decision document says what the body
-/// summarises.
+/// The authority is a legal authority on the genesis roster
+/// ([`ityv_encoding::RosterRole::Authority`]). What it does not prove:
+/// that the law empowers that authority for this particular dispute, or
+/// that the decision document says what the body summarises.
 #[derive(Debug, Clone, Copy)]
 pub struct LegalReference<'a> {
     object: &'a [u8],
     body: LegalDecisionRefParts<'a>,
-    authority: &'a HybridVerifyingKey,
+    authority: &'a RosterEntry<'a>,
 }
 
 impl<'a> LegalReference<'a> {
@@ -368,18 +370,22 @@ impl<'a> LegalReference<'a> {
     /// `legal-decision` over a canonical `LegalDecisionRefBody`.
     ///
     /// # Errors
-    /// [`Error::SignatureObject`] for another purpose,
+    /// [`Error::NotRegistered`] if `authority` is not registered as a legal
+    /// authority, [`Error::SignatureObject`] for another purpose,
     /// [`Error::SignatureSigner`] for another key, [`Error::Decode`] if the
     /// object is not a `LegalDecisionRefBody`.
     pub fn from_signed(
         signed: &Verified<HybridSigned<'a>>,
-        authority: &HybridVerifyingKey,
+        authority: &'a RosterEntry<'a>,
     ) -> Result<Self, Error> {
         let token = signed.get();
+        if authority.get().role != RosterRole::Authority {
+            return Err(Error::NotRegistered);
+        }
         if token.purpose().as_bytes() != PURPOSE_LEGAL_DECISION {
             return Err(Error::SignatureObject);
         }
-        if token.key() != authority {
+        if !key_is(token.key(), authority.get().key) {
             return Err(Error::SignatureSigner);
         }
         let body: LegalDecisionRefBody<'a> = decode_object(
@@ -391,7 +397,7 @@ impl<'a> LegalReference<'a> {
         Ok(Self {
             object: token.object(),
             body: *body.parts(),
-            authority: token.key(),
+            authority,
         })
     }
 
@@ -426,9 +432,9 @@ impl<'a> LegalReference<'a> {
             && self.body.election_id.as_bytes() == dispute.election_id().as_bytes()
     }
 
-    /// The authority's key.
+    /// The authority, as the roster registers it.
     #[must_use]
-    pub const fn authority(&self) -> &'a HybridVerifyingKey {
+    pub const fn authority(&self) -> &'a RosterEntry<'a> {
         self.authority
     }
 }

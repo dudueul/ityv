@@ -180,12 +180,21 @@ pub(crate) struct Vector {
 }
 
 pub(crate) fn render(title: &str, schema: SchemaId, vectors: &[Vector]) -> String {
+    render_version(title, schema, SCHEMA_VERSION_1, vectors)
+}
+
+pub(crate) fn render_version(
+    title: &str,
+    schema: SchemaId,
+    version: u16,
+    vectors: &[Vector],
+) -> String {
     use core::fmt::Write as _;
     let mut out = String::new();
     // Writing to a String cannot fail, so the results are discarded.
     let _ = writeln!(
         out,
-        "# ityv-encoding test vectors: {title} (schema_id 0x{:04x}, version {SCHEMA_VERSION_1})",
+        "# ityv-encoding test vectors: {title} (schema_id 0x{:04x}, version {version})",
         schema.get()
     );
     let _ = writeln!(out, "# VALID <label> <hex>");

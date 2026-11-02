@@ -26,6 +26,7 @@ pub use ityv_encoding::EnvelopeIssuance;
 use crate::close::{RosterEntry, check_witnesses};
 use crate::error::Error;
 use crate::hold::{HoldReason, HoldSet};
+use crate::progress::ObserverCount;
 use crate::sig::Signed;
 
 /// A station's issuance count whose signatures were bound to the roster.
@@ -83,14 +84,34 @@ fn sum(values: &[u64]) -> Option<u64> {
     values.iter().try_fold(0u64, |acc, v| acc.checked_add(*v))
 }
 
-/// Checks the stock and issuance identities and, if the check-in count is
-/// known, the participation identity. An overflowing or negative term is a
-/// violation.
+/// Checks the stock and issuance identities and, given the observers'
+/// final count of the station (PROTOCOL.md §6.3), the participation
+/// identity. An overflowing or negative term is a violation.
 ///
 /// What it does not prove: that the counts are true; equal counts do not
 /// exclude a substitution of equal numbers (ITYV-BEH-170).
-#[must_use]
+///
+/// # Errors
+/// [`Error::Mismatch`] if `observers` is not the final count of the
+/// issuance count's station.
 pub fn issuance_verdict(
+    issuance: &IssuanceCount<'_>,
+    totals: &IssuanceTotals,
+    observers: Option<&ObserverCount<'_>>,
+) -> Result<HoldSet, Error> {
+    let p = &issuance.parts;
+    let checkin = match observers {
+        Some(o) => Some(
+            o.final_total(p.election_id, p.station_id)
+                .ok_or(Error::Mismatch)?,
+        ),
+        None => None,
+    };
+    Ok(verdict(issuance, totals, checkin))
+}
+
+/// [`issuance_verdict`] with the check-in total as a number.
+pub(crate) fn verdict(
     issuance: &IssuanceCount<'_>,
     totals: &IssuanceTotals,
     checkin: Option<u64>,
@@ -127,7 +148,7 @@ pub fn issuance_verdict(
 mod tests {
     use ityv_encoding::{ElectionId, IssuanceCountParts, StationId, TimeBucket};
 
-    use super::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict};
+    use super::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict, verdict};
     use crate::hold::{HoldReason, HoldSet};
 
     fn parts() -> IssuanceCountParts<'static> {
@@ -168,9 +189,51 @@ mod tests {
     fn identities_hold() {
         // Stock 20 + 80 + 2 = 102; 12 + 2 + 2 + 1 + 2 + 1 = 20; check-in
         // 20 − 2 − 2 = 16.
-        assert!(issuance_verdict(&issuance(), &totals(), Some(16)).is_empty());
-        assert!(issuance_verdict(&issuance(), &totals(), None).is_empty());
+        assert!(verdict(&issuance(), &totals(), Some(16)).is_empty());
+        assert!(verdict(&issuance(), &totals(), None).is_empty());
         assert_eq!(issuance().parts().issued, 20);
+    }
+
+    #[test]
+    fn verdict_takes_the_final_observer_count() {
+        use ityv_encoding::{ObserverCountKind, ObserverCountParts, UnitId};
+
+        use crate::error::Error;
+        use crate::progress::ObserverCount;
+
+        let count = |kind, election: &'static [u8], station: &'static [u8], n| {
+            ObserverCount::unsigned(ObserverCountParts {
+                election_id: ElectionId::new(election).unwrap(),
+                station_id: StationId::new(station).unwrap(),
+                unit_id: UnitId::new(b"U1").unwrap(),
+                count: n,
+                kind,
+                time_bucket: TimeBucket::new(0),
+            })
+        };
+        let last = |n| count(ObserverCountKind::Final, b"E1", b"S1", n);
+        assert_eq!(
+            issuance_verdict(&issuance(), &totals(), Some(&last(16))),
+            Ok(HoldSet::empty())
+        );
+        assert_eq!(
+            issuance_verdict(&issuance(), &totals(), Some(&last(17))),
+            Ok(HoldSet::empty().with(HoldReason::ParticipationMismatch))
+        );
+        assert_eq!(
+            issuance_verdict(&issuance(), &totals(), None),
+            Ok(HoldSet::empty())
+        );
+        for other in [
+            count(ObserverCountKind::Periodic, b"E1", b"S1", 16),
+            count(ObserverCountKind::Final, b"E2", b"S1", 16),
+            count(ObserverCountKind::Final, b"E1", b"S2", 16),
+        ] {
+            assert_eq!(
+                issuance_verdict(&issuance(), &totals(), Some(&other)),
+                Err(Error::Mismatch)
+            );
+        }
     }
 
     #[test]
@@ -182,10 +245,10 @@ mod tests {
                 p.unused = unused;
                 p.printer_waste = waste;
             });
-            assert_eq!(issuance_verdict(&i, &totals(), None), only);
+            assert_eq!(verdict(&i, &totals(), None), only);
         }
         let overflow = with(|p| p.unused = u64::MAX);
-        assert_eq!(issuance_verdict(&overflow, &totals(), None), only);
+        assert_eq!(verdict(&overflow, &totals(), None), only);
     }
 
     #[test]
@@ -196,7 +259,7 @@ mod tests {
                 p.stock_received = issued + 82;
             });
             assert_eq!(
-                issuance_verdict(&i, &totals(), None),
+                verdict(&i, &totals(), None),
                 HoldSet::empty().with(HoldReason::IssuanceMismatch)
             );
         }
@@ -212,26 +275,25 @@ mod tests {
                 _ => t.records = u64::MAX,
             }
             let i = IssuanceCount::unsigned(p);
-            assert!(issuance_verdict(&i, &t, None).contains(HoldReason::IssuanceMismatch));
+            assert!(verdict(&i, &t, None).contains(HoldReason::IssuanceMismatch));
         }
     }
 
     #[test]
     fn participation_mismatch() {
         let only = HoldSet::empty().with(HoldReason::ParticipationMismatch);
-        assert_eq!(issuance_verdict(&issuance(), &totals(), Some(15)), only);
-        assert_eq!(issuance_verdict(&issuance(), &totals(), Some(17)), only);
+        assert_eq!(verdict(&issuance(), &totals(), Some(15)), only);
+        assert_eq!(verdict(&issuance(), &totals(), Some(17)), only);
         let underflow = with(|p| p.issued = 1);
         assert!(
-            issuance_verdict(&underflow, &totals(), Some(0))
-                .contains(HoldReason::ParticipationMismatch)
+            verdict(&underflow, &totals(), Some(0)).contains(HoldReason::ParticipationMismatch)
         );
         let challenged_underflow = with(|p| {
             p.issued = 3;
             p.voter_spoiled = 2;
         });
         assert!(
-            issuance_verdict(&challenged_underflow, &totals(), Some(0))
+            verdict(&challenged_underflow, &totals(), Some(0))
                 .contains(HoldReason::ParticipationMismatch)
         );
     }
@@ -254,7 +316,7 @@ mod tests {
                 p.printer_waste = waste;
             });
             let totals = IssuanceTotals { records, without_record, challenged, quarantined };
-            let holds = issuance_verdict(&i, &totals, checkin);
+            let holds = verdict(&i, &totals, checkin);
             // Sums of at most six u64 terms in i128 cannot wrap, so the
             // wrapping operations are exact here.
             let sum = |xs: &[u64]| xs.iter().fold(0i128, |a, x| a.wrapping_add(i128::from(*x)));

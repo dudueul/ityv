@@ -15,6 +15,7 @@ use crate::envelope::{Header, decode as decode_object};
 use crate::error::{Error, Kind};
 use crate::primitives::{OrgId, SchemaId, SignerId};
 use crate::reader::Reader;
+use crate::schema::checkin::{BoxUnitSwapBody, CheckinUnitSwapBody, ObserverCountAttestBody};
 use crate::schema::events::{
     BoxOpenedBody, CustodyHandoffBody, DisputeEventBody, FallbackBody, ImprintAuditBody,
     IssuanceCountBody, LateBatchCloseBody, LegalDecisionRefBody, SealChangeBody,
@@ -22,9 +23,10 @@ use crate::schema::events::{
 use crate::schema::progress::ProgressCheckBody;
 use crate::schema::util::{HYBRID_SIG_LEN, ascending_by, read_fixed};
 use crate::schema::{
-    SCHEMA_BOX_OPENED_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_PROGRESS_CHECK_BODY,
+    SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
+    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
+    SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY,
     SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1,
 };
 use crate::writer::Writer;
@@ -42,7 +44,7 @@ pub const MIN_EVENT_CLERKS: usize = 2;
 pub const MIN_EVENT_OBSERVER_ORGS: usize = 2;
 
 /// The body schemas a `WitnessedEvent` may carry.
-pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 10] = [
+pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 13] = [
     SCHEMA_CUSTODY_HANDOFF_BODY,
     SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_LEGAL_DECISION_REF_BODY,
@@ -53,6 +55,9 @@ pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 10] = [
     SCHEMA_SEAL_CHANGE_BODY,
     SCHEMA_LATE_BATCH_CLOSE_BODY,
     SCHEMA_PROGRESS_CHECK_BODY,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_CHECKIN_UNIT_SWAP_BODY,
+    SCHEMA_BOX_UNIT_SWAP_BODY,
 ];
 
 /// The signature purpose of a body schema (PROTOCOL.md Appendix B), or
@@ -70,6 +75,9 @@ pub fn purpose_of(schema: SchemaId) -> Option<&'static [u8]> {
         0x002D => b"seal-change",
         0x002E => b"late-batch-close",
         0x0032 => b"progress-check",
+        0x003F => b"observer-count",
+        0x0040 => b"checkin-swap",
+        0x0041 => b"box-swap",
         _ => return None,
     };
     Some(purpose)
@@ -176,6 +184,30 @@ where
         && extra_ok
 }
 
+/// Observers only, of two or more organisations (`ObserverCountAttest`,
+/// VC-016).
+fn observers_only<'a, F, I>(sigs: F) -> bool
+where
+    F: Fn() -> I,
+    I: Iterator<Item = EventSig<'a>>,
+{
+    let mut orgs: [Option<&[u8]>; MAX_EVENT_SIGS] = [None; MAX_EVENT_SIGS];
+    let mut distinct = 0usize;
+    for s in sigs() {
+        if s.role != EventRole::Observer {
+            return false;
+        }
+        let org = s.org_id.as_bytes();
+        if !orgs.iter().take(distinct).flatten().any(|o| *o == org) {
+            if let Some(slot) = orgs.get_mut(distinct) {
+                *slot = Some(org);
+            }
+            distinct = distinct.saturating_add(1);
+        }
+    }
+    distinct >= MIN_EVENT_OBSERVER_ORGS
+}
+
 fn exactly<'a, F, I>(sigs: F, roles: &[EventRole]) -> bool
 where
     F: Fn() -> I,
@@ -189,8 +221,11 @@ where
 /// * `BoxOpened`: the device once, two or more clerks, observers of two or
 ///   more organisations, nothing else;
 /// * `Fallback`, `IssuanceCount`, `ImprintAudit`, `SealChange`,
-///   `LateBatchClose`, `ProgressCheck`: two or more clerks and observers of two or more
-///   organisations, nothing else;
+///   `LateBatchClose`, `ProgressCheck`, `CheckinUnitSwap`, `BoxUnitSwap`:
+///   two or more clerks and observers of two or more organisations,
+///   nothing else;
+/// * `ObserverCountAttest`: observers of two or more organisations,
+///   nothing else;
 /// * `CustodyHandoff`: exactly one sender and one receiver;
 /// * `DisputeEvent`: exactly the commission and the committee;
 /// * `LegalDecisionRef`: exactly one authority.
@@ -201,7 +236,8 @@ where
 {
     match schema.get() {
         0x0029 => clerks_and_observers(sigs, Some(EventRole::Device)),
-        0x002A..=0x002E | 0x0032 => clerks_and_observers(sigs, None),
+        0x002A..=0x002E | 0x0032 | 0x0040 | 0x0041 => clerks_and_observers(sigs, None),
+        0x003F => observers_only(sigs),
         0x0008 => exactly(sigs, &[EventRole::Sender, EventRole::Receiver]),
         0x000E => exactly(sigs, &[EventRole::Commission, EventRole::Committee]),
         0x000F => exactly(sigs, &[EventRole::Authority]),
@@ -223,6 +259,9 @@ fn validate_body(schema: SchemaId, bytes: &[u8]) -> Result<(), Error> {
         0x002D => decode_object::<SealChangeBody<'_>>(schema, v, bytes).map(drop),
         0x002E => decode_object::<LateBatchCloseBody<'_>>(schema, v, bytes).map(drop),
         0x0032 => decode_object::<ProgressCheckBody<'_>>(schema, v, bytes).map(drop),
+        0x003F => decode_object::<ObserverCountAttestBody<'_>>(schema, v, bytes).map(drop),
+        0x0040 => decode_object::<CheckinUnitSwapBody<'_>>(schema, v, bytes).map(drop),
+        0x0041 => decode_object::<BoxUnitSwapBody<'_>>(schema, v, bytes).map(drop),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }

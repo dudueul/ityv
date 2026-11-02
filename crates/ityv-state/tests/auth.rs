@@ -15,7 +15,7 @@ use ityv_encoding::{
     SCHEMA_VERSION_1, Scope, ScopeSet, TallyEffect, TimeBucket, encode_object,
 };
 use ityv_state::{
-    BallotMark, Bodies, CryptoTallyAid, Dispute, DisputeEvent, DisputeStatus, DisputeType, Error,
+    BallotMark, CryptoTallyAid, Dispute, DisputeEvent, DisputeStatus, DisputeType, Error, Genesis,
     LATE_CLOSE_WINDOW, LegalReference, PublicBoard, Rla, Signed, TallyReadiness, VoterCode,
     admit_aggregate_opening, admit_tally_scope, authorize,
 };
@@ -27,9 +27,14 @@ struct Signers {
 
 fn signers() -> Signers {
     Signers {
-        commission: leak(HybridSigningKey::from_seeds([20; 32], [21; 32])),
-        committee: leak(HybridSigningKey::from_seeds([22; 32], [23; 32])),
+        commission: common::genesis::commission(),
+        committee: common::genesis::committee(),
     }
+}
+
+/// The genesis that pins `object`.
+fn pinning(object: &'static [u8]) -> &'static Genesis<'static> {
+    &common::genesis_pinning(object).genesis
 }
 
 fn object(scopes: ScopeSet) -> &'static [u8] {
@@ -70,37 +75,40 @@ fn token(
 }
 
 #[test]
-fn authorize_rejects_keys_sharing_a_half() {
+fn authorize_takes_keys_and_object_from_the_genesis() {
+    let s = signers();
     let obj = object(stage2());
-    let commission = leak(HybridSigningKey::from_seeds([30; 32], [31; 32]));
-    let commission_vk = commission.verifying_key();
-    let t1 = token(commission, b"legal-auth", obj);
-    // Same Ed25519 half, different ML-DSA-87 half.
-    let shared_ed = leak(HybridSigningKey::from_seeds([32; 32], [31; 32]));
-    // Same ML-DSA-87 half, different Ed25519 half.
-    let shared_ml = leak(HybridSigningKey::from_seeds([30; 32], [33; 32]));
-    for other in [shared_ed, shared_ml] {
-        let vk = other.verifying_key();
-        let t2 = token(other, b"legal-auth", obj);
-        assert_eq!(
-            authorize(obj, &t1, &commission_vk, &t2, &vk).unwrap_err(),
-            Error::SignatureSigner
-        );
-    }
-    let distinct = leak(HybridSigningKey::from_seeds([32; 32], [33; 32]));
-    let t2 = token(distinct, b"legal-auth", obj);
-    assert!(authorize(obj, &t1, &commission_vk, &t2, &distinct.verifying_key()).is_ok());
+    let t1 = token(s.commission, b"legal-auth", obj);
+    let t2 = token(s.committee, b"legal-auth", obj);
+    assert!(authorize(pinning(obj), obj, &t1, &t2).is_ok());
+    // An object the genesis does not pin, even if both bodies signed it.
+    let other = object(ScopeSet::from_slice(&[Scope::PublicBoard]));
+    let o1 = token(s.commission, b"legal-auth", other);
+    let o2 = token(s.committee, b"legal-auth", other);
+    assert_eq!(
+        authorize(pinning(obj), other, &o1, &o2).unwrap_err(),
+        Error::Mismatch
+    );
+    // Keys the genesis does not register, for either body.
+    let stranger = leak(HybridSigningKey::from_seeds([30; 32], [31; 32]));
+    let x = token(stranger, b"legal-auth", obj);
+    assert_eq!(
+        authorize(pinning(obj), obj, &x, &t2).unwrap_err(),
+        Error::SignatureSigner
+    );
+    assert_eq!(
+        authorize(pinning(obj), obj, &t1, &x).unwrap_err(),
+        Error::SignatureSigner
+    );
 }
 
 #[test]
 fn authorize_checks_both_signatures() {
     let s = signers();
     let obj = object(stage2());
-    let commission_vk = s.commission.verifying_key();
-    let committee_vk = s.committee.verifying_key();
     let t1 = token(s.commission, b"legal-auth", obj);
     let t2 = token(s.committee, b"legal-auth", obj);
-    let auth = authorize(obj, &t1, &commission_vk, &t2, &committee_vk).unwrap();
+    let auth = authorize(pinning(obj), obj, &t1, &t2).unwrap();
     assert_eq!(auth.election_id(), election());
     assert_eq!(auth.scopes(), stage2());
     assert_eq!(auth.effective_from_day(), Day::new(90));
@@ -113,27 +121,27 @@ fn authorize_checks_both_signatures() {
 
     // The same key twice is one signer.
     assert_eq!(
-        authorize(obj, &t1, &commission_vk, &t1, &commission_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &t1, &t1).unwrap_err(),
         Error::SignatureSigner
     );
     // Swapped tokens come from the wrong keys.
     assert_eq!(
-        authorize(obj, &t2, &commission_vk, &t1, &committee_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &t2, &t1).unwrap_err(),
         Error::SignatureSigner
     );
     assert_eq!(
-        authorize(obj, &t1, &commission_vk, &t1, &committee_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &t1, &t1).unwrap_err(),
         Error::SignatureSigner
     );
     // Wrong purpose, for either signer.
     let p1 = token(s.commission, b"legal-decision", obj);
     let p2 = token(s.committee, b"genesis", obj);
     assert_eq!(
-        authorize(obj, &p1, &commission_vk, &t2, &committee_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &p1, &t2).unwrap_err(),
         Error::SignatureObject
     );
     assert_eq!(
-        authorize(obj, &t1, &commission_vk, &p2, &committee_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &t1, &p2).unwrap_err(),
         Error::SignatureObject
     );
     // A token over another object, for either signer.
@@ -141,11 +149,11 @@ fn authorize_checks_both_signatures() {
     let o1 = token(s.commission, b"legal-auth", other);
     let o2 = token(s.committee, b"legal-auth", other);
     assert_eq!(
-        authorize(obj, &o1, &commission_vk, &t2, &committee_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &o1, &t2).unwrap_err(),
         Error::SignatureObject
     );
     assert_eq!(
-        authorize(obj, &t1, &commission_vk, &o2, &committee_vk).unwrap_err(),
+        authorize(pinning(obj), obj, &t1, &o2).unwrap_err(),
         Error::SignatureObject
     );
 }
@@ -153,13 +161,11 @@ fn authorize_checks_both_signatures() {
 #[test]
 fn authorize_decodes_and_checks_scopes() {
     let s = signers();
-    let commission_vk = s.commission.verifying_key();
-    let committee_vk = s.committee.verifying_key();
     let garbage: &'static [u8] = leak_slice(std::vec![0u8; 40]);
     let g1 = token(s.commission, b"legal-auth", garbage);
     let g2 = token(s.committee, b"legal-auth", garbage);
     assert_eq!(
-        authorize(garbage, &g1, &commission_vk, &g2, &committee_vk).unwrap_err(),
+        authorize(pinning(garbage), garbage, &g1, &g2).unwrap_err(),
         Error::Decode
     );
     // VOTER_CODE without BALLOT_MARK (VC-008).
@@ -171,7 +177,7 @@ fn authorize_decodes_and_checks_scopes() {
     let k1 = token(s.commission, b"legal-auth", skipped);
     let k2 = token(s.committee, b"legal-auth", skipped);
     assert_eq!(
-        authorize(skipped, &k1, &commission_vk, &k2, &committee_vk).unwrap_err(),
+        authorize(pinning(skipped), skipped, &k1, &k2).unwrap_err(),
         Error::ScopePrerequisite {
             scope: Scope::VoterCode,
             requires: Scope::BallotMark
@@ -195,36 +201,57 @@ fn decision_object(dispute_hash: Hash512, tally_effect: TallyEffect) -> &'static
     )
 }
 
+fn court() -> &'static ityv_state::RosterEntry<'static> {
+    common::roster()
+        .iter()
+        .find(|e| e.get().signer_id.as_bytes() == b"court")
+        .unwrap()
+}
+
 #[test]
 fn legal_reference_needs_the_authority_signature() {
-    let authority = leak(HybridSigningKey::from_seeds([30; 32], [31; 32]));
-    let authority_vk = authority.verifying_key();
+    let authority = common::genesis::court_key();
+    let authority_vk = court();
     let decision = decision_object(Hash512([6; 64]), TallyEffect::Exclude);
     let signed = leak(token(authority, b"legal-decision", decision));
-    let reference = LegalReference::from_signed(signed, &authority_vk).unwrap();
+    let reference = LegalReference::from_signed(signed, authority_vk).unwrap();
     assert_eq!(reference.object(), decision);
-    assert_eq!(reference.authority(), &authority_vk);
+    assert_eq!(reference.authority(), authority_vk);
     assert_eq!(reference.outcome(), LegalOutcome::Upheld);
     assert_eq!(reference.tally_effect(), TallyEffect::Exclude);
     assert_eq!(reference.body().dispute_hash, Hash512([6; 64]));
     assert_eq!(LegalReference::NAME, "LEGAL_CERTIFIED");
     let wrong_purpose = leak(token(authority, b"dispute", decision));
     assert_eq!(
-        LegalReference::from_signed(wrong_purpose, &authority_vk).unwrap_err(),
+        LegalReference::from_signed(wrong_purpose, authority_vk).unwrap_err(),
         Error::SignatureObject
     );
     let stranger = leak(HybridSigningKey::from_seeds([32; 32], [33; 32]));
     let forged = leak(token(stranger, b"legal-decision", decision));
     assert_eq!(
-        LegalReference::from_signed(forged, &authority_vk).unwrap_err(),
+        LegalReference::from_signed(forged, authority_vk).unwrap_err(),
         Error::SignatureSigner
     );
     // The object must be a canonical LegalDecisionRefBody.
     let opaque: &'static [u8] = b"decision object";
     let opaque = leak(token(authority, b"legal-decision", opaque));
     assert_eq!(
-        LegalReference::from_signed(opaque, &authority_vk).unwrap_err(),
+        LegalReference::from_signed(opaque, authority_vk).unwrap_err(),
         Error::Decode
+    );
+    // A clerk on the roster is not a legal authority.
+    let clerk = common::roster()
+        .iter()
+        .find(|e| e.get().signer_id.as_bytes() == b"clerk-1")
+        .unwrap();
+    let by_clerk = leak(token(
+        common::person_key(b"clerk-1"),
+        b"legal-decision",
+        decision,
+    ));
+    assert_eq!(
+        LegalReference::from_signed(by_clerk, clerk).unwrap_err(),
+        Error::NotRegistered
     );
 }
 
@@ -272,19 +299,14 @@ fn capabilities_from_a_signed_authorization() {
 struct Parties {
     commission: &'static HybridSigningKey,
     committee: &'static HybridSigningKey,
-    bodies: Bodies<'static>,
+    bodies: &'static Genesis<'static>,
 }
 
 fn parties() -> Parties {
-    let commission = leak(HybridSigningKey::from_seeds([50; 32], [51; 32]));
-    let committee = leak(HybridSigningKey::from_seeds([52; 32], [53; 32]));
     Parties {
-        commission,
-        committee,
-        bodies: Bodies {
-            commission: common::verifying(commission),
-            committee: common::verifying(committee),
-        },
+        commission: common::genesis::commission(),
+        committee: common::genesis::committee(),
+        bodies: &common::fixture().genesis,
     }
 }
 
@@ -340,18 +362,18 @@ fn disputes_need_both_bodies() {
         let f = filing(&p, *t);
         if *t == DisputeType::InclusionMissing {
             assert_eq!(
-                Dispute::file(&f, &p.bodies, &board),
+                Dispute::file(&f, p.bodies, &board),
                 Err(Error::ScopeMissing(Scope::VoterCode))
             );
-            let d = Dispute::file_inclusion(&f, &p.bodies, &code).unwrap();
+            let d = Dispute::file_inclusion(&f, p.bodies, &code).unwrap();
             assert_eq!(d.status(), DisputeStatus::Open);
             assert_eq!(d.dispute_type(), *t);
         } else {
             assert_eq!(
-                Dispute::file_inclusion(&f, &p.bodies, &code),
+                Dispute::file_inclusion(&f, p.bodies, &code),
                 Err(Error::Mismatch)
             );
-            let d = Dispute::file(&f, &p.bodies, &board).unwrap();
+            let d = Dispute::file(&f, p.bodies, &board).unwrap();
             assert_eq!(d.status(), DisputeStatus::Open);
             assert!(d.is_unresolved());
             assert_eq!(d.election_id(), election());
@@ -368,32 +390,28 @@ fn disputes_need_both_bodies() {
     // A capability of another election.
     let other = common::signed_authorization_for(common::other_election());
     let foreign = other.grant::<PublicBoard>(today()).unwrap();
-    assert_eq!(Dispute::file(&f, &p.bodies, &foreign), Err(Error::Mismatch));
-    // Keys of the bodies swapped, or one key for both.
-    let swapped = Bodies {
-        commission: p.bodies.committee,
-        committee: p.bodies.commission,
-    };
+    assert_eq!(Dispute::file(&f, p.bodies, &foreign), Err(Error::Mismatch));
+    // The bodies' keys swapped, or one key for both.
+    let swapped = witnessed(
+        f.event.body_bytes(),
+        &[
+            By::Other(b"nec", EventRole::Commission, b"NEC", p.committee),
+            By::Other(b"ivc", EventRole::Committee, b"IVC", p.commission),
+        ],
+    );
     assert_eq!(
-        Dispute::file(&f, &swapped, &board),
+        Dispute::file(&swapped, p.bodies, &board),
         Err(Error::SignatureSigner)
     );
-    let same = Bodies {
-        commission: p.bodies.commission,
-        committee: p.bodies.commission,
-    };
-    assert_eq!(
-        Dispute::file(&f, &same, &board),
-        Err(Error::SignatureSigner)
+    let same = witnessed(
+        f.event.body_bytes(),
+        &[
+            By::Other(b"nec", EventRole::Commission, b"NEC", p.commission),
+            By::Other(b"ivc", EventRole::Committee, b"IVC", p.commission),
+        ],
     );
-    // Keys that share one half are one body.
-    let half = leak(HybridSigningKey::from_seeds([54; 32], [51; 32]));
-    let shared = Bodies {
-        commission: p.bodies.commission,
-        committee: common::verifying(half),
-    };
     assert_eq!(
-        Dispute::file(&f, &shared, &board),
+        Dispute::file(&same, p.bodies, &board),
         Err(Error::SignatureSigner)
     );
     // A token missing.
@@ -402,13 +420,13 @@ fn disputes_need_both_bodies() {
         tokens: &f.tokens[..1],
     };
     assert_eq!(
-        Dispute::file(&short, &p.bodies, &board),
+        Dispute::file(&short, p.bodies, &board),
         Err(Error::Unverified)
     );
     // Not a dispute event, or not a filing.
     let not_dispute = common::audit(0, 0);
     assert_eq!(
-        Dispute::file(&not_dispute, &p.bodies, &board),
+        Dispute::file(&not_dispute, p.bodies, &board),
         Err(Error::Decode)
     );
     let investigating = witnessed(
@@ -421,7 +439,7 @@ fn disputes_need_both_bodies() {
         &by_bodies(&p),
     );
     assert_eq!(
-        Dispute::file(&investigating, &p.bodies, &board),
+        Dispute::file(&investigating, p.bodies, &board),
         Err(Error::DisputeFiling)
     );
 }
@@ -432,7 +450,7 @@ fn dispute_status_changes_are_signed() {
     let auth = common::authorization();
     let board = auth.grant::<PublicBoard>(today()).unwrap();
     let f = filing(&p, DisputeType::Custody);
-    let d = Dispute::file(&f, &p.bodies, &board).unwrap();
+    let d = Dispute::file(&f, p.bodies, &board).unwrap();
     let filing_hash = *d.filing_hash();
     let step = |action, result| {
         witnessed(
@@ -441,14 +459,11 @@ fn dispute_status_changes_are_signed() {
         )
     };
     let d = d
-        .record(
-            &step(DisputeAction::Investigating, Hash512::ZERO),
-            &p.bodies,
-        )
+        .record(&step(DisputeAction::Investigating, Hash512::ZERO), p.bodies)
         .unwrap();
     assert_eq!(d.status(), DisputeStatus::Investigating);
     // A second filing, an event for another filing, or another type.
-    assert_eq!(d.record(&f, &p.bodies), Err(Error::Mismatch));
+    assert_eq!(d.record(&f, p.bodies), Err(Error::Mismatch));
     let elsewhere = witnessed(
         dispute_body(
             DisputeAction::ResolvedTechnical,
@@ -458,7 +473,7 @@ fn dispute_status_changes_are_signed() {
         ),
         &by_bodies(&p),
     );
-    assert_eq!(d.record(&elsewhere, &p.bodies), Err(Error::Mismatch));
+    assert_eq!(d.record(&elsewhere, p.bodies), Err(Error::Mismatch));
     let retyped = witnessed(
         dispute_body(
             DisputeAction::ResolvedTechnical,
@@ -468,7 +483,7 @@ fn dispute_status_changes_are_signed() {
         ),
         &by_bodies(&p),
     );
-    assert_eq!(d.record(&retyped, &p.bodies), Err(Error::Mismatch));
+    assert_eq!(d.record(&retyped, p.bodies), Err(Error::Mismatch));
     // Signed by one body only (a stranger in the committee's place).
     let stranger = leak(HybridSigningKey::from_seeds([56; 32], [57; 32]));
     let half_signed = witnessed(
@@ -484,15 +499,12 @@ fn dispute_status_changes_are_signed() {
         ],
     );
     assert_eq!(
-        d.record(&half_signed, &p.bodies),
+        d.record(&half_signed, p.bodies),
         Err(Error::SignatureSigner)
     );
     // An illegal step.
     assert_eq!(
-        d.record(
-            &step(DisputeAction::Investigating, Hash512::ZERO),
-            &p.bodies
-        ),
+        d.record(&step(DisputeAction::Investigating, Hash512::ZERO), p.bodies),
         Err(Error::DisputeTransition {
             from: DisputeStatus::Investigating,
             event: DisputeEvent::Investigate
@@ -501,7 +513,7 @@ fn dispute_status_changes_are_signed() {
     let resolved = d
         .record(
             &step(DisputeAction::ResolvedTechnical, Hash512([7; 64])),
-            &p.bodies,
+            p.bodies,
         )
         .unwrap();
     assert!(!resolved.is_unresolved());
@@ -509,20 +521,20 @@ fn dispute_status_changes_are_signed() {
     let referred = resolved
         .record(
             &step(DisputeAction::ReferredLegal, Hash512([6; 64])),
-            &p.bodies,
+            p.bodies,
         )
         .unwrap();
     assert_eq!(referred.status(), DisputeStatus::ReferredLegal);
     assert!(referred.is_unresolved());
     // A decision names the filing; it does not change the status.
-    let authority = leak(HybridSigningKey::from_seeds([58; 32], [59; 32]));
+    let authority = common::genesis::court_key();
     let decision = decision_object(filing_hash, TallyEffect::NoEffect);
     let signed = leak(token(authority, b"legal-decision", decision));
-    let reference = LegalReference::from_signed(signed, common::verifying(authority)).unwrap();
+    let reference = LegalReference::from_signed(signed, court()).unwrap();
     assert!(reference.concerns(&referred));
     assert!(referred.is_unresolved());
     let other = decision_object(Hash512([1; 64]), TallyEffect::NoEffect);
     let other = leak(token(authority, b"legal-decision", other));
-    let other = LegalReference::from_signed(other, common::verifying(authority)).unwrap();
+    let other = LegalReference::from_signed(other, court()).unwrap();
     assert!(!other.concerns(&referred));
 }

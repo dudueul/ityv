@@ -67,13 +67,13 @@
 //! ```
 
 use ityv_crypto::hash::object_hash;
-use ityv_crypto::{HybridSigned, HybridVerifyingKey, Verified};
+use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
     BatchAttest, BatchAttestBody, BoxClose, BoxId, BoxOpenedBody, CastRecordBody,
     ChallengeOpeningBody, CloseCounts, CustodyRoute, ElectionId, FallbackBody, FallbackKind,
-    GenesisBox, ImprintAuditBody, LateBatchCloseBody, ModuleId, ModuleIds, OrgId,
-    SCHEMA_BOX_OPENED_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, StationId, TimeBucket,
+    GenesisBox, ImprintAuditBody, LateBatchCloseBody, ModuleIds, SCHEMA_BOX_OPENED_BODY,
+    SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, StationId,
+    TimeBucket,
 };
 
 use crate::auth::{BallotMark, Cap, PublicBoard, Rla};
@@ -83,10 +83,11 @@ use crate::close::{
 };
 use crate::custody::CustodyChain;
 use crate::error::Error;
+use crate::genesis::{Entry, Genesis};
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::{EnvelopeIssuance, IssuanceCount};
 use crate::record::{Profile, RecordState, is_test_style};
-use crate::sig::{Signed, check_token};
+use crate::sig::{Key, Signed, check_token};
 use crate::tally::LATE_CLOSE_WINDOW;
 
 /// Signature purpose of the box-close signatures (device and people).
@@ -95,65 +96,86 @@ pub const PURPOSE_BOX_CLOSE: &[u8] = b"box-close";
 /// Signature purpose of the late box-close signatures.
 pub const PURPOSE_LATE_BOX_CLOSE: &[u8] = b"late-box-close";
 
-/// What the genesis fixes for one box.
+/// What the genesis fixes for one box: its entry, its custody route and
+/// the roster, all proved against one genesis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoxSpec<'a> {
-    /// The election.
-    pub election_id: ElectionId<'a>,
-    /// The box.
-    pub box_id: BoxId<'a>,
-    /// The box's station.
-    pub station_id: StationId<'a>,
-    /// The collection profile.
-    pub profile: Profile,
-    /// The chamber modules registered in the genesis.
-    pub registered_modules: &'a [ModuleId<'a>],
-    /// The box's commitment-unit key.
-    pub device_key: &'a HybridVerifyingKey,
-    /// The registered clerks, observers and custodians, with their keys.
-    pub roster: &'a [RosterEntry<'a>],
-    /// The custody route: organisations from the station to the counting
-    /// centre.
-    pub route: &'a [OrgId<'a>],
+    election_id: ElectionId<'a>,
+    entry: GenesisBox<'a>,
+    route: CustodyRoute<'a>,
+    roster: &'a [RosterEntry<'a>],
 }
 
-impl BoxSpec<'_> {
-    /// Checks that the spec is exactly what the genesis entry and its
-    /// custody route say: box, station, profile, device key bytes, modules
-    /// and route stops.
+impl<'a> BoxSpec<'a> {
+    /// The spec of the box `entry` names, with its custody route and the
+    /// roster (clerks, observers and custodians, as proved entries).
     ///
     /// # Errors
-    /// [`Error::Mismatch`] for any difference.
-    pub fn check_genesis(
-        &self,
-        entry: &GenesisBox<'_>,
-        route: &CustodyRoute<'_>,
-    ) -> Result<(), Error> {
-        let key = entry
-            .device_key
-            .split_first_chunk::<{ ityv_crypto::sig::MLDSA87_VK_LEN }>();
-        let key_ok = key.is_some_and(|(mldsa87, ed25519)| {
-            mldsa87 == self.device_key.mldsa87() && ed25519 == self.device_key.ed25519().as_slice()
-        });
-        let modules_ok = entry.modules.len() == self.registered_modules.len()
-            && entry
-                .modules
-                .iter()
-                .zip(self.registered_modules)
-                .all(|(a, b)| a.as_bytes() == b.as_bytes());
-        let route_ok = route.route_id().as_bytes() == entry.route_id.as_bytes()
-            && route.stop_count() == self.route.len()
-            && route
-                .stops()
-                .zip(self.route)
-                .all(|(a, b)| a.as_bytes() == b.as_bytes());
-        let same = entry.box_id.as_bytes() == self.box_id.as_bytes()
-            && entry.station_id.as_bytes() == self.station_id.as_bytes()
-            && Profile::from_capture(entry.profile) == self.profile
-            && key_ok
-            && modules_ok
-            && route_ok;
-        if same { Ok(()) } else { Err(Error::Mismatch) }
+    /// [`Error::Mismatch`] if `route` is not the route the box names.
+    pub fn new(
+        genesis: &Genesis<'a>,
+        entry: &Entry<GenesisBox<'a>>,
+        route: &Entry<CustodyRoute<'a>>,
+        roster: &'a [RosterEntry<'a>],
+    ) -> Result<Self, Error> {
+        let (entry, route) = (*entry.get(), *route.get());
+        if route.route_id().as_bytes() != entry.route_id.as_bytes() {
+            return Err(Error::Mismatch);
+        }
+        Ok(Self {
+            election_id: genesis.election_id(),
+            entry,
+            route,
+            roster,
+        })
+    }
+
+    /// The election.
+    #[must_use]
+    pub const fn election_id(&self) -> ElectionId<'a> {
+        self.election_id
+    }
+
+    /// The box.
+    #[must_use]
+    pub const fn box_id(&self) -> BoxId<'a> {
+        self.entry.box_id
+    }
+
+    /// The box's station.
+    #[must_use]
+    pub const fn station_id(&self) -> StationId<'a> {
+        self.entry.station_id
+    }
+
+    /// The collection profile.
+    #[must_use]
+    pub const fn profile(&self) -> Profile {
+        Profile::from_capture(self.entry.profile)
+    }
+
+    /// The chamber modules registered for the box.
+    #[must_use]
+    pub const fn registered_modules(&self) -> &ModuleIds<'a> {
+        &self.entry.modules
+    }
+
+    /// The commitment unit's key.
+    #[must_use]
+    pub const fn device_key(&self) -> &'a Key {
+        self.entry.device_key
+    }
+
+    /// The custody route.
+    #[must_use]
+    pub const fn route(&self) -> &CustodyRoute<'a> {
+        &self.route
+    }
+
+    /// The roster.
+    #[must_use]
+    pub const fn roster(&self) -> &'a [RosterEntry<'a>] {
+        self.roster
     }
 }
 
@@ -255,7 +277,7 @@ struct Base<'a> {
 fn device_signed(
     close: &BoxClose<'_>,
     token: Option<&Verified<HybridSigned<'_>>>,
-    key: &HybridVerifyingKey,
+    key: &Key,
     purpose: &[u8],
 ) -> Result<bool, Error> {
     match (close.device_sig(), token) {
@@ -285,7 +307,7 @@ fn within_window(close_bucket: TimeBucket, at: TimeBucket) -> Result<(), Error> 
 impl<'a> Base<'a> {
     fn check_target(&self, election_id: ElectionId<'_>, box_id: BoxId<'_>) -> Result<(), Error> {
         if election_id.as_bytes() == self.spec.election_id.as_bytes()
-            && box_id.as_bytes() == self.spec.box_id.as_bytes()
+            && box_id.as_bytes() == self.spec.entry.box_id.as_bytes()
         {
             Ok(())
         } else {
@@ -300,16 +322,14 @@ impl<'a> Base<'a> {
             .map_err(|_| Error::Decode)?;
         let p = body.parts();
         self.check_target(p.election_id, p.box_id)?;
-        let registered = p.modules.iter().all(|module| {
-            self.spec
-                .registered_modules
-                .iter()
-                .any(|r| r.as_bytes() == module.as_bytes())
-        });
+        let registered = p
+            .modules
+            .iter()
+            .all(|module| self.spec.entry.modules.contains(module));
         if !registered {
             return Err(Error::NotRegistered);
         }
-        check_witnesses(signed, self.spec.roster, Some(self.spec.device_key))?;
+        check_witnesses(signed, self.spec.roster, Some(self.spec.entry.device_key))?;
         let holds = HoldSet::empty()
             .with_if(!p.seals_match, HoldReason::SealMismatch)
             .with_if(p.initial_count != 0, HoldReason::OpeningNonZero);
@@ -337,13 +357,13 @@ impl<'a> Base<'a> {
             .checked_add(1)
             .ok_or(Error::Overflow)?;
         Ok(RecordState::new(
-            self.spec.profile,
+            self.spec.profile(),
             is_test_style(record.ballot_style_id()),
         ))
     }
 
     fn challenge(&mut self, opening: &ChallengeOpeningBody<'_>) -> Result<(), Error> {
-        if matches!(self.spec.profile, Profile::ReceiptScan) {
+        if matches!(self.spec.profile(), Profile::ReceiptScan) {
             return Err(Error::Profile);
         }
         self.check_target(opening.election_id(), opening.box_id())?;
@@ -386,7 +406,7 @@ impl<'a> Base<'a> {
     ) -> HoldSet {
         let body = close.body();
         let facts = CountFacts {
-            profile: self.spec.profile,
+            profile: self.spec.profile(),
             counts: *counts,
             open_batches: body.open_batches(),
             observed: self.observed,
@@ -413,7 +433,7 @@ impl<'a> Base<'a> {
                 let checked = IssuanceCount::check(signed, self.spec.roster)?;
                 let p = checked.parts();
                 if p.election_id.as_bytes() != self.spec.election_id.as_bytes()
-                    || p.station_id.as_bytes() != self.spec.station_id.as_bytes()
+                    || p.station_id.as_bytes() != self.spec.entry.station_id.as_bytes()
                 {
                     return Err(Error::Mismatch);
                 }
@@ -424,24 +444,24 @@ impl<'a> Base<'a> {
         let signed = device_signed(
             close,
             tokens.device,
-            self.spec.device_key,
+            self.spec.entry.device_key,
             PURPOSE_BOX_CLOSE,
         )?;
         let counts = *body.counts();
         let verdict = self
             .verdict(&counts, close, envelopes)
             .with_if(!signed, HoldReason::ManualClose);
-        let expected = match self.spec.profile {
+        let expected = match self.spec.profile() {
             Profile::Absentee => counts.envelopes,
             Profile::InPerson | Profile::ReceiptScan => counts.paper,
         };
         let custody = CustodyChain::new(
             self.spec.election_id,
-            self.spec.box_id,
+            self.spec.entry.box_id,
             self.spec.route,
             *body.seal_digest(),
             expected,
-        )?;
+        );
         Ok(Closed {
             counts,
             open_batches: body.open_batches(),
@@ -475,7 +495,7 @@ impl<'a> Base<'a> {
         device_signed(
             close,
             Some(device),
-            self.spec.device_key,
+            self.spec.entry.device_key,
             PURPOSE_LATE_BOX_CLOSE,
         )?;
         let late = *body.counts();
@@ -543,13 +563,13 @@ impl<'a, S> BallotBox<'a, S> {
     /// The box.
     #[must_use]
     pub const fn box_id(&self) -> BoxId<'a> {
-        self.base.spec.box_id
+        self.base.spec.entry.box_id
     }
 
     /// The collection profile.
     #[must_use]
     pub const fn profile(&self) -> Profile {
-        self.base.spec.profile
+        self.base.spec.profile()
     }
 
     /// The modules opened in the box.
@@ -582,16 +602,12 @@ impl<'a> BallotBox<'a, Provisioned> {
     /// A box the genesis provisions.
     ///
     /// # Errors
-    /// [`Error::Mismatch`] if the capability belongs to another election,
-    /// [`Error::CustodyRoute`] if the route has fewer than two stops.
-    pub fn provision(spec: BoxSpec<'a>, cap: &Cap<'_, PublicBoard>) -> Result<Self, Error> {
+    /// [`Error::Mismatch`] if the capability belongs to another election.
+    pub fn provision(spec: &BoxSpec<'a>, cap: &Cap<'_, PublicBoard>) -> Result<Self, Error> {
         cap.check_election(spec.election_id)?;
-        if spec.route.len() < 2 {
-            return Err(Error::CustodyRoute);
-        }
         Ok(Self {
             base: Base {
-                spec,
+                spec: *spec,
                 modules: ModuleIds::EMPTY,
                 observed: Observed::ZERO,
                 fallback_declared: false,

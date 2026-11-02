@@ -15,18 +15,18 @@
 //! two clerks and observers of two organisations. Every signature must
 //! come with a verification token from the key the roster registers.
 
-use ityv_crypto::HybridVerifyingKey;
 use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
-    BoxId, CustodyHandoffBody, CustodyHandoffParts, ElectionId, EventRole, Hash512, OrgId,
-    RosterRole, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_SEAL_CHANGE_BODY, SealChangeBody,
+    BoxId, CustodyHandoffBody, CustodyHandoffParts, CustodyRoute, ElectionId, EventRole, Hash512,
+    OrgId, RosterRole, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_SEAL_CHANGE_BODY, SealChangeBody,
     SealChangeParts, SealChangeReason, SignerId,
 };
 
 use crate::close::{RosterEntry, check_witnesses};
 use crate::error::Error;
+use crate::genesis::Entry;
 use crate::hold::{HoldReason, HoldSet};
-use crate::sig::{Signed, check_event};
+use crate::sig::{Key, Signed, check_event};
 
 /// The key of a person who may sign a custody handoff: registered with
 /// that identifier and organisation as a clerk or a custodian.
@@ -34,9 +34,10 @@ fn custody_key<'r>(
     roster: &'r [RosterEntry<'r>],
     id: SignerId<'_>,
     org: OrgId<'_>,
-) -> Result<&'r HybridVerifyingKey, Error> {
+) -> Result<&'r Key, Error> {
     roster
         .iter()
+        .map(Entry::get)
         .find(|r| {
             r.signer_id.as_bytes() == id.as_bytes()
                 && r.org_id.as_bytes() == org.as_bytes()
@@ -51,7 +52,7 @@ fn custody_key<'r>(
 pub struct CustodyChain<'a> {
     election_id: ElectionId<'a>,
     box_id: BoxId<'a>,
-    route: &'a [OrgId<'a>],
+    route: CustodyRoute<'a>,
     handoffs: u32,
     last_hash: Hash512,
     last_receiver: Option<(SignerId<'a>, OrgId<'a>)>,
@@ -63,22 +64,17 @@ pub struct CustodyChain<'a> {
 
 impl<'a> CustodyChain<'a> {
     /// A chain for a box closed with `seal` and `expected_count`, along
-    /// `route` (the organisations in order, from the polling station to the
-    /// counting centre).
-    ///
-    /// # Errors
-    /// [`Error::CustodyRoute`] if the route has fewer than two stops.
+    /// the genesis `route` (two or more organisations in order, from the
+    /// polling station to the counting centre).
+    #[must_use]
     pub const fn new(
         election_id: ElectionId<'a>,
         box_id: BoxId<'a>,
-        route: &'a [OrgId<'a>],
+        route: CustodyRoute<'a>,
         seal: Hash512,
         expected_count: u64,
-    ) -> Result<Self, Error> {
-        if route.len() < 2 {
-            return Err(Error::CustodyRoute);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             election_id,
             box_id,
             route,
@@ -89,7 +85,7 @@ impl<'a> CustodyChain<'a> {
             announced_seal: None,
             expected_count,
             holds: HoldSet::empty(),
-        })
+        }
     }
 
     fn check_target(&self, election_id: ElectionId<'_>, box_id: BoxId<'_>) -> Result<(), Error> {
@@ -212,12 +208,12 @@ impl<'a> CustodyChain<'a> {
         }
         let stop = usize::try_from(self.handoffs).map_err(|_| Error::Overflow)?;
         let next = stop.checked_add(1).ok_or(Error::Overflow)?;
-        let on_route = if let (Some(from), Some(to)) = (self.route.get(stop), self.route.get(next))
-        {
-            from.as_bytes() == h.from_org.as_bytes() && to.as_bytes() == h.to_org.as_bytes()
-        } else {
-            false
-        };
+        let on_route =
+            if let (Some(from), Some(to)) = (self.route.stop(stop), self.route.stop(next)) {
+                from.as_bytes() == h.from_org.as_bytes() && to.as_bytes() == h.to_org.as_bytes()
+            } else {
+                false
+            };
         if !on_route {
             return Err(Error::CustodyRoute);
         }
@@ -257,7 +253,7 @@ impl<'a> CustodyChain<'a> {
         usize::try_from(self.handoffs)
             .ok()
             .and_then(|h| h.checked_add(1))
-            == Some(self.route.len())
+            == Some(self.route.stop_count())
     }
 
     /// The custody holds so far.
@@ -270,8 +266,8 @@ impl<'a> CustodyChain<'a> {
 #[cfg(test)]
 mod tests {
     use ityv_encoding::{
-        BoxId, CustodyHandoffParts, ElectionId, Hash512, OrgId, SealChangeParts, SealChangeReason,
-        SignerId, TimeBucket,
+        BoxId, CustodyHandoffParts, CustodyRoute, ElectionId, Hash512, OrgId, RouteId,
+        SealChangeParts, SealChangeReason, SignerId, TimeBucket,
     };
 
     use super::CustodyChain;
@@ -305,7 +301,8 @@ mod tests {
     const H2: Hash512 = Hash512([2; 64]);
 
     fn chain() -> CustodyChain<'static> {
-        CustodyChain::new(election(), box_id(), &ROUTE, SEAL, 100).unwrap()
+        let route = CustodyRoute::new(RouteId::new(b"R1").unwrap(), false, &ROUTE).unwrap();
+        CustodyChain::new(election(), box_id(), route, SEAL, 100)
     }
 
     fn first() -> CustodyHandoffParts<'static> {
@@ -347,19 +344,6 @@ mod tests {
             statement_hash: Hash512([9; 64]),
             time_bucket: TimeBucket::new(10),
         }
-    }
-
-    #[test]
-    fn route_needs_two_stops() {
-        assert_eq!(
-            CustodyChain::new(election(), box_id(), &ROUTE[..1], SEAL, 1).unwrap_err(),
-            Error::CustodyRoute
-        );
-        assert_eq!(
-            CustodyChain::new(election(), box_id(), &[], SEAL, 1).unwrap_err(),
-            Error::CustodyRoute
-        );
-        assert!(CustodyChain::new(election(), box_id(), &ROUTE[..2], SEAL, 1).is_ok());
     }
 
     #[test]

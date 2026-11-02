@@ -13,9 +13,11 @@ pub mod batch_attest;
 pub mod box_close;
 pub mod cast_record;
 pub mod challenge;
+pub mod checkin;
 pub mod checkpoint;
 pub mod events;
 pub mod genesis;
+pub mod genesis_body;
 pub mod ledger_frame;
 pub mod progress;
 pub mod scan_count;
@@ -31,6 +33,9 @@ pub const SCHEMA_VERSION_1: u16 = 1;
 
 /// `LedgerFrame` (ENCODING.md §6, `0x0001`).
 pub const SCHEMA_LEDGER_FRAME: SchemaId = SchemaId::new(0x0001);
+
+/// `GenesisBody` (ENCODING.md §8.54, `0x0002`, version 6).
+pub const SCHEMA_GENESIS_BODY: SchemaId = SchemaId::new(0x0002);
 
 /// `LegalAuthorization` (ENCODING.md §6, `0x0003`).
 pub const SCHEMA_LEGAL_AUTHORIZATION: SchemaId = SchemaId::new(0x0003);
@@ -130,3 +135,48 @@ pub const SCHEMA_PROGRESS_TICK: SchemaId = SchemaId::new(0x0031);
 
 /// `ProgressCheckBody` (ENCODING.md §8.47, `0x0032`).
 pub const SCHEMA_PROGRESS_CHECK_BODY: SchemaId = SchemaId::new(0x0032);
+
+/// `SignedGenesis` (ENCODING.md §8.56, `0x0033`).
+pub const SCHEMA_SIGNED_GENESIS: SchemaId = SchemaId::new(0x0033);
+
+/// `GenesisAmendmentBody` (ENCODING.md §8.55, `0x0034`).
+pub const SCHEMA_GENESIS_AMENDMENT_BODY: SchemaId = SchemaId::new(0x0034);
+
+/// `GenesisBox` (ENCODING.md §8.43, `0x0035`).
+pub const SCHEMA_GENESIS_BOX: SchemaId = SchemaId::new(0x0035);
+
+/// `StationEntry` (ENCODING.md §8.49, `0x0036`).
+pub const SCHEMA_STATION_ENTRY: SchemaId = SchemaId::new(0x0036);
+
+/// `StationProgressPolicy` (ENCODING.md §8.48, `0x0037`).
+pub const SCHEMA_STATION_PROGRESS_POLICY: SchemaId = SchemaId::new(0x0037);
+
+/// `ReportingUnitEntry` (ENCODING.md §8.50, `0x0038`).
+pub const SCHEMA_REPORTING_UNIT_ENTRY: SchemaId = SchemaId::new(0x0038);
+
+/// `CustodyRoute` (ENCODING.md §8.43, `0x0039`).
+pub const SCHEMA_CUSTODY_ROUTE: SchemaId = SchemaId::new(0x0039);
+
+/// `RosterSigner` (ENCODING.md §8.43, `0x003A`).
+pub const SCHEMA_ROSTER_SIGNER: SchemaId = SchemaId::new(0x003A);
+
+/// `ModuleEntry` (ENCODING.md §8.51, `0x003B`).
+pub const SCHEMA_MODULE_ENTRY: SchemaId = SchemaId::new(0x003B);
+
+/// `BallotStyleEntry` (ENCODING.md §8.52, `0x003C`).
+pub const SCHEMA_BALLOT_STYLE_ENTRY: SchemaId = SchemaId::new(0x003C);
+
+/// `TrusteeEntry` (ENCODING.md §8.53, `0x003D`).
+pub const SCHEMA_TRUSTEE_ENTRY: SchemaId = SchemaId::new(0x003D);
+
+/// `WitnessRosterEntry` (ENCODING.md §8.53, `0x003E`).
+pub const SCHEMA_WITNESS_ROSTER_ENTRY: SchemaId = SchemaId::new(0x003E);
+
+/// `ObserverCountAttestBody` (ENCODING.md §8.57, `0x003F`).
+pub const SCHEMA_OBSERVER_COUNT_ATTEST_BODY: SchemaId = SchemaId::new(0x003F);
+
+/// `CheckinUnitSwapBody` (ENCODING.md §8.58, `0x0040`).
+pub const SCHEMA_CHECKIN_UNIT_SWAP_BODY: SchemaId = SchemaId::new(0x0040);
+
+/// `BoxUnitSwapBody` (ENCODING.md §8.59, `0x0041`).
+pub const SCHEMA_BOX_UNIT_SWAP_BODY: SchemaId = SchemaId::new(0x0041);

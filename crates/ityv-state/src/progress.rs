@@ -16,6 +16,12 @@
 //!   [`HoldReason::ProgressUnresolved`] and [`HoldReason::CarryOut`] with
 //!   the counterfoil-check flag.
 //!
+//! Keys, boxes and limits come from proved genesis entries
+//! ([`crate::genesis::Entry`]); the counts a spare device continues from
+//! come from the swap events ([`CheckinUnitSwap`], [`BoxUnitSwap`]); the
+//! check-in total at close comes from the observers' final
+//! [`ObserverCount`].
+//!
 //! Ticks are fed in slot order. A tick that reaches the ledger late is
 //! taken by replaying the station from its opening (the evaluator is
 //! small and `Copy`); a slot that never arrives keeps the previous counts
@@ -23,27 +29,25 @@
 //! alarms never touch a record status, and nothing about them is a reason
 //! to treat a ballot as invalid.
 
-use ityv_crypto::{HybridSigned, HybridVerifyingKey, Verified};
+use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
-    BoxClose, BoxId, BoxProgressBody, BoxProgressState, CheckinProgressBody, CheckinProgressState,
-    ElectionId, ProgressAlarm, ProgressBody, ProgressCheckBody, ProgressFinding, ProgressTick,
-    SCHEMA_PROGRESS_CHECK_BODY, StationId, StationProgressPolicy,
+    BoxClose, BoxId, BoxProgressBody, BoxProgressState, BoxUnitSwapBody, BoxUnitSwapParts,
+    CheckinProgressBody, CheckinProgressState, CheckinUnit, CheckinUnitSwapBody,
+    CheckinUnitSwapParts, ElectionId, GenesisBox, ObserverCountAttestBody, ObserverCountKind,
+    ObserverCountParts, ProgressAlarm, ProgressBody, ProgressCheckBody, ProgressFinding,
+    ProgressTick, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY, StationEntry, StationId,
+    StationProgressPolicy, UnitId,
 };
 
-use crate::close::{RosterEntry, check_witnesses};
+pub use ityv_encoding::MAX_STATION_BOXES;
+
+use crate::close::{RosterEntry, check_observers, check_witnesses};
 use crate::error::Error;
+use crate::genesis::{Entry, Genesis};
 use crate::hold::{HoldReason, HoldSet};
 use crate::issuance::IssuanceCount;
-use crate::sig::{Signed, check_token};
-
-/// Boxes one station can have in the evaluator.
-///
-/// A polling station has one box per election round, and an early-voting
-/// station adds an out-of-district box; two-round local elections give two
-/// rounds, and a replaced scanner keeps its `box_id`. Eight leaves room
-/// for every arrangement in PROTOCOL.md §17 and keeps the evaluator a
-/// fixed-size value.
-pub const MAX_STATION_BOXES: usize = 8;
+use crate::sig::{Key, Signed, check_token};
 
 /// Slots after the alarm slot within which the on-site check must be
 /// recorded (PROTOCOL.md §7.10 item 6).
@@ -68,9 +72,130 @@ pub const MAX_PENDING: usize = 4;
 pub fn check_tick(
     tick: &ProgressTick<'_>,
     token: &Verified<HybridSigned<'_>>,
-    key: &HybridVerifyingKey,
+    key: &Key,
 ) -> Result<(), Error> {
     check_token(token, tick.body_bytes(), tick.purpose(), tick.sig(), key)
+}
+
+// ---------------------------------------------------------------------------
+// Witnessed station events (ADR-0028)
+
+/// An observer count (`ObserverCountAttestBody`, schema `0x003F`) whose
+/// signatures were bound to the roster: observers only, of two or more
+/// organisations (PROTOCOL.md §6.3, VC-016).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObserverCount<'a> {
+    parts: ObserverCountParts<'a>,
+}
+
+impl<'a> ObserverCount<'a> {
+    /// Checks a signed observer count.
+    ///
+    /// # Errors
+    /// [`Error::Decode`] if the event is not an observer count, and the
+    /// errors of [`crate::close::check_observers`].
+    pub fn check(signed: &Signed<'a>, roster: &[RosterEntry<'_>]) -> Result<Self, Error> {
+        let body: ObserverCountAttestBody<'a> = signed
+            .event
+            .body(SCHEMA_OBSERVER_COUNT_ATTEST_BODY)
+            .map_err(|_| Error::Decode)?;
+        check_observers(signed, roster)?;
+        Ok(Self {
+            parts: *body.parts(),
+        })
+    }
+
+    /// An observer count without signatures, for unit tests and Kani
+    /// harnesses only.
+    #[cfg(any(test, kani))]
+    pub(crate) const fn unsigned(parts: ObserverCountParts<'a>) -> Self {
+        Self { parts }
+    }
+
+    /// The fields.
+    #[must_use]
+    pub const fn parts(&self) -> &ObserverCountParts<'a> {
+        &self.parts
+    }
+
+    /// The station's check-in total, if this is the final count of
+    /// `station_id` in `election_id`.
+    #[must_use]
+    pub fn final_total(
+        &self,
+        election_id: ElectionId<'_>,
+        station_id: StationId<'_>,
+    ) -> Option<u64> {
+        let p = &self.parts;
+        (p.kind == ObserverCountKind::Final
+            && p.election_id.as_bytes() == election_id.as_bytes()
+            && p.station_id.as_bytes() == station_id.as_bytes())
+        .then_some(p.count)
+    }
+}
+
+/// A check-in unit swap (`CheckinUnitSwapBody`, schema `0x0040`) whose
+/// signatures were bound to the roster (two clerks, observers of two
+/// organisations).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckinUnitSwap<'a> {
+    parts: CheckinUnitSwapParts<'a>,
+}
+
+impl<'a> CheckinUnitSwap<'a> {
+    /// Checks a signed check-in unit swap.
+    ///
+    /// # Errors
+    /// [`Error::Decode`] if the event is not a check-in unit swap, and the
+    /// errors of [`check_witnesses`].
+    pub fn check(signed: &Signed<'a>, roster: &[RosterEntry<'_>]) -> Result<Self, Error> {
+        let body: CheckinUnitSwapBody<'a> = signed
+            .event
+            .body(SCHEMA_CHECKIN_UNIT_SWAP_BODY)
+            .map_err(|_| Error::Decode)?;
+        check_witnesses(signed, roster, None)?;
+        Ok(Self {
+            parts: *body.parts(),
+        })
+    }
+
+    /// The fields.
+    #[must_use]
+    pub const fn parts(&self) -> &CheckinUnitSwapParts<'a> {
+        &self.parts
+    }
+}
+
+/// A commitment-unit swap (`BoxUnitSwapBody`, schema `0x0041`) whose
+/// signatures were bound to the roster (two clerks, observers of two
+/// organisations).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxUnitSwap<'a> {
+    parts: BoxUnitSwapParts<'a>,
+}
+
+impl<'a> BoxUnitSwap<'a> {
+    /// Checks a signed commitment-unit swap.
+    ///
+    /// # Errors
+    /// [`Error::Decode`] if the event is not a commitment-unit swap, and
+    /// the errors of [`check_witnesses`].
+    pub fn check(signed: &Signed<'a>, roster: &[RosterEntry<'_>]) -> Result<Self, Error> {
+        let body: BoxUnitSwapBody<'a> = signed
+            .event
+            .body(SCHEMA_BOX_UNIT_SWAP_BODY)
+            .map_err(|_| Error::Decode)?;
+        check_witnesses(signed, roster, None)?;
+        Ok(Self {
+            parts: *body.parts(),
+        })
+    }
+
+    /// The fields.
+    #[must_use]
+    pub const fn parts(&self) -> &BoxUnitSwapParts<'a> {
+        &self.parts
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,25 +286,25 @@ impl<const N: usize> Stream<N> {
 pub struct BoxStream<'a> {
     election_id: ElectionId<'a>,
     box_id: BoxId<'a>,
-    key: &'a HybridVerifyingKey,
+    key: &'a Key,
     inner: Stream<1>,
 }
 
 impl<'a> BoxStream<'a> {
-    /// Opens the stream of `box_id`, whose first tick belongs to
-    /// `first_slot` (the slot of `BoxOpened`), with the device key from the
-    /// genesis entry.
+    /// Opens the stream of the box `entry` names, whose first tick belongs
+    /// to `first_slot` (the slot of `BoxOpened`), with the device key of
+    /// the entry.
     #[must_use]
     pub const fn open(
-        election_id: ElectionId<'a>,
-        box_id: BoxId<'a>,
-        key: &'a HybridVerifyingKey,
+        genesis: &Genesis<'a>,
+        entry: &Entry<GenesisBox<'a>>,
         first_slot: u64,
     ) -> Self {
+        let entry = entry.get();
         Self {
-            election_id,
-            box_id,
-            key,
+            election_id: genesis.election_id(),
+            box_id: entry.box_id,
+            key: entry.device_key,
             inner: Stream::new(first_slot, [0]),
         }
     }
@@ -212,12 +337,34 @@ impl<'a> BoxStream<'a> {
         Ok(usable.then_some(body))
     }
 
-    /// Continues with a spare commitment unit from `at_slot`, with its key
-    /// and the sheets-in count the replacement record confirms (PROTOCOL.md
-    /// §7.10 item 8).
-    pub fn swap(&mut self, key: &'a HybridVerifyingKey, at_slot: u64, sheets_in: u64) {
-        self.key = key;
-        self.inner.swap(at_slot, [sheets_in]);
+    /// Continues with a spare commitment unit: its key from the amended
+    /// genesis entry `entry` (PROTOCOL.md §4.3), and the slot and
+    /// sheets-in count the on-site `swap` record confirms (§7.10 item 8).
+    /// A count the signers could not read holds the stream.
+    ///
+    /// # Errors
+    /// [`Error::Mismatch`] if the entry or the swap names another box or
+    /// election, or the entry still has the current key.
+    pub fn swap(
+        &mut self,
+        entry: &Entry<GenesisBox<'a>>,
+        swap: &BoxUnitSwap<'_>,
+    ) -> Result<(), Error> {
+        let (e, p) = (entry.get(), swap.parts());
+        if e.box_id.as_bytes() != self.box_id.as_bytes()
+            || p.box_id.as_bytes() != self.box_id.as_bytes()
+            || p.election_id.as_bytes() != self.election_id.as_bytes()
+            || e.device_key == self.key
+        {
+            return Err(Error::Mismatch);
+        }
+        self.key = e.device_key;
+        self.inner.swap(p.at_slot, [p.sheets_in]);
+        self.inner.holds = self
+            .inner
+            .holds
+            .with_if(!p.confirmed, HoldReason::ProgressStream);
+        Ok(())
     }
 
     /// The stream holds at close: the last tick must be a closing tick
@@ -250,7 +397,9 @@ impl<'a> BoxStream<'a> {
 pub struct CheckinStream<'a> {
     election_id: ElectionId<'a>,
     station_id: StationId<'a>,
-    key: &'a HybridVerifyingKey,
+    unit_id: UnitId<'a>,
+    key: &'a Key,
+    spare: CheckinUnit<'a>,
     inner: Stream<4>,
 }
 
@@ -260,20 +409,22 @@ const fn checkin_counts(body: &CheckinProgressBody<'_>) -> [u64; 4] {
 }
 
 impl<'a> CheckinStream<'a> {
-    /// Opens the stream of `station_id` with the unit's key. The genesis
-    /// `stations[]` entry that holds the key has no canonical type yet
-    /// (ROADMAP M5); the caller passes the key from the verified genesis.
+    /// Opens the stream of the station `station` names, with the key of
+    /// its check-in unit in service.
     #[must_use]
     pub const fn open(
-        election_id: ElectionId<'a>,
-        station_id: StationId<'a>,
-        key: &'a HybridVerifyingKey,
+        genesis: &Genesis<'a>,
+        station: &Entry<StationEntry<'a>>,
         first_slot: u64,
     ) -> Self {
+        let station = station.get();
+        let primary = station.primary();
         Self {
-            election_id,
-            station_id,
-            key,
+            election_id: genesis.election_id(),
+            station_id: station.station_id(),
+            unit_id: primary.unit_id,
+            key: primary.key,
+            spare: *station.spare(),
             inner: Stream::new(first_slot, [0; 4]),
         }
     }
@@ -281,7 +432,8 @@ impl<'a> CheckinStream<'a> {
     /// Takes one tick of this station's unit; see [`BoxStream::accept`].
     ///
     /// # Errors
-    /// As [`BoxStream::accept`].
+    /// As [`BoxStream::accept`], and [`Error::Mismatch`] for a tick of the
+    /// unit not in service.
     pub fn accept(
         &mut self,
         tick: &ProgressTick<'a>,
@@ -294,6 +446,7 @@ impl<'a> CheckinStream<'a> {
         let p = body.parts();
         if p.election_id.as_bytes() != self.election_id.as_bytes()
             || p.station_id.as_bytes() != self.station_id.as_bytes()
+            || p.unit_id.as_bytes() != self.unit_id.as_bytes()
         {
             return Err(Error::Mismatch);
         }
@@ -302,23 +455,60 @@ impl<'a> CheckinStream<'a> {
         Ok(usable.then_some(body))
     }
 
-    /// Continues with the spare unit from `at_slot`, with its key and the
-    /// counts `CheckinUnitSwap` confirms (`[checkins, issued, spoiled,
-    /// returned]`).
-    pub fn swap(&mut self, key: &'a HybridVerifyingKey, at_slot: u64, counts: [u64; 4]) {
-        self.key = key;
-        self.inner.swap(at_slot, counts);
+    /// Continues with the station's sealed spare unit (its key from the
+    /// station entry) from the slot and counts the `swap` record confirms
+    /// (`[next_seq − 1, issued, spoiled, returned]`, PROTOCOL.md §6.2). A
+    /// count the signers could not read holds the stream. The spare is
+    /// used once: a second swap would name the spare as the failed unit
+    /// and has no spare to go to.
+    ///
+    /// # Errors
+    /// [`Error::Mismatch`] if the swap names another election or station,
+    /// a failed unit other than the one in service, or a spare other than
+    /// the station's.
+    pub fn swap(&mut self, swap: &CheckinUnitSwap<'_>) -> Result<(), Error> {
+        let p = swap.parts();
+        if p.election_id.as_bytes() != self.election_id.as_bytes()
+            || p.station_id.as_bytes() != self.station_id.as_bytes()
+            || p.failed_unit.as_bytes() != self.unit_id.as_bytes()
+            || p.spare_unit.as_bytes() != self.spare.unit_id.as_bytes()
+        {
+            return Err(Error::Mismatch);
+        }
+        self.unit_id = self.spare.unit_id;
+        self.key = self.spare.key;
+        self.inner.swap(p.at_slot, p.counts());
+        self.inner.holds = self
+            .inner
+            .holds
+            .with_if(!p.confirmed, HoldReason::ProgressStream);
+        Ok(())
     }
 
     /// The stream holds at close: the last tick must be a closing tick
     /// whose issued, spoiled and returned counts are the `IssuanceCount`'s
-    /// and whose check-ins are the last `ObserverCountAttest` total
-    /// (`observer_total`, which has no canonical type yet).
-    #[must_use]
-    pub fn finish(&self, issuance: &IssuanceCount<'_>, observer_total: u64) -> HoldSet {
+    /// and whose check-ins are the observers' final count.
+    ///
+    /// # Errors
+    /// [`Error::Mismatch`] if the issuance count is another station's, or
+    /// `observers` is not the final count of this station.
+    pub fn finish(
+        &self,
+        issuance: &IssuanceCount<'_>,
+        observers: &ObserverCount<'_>,
+    ) -> Result<HoldSet, Error> {
         let p = issuance.parts();
-        self.inner
-            .finish([observer_total, p.issued, p.voter_spoiled, p.returned])
+        if p.election_id.as_bytes() != self.election_id.as_bytes()
+            || p.station_id.as_bytes() != self.station_id.as_bytes()
+        {
+            return Err(Error::Mismatch);
+        }
+        let total = observers
+            .final_total(self.election_id, self.station_id)
+            .ok_or(Error::Mismatch)?;
+        Ok(self
+            .inner
+            .finish([total, p.issued, p.voter_spoiled, p.returned]))
     }
 
     /// The holds so far.
@@ -428,33 +618,35 @@ pub struct StationProgress<'a> {
 }
 
 impl<'a> StationProgress<'a> {
-    /// Starts the evaluator for the station of `policy`, with the boxes
-    /// the genesis lists for it.
+    /// Starts the evaluator for `station`, with the boxes its entry lists
+    /// and the limit of its progress policy.
     ///
     /// # Errors
-    /// [`Error::Overflow`] for more than [`MAX_STATION_BOXES`] boxes or none,
-    /// [`Error::Mismatch`] for a repeated box.
+    /// [`Error::Mismatch`] if the policy is another station's.
     pub fn new(
+        genesis: &Genesis<'a>,
+        station: &Entry<StationEntry<'a>>,
+        policy: &Entry<StationProgressPolicy<'a>>,
+    ) -> Result<Self, Error> {
+        let (station, policy) = (station.get(), policy.get());
+        if station.station_id().as_bytes() != policy.station_id().as_bytes() {
+            return Err(Error::Mismatch);
+        }
+        Ok(Self::start(genesis.election_id(), policy, station.boxes()))
+    }
+
+    /// The evaluator for the station of `policy` with `boxes` (at most
+    /// [`MAX_STATION_BOXES`], distinct, as a station entry guarantees).
+    pub(crate) fn start(
         election_id: ElectionId<'a>,
         policy: &StationProgressPolicy<'a>,
-        boxes: &[BoxId<'a>],
-    ) -> Result<Self, Error> {
-        if boxes.is_empty() || boxes.len() > MAX_STATION_BOXES {
-            return Err(Error::Overflow);
-        }
+        boxes: impl Iterator<Item = BoxId<'a>>,
+    ) -> Self {
         let mut box_ids = [None; MAX_STATION_BOXES];
         for (slot, id) in box_ids.iter_mut().zip(boxes) {
-            if boxes
-                .iter()
-                .filter(|other| other.as_bytes() == id.as_bytes())
-                .count()
-                != 1
-            {
-                return Err(Error::Mismatch);
-            }
-            *slot = Some(*id);
+            *slot = Some(id);
         }
-        Ok(Self {
+        Self {
             election_id,
             station_id: policy.station_id(),
             limit: u64::from(policy.limit_sheets()),
@@ -471,7 +663,7 @@ impl<'a> StationProgress<'a> {
             pending: [None; MAX_PENDING],
             holds: HoldSet::empty(),
             counterfoil: false,
-        })
+        }
     }
 
     /// Takes a box tick accepted by its [`BoxStream`]. A tick in fallback

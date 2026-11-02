@@ -40,8 +40,8 @@
 )]
 
 use ityv_encoding::{
-    BoxId, CloseCounts, CustodyHandoffParts, Day, ElectionId, Hash512, IssuanceCountParts, OrgId,
-    Scope, ScopeSet, SignerId, StationId, TimeBucket,
+    BoxId, CloseCounts, CustodyHandoffParts, CustodyRoute, Day, ElectionId, Hash512,
+    IssuanceCountParts, OrgId, RouteId, Scope, ScopeSet, SignerId, StationId, TimeBucket,
 };
 
 use crate::auth::{Authorization, BallotMark, check_scope_rules, stage};
@@ -50,7 +50,9 @@ use crate::custody::CustodyChain;
 use crate::dispute::{Dispute, DisputeEvent, DisputeStatus, DisputeType};
 use crate::error::Error;
 use crate::hold::{HoldReason, HoldSet};
-use crate::issuance::{EnvelopeIssuance, IssuanceCount, IssuanceTotals, issuance_verdict};
+use crate::issuance::{
+    EnvelopeIssuance, IssuanceCount, IssuanceTotals, verdict as issuance_verdict,
+};
 use crate::record::{Disposition, Exclusion, Primary, Profile, Receipt, RecordEvent, RecordState};
 use crate::status::{Evidence, Outcome, Publication, Status, Step, evaluate};
 
@@ -549,9 +551,14 @@ fn custody_first_link_is_exact() {
         Some(id) => id,
         None => panic!("valid identifier"),
     };
-    let Ok(mut chain) = CustodyChain::new(ELECTION, BOX, &ROUTE, Hash512::ZERO, 5) else {
+    static ROUTE_ID: RouteId<'static> = match RouteId::new(b"R") {
+        Some(id) => id,
+        None => panic!("valid identifier"),
+    };
+    let Ok(route) = CustodyRoute::new(ROUTE_ID, false, &ROUTE) else {
         panic!("route of three")
     };
+    let mut chain = CustodyChain::new(ELECTION, BOX, route, Hash512::ZERO, 5);
     let from_org: usize = kani::any();
     let to_org: usize = kani::any();
     kani::assume(from_org < 4 && to_org < 4);
@@ -676,9 +683,7 @@ fn progress_alarms_fire_once_per_run() {
     let Ok(policy) = StationProgressPolicy::new(STATION, 1, 1) else {
         panic!("valid policy");
     };
-    let Ok(mut station) = StationProgress::new(ELECTION, &policy, &[PBOX]) else {
-        panic!("one box");
-    };
+    let mut station = StationProgress::start(ELECTION, &policy, [PBOX].into_iter());
     let mut issued = [0u64; SLOTS];
     let mut sheets_in = [0u64; SLOTS];
     for t in 0..SLOTS {

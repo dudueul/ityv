@@ -24,13 +24,16 @@
 
 use core::marker::PhantomData;
 
-use ityv_crypto::{HybridSigned, HybridVerifyingKey, Verified};
+use ityv_crypto::hash::object_hash;
+use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
     Day, ElectionId, LegalAuthorizationBody, SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, Scope,
     ScopeSet, decode_object,
 };
 
 use crate::error::Error;
+use crate::genesis::Genesis;
+use crate::sig::{Key, key_is};
 
 /// Signature purpose of the legal authorization (PROTOCOL.md Appendix B).
 pub const PURPOSE_LEGAL_AUTH: &[u8] = b"legal-auth";
@@ -102,9 +105,8 @@ pub fn check_scope_rules(scopes: ScopeSet) -> Result<(), Error> {
 /// A checked legal authorization: the decoded body, signed by both
 /// authorities, with a valid scope set.
 ///
-/// What it does not prove: that the two keys are the ones the genesis pins
-/// (the caller passes them from the verified genesis, M5), or that the
-/// statutes behind `statute_refs_hash` say what the scopes claim.
+/// What it does not prove: that the statutes behind `statute_refs_hash`
+/// say what the scopes claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Authorization<'a> {
     election_id: ElectionId<'a>,
@@ -116,14 +118,14 @@ pub struct Authorization<'a> {
 fn check_token(
     token: &Verified<HybridSigned<'_>>,
     object: &[u8],
-    key: &HybridVerifyingKey,
+    key: &Key,
     purpose: &[u8],
 ) -> Result<(), Error> {
     let signed = token.get();
     if signed.purpose().as_bytes() != purpose || signed.object() != object {
         return Err(Error::SignatureObject);
     }
-    if signed.key() != key {
+    if !key_is(signed.key(), key) {
         return Err(Error::SignatureSigner);
     }
     Ok(())
@@ -132,32 +134,40 @@ fn check_token(
 /// Checks a legal authorization object (`LegalAuthorizationBody`, schema
 /// `0x0003`) and its two signatures (VC-006).
 ///
-/// `commission` and `committee` are verification tokens from
-/// `ityv_crypto::verify_hybrid`; each must cover exactly `object` with
-/// purpose `legal-auth` and come from the matching key. The two keys must
-/// differ in both halves (ML-DSA-87 and Ed25519).
+/// The object must be the one the genesis pins
+/// (`legal_authorization_hash`). `commission` and `committee` are
+/// verification tokens from `ityv_crypto::verify_hybrid`; each must cover
+/// exactly `object` with purpose `legal-auth` and come from the key the
+/// genesis registers for that body. The genesis guarantees that the two
+/// keys differ in both halves (ML-DSA-87 and Ed25519).
 ///
 /// # Errors
-/// [`Error::SignatureSigner`] if the keys share a half or a token comes from
-/// another key, [`Error::SignatureObject`] if a token covers other bytes or
-/// another purpose, [`Error::Decode`] if the object is not a canonical
+/// [`Error::Mismatch`] if the object is not the one the genesis pins,
+/// [`Error::SignatureSigner`] if a token comes from another key,
+/// [`Error::SignatureObject`] if a token covers other bytes or another
+/// purpose, [`Error::Decode`] if the object is not a canonical
 /// `LegalAuthorizationBody`, [`Error::ScopePrerequisite`] (VC-008).
 pub fn authorize<'a>(
+    genesis: &Genesis<'_>,
     object: &'a [u8],
     commission: &Verified<HybridSigned<'_>>,
-    commission_key: &HybridVerifyingKey,
     committee: &Verified<HybridSigned<'_>>,
-    committee_key: &HybridVerifyingKey,
 ) -> Result<Authorization<'a>, Error> {
-    // Both halves must differ: a shared Ed25519 or ML-DSA-87 half would let
-    // one holder produce that half of both signatures.
-    if commission_key.mldsa87() == committee_key.mldsa87()
-        || commission_key.ed25519() == committee_key.ed25519()
-    {
-        return Err(Error::SignatureSigner);
+    if object_hash(object) != *genesis.body().legal_authorization_hash() {
+        return Err(Error::Mismatch);
     }
-    check_token(commission, object, commission_key, PURPOSE_LEGAL_AUTH)?;
-    check_token(committee, object, committee_key, PURPOSE_LEGAL_AUTH)?;
+    check_token(
+        commission,
+        object,
+        genesis.commission_key(),
+        PURPOSE_LEGAL_AUTH,
+    )?;
+    check_token(
+        committee,
+        object,
+        genesis.committee_key(),
+        PURPOSE_LEGAL_AUTH,
+    )?;
     let body: LegalAuthorizationBody<'a> =
         decode_object(SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, object)
             .map_err(|_| Error::Decode)?;

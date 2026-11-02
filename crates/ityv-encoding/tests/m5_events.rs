@@ -835,7 +835,9 @@ fn genesis_entries() {
         ballot_style_id: BallotStyleId::new(b"pres-2030").unwrap(),
         profile: CaptureProfile::Absentee,
         route_id: RouteId::new(b"route-11").unwrap(),
+        reporting_unit_id: ityv_encoding::ReportingUnitId::new(b"ru-11-absentee").unwrap(),
         device_key: &VK,
+        attest_key: &VK,
         modules: modules(),
     };
     let mut buf = Vec::new();
@@ -926,11 +928,13 @@ fn genesis_entries() {
         (1, RosterRole::Clerk),
         (2, RosterRole::Observer),
         (3, RosterRole::Custodian),
+        (4, RosterRole::Authority),
     ] {
         assert_eq!(RosterRole::from_code(code), Some(role));
         assert_eq!(role.code(), code);
     }
     assert_eq!(RosterRole::from_code(0), None);
+    assert_eq!(RosterRole::from_code(5), None);
     let _ = patterned::<1>(0);
 }
 

@@ -96,6 +96,10 @@ pub enum Error {
     TallyPremature,
     /// A counter would overflow.
     Overflow,
+    /// The genesis body's hash is not the pin given out of band (VC-005).
+    Pin,
+    /// A genesis entry's inclusion proof does not lead to its set's root.
+    NotIncluded,
 }
 
 impl core::fmt::Display for Error {
@@ -133,6 +137,8 @@ impl core::fmt::Display for Error {
             Self::DisputeFiling => f.write_str("dispute not received by both bodies"),
             Self::TallyPremature => f.write_str("tally event before its preconditions"),
             Self::Overflow => f.write_str("counter overflow"),
+            Self::Pin => f.write_str("genesis does not match the pin"),
+            Self::NotIncluded => f.write_str("entry not included in the genesis set"),
         }
     }
 }
@@ -189,6 +195,8 @@ mod tests {
             Error::DisputeFiling,
             Error::TallyPremature,
             Error::Overflow,
+            Error::Pin,
+            Error::NotIncluded,
         ];
         let texts: BTreeSet<_> = all.iter().map(ToString::to_string).collect();
         assert_eq!(texts.len(), all.len());

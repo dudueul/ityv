@@ -277,6 +277,11 @@ pub struct RouteId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UnitId<'a>(Ident<'a>);
 
+/// Identifier of a reporting unit: the unit in which paper results are
+/// published by law (PROTOCOL.md §4.1 `reporting_units[]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReportingUnitId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -332,3 +337,4 @@ ident_newtype!(OrgId);
 ident_newtype!(SignerId);
 ident_newtype!(RouteId);
 ident_newtype!(UnitId);
+ident_newtype!(ReportingUnitId);

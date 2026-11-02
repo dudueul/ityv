@@ -443,12 +443,14 @@ fn record_count_range_is_exact() {
 }
 
 use crate::primitives::{OrgId, SignerId};
+use crate::schema::checkin::ObserverCountKind;
 use crate::schema::events::{
     CustodyHandoffBody, CustodyHandoffParts, DisputeAction, DisputeEventBody, DisputeEventParts,
     DisputeType, FallbackBody, FallbackKind, FallbackParts, FallbackReason, LateBatchReason,
     LegalOutcome, SealChangeReason, TallyEffect,
 };
-use crate::schema::genesis::{CaptureProfile, RosterRole};
+use crate::schema::genesis::{CaptureProfile, RosterRole, StationKind};
+use crate::schema::genesis_body::AmendmentReason;
 use crate::schema::witnessed::EventRole;
 
 static E1: ElectionId<'static> = match ElectionId::new(b"E") {
@@ -507,7 +509,16 @@ fn event_codes_are_exact() {
             CaptureProfile::from_code(code).map(CaptureProfile::code),
             1..=3,
         ),
-        (RosterRole::from_code(code).map(RosterRole::code), 1..=3),
+        (RosterRole::from_code(code).map(RosterRole::code), 1..=4),
+        (StationKind::from_code(code).map(StationKind::code), 1..=3),
+        (
+            AmendmentReason::from_code(code).map(AmendmentReason::code),
+            1..=4,
+        ),
+        (
+            ObserverCountKind::from_code(code).map(ObserverCountKind::code),
+            1..=2,
+        ),
     ];
     for (decoded, range) in checks {
         assert_eq!(decoded.is_some(), range.contains(&code));
@@ -726,4 +737,142 @@ fn station_progress_policy_rules_are_exact() {
         StationProgressPolicy::new(ST1, booths, limit).is_ok(),
         booths >= 1 && limit >= 1
     );
+}
+
+// ---------------------------------------------------------------------------
+// The genesis and the check-in events (ADR-0028)
+
+use crate::primitives::BallotStyleId;
+use crate::schema::SCHEMA_OBSERVER_COUNT_ATTEST_BODY;
+use crate::schema::checkin::{
+    BoxUnitSwapBody, BoxUnitSwapParts, CheckinUnitSwapBody, CheckinUnitSwapParts,
+    ObserverCountAttestBody, ObserverCountParts,
+};
+use crate::schema::genesis::{BallotStyleEntry, chunks_for};
+use crate::schema::genesis_body::WitnessQuorum;
+
+static BS1: BallotStyleId<'static> = match BallotStyleId::new(b"P") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+static U2: UnitId<'static> = match UnitId::new(b"V") {
+    Some(id) => id,
+    None => unreachable!(),
+};
+
+/// A ballot style is built exactly for one to seventy choices, and its
+/// chunk count is `⌈(m + 2)/9⌉` (PROTOCOL.md §7.4).
+#[kani::proof]
+fn ballot_style_rules_are_exact() {
+    let choices: u16 = kani::any();
+    let entry = BallotStyleEntry::new(BS1, choices, Hash512([1; 64]));
+    assert_eq!(entry.is_ok(), (1..=70).contains(&choices));
+    if let Ok(e) = entry {
+        let m = u32::from(choices);
+        assert_eq!(u32::from(e.chunks()), (m + 2).div_ceil(9));
+        assert!(e.chunks() >= 1 && e.chunks() <= 8);
+    }
+    assert_eq!(chunks_for(choices), (u32::from(choices) + 2).div_ceil(9));
+}
+
+/// The witness quorum profile is accepted exactly when `13 ≤ n ≤ 64`,
+/// `9 ≤ q ≤ n`, `2q − n > f` and the diversity minimums lie in
+/// `[7, q]`, `[4, q]`, `[3, q]` (PROTOCOL.md §5.4).
+#[kani::proof]
+fn witness_quorum_rule_is_exact() {
+    let q = WitnessQuorum {
+        witnesses: kani::any(),
+        quorum: kani::any(),
+        byzantine_max: kani::any(),
+        min_orgs: kani::any(),
+        min_providers: kani::any(),
+        min_regions: kani::any(),
+    };
+    let n = u32::from(q.witnesses);
+    let k = u32::from(q.quorum);
+    let f = u32::from(q.byzantine_max);
+    let within = |v: u8, floor: u8| v >= floor && v <= q.quorum;
+    let expected = (13..=64).contains(&n)
+        && k >= 9
+        && k <= n
+        && 2 * k > n + f
+        && within(q.min_orgs, 7)
+        && within(q.min_providers, 4)
+        && within(q.min_regions, 3);
+    assert_eq!(q.is_valid(), expected);
+}
+
+/// A check-in unit swap is built exactly for two different units, a
+/// sequence from 1, and zero counts unless confirmed; a commitment-unit
+/// swap exactly for zero sheets unless confirmed (ENCODING.md §8.58,
+/// §8.59).
+#[kani::proof]
+fn swap_rules_are_exact() {
+    let same: bool = kani::any();
+    let confirmed: bool = kani::any();
+    let next_seq: u64 = kani::any();
+    let issued: u64 = kani::any();
+    let spoiled: u64 = kani::any();
+    let returned: u64 = kani::any();
+    let parts = CheckinUnitSwapParts {
+        election_id: E1,
+        station_id: ST1,
+        failed_unit: U1,
+        spare_unit: if same { U1 } else { U2 },
+        at_slot: kani::any(),
+        confirmed,
+        next_seq,
+        issued,
+        spoiled,
+        returned,
+    };
+    let zero = issued == 0 && spoiled == 0 && returned == 0;
+    let expected = !same && next_seq >= 1 && (confirmed || zero);
+    assert_eq!(CheckinUnitSwapBody::new(&parts).is_ok(), expected);
+    assert_eq!(parts.counts()[0], next_seq.saturating_sub(1));
+    let sheets_in: u64 = kani::any();
+    let box_parts = BoxUnitSwapParts {
+        election_id: E1,
+        box_id: B1,
+        at_slot: kani::any(),
+        confirmed,
+        sheets_in,
+    };
+    assert_eq!(
+        BoxUnitSwapBody::new(&box_parts).is_ok(),
+        confirmed || sheets_in == 0
+    );
+}
+
+/// An observer count with symbolic count, kind and bucket survives an
+/// object-level round trip.
+#[kani::proof]
+#[kani::unwind(70)]
+fn observer_count_round_trip() {
+    let Some(kind) = crate::schema::checkin::ObserverCountKind::from_code(kani::any()) else {
+        return;
+    };
+    let body = ObserverCountAttestBody::new(&ObserverCountParts {
+        election_id: E1,
+        station_id: ST1,
+        unit_id: U1,
+        count: kani::any(),
+        kind,
+        time_bucket: TimeBucket::new(kani::any()),
+    });
+    let mut buf = [0u8; 64];
+    let Ok(len) = encode(
+        SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+        SCHEMA_VERSION_1,
+        &body,
+        &mut buf,
+    ) else {
+        unreachable!("64 bytes suffice for one-byte identifiers");
+    };
+    assert_eq!(len, 16 + 5 + 5 + 5 + 17);
+    let (bytes, _) = buf.split_at_checked(len).unwrap_or((&[], &buf));
+    let decoded: Result<ObserverCountAttestBody<'_>, _> =
+        decode(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
+    assert_eq!(decoded, Ok(body));
 }
