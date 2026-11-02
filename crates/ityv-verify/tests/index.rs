@@ -251,6 +251,8 @@ fn indexes_a_clean_ledger() {
         acc.push(&object_hash(f)).unwrap();
     }
     assert_eq!(idx.root(), acc.root());
+    let hashes: Vec<Hash512> = ledger.frames.iter().map(|f| object_hash(f)).collect();
+    assert_eq!(idx.frame_hashes(), hashes.as_slice());
     assert_eq!(idx.events()[2].frame_hash, object_hash(ledger.frames[2]));
 }
 

@@ -184,6 +184,7 @@ pub struct LedgerIndex<'a> {
     boxes: BTreeMap<&'a [u8], HoldSet>,
     ledger: HoldSet,
     chain: ChainState<'a>,
+    frame_hashes: Vec<Hash512>,
 }
 
 impl<'a> LedgerIndex<'a> {
@@ -246,6 +247,14 @@ impl<'a> LedgerIndex<'a> {
     #[must_use]
     pub fn root(&self) -> Hash512 {
         self.chain.accumulator().root()
+    }
+
+    /// The hash of every frame in the chain, in order (`frame_hashes()[i]`
+    /// is the frame with `seq = i + 1`), refused frames included: the
+    /// leaves of the ledger tree.
+    #[must_use]
+    pub fn frame_hashes(&self) -> &[Hash512] {
+        &self.frame_hashes
     }
 
     fn hold(&mut self, genesis: &VerifiedGenesis<'a>, scope: Scope<'a>, reason: HoldReason) {
@@ -526,6 +535,7 @@ impl<'a> Builder<'_, 'a> {
                 .refuse(self.genesis, finding, HoldReason::LedgerUnchecked);
             return false;
         };
+        self.index.frame_hashes.push(frame_hash);
         let hash = *frame.event_hash();
         let schema = frame.event_schema_id();
         let found = if OPAQUE_SCHEMAS.contains(&schema) {
@@ -653,6 +663,7 @@ pub fn build_index<'a>(
             boxes: BTreeMap::new(),
             ledger: HoldSet::empty(),
             chain: ChainState::empty(),
+            frame_hashes: Vec::new(),
         },
     };
     let mut stream = FrameStream::new(frames);
