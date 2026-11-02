@@ -144,6 +144,7 @@ offset  size  field
 | 0x003F | `ObserverCountAttestBody` | 1 | 참관인 확인 인원 증명 본문(§8.57). 서명은 `WitnessedEvent` |
 | 0x0040 | `CheckinUnitSwapBody` | 1 | 카운터·가명 유닛 교체 본문(§8.58). 서명은 `WitnessedEvent` |
 | 0x0041 | `BoxUnitSwapBody` | 1 | 커밋먼트 유닛 교체 본문(§8.59). 서명은 `WitnessedEvent` |
+| 0x0042 | `SignedLegalAuthorization` | 1 | 법적 승인 본문 바이트 + 선관위·위원회 하이브리드 서명(§8.60, ADR-0030) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -153,7 +154,7 @@ offset  size  field
 
 ## 7. 시험 벡터
 
-`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 6), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다.
+`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 6), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다.
 
 ## 8. 예시 스키마 필드 정의
 
@@ -179,7 +180,7 @@ offset  size  field
 | 4 | `effective_from_day` | `u64` | 유닉스 기원 기준 일수 |
 | 5 | `effective_until_day` | `u64` | `>= effective_from_day`. 위반 시 `ValueOutOfRange`(이 필드 오프셋) |
 
-선관위와 독립검증위원회의 서명은 이 본문에 포함되지 않는다. 서명은 이 본문을 감싸는 genesis 객체가 운반하고 암호 크레이트가 검증한다.
+선관위와 독립검증위원회의 서명은 이 본문에 포함되지 않는다. 서명은 이 본문을 감싸는 `SignedLegalAuthorization`(0x0042, §8.60)이 운반하고, genesis는 이 본문의 객체 해시를 고정한다(§8.54 `legal_authorization_hash`).
 
 ### 8.3 `CheckpointBody` (`schema_id` 0x0004, `schema_version` 1)
 
@@ -192,8 +193,8 @@ offset  size  field
 | 5 | `tree_size` | `u64` | 포함된 장부 잎 수 |
 | 6 | `root_hash` | `Hash512` | Merkle root |
 | 7 | `previous_checkpoint_hash` | `Hash512` | `checkpoint_seq == 1`일 때만 전부 0, 그 외에는 0이 아님. 위반 시 `InvalidPreviousHash`(이 필드 오프셋) |
-| 8 | `box_close_root` | `Hash512` | 서명된 투표함 마감 봉투 집합의 root |
-| 9 | `dispute_root` | `Hash512` | 미결 분쟁 이벤트 집합의 root |
+| 8 | `box_close_root` | `Hash512` | 덮는 프레임에서 받은 `BoxClose` 객체(0x001A) 해시의 정렬 집합 root |
+| 9 | `dispute_root` | `Hash512` | 덮는 프레임 기준 미해결 분쟁의 접수 본문(0x000E) 객체 해시의 정렬 집합 root |
 | 10 | `genesis_hash` | `Hash512` | 결속된 genesis의 §4 해시 |
 | 11 | `time_bucket` | `u64` | 체크포인트 제안의 시간 구간 |
 
@@ -889,3 +890,15 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 #### 8.59 `BoxUnitSwapBody` (0x0041)
 
 `election_id: Ident<64>` ‖ `box_id: Ident<64>` ‖ `at_slot: u64` ‖ `confirmed: bool` ‖ `sheets_in: u64`(확인하지 못했으면 0, 아니면 `InvariantViolation`). 예비 커밋먼트 유닛의 키는 이 사건이 아니라 `GenesisAmendment`가 등록한다.
+
+### 8.60 `SignedLegalAuthorization` (0x0042, ADR-0030)
+
+> English summary: the ledger object that carries the legal authorization: the `LegalAuthorizationBody` object bytes (at most 512) with the commission's and the committee's hybrid signatures under purpose `legal-auth`. The genesis pins the body's object hash; the verifier accepts only the pinned body and verifies both signatures under the two keys the genesis body registers.
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<512>` | `LegalAuthorizationBody`(§8.2) 객체 전체. 다른 스키마는 `SchemaMismatch`, 본문이 정규가 아니면 그 오류 |
+| 2 | `commission_sig` | `[u8; 4691]` | 선관위 하이브리드 서명 |
+| 3 | `committee_sig` | `[u8; 4691]` | 독립검증위원회 하이브리드 서명 |
+
+두 서명의 메시지는 `body` 바이트이고 purpose는 `legal-auth`다. 서명 바이트의 유효성, genesis의 두 기관 키와의 결속, 본문이 genesis가 고정한 것인지, 범위 전제 규칙(PROTOCOL §4.4)은 `ityv-verify`의 `authorize_ledger`가 검증 토큰을 만들어 `ityv-state`의 `authorize`로 확인한다.

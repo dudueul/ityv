@@ -39,7 +39,7 @@
 | genesis 변경 | genesis amendment | `GenesisAmendment` | 장치 교체·명부 변경처럼 피할 수 없는 변경. 번호와 이전 본문 해시로 이어지고, 바뀔 수 있는 집합 여덟의 새 root를 담으며, genesis와 같이 선관위·위원회·증인 정족수가 서명한다(스키마 0x0034). |
 | 참관인 확인 인원 증명 | observer count attestation | `ObserverCountAttest` | 카운터·가명 유닛의 확인 인원 누계를 서로 다른 조직 참관인 둘 이상이 서명한 사건(스키마 0x003F). 마감 구분의 수가 마감 대조의 확인 인원이다. |
 | 장치 교체 기록 | device swap record | `CheckinUnitSwap`, `BoxUnitSwap` | 카운터·가명 유닛(0x0040)이나 커밋먼트 유닛(0x0041)을 예비로 바꿀 때 사무원과 참관인이 확인한 마지막 누계와 시작 슬롯. 예비 장치는 이 누계에서 이어 센다. |
-| 법적 승인 객체 | legal authorization | `legal_authorization` | genesis 안의 객체. 승인 범위 집합, 조문 참조, 시행일, 선관위 서명, 독립검증위원회 서명. 모듈 활성화의 유일한 게이트. |
+| 법적 승인 객체 | legal authorization | `legal_authorization` | 승인 범위 집합, 조문 참조, 시행 구간을 담은 본문(`LegalAuthorizationBody`). genesis는 본문의 객체 해시를 고정하고, 장부에는 선관위·독립검증위원회 서명과 함께 `SignedLegalAuthorization`(0x0042)으로 싣는다(ADR-0030). 모듈 활성화의 유일한 게이트. |
 | 승인 범위 | authorization scope | `scope` | `PUBLIC_BOARD`, `TRUSTEE_BODY`, `BALLOT_MARK`, `CRYPTO_TALLY_AID`, `RLA`, `OBSERVER_ACCESS`, `DEPLOY_AUTH`, `STAGE_GATE`, `VOTER_CODE`. |
 | 배포 프로필 | deployment profile | `L0`, `L1` | L0 증거 계층(현행법), L1 E2E 계층(법 개정 후). 한 코드베이스이며 게이트로만 구분된다. |
 | 활성화 단계 | activation stage | `stage0`..`stage3` | 0 현행법, 1 신뢰기관 구성, 2 투표지 표식·암호 집계 보조·RLA, 3 유권자 검증코드. |
