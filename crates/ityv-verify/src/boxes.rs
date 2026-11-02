@@ -14,8 +14,15 @@
 //!   one that comes after the box closed is a late close (purpose
 //!   `late-box-close`), so a refused close leaves the box open for the next;
 //! * after the close: a batch attestation and the `LateBatchClose` naming
-//!   its body hash form a late batch close; seal changes and custody
-//!   handoffs extend the custody chain; an `ImprintAudit` counts the box.
+//!   its body hash form a late batch close (a `LateBatchClose` while the
+//!   box is open is out of order); seal changes and custody handoffs
+//!   extend the custody chain; an `ImprintAudit` counts the box.
+//!
+//! A record, challenge opening or batch body counts once per box: the same
+//! body under other signature bytes is another ledger object, but not
+//! another ballot or batch. A box the genesis's last state does not expect
+//! (an amendment removed it) is not run: each of its events is refused
+//! and the box is held.
 //!
 //! Every signature is verified here, under the key the genesis registers
 //! for the signer (the box's device key for the device), into a token that
@@ -39,19 +46,19 @@
 //! follows amendments, so such a box is held).
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Purpose, Verified};
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, CaptureProfile, CastRecord, ChallengeOpening,
-    CloseCounts, Day, Decode, EventRole, FallbackBody, FallbackKind, GenesisBox, HYBRID_SIG_LEN,
+    CloseCounts, Decode, EventRole, FallbackBody, FallbackKind, GenesisBox, HYBRID_SIG_LEN,
     HYBRID_VK_LEN, LateBatchCloseBody, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE,
     SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD,
     SCHEMA_CHALLENGE_OPENING, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_FALLBACK_BODY,
     SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
-    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TimeBucket,
+    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
     WitnessedEvent, decode_object,
 };
 use ityv_state::{
@@ -60,13 +67,10 @@ use ityv_state::{
     RosterEntry, Signed, Transition,
 };
 
-use crate::authority::AuthorityStage;
+use crate::authority::{AuthorityStage, day_of};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
 use crate::sigs::Material;
-
-/// Time buckets per day (fifteen-minute buckets, PROTOCOL.md §3).
-const BUCKETS_PER_DAY: u64 = 96;
 
 /// How far a box got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -102,6 +106,12 @@ pub enum Refusal {
     /// A device swap: the stage does not yet follow an amendment that
     /// replaces a box's device key.
     Unsupported,
+    /// A cast record, challenge opening or batch attestation whose body an
+    /// earlier event of the box already carries (the same body under other
+    /// signature bytes is a different ledger object).
+    Duplicate,
+    /// An event of a box the genesis's last state does not expect.
+    Unexpected,
 }
 
 /// One refused event of a box.
@@ -136,7 +146,8 @@ pub struct BoxStage<'a> {
 }
 
 impl<'a> BoxStage<'a> {
-    /// One report per expected box, in box order.
+    /// One report per expected box, in box order, then one per box with
+    /// events that the genesis's last state does not expect.
     #[must_use]
     pub fn reports(&self) -> &[BoxReport<'a>] {
         &self.reports
@@ -359,9 +370,12 @@ impl<'a> Prep<'_, 'a> {
             if e.seq.get() >= before.get() {
                 break;
             }
+            if e.schema != SCHEMA_WITNESSED_EVENT {
+                continue;
+            }
             if let Some(w) = e
                 .bytes
-                .and_then(|b| decode::<WitnessedEvent<'a>>(e.schema, b))
+                .and_then(|b| decode::<WitnessedEvent<'a>>(SCHEMA_WITNESSED_EVENT, b))
                 .filter(|w| w.body_schema() == SCHEMA_ISSUANCE_COUNT_BODY)
             {
                 last = Some(w);
@@ -369,16 +383,6 @@ impl<'a> Prep<'_, 'a> {
         }
         WitnessedItem::new(&last?, self.keys, None)
     }
-}
-
-/// The day of `bucket`, counted from the genesis's epoch day.
-fn day_of(genesis: &VerifiedGenesis<'_>, bucket: TimeBucket) -> Option<Day> {
-    let epoch = genesis.genesis().body().election_epoch_day().get();
-    bucket
-        .get()
-        .checked_div(BUCKETS_PER_DAY)
-        .and_then(|d| epoch.checked_add(d))
-        .map(Day::new)
 }
 
 /// A box's state machine in whatever state it is in.
@@ -471,6 +475,8 @@ struct Run<'r, 'g> {
     /// their partner.
     batches: Vec<(Seq, &'r BatchAttest<'r>)>,
     lates: Vec<(Seq, Signed<'r>)>,
+    /// The object hashes of the record, challenge and batch bodies seen.
+    bodies: BTreeSet<[u8; 64]>,
     refusals: Vec<BoxRefusal>,
 }
 
@@ -545,8 +551,13 @@ impl<'r> Run<'r, '_> {
                 (m, _) => (m, Some(Refusal::OutOfOrder)),
             }
         } else if schema == SCHEMA_LATE_BATCH_CLOSE_BODY {
-            self.lates.push((seq, signed));
-            (self.match_late(m), None)
+            // A late batch close is taken only after the box's close.
+            if matches!(m, Machine::Closed(_) | Machine::Counted(_)) {
+                self.lates.push((seq, signed));
+                (self.match_late(m), None)
+            } else {
+                (m, Some(Refusal::OutOfOrder))
+            }
         } else if schema == SCHEMA_SEAL_CHANGE_BODY {
             match m {
                 Machine::Closed(mut b) => {
@@ -602,7 +613,7 @@ impl<'r> Run<'r, '_> {
                 self.lates.push((late_seq, late));
                 continue;
             };
-            let (_, batch) = self.batches.remove(i);
+            let (batch_seq, batch) = self.batches.remove(i);
             let r = match &mut m {
                 Machine::Closed(b) => b.late_batch(batch, &late),
                 Machine::Counted(b) => b.late_batch(batch, &late),
@@ -612,6 +623,8 @@ impl<'r> Run<'r, '_> {
                 | Machine::Fallback(_) => Err(ityv_state::Error::LateClose),
             };
             if let Err(e) = r {
+                // Both halves of a refused pair are refused.
+                self.refuse(batch_seq, Refusal::State(e));
                 self.refuse(late_seq, Refusal::State(e));
             }
         }
@@ -659,6 +672,17 @@ impl<'r> Run<'r, '_> {
     /// A cast record, a challenge opening or a batch attestation of the
     /// open box (or one in fallback).
     fn counted(&mut self, m: Machine<'r>, seq: Seq, item: &'r Item<'r>) -> Step<'r> {
+        let body = match item {
+            Item::Record(record) => Some(record.body_bytes()),
+            Item::Challenge(opening) => Some(opening.body_bytes()),
+            Item::Batch(batch) => Some(batch.body_bytes()),
+            Item::Witnessed(_) | Item::Close(_) | Item::Swap | Item::Skip => None,
+        };
+        if let Some(body) = body
+            && !self.bodies.insert(object_hash(body).0)
+        {
+            return (m, Some(Refusal::Duplicate));
+        }
         match (m, item) {
             (Machine::Open(mut b), Item::Record(record)) => match self.ballot_mark.as_ref() {
                 Some(cap) => {
@@ -766,6 +790,7 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
         ballot_mark: None,
         batches: Vec::new(),
         lates: Vec::new(),
+        bodies: BTreeSet::new(),
         refusals: Vec::new(),
     };
     let (phase, machine_holds, counts) = match spec {
@@ -831,7 +856,38 @@ pub fn verify_boxes<'a>(
         roster: &roster,
         keys: &keys,
     };
-    BoxStage {
-        reports: genesis.boxes().map(|b| run_box(&shared, b)).collect(),
+    let mut reports: Vec<BoxReport<'a>> = genesis.boxes().map(|b| run_box(&shared, b)).collect();
+    // A box an earlier state had but the last does not: its events are not
+    // run, so each is refused and the box held.
+    let unexpected = index
+        .boxes_with_events()
+        .filter(|id| genesis.expected_box(id).is_none())
+        .filter_map(|id| BoxId::new(id).map(|box_id| unexpected_report(index, authority, box_id)));
+    reports.extend(unexpected);
+    BoxStage { reports }
+}
+
+/// The report of a box with events that the last state does not expect.
+fn unexpected_report<'a>(
+    index: &LedgerIndex<'a>,
+    authority: &AuthorityStage<'a>,
+    box_id: BoxId<'a>,
+) -> BoxReport<'a> {
+    let refusals: Vec<BoxRefusal> = index
+        .box_events(box_id.as_bytes())
+        .map(|e| BoxRefusal {
+            seq: e.seq,
+            refusal: Refusal::Unexpected,
+        })
+        .collect();
+    BoxReport {
+        box_id,
+        phase: Phase::Provisioned,
+        holds: index
+            .box_holds(box_id.as_bytes())
+            .union(authority.holds())
+            .with(HoldReason::BoxEventRefused),
+        counts: None,
+        refusals,
     }
 }

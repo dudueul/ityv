@@ -224,6 +224,8 @@ pub struct Closed<'a> {
     counts: CloseCounts,
     open_batches: u8,
     manual: bool,
+    /// Whether a late close was recorded (it is taken once).
+    late: bool,
     close_bucket: TimeBucket,
     envelopes: Option<EnvelopeIssuance>,
     close_holds: HoldSet,
@@ -306,13 +308,14 @@ fn device_signed(
     }
 }
 
-/// Whether `at` is within the late-close window after `close_bucket`.
+/// Whether `at` is within the late-close window: not before the close and
+/// at most [`LATE_CLOSE_WINDOW`] buckets after it.
 fn within_window(close_bucket: TimeBucket, at: TimeBucket) -> Result<(), Error> {
     let deadline = close_bucket
         .get()
         .checked_add(LATE_CLOSE_WINDOW)
         .ok_or(Error::Overflow)?;
-    if at.get() <= deadline {
+    if close_bucket.get() <= at.get() && at.get() <= deadline {
         Ok(())
     } else {
         Err(Error::LateWindow)
@@ -481,6 +484,7 @@ impl<'a> Base<'a> {
             counts,
             open_batches: body.open_batches(),
             manual: !signed,
+            late: false,
             close_bucket: body.time_bucket(),
             envelopes,
             close_holds: verdict,
@@ -494,7 +498,7 @@ impl<'a> Base<'a> {
         close: &BoxClose<'_>,
         tokens: &CloseTokens<'_>,
     ) -> Result<(), Error> {
-        if !closed.manual || close.device_sig().is_none() {
+        if !closed.manual || closed.late || close.device_sig().is_none() {
             return Err(Error::LateClose);
         }
         let body = close.body();
@@ -530,6 +534,7 @@ impl<'a> Base<'a> {
                 .union(verdict)
                 .with(HoldReason::LateCloseDiffers);
         }
+        closed.late = true;
         Ok(())
     }
 
@@ -879,15 +884,18 @@ impl<'a> BallotBox<'a, Closed<'a>> {
 
     /// Records a `LateBoxClose` for a manual close: with the device
     /// signature (purpose `late-box-close`), human attestations under the
-    /// same purpose, and within 24 hours of the close. If the human counts
-    /// (paper, envelopes, stickers, spoil bag) equal the manual close's,
-    /// its verdict replaces the manual one; otherwise every earlier hold
-    /// stays and [`HoldReason::LateCloseDiffers`] is added.
+    /// same purpose, and within 24 hours after the close. If the human
+    /// counts (paper, envelopes, stickers, spoil bag) equal the manual
+    /// close's, its verdict replaces the manual one; otherwise every
+    /// earlier hold stays and [`HoldReason::LateCloseDiffers`] is added. A
+    /// box takes one late close: a second one, which could otherwise
+    /// replace a differing one's holds, is refused.
     ///
     /// # Errors
-    /// [`Error::LateClose`] if the close was not manual or the late close
-    /// has no device signature, [`Error::Mismatch`] for another box,
-    /// [`Error::LateWindow`] after the window, and the token errors.
+    /// [`Error::LateClose`] if the close was not manual, a late close was
+    /// already recorded, or the late close has no device signature,
+    /// [`Error::Mismatch`] for another box, [`Error::LateWindow`] before
+    /// the close or after the window, and the token errors.
     pub fn late_close(
         &mut self,
         close: &BoxClose<'_>,

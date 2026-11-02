@@ -15,21 +15,22 @@
 
 mod common;
 
+use std::sync::OnceLock;
 use std::vec::Vec;
 
 use common::{
-    NARROW_SIGNERS, SIGNERS, hybrid_signature, id, leak, leak_slice, object, sign, signing,
-    standard, witness_signing,
+    COMMISSION, COMMITTEE, NARROW_SIGNERS, SIGNERS, SPARE_BASE, authorized, hybrid_signature, id,
+    leak, leak_slice, object, sign, signing, witness_signing,
 };
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     Attestation, BoxClose, BoxCloseBody, BoxCloseParts, BoxId, CheckpointBody, CheckpointParts,
     CloseCounts, DisputeAction, DisputeEventBody, DisputeEventParts, DisputeType, ElectionId,
-    EventRole, EventSig, HYBRID_SIG_LEN, Hash512, KeysetId, LedgerFrame, LedgerId, ModuleCounter,
-    ModuleCounters, OrgId, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_CHECKPOINT_BODY,
-    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, SignerId, SignerRole, TimeBucket, TreeSize,
-    WitnessedEvent,
+    EventRole, EventSig, Hash512, KeysetId, LedgerFrame, LedgerId, ModuleCounter, ModuleCounters,
+    OrgId, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_CHECKPOINT_BODY,
+    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_SIGNED_GENESIS,
+    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
+    SignerId, SignerRole, TimeBucket, TreeSize, WitnessedEvent,
 };
 use ityv_ledger::{
     EMPTY_ROOT, Error as LedgerError, SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts,
@@ -37,13 +38,18 @@ use ityv_ledger::{
 };
 use ityv_state::HoldReason;
 use ityv_verify::{
-    CheckpointChain, CheckpointFindingKind, VerifiedGenesis, build_index, verify_checkpoints,
-    verify_genesis,
+    CheckpointChain, CheckpointFindingKind, VerifiedGenesis, authorize_ledger, build_index,
+    verify_checkpoints, verify_genesis,
 };
 
+/// The standard genesis, pinning a legal authorization (disputes are filed
+/// under its `PUBLIC_BOARD` capability), verified once.
 fn verified() -> &'static VerifiedGenesis<'static> {
-    let built = standard();
-    leak(verify_genesis(&built.pin, &built.input(), &[]).unwrap())
+    static VERIFIED: OnceLock<&'static VerifiedGenesis<'static>> = OnceLock::new();
+    VERIFIED.get_or_init(|| {
+        let built = &authorized().0;
+        leak(verify_genesis(&built.pin, &built.input(), &[]).unwrap())
+    })
 }
 
 fn election() -> ElectionId<'static> {
@@ -101,8 +107,20 @@ fn close() -> &'static [u8] {
 }
 
 /// A dispute event body: the filing when `filing` is `None`, otherwise a
-/// later event of `action` naming it. Returns (body bytes, event bytes).
+/// later event of `action` naming it, signed by the commission and the
+/// committee. Returns (body bytes, event bytes).
 fn dispute(action: DisputeAction, filing: Option<Hash512>) -> (&'static [u8], &'static [u8]) {
+    dispute_with(action, filing, Hash512([0x3E; 64]), false)
+}
+
+/// As [`dispute`], with the evidence hash `evidence`; `forged` signs with
+/// keys of its own instead of the two authorities'.
+fn dispute_with(
+    action: DisputeAction,
+    filing: Option<Hash512>,
+    evidence: Hash512,
+    forged: bool,
+) -> (&'static [u8], &'static [u8]) {
     let result = match action {
         DisputeAction::ResolvedTechnical | DisputeAction::ReferredLegal => Hash512([0x3A; 64]),
         DisputeAction::Filed | DisputeAction::Investigating => Hash512::ZERO,
@@ -113,26 +131,30 @@ fn dispute(action: DisputeAction, filing: Option<Hash512>) -> (&'static [u8], &'
         dispute_type: DisputeType::Custody,
         box_id: Some(BoxId::new(b"BOX-1").unwrap()),
         record_hash: None,
-        evidence_hash: Hash512([0x3E; 64]),
+        evidence_hash: evidence,
         filing_hash: filing.unwrap_or(Hash512::ZERO),
         result_hash: result,
         time_bucket: TimeBucket::new(60),
     })
     .unwrap();
     let body = object(SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_VERSION_1, &body);
-    let sig: &'static [u8; HYBRID_SIG_LEN] = leak([0x5A; HYBRID_SIG_LEN]);
+    let (commission, committee) = if forged {
+        (SPARE_BASE, SPARE_BASE + 1)
+    } else {
+        (COMMISSION, COMMITTEE)
+    };
     let sigs = [
         EventSig {
             signer_id: SignerId::new(b"commission").unwrap(),
             role: EventRole::Commission,
             org_id: OrgId::new(b"NEC").unwrap(),
-            sig,
+            sig: sign(signing(commission), b"dispute", body),
         },
         EventSig {
             signer_id: SignerId::new(b"committee").unwrap(),
             role: EventRole::Committee,
             org_id: OrgId::new(b"IVC").unwrap(),
-            sig,
+            sig: sign(signing(committee), b"dispute", body),
         },
     ];
     let event = WitnessedEvent::new(body, &sigs).unwrap();
@@ -188,14 +210,27 @@ impl Ledger {
         root_of_leaves(&hashes.as_slice(), size as u64).unwrap()
     }
 
+    /// The chain of the ledger with the legal authorization appended after
+    /// every frame the test pushed, so that the frame numbers a test names
+    /// are those of its own frames.
     fn chain(&self) -> CheckpointChain {
+        let mut ledger = Ledger {
+            stream: self.stream.clone(),
+            frames: self.frames.clone(),
+            events: self.events.clone(),
+            prev: self.prev,
+            seq: self.seq,
+        };
+        ledger.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, authorized().1);
         let index = leak(build_index(
             verified(),
-            leak_slice(self.stream.clone()),
-            &self.events,
+            leak_slice(ledger.stream.clone()),
+            &ledger.events,
         ));
         assert!(index.findings().is_empty(), "{:?}", index.findings());
-        verify_checkpoints(verified(), index)
+        let authority = leak(authorize_ledger(verified(), index));
+        assert!(authority.holds().is_empty(), "{:?}", authority.holds());
+        verify_checkpoints(verified(), index, authority)
     }
 }
 
@@ -279,7 +314,7 @@ struct Scene {
 
 fn scene() -> Scene {
     let mut ledger = Ledger::new();
-    ledger.push(SCHEMA_SIGNED_GENESIS, standard().signed);
+    ledger.push(SCHEMA_SIGNED_GENESIS, authorized().0.signed);
     let close = close();
     ledger.push(SCHEMA_BOX_CLOSE, close);
     let (filing_body, filing) = dispute(DisputeAction::Filed, None);
@@ -293,7 +328,7 @@ fn scene() -> Scene {
         previous: Hash512::ZERO,
         box_close_root: set_root(std::vec![close]),
         dispute_root: set_root(std::vec![filing]),
-        genesis: standard().pin,
+        genesis: authorized().0.pin,
         election: election(),
         ledger: b"L-1",
     };
@@ -679,4 +714,95 @@ fn a_checkpoint_after_a_valid_one_is_checked_from_where_the_first_stopped() {
     let chain = s.ledger.chain();
     assert!(chain.findings().is_empty(), "{chain:?}");
     assert_eq!(chain.covered(), 4);
+}
+
+#[test]
+fn a_dispute_leaves_the_root_only_by_a_signed_forward_transition() {
+    // Each case: events after the scene's filing that must leave the
+    // dispute unresolved. A checkpoint claiming it unresolved is valid; one
+    // claiming it gone is refused.
+    let filing = scene().filing;
+    let referral = dispute(DisputeAction::ReferredLegal, Some(filing)).1;
+    let resolution = dispute(DisputeAction::ResolvedTechnical, Some(filing)).1;
+    let forged = dispute_with(
+        DisputeAction::ResolvedTechnical,
+        Some(filing),
+        Hash512([0x3E; 64]),
+        true,
+    )
+    .1;
+    let other_evidence = dispute_with(
+        DisputeAction::ResolvedTechnical,
+        Some(filing),
+        Hash512([0x3F; 64]),
+        false,
+    )
+    .1;
+    let cases: [&[&'static [u8]]; 3] = [
+        // Referred to the legal track, then "resolved": forward only.
+        &[referral, resolution],
+        // A resolution the two authorities did not sign.
+        &[forged],
+        // A resolution that changes the evidence.
+        &[other_evidence],
+    ];
+    for events in cases {
+        for still_open in [true, false] {
+            let mut s = scene();
+            let first = s.first;
+            s.ledger.push(SCHEMA_SIGNED_CHECKPOINT, checkpoint(&first));
+            for e in events {
+                s.ledger.push(SCHEMA_WITNESSED_EVENT, e);
+            }
+            let size = s.ledger.seq;
+            let claim = Claim {
+                seq: 2,
+                tree_size: size,
+                root: s.ledger.root(usize::try_from(size).unwrap()),
+                previous: body_hash(&first),
+                dispute_root: if still_open {
+                    set_root(std::vec![filing])
+                } else {
+                    EMPTY_ROOT
+                },
+                ..first
+            };
+            s.ledger.push(SCHEMA_SIGNED_CHECKPOINT, checkpoint(&claim));
+            let chain = s.ledger.chain();
+            if still_open {
+                assert!(chain.findings().is_empty(), "{chain:?}");
+                assert_eq!(chain.covered(), size);
+            } else {
+                assert_eq!(kind_of(&chain), CheckpointFindingKind::DisputeRoot);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_filing_the_authorities_did_not_sign_opens_no_dispute() {
+    let mut s = scene();
+    let (body, forged) = dispute_with(DisputeAction::Filed, None, Hash512([0x40; 64]), true);
+    s.ledger.push(SCHEMA_WITNESSED_EVENT, forged);
+    let claim = Claim {
+        tree_size: 4,
+        root: s.ledger.root(4),
+        ..s.first
+    };
+    s.ledger.push(SCHEMA_SIGNED_CHECKPOINT, checkpoint(&claim));
+    assert!(s.ledger.chain().findings().is_empty());
+    // Claiming it open is wrong.
+    let mut s = scene();
+    s.ledger.push(SCHEMA_WITNESSED_EVENT, forged);
+    let claim = Claim {
+        tree_size: 4,
+        root: s.ledger.root(4),
+        dispute_root: set_root(std::vec![s.filing, object_hash(body)]),
+        ..s.first
+    };
+    s.ledger.push(SCHEMA_SIGNED_CHECKPOINT, checkpoint(&claim));
+    assert_eq!(
+        kind_of(&s.ledger.chain()),
+        CheckpointFindingKind::DisputeRoot
+    );
 }

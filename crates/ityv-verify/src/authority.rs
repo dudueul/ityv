@@ -13,16 +13,27 @@
 //!
 //! Without a valid authorization no gated stage can run, and the whole
 //! ledger is under `HOLD_REVIEW` ([`HoldReason::AuthorizationMissing`]).
+//! A copy that cannot be taken (a signature that does not verify, scopes
+//! that break the prerequisite rules) is evidence of a forgery or a broken
+//! ceremony: its frame is listed and the whole ledger is held
+//! ([`HoldReason::AuthorizationInvalid`]) even when a valid copy is also on
+//! the ledger.
+//!
+//! A capability is granted for a day (the authorization's effective
+//! days). The day of an event is the genesis's epoch day plus its time
+//! bucket over 96 (PROTOCOL.md §3).
 //!
 //! What this stage does not prove: that the authorization is lawful (the
 //! statute references are a hash of documents a person must read); that a
 //! capability is used on the right day (each stage grants it for the day of
 //! the event it gates).
 
+use alloc::vec::Vec;
+
 use ityv_crypto::Purpose;
 use ityv_encoding::{
-    PURPOSE_LEGAL_AUTHORIZATION, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, Seq,
-    SignedLegalAuthorization, decode_object,
+    Day, PURPOSE_LEGAL_AUTHORIZATION, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, Seq,
+    SignedLegalAuthorization, TimeBucket, decode_object,
 };
 use ityv_state::{Authorization, HoldReason, HoldSet, authorize};
 
@@ -30,11 +41,25 @@ use crate::genesis::VerifiedGenesis;
 use crate::index::LedgerIndex;
 use crate::sigs::Material;
 
+/// Time buckets per day (fifteen-minute buckets, PROTOCOL.md §3).
+const BUCKETS_PER_DAY: u64 = 96;
+
+/// The day of `bucket`, counted from the genesis's epoch day.
+pub(crate) fn day_of(genesis: &VerifiedGenesis<'_>, bucket: TimeBucket) -> Option<Day> {
+    let epoch = genesis.genesis().body().election_epoch_day().get();
+    bucket
+        .get()
+        .checked_div(BUCKETS_PER_DAY)
+        .and_then(|d| epoch.checked_add(d))
+        .map(Day::new)
+}
+
 /// The outcome of the authorization stage.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AuthorityStage<'a> {
     authorization: Option<Authorization<'a>>,
     seq: Option<Seq>,
+    refused: Vec<Seq>,
     holds: HoldSet,
 }
 
@@ -49,6 +74,12 @@ impl<'a> AuthorityStage<'a> {
     #[must_use]
     pub const fn seq(&self) -> Option<Seq> {
         self.seq
+    }
+
+    /// The frames of the authorization objects that could not be taken.
+    #[must_use]
+    pub fn refused(&self) -> &[Seq] {
+        &self.refused
     }
 
     /// The holds the stage puts on the whole ledger.
@@ -77,30 +108,39 @@ fn check<'a>(genesis: &VerifiedGenesis<'a>, bytes: &'a [u8]) -> Option<Authoriza
     }
 }
 
-/// Finds and checks the legal authorization on the ledger.
+/// Finds and checks the legal authorization on the ledger: the first
+/// object that can be taken is the authorization; every other one that
+/// cannot is listed and held.
 #[must_use]
 pub fn authorize_ledger<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
 ) -> AuthorityStage<'a> {
-    let found = index
+    let mut authorization = None;
+    let mut seq = None;
+    let mut refused = Vec::new();
+    let objects = index
         .events()
         .iter()
-        .filter(|e| e.schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION)
-        .find_map(|e| {
-            let bytes = e.bytes?;
-            check(genesis, bytes).map(|a| (a, e.seq))
-        });
-    match found {
-        Some((authorization, seq)) => AuthorityStage {
-            authorization: Some(authorization),
-            seq: Some(seq),
-            holds: HoldSet::empty(),
-        },
-        None => AuthorityStage {
-            authorization: None,
-            seq: None,
-            holds: HoldSet::empty().with(HoldReason::AuthorizationMissing),
-        },
+        .filter(|e| e.schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION);
+    for e in objects {
+        match e.bytes.and_then(|bytes| check(genesis, bytes)) {
+            Some(a) => {
+                if authorization.is_none() {
+                    authorization = Some(a);
+                    seq = Some(e.seq);
+                }
+            }
+            None => refused.push(e.seq),
+        }
+    }
+    let holds = HoldSet::empty()
+        .with_if(authorization.is_none(), HoldReason::AuthorizationMissing)
+        .with_if(!refused.is_empty(), HoldReason::AuthorizationInvalid);
+    AuthorityStage {
+        authorization,
+        seq,
+        refused,
+        holds,
     }
 }

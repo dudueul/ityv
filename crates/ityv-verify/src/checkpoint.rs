@@ -18,11 +18,13 @@
 //! 5. carry the sorted-set root of the object hashes of every accepted
 //!    `BoxClose` (device, manual or late) in those frames;
 //! 6. carry the sorted-set root of the filing-body object hashes of every
-//!    dispute still unresolved after the accepted dispute events in those
-//!    frames: a filing opens a dispute, a technical resolution resolves
-//!    it, a legal referral makes it unresolved again, an investigation
-//!    changes nothing, and an event naming a filing not seen is left to
-//!    the dispute stage.
+//!    dispute still unresolved after the dispute events in those frames,
+//!    run through `ityv_state`'s dispute state machine with their
+//!    signatures verified (`crate::disputes`): a filing under the
+//!    capability for its day opens a dispute, a later event changes it
+//!    only when the machine takes it (same filing, type, target and
+//!    evidence, both authorities' signatures, a forward transition), and
+//!    an event it does not take changes nothing.
 //!
 //! The first checkpoint that breaks a rule ends the chain: it becomes a
 //! [`CheckpointFinding`], the ledger is held (`CheckpointInvalid`), and no
@@ -40,11 +42,8 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
-    CheckpointBody, DisputeAction, DisputeEventBody, Hash512, SCHEMA_BOX_CLOSE,
-    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Seq, WitnessedEvent,
-    decode_object,
+    CheckpointBody, Hash512, SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, Seq, decode_object,
 };
 use ityv_ledger::{
     Accumulator, DiversityPolicy, Error as LedgerError, QuorumProfile, Roster,
@@ -53,6 +52,8 @@ use ityv_ledger::{
 };
 use ityv_state::{HoldReason, HoldSet};
 
+use crate::authority::AuthorityStage;
+use crate::disputes::{DisputeStep, dispute_steps};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
 use crate::sigs::verifying_key;
@@ -157,21 +158,26 @@ struct Prefix<'i, 'a> {
     /// The next event of the index to fold in.
     cursor: usize,
     closes: BTreeSet<[u8; 64]>,
+    /// The next dispute step to fold in.
+    step: usize,
     /// Filing-body hash to "unresolved".
     disputes: BTreeMap<[u8; 64], bool>,
     events: &'i [IndexedEvent<'a>],
     frames: &'i [Hash512],
+    steps: &'i [DisputeStep],
 }
 
 impl<'i, 'a> Prefix<'i, 'a> {
-    fn new(index: &'i LedgerIndex<'a>) -> Self {
+    fn new(index: &'i LedgerIndex<'a>, steps: &'i [DisputeStep]) -> Self {
         Self {
             tree: Accumulator::empty(),
             cursor: 0,
             closes: BTreeSet::new(),
+            step: 0,
             disputes: BTreeMap::new(),
             events: index.events(),
             frames: index.frame_hashes(),
+            steps,
         }
     }
 
@@ -190,49 +196,19 @@ impl<'i, 'a> Prefix<'i, 'a> {
                 break;
             }
             self.cursor = self.cursor.checked_add(1)?;
-            self.fold(event);
+            if event.schema == SCHEMA_BOX_CLOSE {
+                self.closes.insert(event.hash.0);
+            }
+        }
+        // Bounded by the step list: the cursor only moves forward.
+        for step in self.steps.iter().skip(self.step) {
+            if step.seq.get() > size {
+                break;
+            }
+            self.step = self.step.checked_add(1)?;
+            self.disputes.insert(step.filing, step.unresolved);
         }
         Some(())
-    }
-
-    fn fold(&mut self, event: &IndexedEvent<'a>) {
-        if event.schema == SCHEMA_BOX_CLOSE {
-            self.closes.insert(event.hash.0);
-        } else if event.schema == SCHEMA_WITNESSED_EVENT {
-            self.dispute(event);
-        }
-    }
-
-    /// Applies a dispute event: the filing opens, a technical resolution
-    /// resolves, a legal referral reopens; other events change nothing.
-    fn dispute(&mut self, event: &IndexedEvent<'a>) {
-        let Some(bytes) = event.bytes else { return };
-        let Ok(w) =
-            decode_object::<WitnessedEvent<'_>>(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, bytes)
-        else {
-            return;
-        };
-        if w.body_schema() != SCHEMA_DISPUTE_EVENT_BODY {
-            return;
-        }
-        let Ok(body) = w.body::<DisputeEventBody<'_>>(SCHEMA_DISPUTE_EVENT_BODY) else {
-            return;
-        };
-        let p = body.parts();
-        match p.action {
-            DisputeAction::Filed => {
-                self.disputes
-                    .entry(object_hash(w.body_bytes()).0)
-                    .or_insert(true);
-            }
-            DisputeAction::ResolvedTechnical | DisputeAction::ReferredLegal => {
-                let open = p.action == DisputeAction::ReferredLegal;
-                if let Some(state) = self.disputes.get_mut(p.filing_hash.as_bytes()) {
-                    *state = open;
-                }
-            }
-            DisputeAction::Investigating => {}
-        }
     }
 
     fn root(&self) -> Hash512 {
@@ -333,6 +309,7 @@ struct Policy<'r> {
 pub fn verify_checkpoints<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
+    authority: &AuthorityStage<'a>,
 ) -> CheckpointChain {
     let mut chain = CheckpointChain {
         checkpoints: Vec::new(),
@@ -347,7 +324,8 @@ pub fn verify_checkpoints<'a>(
         profile: QuorumProfile::new(q.witnesses, q.quorum, q.byzantine_max),
         diversity: DiversityPolicy::new(q.min_orgs, q.min_providers, q.min_regions),
     };
-    let mut prefix = Prefix::new(index);
+    let steps = dispute_steps(genesis, index, authority);
+    let mut prefix = Prefix::new(index, &steps);
     let mut prev: Option<(SignedCheckpoint<'a>, Hash512)> = None;
     let checkpoints = index
         .events()

@@ -883,6 +883,15 @@ fn manual_close_and_late_close() {
         Err(Error::LateWindow)
     );
     assert!(b.is_manual());
+    // Before the close.
+    let mut too_early = parts;
+    too_early.time_bucket = ityv_encoding::TimeBucket::new(CLOSE_BUCKET - 1);
+    let too_early = leak(late_close(&too_early));
+    assert_eq!(
+        b.late_close(&too_early.close, &too_early.tokens()),
+        Err(Error::LateWindow)
+    );
+    assert!(b.is_manual());
     let mut at_deadline = parts;
     at_deadline.time_bucket = ityv_encoding::TimeBucket::new(CLOSE_BUCKET + 96);
     let at_deadline = leak(late_close(&at_deadline));
@@ -912,6 +921,14 @@ fn manual_close_and_late_close() {
         assert!(b.holds().contains(HoldReason::ManualClose));
         assert!(b.holds().contains(HoldReason::LateCloseDiffers));
         assert_eq!(b.counts(), &counts(10, 10, 1));
+        // A second late close whose counts match does not erase the
+        // difference: a box takes one late close.
+        let again = leak(late_close(&parts));
+        assert_eq!(
+            b.late_close(&again.close, &again.tokens()),
+            Err(Error::LateClose)
+        );
+        assert!(b.holds().contains(HoldReason::LateCloseDiffers));
     }
 
     // A manual close whose device counts were unknown: the late close's
@@ -976,6 +993,10 @@ fn late_batch_resolves_open_batches() {
     );
     assert_eq!(
         b.late_batch(two, leak(late_batch(two, CLOSE_BUCKET + 97, &WITNESSES))),
+        Err(Error::LateWindow)
+    );
+    assert_eq!(
+        b.late_batch(two, leak(late_batch(two, CLOSE_BUCKET - 1, &WITNESSES))),
         Err(Error::LateWindow)
     );
     assert_eq!(b.late_batch(two, leak(audit(0, 0))), Err(Error::Decode));

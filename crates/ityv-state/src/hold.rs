@@ -128,11 +128,17 @@ pub enum HoldReason {
     /// with both authorities' signatures), so no gated stage can run
     /// (§4.4, VC-006..008).
     AuthorizationMissing = 39,
+    /// The ledger carries a legal authorization object that cannot be
+    /// taken: a signature does not verify under the authority's key the
+    /// genesis registers, or its scopes break the prerequisite rules. A
+    /// forged or broken authorization is evidence, even when a valid one is
+    /// also on the ledger (§4.4, VC-006..008).
+    AuthorizationInvalid = 40,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 41] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -173,6 +179,7 @@ impl HoldReason {
         Self::CloseMissing,
         Self::BoxEventRefused,
         Self::AuthorizationMissing,
+        Self::AuthorizationInvalid,
     ];
 
     /// The reason's code.

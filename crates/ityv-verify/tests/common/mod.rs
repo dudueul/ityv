@@ -783,6 +783,29 @@ pub fn legal_authorization(
     )
 }
 
+/// The standard genesis pinning a legal authorization of `PUBLIC_BOARD`,
+/// `TRUSTEE_BODY` and `BALLOT_MARK` for days 20 000..20 100, built once,
+/// with the signed authorization object for the ledger.
+pub fn authorized() -> &'static (Built, &'static [u8]) {
+    static BUILT: OnceLock<&'static (Built, &'static [u8])> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let draft = Draft::standard();
+        let (body, signed) = legal_authorization(
+            &[
+                ityv_encoding::Scope::PublicBoard,
+                ityv_encoding::Scope::TrusteeBody,
+                ityv_encoding::Scope::BallotMark,
+            ],
+            20_000,
+            20_100,
+        );
+        let built = sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+            p.legal_authorization_hash = ityv_crypto::object_hash(body);
+        });
+        leak((built, signed))
+    })
+}
+
 /// A frame stream: frames chained in order, each naming one event.
 pub struct Ledger {
     stream: Vec<u8>,

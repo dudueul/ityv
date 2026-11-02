@@ -209,6 +209,11 @@ impl<'a> LedgerIndex<'a> {
             .filter_map(|&i| self.events.get(i))
     }
 
+    /// The boxes that have accepted events, in identifier order.
+    pub fn boxes_with_events(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
+        self.by_box.keys().copied()
+    }
+
     /// The accepted events that concern station `station_id` as a whole
     /// (not one of its boxes), in frame order.
     pub fn station_events<'s>(

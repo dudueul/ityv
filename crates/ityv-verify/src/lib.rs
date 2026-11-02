@@ -46,6 +46,7 @@ pub mod authority;
 pub mod boxes;
 pub mod checkpoint;
 mod cross;
+mod disputes;
 pub mod error;
 pub mod genesis;
 pub mod index;

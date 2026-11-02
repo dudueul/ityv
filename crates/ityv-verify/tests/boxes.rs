@@ -40,7 +40,7 @@ use ityv_encoding::{
     SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Scope, SealChangeBody, SealChangeParts,
     SealChangeReason, Seq, SignerId, SignerRole, StationId, TimeBucket, WitnessedEvent, purpose_of,
 };
-use ityv_state::HoldReason;
+use ityv_state::{HoldReason, HoldSet};
 use ityv_verify::{
     AuthorityStage, BoxStage, LedgerIndex, Phase, Refusal, VerifiedGenesis, authorize_ledger,
     build_index, verify_boxes, verify_genesis,
@@ -704,12 +704,24 @@ fn an_authorization_whose_signature_does_not_verify_is_not_taken() {
             .holds()
             .contains(HoldReason::AuthorizationMissing)
     );
+    assert!(
+        run.authority
+            .holds()
+            .contains(HoldReason::AuthorizationInvalid)
+    );
+    assert_eq!(run.authority.refused(), [seq(2)]);
 
+    // A valid copy later grants the capabilities, and the forged one stays
+    // on record as evidence.
     ledger.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, world.authorization);
     let run = run_ledger(world, &ledger);
     assert!(run.authority.authorization().is_some());
     assert_eq!(run.authority.seq(), Some(seq(3)));
-    assert!(run.authority.holds().is_empty());
+    assert_eq!(
+        run.authority.holds(),
+        HoldSet::empty().with(HoldReason::AuthorizationInvalid)
+    );
+    assert_eq!(run.authority.refused(), [seq(2)]);
 }
 
 // ---------------------------------------------------------------------
@@ -855,7 +867,7 @@ fn a_forged_or_unregistered_signature_is_refused() {
                 signer_id: SignerId::new(id).unwrap(),
                 role,
                 org_id: OrgId::new(o).unwrap(),
-                sig: sign(signing(n), b"box-opened", body),
+                sig: sign(signing(n), b"box-open", body),
             })
             .collect();
         object(
@@ -914,7 +926,7 @@ fn a_signer_unknown_to_the_roster_leaves_no_tokens() {
                 signer_id: SignerId::new(id).unwrap(),
                 role,
                 org_id: OrgId::new(o).unwrap(),
-                sig: sign(signing(n), b"box-opened", body),
+                sig: sign(signing(n), b"box-open", body),
             })
             .collect();
         object(
@@ -1078,14 +1090,134 @@ fn a_late_batch_close_resolves_the_open_batch() {
     assert!(report(&run).holds.contains(HoldReason::OpenBatches));
 
     // Outside the 24-hour window the state machine refuses the pair.
-    let mut all = events;
+    let mut all = events.clone();
     all.extend([b(late), w(late_batch_close(late, CLOSE_BUCKET + 97))]);
     let run = go(&all);
     assert!(
-        matches!(refusals(&run)[..], [(10, Refusal::State(_))]),
+        matches!(
+            refusals(&run)[..],
+            [(9, Refusal::State(_)), (10, Refusal::State(_))]
+        ),
         "{:?}",
         refusals(&run)
     );
+
+    // One batch body twice (the copy differs only in signature bytes, so
+    // the ledger takes both objects): the second is refused and cannot
+    // cover a record twice.
+    let copy = {
+        let a: BatchAttest<'static> =
+            ityv_encoding::decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, late).unwrap();
+        let flipped = leak([0x01u8; ityv_encoding::HYBRID_SIG_LEN]);
+        let sigs: Vec<ModuleBatchSig<'static>> = a.module_sigs().collect();
+        object(
+            SCHEMA_BATCH_ATTEST,
+            SCHEMA_VERSION_1,
+            &BatchAttest::new(a.body_bytes(), &sigs, flipped).unwrap(),
+        )
+    };
+    let mut all = events.clone();
+    all.extend([
+        b(late),
+        w(late_batch_close(late, CLOSE_BUCKET + 5)),
+        b(copy),
+        w(late_batch_close(late, CLOSE_BUCKET + 6)),
+    ]);
+    let run = go(&all);
+    assert_eq!(
+        refusals(&run),
+        [(11, Refusal::Duplicate), (12, Refusal::Unmatched)]
+    );
+    assert!(!report(&run).holds.contains(HoldReason::OpenBatches));
+    assert!(report(&run).holds.contains(HoldReason::BoxEventRefused));
+
+    // A LateBatchClose while the box is still open is out of order, and
+    // cannot later pair with the batch.
+    let mut all = std::vec![w(opened())];
+    all.extend((1..=3).map(|i| r(record(i))));
+    all.push(b(batch(0, 2)));
+    all.push(w(late_batch_close(late, CLOSE_BUCKET + 5)));
+    all.push(events[5]);
+    all.push(b(late));
+    let run = go(&all);
+    assert_eq!(
+        refusals(&run),
+        [(8, Refusal::OutOfOrder), (10, Refusal::Unmatched)]
+    );
+    assert!(report(&run).holds.contains(HoldReason::OpenBatches));
+}
+
+#[test]
+fn a_record_or_challenge_body_counts_once() {
+    // A cast record whose body is on the ledger already, under other
+    // signature bytes.
+    let first = record(1);
+    let copy = {
+        let rec: CastRecord<'static> =
+            ityv_encoding::decode_object(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, first).unwrap();
+        let other = leak([0x45u8; 64]);
+        let sigs: Vec<ModuleRecordSig<'static>> = MODULES
+            .iter()
+            .map(|m| ModuleRecordSig {
+                module_id: module(m),
+                ed25519: other,
+            })
+            .collect();
+        object(
+            SCHEMA_CAST_RECORD,
+            SCHEMA_VERSION_1,
+            &CastRecord::new(rec.body_bytes(), other, &sigs).unwrap(),
+        )
+    };
+    let run = go(&[w(opened()), r(first), r(copy), b(batch(0, 1)), c(close(1))]);
+    assert_eq!(refusals(&run), [(5, Refusal::Duplicate)]);
+    assert_eq!(report(&run).phase, Phase::Closed);
+    assert_eq!(report(&run).counts, Some(counts(1)));
+}
+
+#[test]
+fn a_box_takes_one_late_close() {
+    // A late close whose human counts differ holds the box; a second one
+    // whose counts match cannot erase that.
+    let mut events = voting(3);
+    events.push(c(close_with(counts(3), 0, CLOSE_BUCKET, Sealed::Manual)));
+    let mut differs = counts(3);
+    differs.paper = 4;
+    events.push(c(close_with(
+        differs,
+        0,
+        CLOSE_BUCKET + 1,
+        Sealed::Device(b"late-box-close"),
+    )));
+    events.push(c(close_with(
+        counts(3),
+        0,
+        CLOSE_BUCKET + 2,
+        Sealed::Device(b"late-box-close"),
+    )));
+    let run = go(&events);
+    let rep = report(&run);
+    assert!(rep.holds.contains(HoldReason::LateCloseDiffers));
+    assert!(rep.holds.contains(HoldReason::ManualClose));
+    assert!(matches!(
+        refusals(&run)[..],
+        [(10, Refusal::State(ityv_state::Error::LateClose))]
+    ));
+    // A late close dated before the close is refused.
+    let mut events = voting(3);
+    events.push(c(close_with(counts(3), 0, CLOSE_BUCKET, Sealed::Manual)));
+    events.push(c(close_with(
+        counts(3),
+        0,
+        CLOSE_BUCKET - 1,
+        Sealed::Device(b"late-box-close"),
+    )));
+    let run = go(&events);
+    assert!(matches!(
+        refusals(&run)[..],
+        [(9, Refusal::State(ityv_state::Error::LateWindow))]
+    ));
+    assert!(report(&run).holds.contains(HoldReason::ManualClose));
 }
 
 #[test]
@@ -1260,4 +1392,98 @@ fn the_index_holds_reach_the_box() {
     let run = go(&[w(opened()), r(rec), r(rec), b(batch(0, 1)), c(close(1))]);
     assert!(report(&run).holds.contains(HoldReason::EventReplayed));
     assert_eq!(report(&run).phase, Phase::Closed);
+}
+
+#[test]
+fn events_of_a_box_an_amendment_removed_are_held() {
+    // The genesis has BOX-3 at ST-2; an amendment removes the box, its
+    // station and its reporting unit. The index still knows the box (an
+    // earlier state had it), but the box stage does not run it: each of its
+    // events is refused and the box is held.
+    let mut draft = Draft::standard();
+    draft.roster.push(roster_signer(
+        6,
+        b"cc-1",
+        RosterRole::Custodian,
+        b"ORG-CC",
+        None,
+    ));
+    draft.appointments = draft.referenced_appointments();
+    let (body, authorization) = common::legal_authorization(
+        &[Scope::PublicBoard, Scope::TrusteeBody, Scope::BallotMark],
+        20_000,
+        20_100,
+    );
+    let built = leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+        p.legal_authorization_hash = object_hash(body);
+    }));
+    let mut amended = draft.clone();
+    amended.boxes.retain(|b| b.box_id.as_bytes() != b"BOX-3");
+    amended
+        .stations
+        .retain(|s| s.station_id().as_bytes() != b"ST-2");
+    amended
+        .policies
+        .retain(|p| p.station_id().as_bytes() != b"ST-2");
+    amended.units.retain(|u| u.unit_id().as_bytes() != b"RU-2");
+    amended.appointments = amended.referenced_appointments();
+    let amendment = common::amendment(1, built.pin, &amended.raw(), &SIGNERS);
+    let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+    assert!(genesis.expected_box(b"BOX-3").is_none());
+    assert!(genesis.knows_box(b"BOX-3"));
+    let world = World {
+        genesis,
+        signed_genesis: built.signed,
+        authorization,
+    };
+    let stray = {
+        let body = BatchAttestBody::new(&BatchAttestParts {
+            election_id: election(),
+            box_id: BoxId::new(b"BOX-3").unwrap(),
+            batch_index: 0,
+            record_count: 1,
+            records_root: Hash512([0x21; 64]),
+            module_ranges: leak_slice(std::vec![ModuleRange {
+                module_id: module(b"M-B3-P1"),
+                counter_first: 1,
+                counter_last: 1,
+            }]),
+            module_refusals: ModuleIds::EMPTY,
+            journal_head: Hash512([0x22; 64]),
+            time_bucket: TimeBucket::new(120),
+        })
+        .unwrap();
+        let body = object(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body);
+        let sig = sign(signing(BOX_DEVICE_BASE + 2), b"batch-attest", body);
+        let sigs = [ModuleBatchSig {
+            module_id: module(b"M-B3-P1"),
+            sig,
+        }];
+        object(
+            SCHEMA_BATCH_ATTEST,
+            SCHEMA_VERSION_1,
+            &BatchAttest::new(body, &sigs, sig).unwrap(),
+        )
+    };
+    let run = run_in(&world, &[b(stray)]);
+    assert!(
+        run.index.findings().is_empty(),
+        "{:?}",
+        run.index.findings()
+    );
+    // BOX-1 and BOX-2 are expected; BOX-3 is reported after them.
+    let reports = run.boxes.reports();
+    assert_eq!(reports.len(), 3);
+    let r = run.boxes.report(b"BOX-3").unwrap();
+    assert_eq!(r.phase, Phase::Provisioned);
+    assert_eq!(
+        r.refusals,
+        [ityv_verify::BoxRefusal {
+            seq: seq(3),
+            refusal: Refusal::Unexpected
+        }]
+    );
+    assert!(r.holds.contains(HoldReason::BoxEventRefused));
+    assert!(!r.holds.contains(HoldReason::CloseMissing));
+    assert_eq!(reports[2].box_id, BoxId::new(b"BOX-3").unwrap());
 }
