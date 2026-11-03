@@ -485,13 +485,6 @@ impl<'a> VerifiedGenesis<'a> {
         self.seen.stations.contains(station_id)
     }
 
-    /// Whether `body_hash` is the body of the genesis or of one of the
-    /// amendments applied (the head of some state).
-    #[must_use]
-    pub fn is_applied_body(&self, body_hash: &Hash512) -> bool {
-        self.anchors.iter().any(|a| a.head() == body_hash)
-    }
-
     fn prove<T: GenesisEntry<'a>>(&self, set: &Set<'a, T>, key: &[u8]) -> Option<Entry<T>> {
         prove_in(&self.genesis, set, key)
     }
@@ -535,13 +528,6 @@ impl<'a> VerifiedGenesis<'a> {
     pub fn route_entry_at(&self, state: usize, key: &[u8]) -> Option<Entry<CustodyRoute<'a>>> {
         let (g, sets) = self.state(state)?;
         prove_in(g, &sets.routes, key)
-    }
-
-    /// The module `key`, proved against state `state`.
-    #[must_use]
-    pub fn module_entry_at(&self, state: usize, key: &[u8]) -> Option<Entry<ModuleEntry<'a>>> {
-        let (g, sets) = self.state(state)?;
-        prove_in(g, &sets.modules, key)
     }
 
     /// The module `module_id` of state `state`, if any.

@@ -154,6 +154,11 @@ fn opened() -> &'static [u8] {
 
 /// A device-signed close of an empty box.
 fn close() -> &'static [u8] {
+    close_with(true)
+}
+
+/// A close of an empty box, device-signed or manual.
+fn close_with(device_signed: bool) -> &'static [u8] {
     let counters: Vec<ModuleCounter<'static>> = MODULES
         .iter()
         .map(|m| ModuleCounter {
@@ -200,11 +205,11 @@ fn close() -> &'static [u8] {
             }
         })
         .collect();
-    let device = sign(signing(BOX_DEVICE_BASE), b"box-close", body);
+    let device = device_signed.then(|| sign(signing(BOX_DEVICE_BASE), b"box-close", body));
     object(
         SCHEMA_BOX_CLOSE,
         SCHEMA_VERSION_1,
-        &BoxClose::new(body, Some(device), &attestations).unwrap(),
+        &BoxClose::new(body, device, &attestations).unwrap(),
     )
 }
 
@@ -251,6 +256,8 @@ struct Book {
     frames: Vec<Hash512>,
     closes: Vec<Hash512>,
     disputes: Vec<Hash512>,
+    /// The sequence number and body hash of the last checkpoint pushed.
+    last: Option<(u64, Hash512)>,
 }
 
 impl Book {
@@ -261,6 +268,7 @@ impl Book {
             frames: Vec::new(),
             closes: Vec::new(),
             disputes: Vec::new(),
+            last: None,
         };
         book.push(SCHEMA_SIGNED_GENESIS, w.signed);
         book.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, w.authorization);
@@ -284,8 +292,12 @@ impl Book {
         }
     }
 
-    /// A checkpoint over every frame so far, signed by nine witnesses.
+    /// A checkpoint over every frame so far, signed by nine witnesses,
+    /// following the last one.
     fn checkpoint(&mut self) {
+        let (seq, previous) = self
+            .last
+            .map_or((1, Hash512::ZERO), |(seq, hash)| (seq + 1, hash));
         let size = self.frames.len() as u64;
         let mut closes = self.closes.clone();
         closes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
@@ -295,10 +307,10 @@ impl Book {
             election_id: common::election(),
             ledger_id: LedgerId::new(b"L-1").unwrap(),
             keyset_id: KeysetId::new(b"K-1").unwrap(),
-            checkpoint_seq: Seq::new(1).unwrap(),
+            checkpoint_seq: Seq::new(seq).unwrap(),
             tree_size: TreeSize::new(size),
             root_hash: root_of_leaves(&self.frames.as_slice(), size).unwrap(),
-            previous_checkpoint_hash: Hash512::ZERO,
+            previous_checkpoint_hash: previous,
             box_close_root: sorted_set_root(&closes).unwrap(),
             dispute_root: sorted_set_root(&disputes).unwrap(),
             genesis_hash: world().pin,
@@ -306,6 +318,7 @@ impl Book {
         })
         .unwrap();
         let body = object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &body);
+        self.last = Some((seq, object_hash(body)));
         let entries: Vec<WitnessSignatureEntry<'static>> = SIGNERS
             .iter()
             .map(|&i| WitnessSignatureEntry {
@@ -359,6 +372,30 @@ fn an_open_box_under_an_anchored_checkpoint_is_log_consistent() {
     assert_eq!(report.status().status(), Status::LogConsistent);
     assert!(!report.boxes().complete());
     assert!(!report.status().count_only());
+    assert_eq!(report.open_disputes(), 0);
+    // A second checkpoint right after the first covers the first's frame.
+    book.checkpoint();
+    let report = book.report(ANCHORED);
+    assert!(report.checkpoints().findings().is_empty());
+    assert_eq!(report.checkpoints().checkpoints().len(), 2);
+    assert_eq!(report.status().status(), Status::LogConsistent);
+}
+
+#[test]
+fn a_hold_of_a_box_reaches_the_status() {
+    // A close without the device signature: the box is held (ManualClose)
+    // and nothing else is wrong.
+    let mut book = Book::new();
+    book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.push(SCHEMA_BOX_CLOSE, close_with(false));
+    book.checkpoint();
+    let report = book.report(ANCHORED);
+    assert!(report.boxes().complete());
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert_eq!(
+        report.status().holds(),
+        ityv_state::HoldSet::empty().with(HoldReason::ManualClose)
+    );
 }
 
 #[test]
@@ -447,6 +484,7 @@ fn a_hold_anywhere_is_hold_review() {
         frames: Vec::new(),
         closes: Vec::new(),
         disputes: Vec::new(),
+        last: None,
     };
     book.push(SCHEMA_SIGNED_GENESIS, world().signed);
     book.push(SCHEMA_WITNESSED_EVENT, opened());
