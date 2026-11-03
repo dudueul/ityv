@@ -401,3 +401,497 @@ fn checkpoint_vectors_are_current_and_self_consistent() {
         Ok(encode_to_vec(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &v))
     });
 }
+
+// ---------------------------------------------------------------------------
+// The participation ledger and its key ceremonies (ENCODING.md §8.25, §8.31,
+// §8.32): `ParticipationSet` 0x0020, `ModuleProvisioned` 0x0026,
+// `PartyKeyCeremony` 0x0027.
+// ---------------------------------------------------------------------------
+
+mod participation {
+    use super::common::{Vector, check_file, encode_to_vec, render, self_check};
+    use ityv_encoding::{
+        ActorSig, ChamberCode, ElectionId, Encode, HEADER_LEN, HYBRID_SIG_LEN, Hash512, Ident,
+        KEM_EK_LEN, ModuleId, ModuleProvisioned, ModuleProvisionedMessage, ModuleProvisionedParts,
+        ParticipationMessage, ParticipationModuleSig, ParticipationSet, PartyKeyCeremony,
+        PartyKeyMessage, PartyKeyParts, Pseudonyms, SCHEMA_MODULE_PROVISIONED,
+        SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_VERSION_1, ShareHolder,
+        StationId, TimeBucket, TrusteeId, Writer, decode_object,
+    };
+    use std::vec::Vec;
+
+    const E: &[u8] = b"KR-2030-PRES";
+    static SIG_A: [u8; HYBRID_SIG_LEN] = [0xA1; HYBRID_SIG_LEN];
+    static SIG_B: [u8; HYBRID_SIG_LEN] = [0xB2; HYBRID_SIG_LEN];
+    static SIG_C: [u8; HYBRID_SIG_LEN] = [0xC3; HYBRID_SIG_LEN];
+    static SIG_D: [u8; HYBRID_SIG_LEN] = [0xD4; HYBRID_SIG_LEN];
+    static SIG_E: [u8; HYBRID_SIG_LEN] = [0xE5; HYBRID_SIG_LEN];
+    static KEM: [u8; KEM_EK_LEN] = [0x6B; KEM_EK_LEN];
+    static PRF: [u8; 32] = [0x7C; 32];
+
+    fn e() -> ElectionId<'static> {
+        ElectionId::new(E).unwrap()
+    }
+
+    fn id(bytes: &'static [u8]) -> Ident<'static> {
+        Ident::new(bytes, 64).unwrap()
+    }
+
+    fn valid(label: &'static str, bytes: Vec<u8>) -> Vector {
+        Vector {
+            label,
+            bytes,
+            expected: None,
+        }
+    }
+
+    fn invalid(label: &'static str, bytes: Vec<u8>, kind: &'static str, offset: usize) -> Vector {
+        Vector {
+            label,
+            bytes,
+            expected: Some((kind, offset)),
+        }
+    }
+
+    /// A field group's encoding, without an object header.
+    fn group<T: Encode>(value: &T) -> Vec<u8> {
+        let mut out = std::vec![0u8; value.encoded_len()];
+        let mut w = Writer::new(&mut out);
+        value.encode(&mut w).unwrap();
+        assert_eq!(w.finish(), out.len());
+        out
+    }
+
+    fn leak(v: Vec<u8>) -> &'static [u8] {
+        Vec::leak(v)
+    }
+
+    // --- ParticipationSet ---------------------------------------------------
+
+    /// Three pseudonyms, the second repeated (a double vote stays visible).
+    fn pseudonym_bytes() -> &'static [u8] {
+        let mut out = Vec::new();
+        for fill in [0x10u8, 0x20, 0x20] {
+            out.extend_from_slice(&[fill; 64]);
+        }
+        leak(out)
+    }
+
+    fn participation(pseudonyms: &'static [u8], modules: usize) -> Vec<u8> {
+        let message = ParticipationMessage {
+            election_id: e(),
+            station_id: StationId::new(b"ST-0001").unwrap(),
+            pseudonyms: Pseudonyms::new(pseudonyms).unwrap(),
+        };
+        let message = leak(group(&message));
+        let sigs = [
+            ParticipationModuleSig {
+                module_id: ModuleId::new(b"M-P1").unwrap(),
+                sig: &SIG_B,
+            },
+            ParticipationModuleSig {
+                module_id: ModuleId::new(b"M-P2").unwrap(),
+                sig: &SIG_C,
+            },
+        ];
+        let set = ParticipationSet::new(message, &SIG_A, &sigs[..modules]).unwrap();
+        encode_to_vec(SCHEMA_PARTICIPATION_SET, SCHEMA_VERSION_1, &set)
+    }
+
+    // Offsets in the three-pseudonym set: header 16, election 4 + 12,
+    // station 4 + 7, then `count`, the array count and the pseudonyms.
+    const COUNT_AT: usize = HEADER_LEN + 16 + 11;
+    const ARRAY_AT: usize = COUNT_AT + 4;
+    const FIRST_AT: usize = ARRAY_AT + 4;
+    const SIGS_AT: usize = FIRST_AT + 3 * 64 + HYBRID_SIG_LEN;
+
+    fn participation_vectors() -> Vec<Vector> {
+        let set = participation(pseudonym_bytes(), 2);
+        let mut v = std::vec![
+            valid("two_parties_three_pseudonyms_one_repeated", set.clone()),
+            valid("no_pseudonyms", participation(leak(Vec::new()), 2)),
+        ];
+        let mut count = set.clone();
+        count[COUNT_AT..COUNT_AT + 4].copy_from_slice(&2u32.to_be_bytes());
+        v.push(invalid(
+            "count_not_the_number_of_pseudonyms",
+            count,
+            "InvariantViolation",
+            ARRAY_AT,
+        ));
+        let mut big = set.clone();
+        big[COUNT_AT..COUNT_AT + 4].copy_from_slice(&65_537u32.to_be_bytes());
+        v.push(invalid(
+            "count_above_65536",
+            big,
+            "ValueOutOfRange",
+            COUNT_AT,
+        ));
+        let mut descending = set.clone();
+        descending[FIRST_AT + 64] = 0x01;
+        v.push(invalid(
+            "pseudonyms_descending",
+            descending,
+            "NotSorted",
+            FIRST_AT + 64,
+        ));
+        let mut five = set.clone();
+        five[SIGS_AT..SIGS_AT + 4].copy_from_slice(&5u32.to_be_bytes());
+        v.push(invalid(
+            "five_module_signatures",
+            five,
+            "CountExceedsMax",
+            SIGS_AT,
+        ));
+        // The second module identifier `M-P2` becomes `M-P1`.
+        let second = SIGS_AT + 4 + 8 + HYBRID_SIG_LEN;
+        let mut twice = set;
+        twice[second + 7] = b'1';
+        v.push(invalid(
+            "one_module_signs_twice",
+            twice,
+            "Duplicate",
+            second,
+        ));
+        v
+    }
+
+    // --- ModuleProvisioned --------------------------------------------------
+
+    fn provisioned_parts(
+        chamber: ChamberCode,
+        prf: Option<&'static [u8; 32]>,
+    ) -> ModuleProvisionedParts<'static> {
+        ModuleProvisionedParts {
+            election_id: e(),
+            module_id: ModuleId::new(b"M-U1A-P1").unwrap(),
+            device_id: id(b"U-1A"),
+            chamber,
+            member_count: 2,
+            pad_length: 1_048_576,
+            chassis_id: id(b"CH-0007"),
+            pad_card_id: id(b"PAD-0007"),
+            reprovision_count: 3,
+            chassis_check_hash: Hash512([0x4C; 64]),
+            kem_ek: &KEM,
+            entropy_commitment: Hash512([0x5D; 64]),
+            se_present: prf.is_some(),
+            prf_key_check: prf,
+        }
+    }
+
+    fn actors() -> [ActorSig<'static>; 4] {
+        [
+            ActorSig {
+                actor_id: id(b"T-P1-1"),
+                sig: &SIG_A,
+            },
+            ActorSig {
+                actor_id: id(b"committee"),
+                sig: &SIG_B,
+            },
+            ActorSig {
+                actor_id: id(b"obs-a"),
+                sig: &SIG_C,
+            },
+            ActorSig {
+                actor_id: id(b"obs-b"),
+                sig: &SIG_D,
+            },
+        ]
+    }
+
+    fn provisioned(parts: &ModuleProvisionedParts<'static>) -> Vec<u8> {
+        let message = leak(group(&ModuleProvisionedMessage::new(parts).unwrap()));
+        let record = ModuleProvisioned::new(message, &actors()).unwrap();
+        encode_to_vec(SCHEMA_MODULE_PROVISIONED, SCHEMA_VERSION_1, &record)
+    }
+
+    // Offsets: header 16, election 16, module 4 + 8, device 4 + 4, then
+    // `chamber` and `member_count`; `se_present` and `prf_key_check` after
+    // pad length 8, chassis 4 + 7, card 4 + 8, reprovisions 4, chassis
+    // check 64, KEM key 1600, entropy commitment 64.
+    const CHAMBER_AT: usize = HEADER_LEN + 16 + 12 + 8;
+    const MEMBERS_AT: usize = CHAMBER_AT + 1;
+    const SE_AT: usize = MEMBERS_AT + 1 + 8 + 11 + 12 + 4 + 64 + KEM_EK_LEN + 64;
+    const PRF_AT: usize = SE_AT + 1;
+
+    fn provisioned_vectors() -> Vec<Vector> {
+        let party = provisioned(&provisioned_parts(ChamberCode::P1, Some(&PRF)));
+        let box_module = provisioned(&provisioned_parts(ChamberCode::J, None));
+        let mut v = std::vec![
+            valid("checkin_party_module_with_key_check", party.clone()),
+            valid("box_module_without_key_check", box_module.clone()),
+        ];
+        let mut n = box_module.clone();
+        n[CHAMBER_AT] = 8;
+        v.push(invalid(
+            "chamber_n_has_no_module",
+            n,
+            "ValueOutOfRange",
+            CHAMBER_AT,
+        ));
+        let mut zero_members = box_module.clone();
+        zero_members[MEMBERS_AT] = 0;
+        v.push(invalid(
+            "no_members",
+            zero_members,
+            "ValueOutOfRange",
+            MEMBERS_AT,
+        ));
+        let mut nine_members = box_module.clone();
+        nine_members[MEMBERS_AT] = 9;
+        v.push(invalid(
+            "nine_members",
+            nine_members,
+            "ValueOutOfRange",
+            MEMBERS_AT,
+        ));
+        let mut not_bool = box_module;
+        not_bool[SE_AT] = 2;
+        v.push(invalid(
+            "se_present_not_a_bool",
+            not_bool,
+            "InvalidBool",
+            SE_AT,
+        ));
+        let mut judge = party.clone();
+        judge[CHAMBER_AT] = 5;
+        v.push(invalid(
+            "key_check_on_a_judiciary_module",
+            judge,
+            "InvariantViolation",
+            PRF_AT,
+        ));
+        let mut no_se = party.clone();
+        no_se[SE_AT] = 0;
+        v.push(invalid(
+            "key_check_without_secure_element",
+            no_se,
+            "InvariantViolation",
+            PRF_AT,
+        ));
+        // The second actor `committee` becomes `Aommittee`, below the
+        // first (`T-P1-1`).
+        let sigs_at = PRF_AT + 1 + 32;
+        let second = sigs_at + 4 + 4 + 6 + HYBRID_SIG_LEN;
+        let mut order = party.clone();
+        order[second + 4] = b'A';
+        v.push(invalid("actors_not_ascending", order, "NotSorted", second));
+        // The third actor `obs-a` becomes `obs-b`, equal to the fourth.
+        let third = second + 4 + 9 + HYBRID_SIG_LEN;
+        let fourth = third + 4 + 5 + HYBRID_SIG_LEN;
+        let mut twice = party;
+        twice[third + 4 + 4] = b'b';
+        v.push(invalid("actor_signs_twice", twice, "Duplicate", fourth));
+        v
+    }
+
+    // --- PartyKeyCeremony ---------------------------------------------------
+
+    fn holders() -> [ShareHolder<'static>; 3] {
+        [
+            ShareHolder {
+                trustee_id: TrusteeId::new(b"T-P1-1").unwrap(),
+                hsm_model: id(b"YubiHSM2"),
+                hsm_serial_hash: Hash512([0x81; 64]),
+            },
+            ShareHolder {
+                trustee_id: TrusteeId::new(b"T-P1-2").unwrap(),
+                hsm_model: id(b"NitrokeyHSM2"),
+                hsm_serial_hash: Hash512([0x82; 64]),
+            },
+            ShareHolder {
+                trustee_id: TrusteeId::new(b"T-P1-3").unwrap(),
+                hsm_model: id(b"SmartCard-HSM"),
+                hsm_serial_hash: Hash512([0x83; 64]),
+            },
+        ]
+    }
+
+    fn ceremony() -> Vec<u8> {
+        let holders = holders();
+        let message = PartyKeyMessage::new(&PartyKeyParts {
+            election_id: e(),
+            chamber: ChamberCode::P1,
+            wrapped_module_count: 37_420,
+            share_threshold: 2,
+            share_holders: &holders,
+            prf_key_check: &PRF,
+            time_bucket: TimeBucket::new(1_900_000),
+        })
+        .unwrap();
+        let message = leak(group(&message));
+        let sigs = [
+            ActorSig {
+                actor_id: id(b"T-P1-1"),
+                sig: &SIG_A,
+            },
+            ActorSig {
+                actor_id: id(b"T-P1-2"),
+                sig: &SIG_B,
+            },
+            ActorSig {
+                actor_id: id(b"committee"),
+                sig: &SIG_C,
+            },
+            ActorSig {
+                actor_id: id(b"obs-a"),
+                sig: &SIG_D,
+            },
+            ActorSig {
+                actor_id: id(b"obs-b"),
+                sig: &SIG_E,
+            },
+        ];
+        let record = PartyKeyCeremony::new(message, &sigs).unwrap();
+        encode_to_vec(SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_VERSION_1, &record)
+    }
+
+    // Offsets: header 16, election 16, `chamber`, wrapped count 4, then
+    // `share_threshold`, `share_count` and the holders.
+    const PARTY_AT: usize = HEADER_LEN + 16;
+    const THRESHOLD_AT: usize = PARTY_AT + 1 + 4;
+    const SHARES_AT: usize = THRESHOLD_AT + 1;
+    const HOLDERS_AT: usize = SHARES_AT + 1;
+
+    fn ceremony_vectors() -> Vec<Vector> {
+        let ok = ceremony();
+        let mut v = std::vec![valid("two_of_three_party_key", ok.clone())];
+        let mut judge = ok.clone();
+        judge[PARTY_AT] = 5;
+        v.push(invalid(
+            "not_a_party_chamber",
+            judge,
+            "ValueOutOfRange",
+            PARTY_AT,
+        ));
+        let mut zero = ok.clone();
+        zero[THRESHOLD_AT] = 0;
+        v.push(invalid(
+            "threshold_zero",
+            zero,
+            "ValueOutOfRange",
+            THRESHOLD_AT,
+        ));
+        let mut above = ok.clone();
+        above[THRESHOLD_AT] = 4;
+        v.push(invalid(
+            "threshold_above_count",
+            above,
+            "ValueOutOfRange",
+            SHARES_AT,
+        ));
+        let mut nine = ok.clone();
+        nine[SHARES_AT] = 9;
+        v.push(invalid("nine_shares", nine, "ValueOutOfRange", SHARES_AT));
+        let mut fewer = ok.clone();
+        fewer[SHARES_AT] = 2;
+        v.push(invalid(
+            "holders_not_share_count",
+            fewer,
+            "InvariantViolation",
+            HOLDERS_AT,
+        ));
+        // The second holder `T-P1-2` becomes `T-P1-0`.
+        let second = HOLDERS_AT + 4 + 10 + 12 + 64;
+        let mut order = ok;
+        order[second + 4 + 5] = b'0';
+        v.push(invalid("holders_not_ascending", order, "NotSorted", second));
+        v
+    }
+
+    #[test]
+    fn participation_set_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "ParticipationSet",
+            SCHEMA_PARTICIPATION_SET,
+            &participation_vectors(),
+        );
+        check_file("participation_set.txt", &content);
+        self_check(&content, |b| {
+            let v: ParticipationSet<'_> =
+                decode_object(SCHEMA_PARTICIPATION_SET, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_PARTICIPATION_SET,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
+        });
+    }
+
+    #[test]
+    fn module_provisioned_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "ModuleProvisioned",
+            SCHEMA_MODULE_PROVISIONED,
+            &provisioned_vectors(),
+        );
+        check_file("module_provisioned.txt", &content);
+        self_check(&content, |b| {
+            let v: ModuleProvisioned<'_> =
+                decode_object(SCHEMA_MODULE_PROVISIONED, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_MODULE_PROVISIONED,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
+        });
+    }
+
+    #[test]
+    fn party_key_ceremony_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "PartyKeyCeremony",
+            SCHEMA_PARTY_KEY_CEREMONY,
+            &ceremony_vectors(),
+        );
+        check_file("party_key_ceremony.txt", &content);
+        self_check(&content, |b| {
+            let v: PartyKeyCeremony<'_> =
+                decode_object(SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_PARTY_KEY_CEREMONY,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
+        });
+    }
+
+    /// The decoders keep each signed field group exactly as the signers
+    /// encoded it, header-less (ENCODING.md §4).
+    #[test]
+    fn signed_field_groups_are_the_message_bytes() {
+        let set = participation(pseudonym_bytes(), 2);
+        let decoded: ParticipationSet<'_> =
+            decode_object(SCHEMA_PARTICIPATION_SET, SCHEMA_VERSION_1, &set).unwrap();
+        assert_eq!(
+            decoded.message_bytes(),
+            &set[HEADER_LEN..SIGS_AT - HYBRID_SIG_LEN]
+        );
+        assert_eq!(group(decoded.message()), decoded.message_bytes());
+        assert_eq!(decoded.count(), 3);
+        assert_eq!(decoded.pseudonyms().len(), 3);
+        assert_eq!(decoded.counter_sig(), &SIG_A);
+        let ids: Vec<&[u8]> = decoded
+            .module_sigs()
+            .map(|s| s.module_id.as_bytes())
+            .collect();
+        assert_eq!(ids, [b"M-P1".as_slice(), b"M-P2"]);
+
+        let record = provisioned(&provisioned_parts(ChamberCode::P1, Some(&PRF)));
+        let decoded: ModuleProvisioned<'_> =
+            decode_object(SCHEMA_MODULE_PROVISIONED, SCHEMA_VERSION_1, &record).unwrap();
+        assert_eq!(decoded.message_bytes(), &record[HEADER_LEN..PRF_AT + 33]);
+        assert_eq!(decoded.parts().prf_key_check, Some(&PRF));
+        assert_eq!(decoded.signatures().len(), 4);
+
+        let record = ceremony();
+        let decoded: PartyKeyCeremony<'_> =
+            decode_object(SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_VERSION_1, &record).unwrap();
+        let end = record.len() - decoded.signatures().encoded_len();
+        assert_eq!(decoded.message_bytes(), &record[HEADER_LEN..end]);
+        assert_eq!(group(decoded.message()), decoded.message_bytes());
+        assert_eq!(decoded.message().share_count(), 3);
+    }
+}

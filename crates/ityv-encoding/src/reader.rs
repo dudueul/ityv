@@ -57,6 +57,18 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
+    /// The bytes consumed from offset `start` up to the current position,
+    /// for objects that keep a signed field group as it came (ENCODING.md
+    /// §4, header-less field groups).
+    ///
+    /// # Errors
+    /// `UnexpectedEnd` at `start` if `start` is past the current position.
+    pub fn consumed_from(&self, start: usize) -> Result<&'a [u8], Error> {
+        self.buf
+            .get(start..self.pos)
+            .ok_or(Error::new(Kind::UnexpectedEnd, start))
+    }
+
     /// Consumes exactly `n` bytes.
     ///
     /// # Errors
