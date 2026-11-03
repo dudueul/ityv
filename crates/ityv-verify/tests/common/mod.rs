@@ -875,9 +875,16 @@ pub fn module_key(n: u16) -> &'static [u8; HYBRID_VK_LEN] {
 }
 
 // ---------------------------------------------------------------------
-// Progress-stage helpers.
+// Progress- and participation-stage helpers.
 
-/// The signing key of check-in unit `n` (the `n` given to `checkin_unit`).
+/// The signing key of trustee `n` of [`Draft::standard`] (`T-P1-1` is 0,
+/// then `T-P1-2`, `T-P2-1`, `T-P2-2`, `T-J`, `T-A`, `T-C`, `T-N`).
+pub fn trustee_signing(n: u16) -> &'static HybridSigningKey {
+    signing(TRUSTEE_BASE + n)
+}
+
+/// The signing key of check-in unit `n` (the `n` given to
+/// `checkin_unit`: `U-1A` 0, `U-1B` 1, `U-2A` 2, `U-2B` 3).
 pub fn unit_signing(n: u16) -> &'static HybridSigningKey {
     signing(UNIT_BASE + n)
 }

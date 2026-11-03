@@ -47,17 +47,18 @@ use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
     CheckinUnitSwapBody, CustodyHandoffBody, Decode, DeviceAttestation, DisputeEventBody,
     ElectionId, FallbackBody, Hash512, ImprintAuditBody, IssuanceCountBody, LateBatchCloseBody,
-    LegalDecisionRefBody, ObserverCountAttestBody, ProgressBody, ProgressCheckBody, ProgressTick,
-    SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
-    SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
-    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DEVICE_ATTESTATION, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
-    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK,
-    SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, ScanCountAttest,
-    SchemaId, SealChangeBody, Seq, SignedGenesis, SignedLegalAuthorization, StationId,
-    WitnessedEvent, decode_object,
+    LegalDecisionRefBody, ModuleProvisioned, ObserverCountAttestBody, ParticipationSet,
+    PartyKeyCeremony, ProgressBody, ProgressCheckBody, ProgressTick, SCHEMA_BATCH_ATTEST,
+    SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD,
+    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY,
+    SCHEMA_DEVICE_ATTESTATION, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
+    SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_CHECK_BODY,
+    SCHEMA_PROGRESS_TICK, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
+    SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody, Seq, SignedGenesis,
+    SignedLegalAuthorization, StationId, WitnessedEvent, decode_object,
 };
 use ityv_ledger::{
     ChainHead, ChainState, Error as LedgerError, FrameStream, Record, SCHEMA_SIGNED_CHECKPOINT,
@@ -480,6 +481,17 @@ fn classify<'a>(
     } else if schema == SCHEMA_WITNESSED_EVENT {
         let (scope, election) = witnessed(&decode::<WitnessedEvent<'a>>(schema, bytes)?)?;
         Classified::new(scope, Role::Other, election)
+    } else if schema == SCHEMA_PARTICIPATION_SET {
+        let p = decode::<ParticipationSet<'a>>(schema, bytes)?;
+        Classified::new(Scope::Station(p.station_id()), Role::Other, p.election_id())
+    } else if schema == SCHEMA_MODULE_PROVISIONED {
+        // The module's device: its box, or its station's check-in unit.
+        let m = decode::<ModuleProvisioned<'a>>(schema, bytes)?;
+        let scope = device_scope(genesis, m.parts().device_id.as_bytes());
+        Classified::new(scope, Role::Other, m.parts().election_id)
+    } else if schema == SCHEMA_PARTY_KEY_CEREMONY {
+        let c = decode::<PartyKeyCeremony<'a>>(schema, bytes)?;
+        Classified::new(Scope::Election, Role::Other, c.message().election_id())
     } else if schema == SCHEMA_SIGNED_GENESIS {
         let signed = decode::<SignedGenesis<'a>>(schema, bytes)?;
         let election = match (signed.genesis(), signed.amendment()) {

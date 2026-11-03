@@ -560,6 +560,36 @@ impl<'a> VerifiedGenesis<'a> {
         self.state(state)?.1.modules.find(module_id)
     }
 
+    /// The expected boxes of state `state`, in key order (none for a state
+    /// that does not exist).
+    pub fn boxes_at(&self, state: usize) -> impl Iterator<Item = &GenesisBox<'a>> + '_ {
+        self.state(state)
+            .into_iter()
+            .flat_map(|(_, sets)| sets.boxes.items().iter().map(|i| &i.value))
+    }
+
+    /// The stations of state `state`, in key order (none for a state that
+    /// does not exist).
+    pub fn stations_at(&self, state: usize) -> impl Iterator<Item = &StationEntry<'a>> + '_ {
+        self.state(state)
+            .into_iter()
+            .flat_map(|(_, sets)| sets.stations.items().iter().map(|i| &i.value))
+    }
+
+    /// The modules of state `state`, in key order (none for a state that
+    /// does not exist).
+    pub fn modules_at(&self, state: usize) -> impl Iterator<Item = &ModuleEntry<'a>> + '_ {
+        self.state(state)
+            .into_iter()
+            .flat_map(|(_, sets)| sets.modules.items().iter().map(|i| &i.value))
+    }
+
+    /// The trustees (chamber members), in key order (the set is fixed for
+    /// the election).
+    pub fn trustees(&self) -> impl Iterator<Item = &TrusteeEntry<'a>> + '_ {
+        self.fixed.trustees.items().iter().map(|i| &i.value)
+    }
+
     /// Every roster signer of state `state`, proved against it, in key
     /// order (empty for a state that does not exist).
     #[must_use]
