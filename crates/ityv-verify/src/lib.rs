@@ -35,10 +35,9 @@
 //!   left out, reported as a [`index::Finding`], and puts the box it
 //!   belongs to (or the whole ledger) under `HOLD_REVIEW`.
 //!
-//! What this crate does **not** do yet (ROADMAP M5): the participation,
-//! tally, audit, split-view, connectivity and software stages (6–8,
-//! 10–12) and the full dispute stage (9: the report holds on any
-//! unresolved dispute); so the highest status
+//! What this crate does **not** do yet (ROADMAP M5): the tally, audit,
+//! split-view, connectivity and software stages (7–8, 10–12); so the
+//! highest status
 //! [`report::verify_ledger`] gives is `SOURCE_COMPLETENESS_CHECKED`.
 #![no_std]
 #![forbid(unsafe_code)]

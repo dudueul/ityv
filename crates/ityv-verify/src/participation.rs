@@ -15,10 +15,11 @@
 //!   module of every genesis state needs the record whose object hash its
 //!   entry pins, signed by the committee, a member of the module's chamber
 //!   and observers of two or more organisations; with the entry's chamber,
-//!   the device that lists the module in that state, the chamber's member
-//!   count, a non-zero entropy commitment (VC-095), and for a check-in
-//!   unit's party module a secure element and the party ceremony's key
-//!   check (VC-093); no other module carries a key check.
+//!   the device that lists the module (for a spare no device lists, a box
+//!   or check-in unit of some genesis state), the chamber's member count,
+//!   a non-zero entropy commitment (VC-095), and for a check-in unit's
+//!   party module a secure element and the party ceremony's key check
+//!   (VC-093); no other module carries a key check.
 //! * **Participation sets** (`ParticipationSet`, `0x0020`). Every station
 //!   of the genesis's last state needs one: signed by a check-in unit of
 //!   the station (in service or spare, in any genesis state up to the
@@ -451,7 +452,8 @@ fn ceremony<'a>(
 
 /// The module entries every genesis state pins a provisioning record
 /// for, by module and record hash, with the device that lists the module
-/// in the earliest state that pins it.
+/// in the earliest state that both pins the record and lists the module
+/// (none for a module no such state lists: a spare).
 fn pinned<'a>(genesis: &VerifiedGenesis<'a>) -> BTreeMap<(&'a [u8], [u8; 64]), Pinned<'a>> {
     let mut out = BTreeMap::new();
     for state in 0..genesis.state_count() {
@@ -481,12 +483,16 @@ fn pinned<'a>(genesis: &VerifiedGenesis<'a>) -> BTreeMap<(&'a [u8], [u8; 64]), P
             }
         }
         for m in genesis.modules_at(state) {
-            out.entry((m.module_id.as_bytes(), m.provisioned_hash.0))
+            let pin = out
+                .entry((m.module_id.as_bytes(), m.provisioned_hash.0))
                 .or_insert(Pinned {
                     module_id: m.module_id,
                     chamber: m.chamber,
-                    device: devices.get(m.module_id.as_bytes()).copied(),
+                    device: None,
                 });
+            if pin.device.is_none() {
+                pin.device = devices.get(m.module_id.as_bytes()).copied();
+            }
         }
     }
     out
@@ -509,7 +515,23 @@ fn provisioning<'a>(
         .chambers()
         .find(|c| c.chamber == p.chamber)
         .map(|c| c.members);
-    let device_ok = pin.device.is_some_and(|d| d.id == p.device_id.as_bytes());
+    // A module no device lists (a spare) names the device it is made for:
+    // a box or check-in unit of some genesis state.
+    let named = p.device_id.as_bytes();
+    let device = pin.device.or_else(|| {
+        if ctx.genesis.knows_box(named) {
+            Some(Device {
+                id: named,
+                checkin_unit: false,
+            })
+        } else {
+            ctx.genesis.unit_station(named).map(|_| Device {
+                id: named,
+                checkin_unit: true,
+            })
+        }
+    });
+    let device_ok = device.is_some_and(|d| d.id == named);
     if pin.chamber != p.chamber || !device_ok || members != Some(p.member_count) {
         return Err(KeyProblem::Fields);
     }
@@ -528,8 +550,7 @@ fn provisioning<'a>(
     if p.entropy_commitment == Hash512::ZERO {
         return Err(KeyProblem::EntropyCommitment);
     }
-    let party_unit_module =
-        pin.device.is_some_and(|d| d.checkin_unit) && is_party_chamber(p.chamber);
+    let party_unit_module = device.is_some_and(|d| d.checkin_unit) && is_party_chamber(p.chamber);
     let check_ok = if party_unit_module {
         let expected = ceremonies.get(&p.chamber).map(|c| c.prf_key_check);
         p.se_present

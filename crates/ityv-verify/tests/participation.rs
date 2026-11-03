@@ -191,7 +191,11 @@ enum Flaw {
 
 /// The provisioning record of module `n`, with `flaw` if any.
 fn provisioning(n: usize, flaw: Option<Flaw>) -> &'static [u8] {
-    let module = &MODULES[n];
+    provisioning_of(&MODULES[n], flaw)
+}
+
+/// The provisioning record of `module`, with `flaw` if any.
+fn provisioning_of(module: &Module, flaw: Option<Flaw>) -> &'static [u8] {
     let party_unit = module.unit && matches!(module.chamber, ChamberCode::P1 | ChamberCode::P2);
     let mut parts = ModuleProvisionedParts {
         election_id: election(),
@@ -354,11 +358,27 @@ fn world_with(flaws: &[(usize, Flaw)]) -> World {
 
 /// As [`world_with`], with one amendment made by `amend` when given.
 fn amended_world(flaws: &[(usize, Flaw)], amend: Option<fn(&mut Draft)>) -> World {
+    spare_world(flaws, amend, &[])
+}
+
+/// As [`amended_world`], with `spares`: modules no device lists, each
+/// with its key number and the record the genesis pins for it.
+fn spare_world(
+    flaws: &[(usize, Flaw)],
+    amend: Option<fn(&mut Draft)>,
+    spares: &[(Module, u16)],
+) -> World {
     let flaws: BTreeMap<usize, Flaw> = flaws.iter().copied().collect();
     let mut draft = Draft::standard();
-    let records: Vec<&'static [u8]> = (0..MODULES.len())
+    let mut records: Vec<&'static [u8]> = (0..MODULES.len())
         .map(|n| provisioning(n, flaws.get(&n).copied()))
         .collect();
+    for (spare, n) in spares {
+        draft
+            .modules
+            .push(common::module_entry(*n, spare.name, spare.chamber));
+        records.push(provisioning_of(spare, None));
+    }
     for (entry, record) in draft.modules.iter_mut().zip(&records) {
         entry.provisioned_hash = object_hash(record);
     }
@@ -1350,4 +1370,36 @@ fn a_set_for_a_station_the_last_state_lacks_is_refused() {
     // Every module of both states is provisioned (the amendment pins the
     // same records).
     assert!(run.stage.missing_provisioning().is_empty());
+}
+
+// ---------------------------------------------------------------------
+// Spare modules.
+
+#[test]
+fn a_spare_module_names_a_device_of_the_genesis() {
+    let world = leak(spare_world(
+        &[],
+        None,
+        &[
+            // A spare party module for U-1A: a unit module, so it needs
+            // the secure element and its party's key check.
+            (m(b"M-SPARE-P1", ChamberCode::P1, b"U-1A", true), 16),
+            // A spare judiciary module for BOX-2.
+            (m(b"M-SPARE-J", ChamberCode::J, b"BOX-2", false), 17),
+            // A spare for a device no state has.
+            (m(b"M-SPARE-P2", ChamberCode::P2, b"BOX-9", false), 18),
+        ],
+    ));
+    let run = go_in(world, &clean(world));
+    // The records of the 16 listed modules come at frames 5 to 20, the
+    // spares' at 21, 22 and 23.
+    assert_eq!(
+        key_problems(&run),
+        [(23, SCHEMA_MODULE_PROVISIONED, KeyProblem::Fields)]
+    );
+    assert_eq!(run.stage.missing_provisioning().len(), 1);
+    assert_eq!(
+        run.stage.missing_provisioning()[0].0.as_bytes(),
+        b"M-SPARE-P2"
+    );
 }
