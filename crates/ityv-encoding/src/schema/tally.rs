@@ -1,9 +1,9 @@
-//! The tally (PROTOCOL.md §11; ENCODING.md §8.61–§8.64), version 1:
-//! `TallyScopeBody` (schema `0x0043`), `AggregateOpeningBody` (`0x0044`),
-//! the trustee-quorum envelope `QuorumSigned` (`0x0045`) that carries
-//! either of them with the signatures of the trustees who made it, and
-//! `PaperCountReportBody` (`0x0046`), the body of a [`crate::WitnessedEvent`]
-//! (ADR-0035).
+//! The tally (PROTOCOL.md §10.6, §11; ENCODING.md §8.61–§8.65), version
+//! 1: `TallyScopeBody` (schema `0x0043`), `AggregateOpeningBody`
+//! (`0x0044`), `ReceiptResolutionBody` (`0x0047`), the trustee-quorum
+//! envelope `QuorumSigned` (`0x0045`) that carries any of the three with the
+//! signatures of the trustees who made it, and `PaperCountReportBody`
+//! (`0x0046`), the body of a [`crate::WitnessedEvent`] (ADR-0035).
 //!
 //! `TallyScopeBody` field order: `election_id`, `ballot_style_id`,
 //! `reporting_unit_id`, `included_count` (at most [`MAX_TALLY_COUNT`]),
@@ -18,13 +18,20 @@
 //! `T_j`, `rand_sum` `R_j`, `id_sum` `S` (three 32-byte scalars, canonical
 //! form checked by `ityv-crypto`), `time_bucket`.
 //!
-//! `QuorumSigned`: `body` (a complete `TallyScopeBody` or
-//! `AggregateOpeningBody` object of at most [`MAX_QUORUM_BODY_LEN`] bytes),
+//! `ReceiptResolutionBody`: `election_id`, `box_id` (an out-of-district
+//! box), `entries` (at most [`MAX_RECEIPT_ENTRIES`] entries of
+//! `record_hash ‖ outcome`, strictly ascending by record hash, outcome code
+//! 1–5: `RECEIVED`, `RECEIVED_DAMAGED`, `RECEIVED_LATE`, `WRONG_DISTRICT`,
+//! `CAST_NOT_RECEIVED`), `time_bucket`.
+//!
+//! `QuorumSigned`: `body` (a complete `TallyScopeBody`,
+//! `AggregateOpeningBody` or `ReceiptResolutionBody` object of at most
+//! [`MAX_QUORUM_BODY_LEN`] bytes),
 //! `sigs` (one to [`MAX_QUORUM_SIGS`] entries of `trustee_id ‖ sig`,
 //! strictly ascending by trustee). Every signature is a hybrid signature
-//! over exactly the body bytes, purpose `tally-scope` or
-//! `aggregate-opening` by the body's schema. The signers are the
-//! participating members (PROTOCOL.md §11.2).
+//! over exactly the body bytes, purpose `tally-scope`, `aggregate-opening`
+//! or `receipt-resolution` by the body's schema. The signers are the
+//! participating members (PROTOCOL.md §10.6 item 2, §11.2).
 //!
 //! `PaperCountReportBody`: `election_id`, `reporting_unit_id`,
 //! `ballot_style_id`, `votes` (one to [`MAX_CANDIDATES`] counts, candidate
@@ -43,12 +50,15 @@ use crate::codec::{Decode, Encode};
 use crate::envelope::{Header, decode as decode_object};
 use crate::error::{Error, Kind};
 use crate::primitives::{
-    BallotStyleId, ElectionId, Hash512, IDENT_MAX_STANDARD, ReportingUnitId, Scalar32, TimeBucket,
-    TrusteeId,
+    BallotStyleId, BoxId, ElectionId, Hash512, IDENT_MAX_STANDARD, ReportingUnitId, Scalar32,
+    TimeBucket, TrusteeId,
 };
 use crate::reader::Reader;
 use crate::schema::util::{HYBRID_SIG_LEN, MAX_CHUNKS, ascending_by, read_fixed};
-use crate::schema::{SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1};
+use crate::schema::{
+    SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_TALLY_SCOPE_BODY,
+    SCHEMA_VERSION_1,
+};
 use crate::writer::Writer;
 
 /// Purpose of the trustees' signatures on a tally scope.
@@ -56,6 +66,9 @@ pub const PURPOSE_TALLY_SCOPE: &[u8] = b"tally-scope";
 
 /// Purpose of the trustees' signatures on an aggregate opening.
 pub const PURPOSE_AGGREGATE_OPENING: &[u8] = b"aggregate-opening";
+
+/// Purpose of the trustees' signatures on a receipt resolution.
+pub const PURPOSE_RECEIPT_RESOLUTION: &[u8] = b"receipt-resolution";
 
 /// Purpose of the signatures on a paper count report.
 pub const PURPOSE_PAPER_COUNT: &[u8] = b"paper-count";
@@ -515,6 +528,232 @@ impl<'a> Decode<'a> for AggregateOpeningBody<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// 0x0047 ReceiptResolutionBody
+
+/// The outcome of the receipt resolution for one out-of-district record
+/// (PROTOCOL.md §10.6 item 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ReceiptOutcome {
+    /// `RECEIVED`: a normal envelope carried its label.
+    Received = 1,
+    /// `RECEIVED_DAMAGED`: a damaged envelope carried its label.
+    Damaged = 2,
+    /// `RECEIVED_LATE`: an envelope past the deadline carried its label.
+    Late = 3,
+    /// `WRONG_DISTRICT`: the label arrived, but the record's ballot style
+    /// is not the receiving district's.
+    WrongDistrict = 4,
+    /// `CAST_NOT_RECEIVED`: no envelope carried its label.
+    NotReceived = 5,
+}
+
+impl ReceiptOutcome {
+    /// The wire code.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// Returns the outcome with wire code `code`, if defined.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Received),
+            2 => Some(Self::Damaged),
+            3 => Some(Self::Late),
+            4 => Some(Self::WrongDistrict),
+            5 => Some(Self::NotReceived),
+            _ => None,
+        }
+    }
+}
+
+/// One record's outcome in a receipt resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReceiptEntry {
+    /// The record's tracking code.
+    pub record_hash: Hash512,
+    /// What the receipt resolution found.
+    pub outcome: ReceiptOutcome,
+}
+
+/// Length of one receipt entry: `record_hash[64] ‖ outcome[1]`.
+pub const RECEIPT_ENTRY_LEN: usize = 65;
+
+/// Most records one receipt resolution resolves.
+pub const MAX_RECEIPT_ENTRIES: usize = 65_536;
+
+impl Encode for ReceiptEntry {
+    fn encoded_len(&self) -> usize {
+        RECEIPT_ENTRY_LEN
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        self.record_hash.encode(w)?;
+        w.write_u8(self.outcome.code())
+    }
+}
+
+impl<'a> Decode<'a> for ReceiptEntry {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        let record_hash = Hash512::decode(r)?;
+        let at = r.position();
+        let outcome = ReceiptOutcome::from_code(r.read_u8()?).ok_or_else(|| out_of_range(at))?;
+        Ok(Self {
+            record_hash,
+            outcome,
+        })
+    }
+}
+
+/// The entries of a receipt resolution, borrowed as one slice of
+/// [`RECEIPT_ENTRY_LEN`]-byte entries, strictly ascending by record hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReceiptEntries<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> ReceiptEntries<'a> {
+    /// The entries encoded in `bytes`. `None` unless `bytes` is a whole
+    /// number, at most [`MAX_RECEIPT_ENTRIES`], of canonical entries
+    /// strictly ascending by record hash.
+    #[must_use]
+    pub fn new(bytes: &'a [u8]) -> Option<Self> {
+        let count = bytes.len().checked_div(RECEIPT_ENTRY_LEN)?;
+        if bytes.len().checked_rem(RECEIPT_ENTRY_LEN) != Some(0) || count > MAX_RECEIPT_ENTRIES {
+            return None;
+        }
+        let mut r = Reader::new(bytes);
+        read_receipts(&mut r, count).ok()?;
+        r.finish().ok()?;
+        Some(Self { bytes })
+    }
+
+    /// The number of entries.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match self.bytes.len().checked_div(RECEIPT_ENTRY_LEN) {
+            Some(n) => n,
+            None => 0,
+        }
+    }
+
+    /// Whether there is none.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// The entries in ascending record-hash order.
+    pub fn iter(&self) -> impl Iterator<Item = ReceiptEntry> + use<'a> {
+        self.bytes
+            .chunks_exact(RECEIPT_ENTRY_LEN)
+            .filter_map(|chunk| {
+                let mut r = Reader::new(chunk);
+                ReceiptEntry::decode(&mut r).ok()
+            })
+    }
+}
+
+/// Reads `count` receipt entries, each record hash above the one before.
+fn read_receipts(r: &mut Reader<'_>, count: usize) -> Result<(), Error> {
+    let mut previous: Option<[u8; 64]> = None;
+    for _ in 0..count {
+        let at = r.position();
+        let entry = ReceiptEntry::decode(r)?;
+        Reader::check_ascending(
+            previous.as_ref().map(<[u8; 64]>::as_slice),
+            entry.record_hash.as_bytes(),
+            at,
+        )?;
+        previous = Some(entry.record_hash.0);
+    }
+    Ok(())
+}
+
+/// The fields of a receipt resolution (PROTOCOL.md §10.6 items 2 and 5):
+/// the outcome of every cast record of one out-of-district box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReceiptResolutionParts<'a> {
+    /// The election.
+    pub election_id: ElectionId<'a>,
+    /// The out-of-district box whose records are resolved.
+    pub box_id: BoxId<'a>,
+    /// One outcome per record, ascending by record hash.
+    pub entries: ReceiptEntries<'a>,
+    /// When the resolution was recorded.
+    pub time_bucket: TimeBucket,
+}
+
+/// A receipt resolution body (schema `0x0047`). Rules: at most
+/// [`MAX_RECEIPT_ENTRIES`] entries (`CountExceedsMax`), outcome codes 1–5
+/// (`ValueOutOfRange`), strictly ascending by record hash (`NotSorted`,
+/// `Duplicate`). Labels that match no record belong to the receiving
+/// commission's count, not to a box, and are not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ReceiptResolutionBody<'a> {
+    parts: ReceiptResolutionParts<'a>,
+}
+
+impl<'a> ReceiptResolutionBody<'a> {
+    /// Builds the body (the entries were checked by
+    /// [`ReceiptEntries::new`]).
+    #[must_use]
+    pub const fn new(parts: &ReceiptResolutionParts<'a>) -> Self {
+        Self { parts: *parts }
+    }
+
+    /// The fields.
+    #[must_use]
+    pub const fn parts(&self) -> &ReceiptResolutionParts<'a> {
+        &self.parts
+    }
+}
+
+impl Encode for ReceiptResolutionBody<'_> {
+    fn encoded_len(&self) -> usize {
+        let p = &self.parts;
+        p.election_id
+            .encoded_len()
+            .saturating_add(p.box_id.encoded_len())
+            .saturating_add(4)
+            .saturating_add(p.entries.bytes.len())
+            .saturating_add(8)
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        let p = &self.parts;
+        p.election_id.encode(w)?;
+        p.box_id.encode(w)?;
+        w.write_count(p.entries.len(), MAX_RECEIPT_ENTRIES)?;
+        w.write_slice(p.entries.bytes)?;
+        p.time_bucket.encode(w)
+    }
+}
+
+impl<'a> Decode<'a> for ReceiptResolutionBody<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        let election_id = ElectionId::decode(r)?;
+        let box_id = BoxId::decode(r)?;
+        let count = r.read_count(MAX_RECEIPT_ENTRIES)?;
+        let start = r.position();
+        read_receipts(r, count)?;
+        let entries = ReceiptEntries {
+            bytes: r.consumed_from(start)?,
+        };
+        Ok(Self {
+            parts: ReceiptResolutionParts {
+                election_id,
+                box_id,
+                entries,
+                time_bucket: TimeBucket::decode(r)?,
+            },
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 0x0045 QuorumSigned
 
 /// Which body a [`QuorumSigned`] carries.
@@ -524,6 +763,8 @@ pub enum QuorumKind {
     TallyScope,
     /// An `AggregateOpeningBody` (`0x0044`), purpose `aggregate-opening`.
     AggregateOpening,
+    /// A `ReceiptResolutionBody` (`0x0047`), purpose `receipt-resolution`.
+    ReceiptResolution,
 }
 
 impl QuorumKind {
@@ -533,6 +774,7 @@ impl QuorumKind {
         match self {
             Self::TallyScope => PURPOSE_TALLY_SCOPE,
             Self::AggregateOpening => PURPOSE_AGGREGATE_OPENING,
+            Self::ReceiptResolution => PURPOSE_RECEIPT_RESOLUTION,
         }
     }
 }
@@ -563,15 +805,21 @@ fn classify(bytes: &[u8]) -> Result<QuorumKind, Error> {
             bytes,
         )
         .map(|_| QuorumKind::AggregateOpening),
+        SCHEMA_RECEIPT_RESOLUTION_BODY => decode_object::<ReceiptResolutionBody<'_>>(
+            SCHEMA_RECEIPT_RESOLUTION_BODY,
+            SCHEMA_VERSION_1,
+            bytes,
+        )
+        .map(|_| QuorumKind::ReceiptResolution),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }
 
-/// An event a quorum of trustees signs: a tally scope or an aggregate
-/// opening, with each participating member's signature (PROTOCOL.md §11.1,
-/// §11.2; Appendix A "정족수").
+/// An event a quorum of trustees signs: a tally scope, an aggregate
+/// opening or a receipt resolution, with each participating member's
+/// signature (PROTOCOL.md §10.6, §11.1, §11.2; Appendix A "정족수").
 ///
-/// Rules: the body is a complete object of one of the two schemas (its own
+/// Rules: the body is a complete object of one of the three schemas (its own
 /// errors, rebased; `SchemaMismatch` for another schema, `LengthExceedsMax`
 /// for a longer body); one to [`MAX_QUORUM_SIGS`] signatures
 /// (`InvariantViolation` for none, `CountExceedsMax` for more), strictly
@@ -640,6 +888,17 @@ impl<'a> QuorumSigned<'a> {
     pub fn aggregate_opening(&self) -> Option<AggregateOpeningBody<'a>> {
         decode_object(
             SCHEMA_AGGREGATE_OPENING_BODY,
+            SCHEMA_VERSION_1,
+            self.body_bytes,
+        )
+        .ok()
+    }
+
+    /// The receipt resolution, if it carries one.
+    #[must_use]
+    pub fn receipt_resolution(&self) -> Option<ReceiptResolutionBody<'a>> {
+        decode_object(
+            SCHEMA_RECEIPT_RESOLUTION_BODY,
             SCHEMA_VERSION_1,
             self.body_bytes,
         )

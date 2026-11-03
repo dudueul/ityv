@@ -206,3 +206,6 @@ pub const SCHEMA_QUORUM_SIGNED: SchemaId = SchemaId::new(0x0045);
 
 /// `PaperCountReportBody` (ENCODING.md §8.64, `0x0046`).
 pub const SCHEMA_PAPER_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x0046);
+
+/// `ReceiptResolutionBody` (ENCODING.md §8.65, `0x0047`).
+pub const SCHEMA_RECEIPT_RESOLUTION_BODY: SchemaId = SchemaId::new(0x0047);

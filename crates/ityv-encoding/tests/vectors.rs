@@ -905,13 +905,14 @@ mod participation {
 mod tally {
     use super::common::{Vector, check_file, encode_to_vec, render, self_check};
     use ityv_encoding::{
-        AggregateOpeningBody, AggregateOpeningParts, BallotStyleId, ElectionId, Encode,
+        AggregateOpeningBody, AggregateOpeningParts, BallotStyleId, BoxId, ElectionId, Encode,
         ExclusionEntry, ExclusionReason, Exclusions, HEADER_LEN, HYBRID_SIG_LEN, Hash512,
         MAX_TALLY_COUNT, PaperCountParts, PaperCountReportBody, PaperVotes, QuorumSig,
-        QuorumSigned, ReportingUnitId, SCHEMA_AGGREGATE_OPENING_BODY,
-        SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED, SCHEMA_TALLY_SCOPE_BODY,
-        SCHEMA_VERSION_1, Scalar32, TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId, Writer,
-        decode_object,
+        QuorumSigned, RECEIPT_ENTRY_LEN, ReceiptEntries, ReceiptEntry, ReceiptOutcome,
+        ReceiptResolutionBody, ReceiptResolutionParts, ReportingUnitId,
+        SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
+        SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, Scalar32,
+        TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId, Writer, decode_object,
     };
     use std::vec::Vec;
 
@@ -1083,6 +1084,74 @@ mod tally {
         v
     }
 
+    fn receipt(list: &[(u8, ReceiptOutcome)]) -> Vec<u8> {
+        let mut out = std::vec![0u8; list.len() * RECEIPT_ENTRY_LEN];
+        let mut w = Writer::new(&mut out);
+        for (fill, outcome) in list {
+            ReceiptEntry {
+                record_hash: Hash512([*fill; 64]),
+                outcome: *outcome,
+            }
+            .encode(&mut w)
+            .unwrap();
+        }
+        let body = ReceiptResolutionBody::new(&ReceiptResolutionParts {
+            election_id: e(),
+            box_id: BoxId::new(b"BOX-OUT-1").unwrap(),
+            entries: ReceiptEntries::new(leak(out)).unwrap(),
+            time_bucket: TimeBucket::new(1_900),
+        });
+        encode_to_vec(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    // Offsets: header 16, election 4 + 12, box 4 + 9, count 4.
+    const RECEIPT_FIRST_AT: usize = HEADER_LEN + 16 + 13 + 4;
+    const RECEIPT_SECOND_AT: usize = RECEIPT_FIRST_AT + RECEIPT_ENTRY_LEN;
+
+    fn receipt_vectors() -> Vec<Vector> {
+        let ok = receipt(&[
+            (0x10, ReceiptOutcome::Received),
+            (0x20, ReceiptOutcome::Damaged),
+            (0x30, ReceiptOutcome::Late),
+            (0x40, ReceiptOutcome::WrongDistrict),
+            (0x50, ReceiptOutcome::NotReceived),
+        ]);
+        let mut v = std::vec![
+            valid("every_outcome", ok.clone()),
+            valid("empty_box", receipt(&[]))
+        ];
+        for (label, code) in [("outcome_0", 0u8), ("outcome_6", 6)] {
+            let mut b = ok.clone();
+            b[RECEIPT_FIRST_AT + 64] = code;
+            v.push(invalid(label, b, "ValueOutOfRange", RECEIPT_FIRST_AT + 64));
+        }
+        let mut b = ok.clone();
+        b[RECEIPT_SECOND_AT..RECEIPT_SECOND_AT + 64].fill(0x10);
+        v.push(invalid(
+            "record_listed_twice",
+            b,
+            "Duplicate",
+            RECEIPT_SECOND_AT,
+        ));
+        let mut b = ok.clone();
+        b[RECEIPT_SECOND_AT..RECEIPT_SECOND_AT + 64].fill(0x05);
+        v.push(invalid(
+            "records_not_ascending",
+            b,
+            "NotSorted",
+            RECEIPT_SECOND_AT,
+        ));
+        let mut b = ok;
+        b[RECEIPT_FIRST_AT - 4..RECEIPT_FIRST_AT].copy_from_slice(&65_537u32.to_be_bytes());
+        v.push(invalid(
+            "too_many_entries",
+            b,
+            "CountExceedsMax",
+            RECEIPT_FIRST_AT - 4,
+        ));
+        v
+    }
+
     fn sig(id: &'static [u8], sig: &'static [u8; HYBRID_SIG_LEN]) -> QuorumSig<'static> {
         QuorumSig {
             trustee_id: TrusteeId::new(id).unwrap(),
@@ -1127,6 +1196,10 @@ mod tally {
         let mut v = std::vec![
             valid("opening_two_trustees", ok.clone()),
             valid("scope_two_trustees", quorum(scope(two_exclusions(), 3))),
+            valid(
+                "receipt_resolution_two_trustees",
+                quorum(receipt(&[(0x10, ReceiptOutcome::Received)]))
+            ),
         ];
         let mut b = ok[..count_at].to_vec();
         b.extend_from_slice(&0u32.to_be_bytes());
@@ -1253,6 +1326,25 @@ mod tally {
         self_check(&content, |b| {
             let v: QuorumSigned<'_> = decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, b)?;
             Ok(encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &v))
+        });
+    }
+
+    #[test]
+    fn receipt_resolution_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "ReceiptResolutionBody",
+            SCHEMA_RECEIPT_RESOLUTION_BODY,
+            &receipt_vectors(),
+        );
+        check_file("receipt_resolution_body.txt", &content);
+        self_check(&content, |b| {
+            let v: ReceiptResolutionBody<'_> =
+                decode_object(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_RECEIPT_RESOLUTION_BODY,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
         });
     }
 

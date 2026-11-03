@@ -1,7 +1,7 @@
-//! The tally (ENCODING.md §8.61–§8.64): `TallyScopeBody` (0x0043),
-//! `AggregateOpeningBody` (0x0044), the trustee-quorum envelope
-//! `QuorumSigned` (0x0045) and `PaperCountReportBody` (0x0046) in a
-//! `WitnessedEvent`. Round trips, the constructors' rules (the same as the
+//! The tally (ENCODING.md §8.61–§8.65): `TallyScopeBody` (0x0043),
+//! `AggregateOpeningBody` (0x0044), `ReceiptResolutionBody` (0x0047), the
+//! trustee-quorum envelope `QuorumSigned` (0x0045) and
+//! `PaperCountReportBody` (0x0046) in a `WitnessedEvent`. Round trips, the constructors' rules (the same as the
 //! decoders'), the signer roles of a paper count report, and the bounds the
 //! golden vectors in `vectors.rs` do not reach. Signatures are patterned
 //! bytes.
@@ -24,16 +24,18 @@ mod common;
 
 use common::encode_to_vec;
 use ityv_encoding::{
-    AggregateOpeningBody, AggregateOpeningParts, BallotStyleId, Decode, EXCLUSION_LEN, ElectionId,
-    Encode, ErrorKind, EventRole, EventSig, ExclusionEntry, ExclusionReason, Exclusions,
-    HEADER_LEN, HYBRID_SIG_LEN, Hash512, MAX_CANDIDATES, MAX_EXCLUSIONS, MAX_QUORUM_BODY_LEN,
-    MAX_QUORUM_SIGS, MAX_TALLY_COUNT, OrgId, PURPOSE_AGGREGATE_OPENING, PURPOSE_PAPER_COUNT,
+    AggregateOpeningBody, AggregateOpeningParts, BallotStyleId, BoxId, Decode, EXCLUSION_LEN,
+    ElectionId, Encode, ErrorKind, EventRole, EventSig, ExclusionEntry, ExclusionReason,
+    Exclusions, HEADER_LEN, HYBRID_SIG_LEN, Hash512, MAX_CANDIDATES, MAX_EXCLUSIONS,
+    MAX_QUORUM_BODY_LEN, MAX_QUORUM_SIGS, MAX_RECEIPT_ENTRIES, MAX_TALLY_COUNT, OrgId,
+    PURPOSE_AGGREGATE_OPENING, PURPOSE_PAPER_COUNT, PURPOSE_RECEIPT_RESOLUTION,
     PURPOSE_TALLY_SCOPE, PaperCountParts, PaperCountReportBody, PaperVotes, QuorumKind, QuorumSig,
-    QuorumSigned, Reader, ReportingUnitId, SCHEMA_AGGREGATE_OPENING_BODY,
-    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED, SCHEMA_TALLY_SCOPE_BODY,
-    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Scalar32, SchemaId, SignerId, TallyScopeBody,
-    TallyScopeParts, TimeBucket, TrusteeId, WITNESSED_BODY_SCHEMAS, WitnessedEvent, Writer,
-    decode_object, purpose_of, roles_satisfied,
+    QuorumSigned, RECEIPT_ENTRY_LEN, Reader, ReceiptEntries, ReceiptEntry, ReceiptOutcome,
+    ReceiptResolutionBody, ReceiptResolutionParts, ReportingUnitId, SCHEMA_AGGREGATE_OPENING_BODY,
+    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED, SCHEMA_RECEIPT_RESOLUTION_BODY,
+    SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Scalar32, SchemaId,
+    SignerId, TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId, WITNESSED_BODY_SCHEMAS,
+    WitnessedEvent, Writer, decode_object, purpose_of, roles_satisfied,
 };
 use std::vec::Vec;
 
@@ -337,6 +339,7 @@ fn a_quorum_event_carries_either_body_with_ascending_trustees() {
     for (body, kind) in [
         (scope_bytes(), QuorumKind::TallyScope),
         (opening_bytes(), QuorumKind::AggregateOpening),
+        (receipt_bytes(), QuorumKind::ReceiptResolution),
     ] {
         let event = QuorumSigned::new(body, &sigs).unwrap();
         assert_eq!(event.kind(), kind);
@@ -351,6 +354,10 @@ fn a_quorum_event_carries_either_body_with_ascending_trustees() {
         assert_eq!(
             event.aggregate_opening().is_some(),
             kind == QuorumKind::AggregateOpening
+        );
+        assert_eq!(
+            event.receipt_resolution().is_some(),
+            kind == QuorumKind::ReceiptResolution
         );
         let bytes = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
         assert_eq!(bytes.len(), HEADER_LEN + event.encoded_len());
@@ -485,4 +492,173 @@ fn a_paper_count_report_is_signed_by_the_chair_and_two_observer_orgs() {
     let parsed: PaperCountReportBody<'_> = back.body(SCHEMA_PAPER_COUNT_REPORT_BODY).unwrap();
     assert_eq!(parsed.parts().votes.as_slice(), [5, 2]);
     assert!(WitnessedEvent::new(body, &[obs_a, obs_b]).is_err());
+}
+
+fn receipt_entries(list: &[(u8, ReceiptOutcome)]) -> &'static [u8] {
+    let mut out = std::vec![0u8; list.len() * RECEIPT_ENTRY_LEN];
+    let mut w = Writer::new(&mut out);
+    for (fill, outcome) in list {
+        ReceiptEntry {
+            record_hash: Hash512([*fill; 64]),
+            outcome: *outcome,
+        }
+        .encode(&mut w)
+        .unwrap();
+    }
+    assert_eq!(w.finish(), out.len());
+    leak(out)
+}
+
+fn receipt_parts(entries: &'static [u8]) -> ReceiptResolutionParts<'static> {
+    ReceiptResolutionParts {
+        election_id: e(),
+        box_id: BoxId::new(b"BOX-OUT-1").unwrap(),
+        entries: ReceiptEntries::new(entries).unwrap(),
+        time_bucket: TimeBucket::new(1_900),
+    }
+}
+
+fn receipt_bytes() -> &'static [u8] {
+    let all = receipt_entries(&[
+        (0x10, ReceiptOutcome::Received),
+        (0x20, ReceiptOutcome::Damaged),
+        (0x30, ReceiptOutcome::Late),
+        (0x40, ReceiptOutcome::WrongDistrict),
+        (0x50, ReceiptOutcome::NotReceived),
+    ]);
+    let body = ReceiptResolutionBody::new(&receipt_parts(all));
+    leak(encode_to_vec(
+        SCHEMA_RECEIPT_RESOLUTION_BODY,
+        SCHEMA_VERSION_1,
+        &body,
+    ))
+}
+
+#[test]
+fn receipt_outcomes_have_the_codes_of_the_resolution() {
+    assert_eq!(PURPOSE_RECEIPT_RESOLUTION, b"receipt-resolution");
+    assert_eq!(
+        QuorumKind::ReceiptResolution.purpose(),
+        PURPOSE_RECEIPT_RESOLUTION
+    );
+    let all = [
+        ReceiptOutcome::Received,
+        ReceiptOutcome::Damaged,
+        ReceiptOutcome::Late,
+        ReceiptOutcome::WrongDistrict,
+        ReceiptOutcome::NotReceived,
+    ];
+    for (i, o) in all.iter().enumerate() {
+        assert_eq!(usize::from(o.code()), i + 1);
+        assert_eq!(ReceiptOutcome::from_code(o.code()), Some(*o));
+    }
+    assert_eq!(ReceiptOutcome::from_code(0), None);
+    assert_eq!(ReceiptOutcome::from_code(6), None);
+    assert_eq!(RECEIPT_ENTRY_LEN, 65);
+    assert_eq!(MAX_RECEIPT_ENTRIES, 65_536);
+}
+
+#[test]
+fn a_receipt_resolution_round_trips_and_lists_each_record_once_in_order() {
+    let bytes = receipt_bytes();
+    let body: ReceiptResolutionBody<'_> =
+        decode_object(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, bytes).unwrap();
+    assert_eq!(bytes.len(), HEADER_LEN + body.encoded_len());
+    let entries = body.parts().entries;
+    assert_eq!(entries.len(), 5);
+    assert!(!entries.is_empty());
+    let outcomes: Vec<(u8, ReceiptOutcome)> = entries
+        .iter()
+        .map(|e| (e.record_hash.0[0], e.outcome))
+        .collect();
+    assert_eq!(
+        outcomes,
+        std::vec![
+            (0x10, ReceiptOutcome::Received),
+            (0x20, ReceiptOutcome::Damaged),
+            (0x30, ReceiptOutcome::Late),
+            (0x40, ReceiptOutcome::WrongDistrict),
+            (0x50, ReceiptOutcome::NotReceived),
+        ]
+    );
+    // No entry at all is a resolution of an empty box.
+    let empty = ReceiptResolutionBody::new(&receipt_parts(leak(Vec::new())));
+    assert!(empty.parts().entries.is_empty());
+    assert_eq!(empty.parts().entries.len(), 0);
+    let bytes = encode_to_vec(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &empty);
+    let back: ReceiptResolutionBody<'_> =
+        decode_object(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(back, empty);
+
+    // The entry list's own rules.
+    let two = receipt_entries(&[
+        (0x10, ReceiptOutcome::Received),
+        (0x20, ReceiptOutcome::Late),
+    ]);
+    assert!(ReceiptEntries::new(two).is_some());
+    assert!(ReceiptEntries::new(&two[..=RECEIPT_ENTRY_LEN]).is_none());
+    let mut bad = two.to_vec();
+    bad[64] = 6;
+    assert!(ReceiptEntries::new(leak(bad)).is_none());
+    let twice = receipt_entries(&[
+        (0x10, ReceiptOutcome::Received),
+        (0x10, ReceiptOutcome::Late),
+    ]);
+    assert!(ReceiptEntries::new(twice).is_none());
+    let reversed = receipt_entries(&[
+        (0x20, ReceiptOutcome::Received),
+        (0x10, ReceiptOutcome::Late),
+    ]);
+    assert!(ReceiptEntries::new(reversed).is_none());
+    let too_many = leak(std::vec![0u8; (MAX_RECEIPT_ENTRIES + 1) * RECEIPT_ENTRY_LEN]);
+    assert!(ReceiptEntries::new(too_many).is_none());
+    // The largest list is accepted (ascending record hashes).
+    let mut most = std::vec![0u8; MAX_RECEIPT_ENTRIES * RECEIPT_ENTRY_LEN];
+    for (i, chunk) in most.chunks_exact_mut(RECEIPT_ENTRY_LEN).enumerate() {
+        chunk[60..64].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
+        chunk[64] = 1;
+    }
+    let most = ReceiptEntries::new(leak(most)).unwrap();
+    assert_eq!(most.len(), MAX_RECEIPT_ENTRIES);
+}
+
+#[test]
+fn a_receipt_resolution_decoder_reports_each_rule_where_it_breaks() {
+    let bytes = receipt_bytes();
+    // Offsets: header 16, election 4 + 12, box 4 + 9, count 4.
+    let first = HEADER_LEN + 16 + 13 + 4;
+    let second = first + RECEIPT_ENTRY_LEN;
+    let mut b = bytes.to_vec();
+    b[first + 64] = 0;
+    assert_eq!(
+        kind_of::<ReceiptResolutionBody<'_>>(SCHEMA_RECEIPT_RESOLUTION_BODY, &b),
+        (ErrorKind::ValueOutOfRange, first + 64)
+    );
+    let mut b = bytes.to_vec();
+    b[second..second + 64].fill(0x10);
+    assert_eq!(
+        kind_of::<ReceiptResolutionBody<'_>>(SCHEMA_RECEIPT_RESOLUTION_BODY, &b),
+        (ErrorKind::Duplicate, second)
+    );
+    let mut b = bytes.to_vec();
+    b[second..second + 64].fill(0x01);
+    assert_eq!(
+        kind_of::<ReceiptResolutionBody<'_>>(SCHEMA_RECEIPT_RESOLUTION_BODY, &b),
+        (ErrorKind::NotSorted, second)
+    );
+    let mut b = bytes.to_vec();
+    b[first - 4..first].copy_from_slice(&65_537u32.to_be_bytes());
+    assert_eq!(
+        kind_of::<ReceiptResolutionBody<'_>>(SCHEMA_RECEIPT_RESOLUTION_BODY, &b).0,
+        ErrorKind::CountExceedsMax
+    );
+    // Inside a quorum envelope the error is rebased to the envelope.
+    let sigs = [sig(b"T-A", &SIG_A)];
+    let event = QuorumSigned::new(bytes, &sigs).unwrap();
+    let mut wrapped = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
+    wrapped[HEADER_LEN + 4 + first + 64] = 9;
+    assert_eq!(
+        kind_of::<QuorumSigned<'_>>(SCHEMA_QUORUM_SIGNED, &wrapped),
+        (ErrorKind::ValueOutOfRange, HEADER_LEN + 4 + first + 64)
+    );
 }
