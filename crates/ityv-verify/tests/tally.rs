@@ -2185,6 +2185,59 @@ fn a_legal_include_decision_counts_the_record() {
 }
 
 #[test]
+fn a_record_the_law_includes_but_no_batch_attests_is_counted_on_paper() {
+    // Received and attested (option 1); damaged, included by the law, but
+    // in no batch (option 2): UNATTESTED in the scope, its ballot on paper.
+    let mut book = Book::new(world());
+    let received = cast(B3, 1, 1);
+    let damaged = cast(B3, 2, 2);
+    book.w(opened(B3));
+    book.push(SCHEMA_CAST_RECORD, received.event);
+    book.push(SCHEMA_CAST_RECORD, damaged.event);
+    book.push(SCHEMA_BATCH_ATTEST, batch(B3, 0, 1, 1, &[received.code]));
+    let closed = close(B3, 2, 1, 0, &[received.code, damaged.code]);
+    book.push(SCHEMA_BOX_CLOSE, closed);
+    book.checkpoint();
+    book.q(resolution(
+        B3,
+        &[
+            (received.code, ReceiptOutcome::Received),
+            (damaged.code, ReceiptOutcome::Damaged),
+        ],
+        CLOSE_BUCKET + 20,
+    ));
+    let (filed, filed_event) = filing(DisputeType::Postal, B3, damaged.code, 1);
+    book.w(filed_event);
+    book.disputes.push(filed);
+    book.w(decision(filed, TallyEffect::Include));
+    let mut s = spec(STYLE2, RU2, &[received.code]);
+    s.exclusions = std::vec![exclusion(
+        damaged.code,
+        ExclusionReason::Unattested,
+        object_hash(closed)
+    )];
+    let body = scope_body(&s);
+    book.q(scope(body));
+    book.checkpoint();
+    for j in 0..2 {
+        book.q(opening(opening_body(
+            STYLE2,
+            RU2,
+            body,
+            j,
+            sums(&[received], j),
+        )));
+    }
+    book.w(paper(STYLE2, RU2, &[1, 1, 0, 0, 0, 0, 0, 0, 0], 0));
+    let stage = book.run();
+    let u = stage.unit(STYLE2, RU2).unwrap();
+    assert!(u.scope_problems.is_empty(), "{:?}", u.scope_problems);
+    assert_eq!(u.excluded_with_paper, 1);
+    assert!(u.comparison.unwrap().agrees(), "{:?}", u.comparison);
+    assert_eq!(u.holds, HoldSet::empty());
+}
+
+#[test]
 fn a_scope_waits_for_the_receipts_and_a_late_one_is_excluded() {
     let mut book = Book::new(world());
     let casts = box3(&mut book, &[1, 2]);

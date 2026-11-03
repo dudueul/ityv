@@ -68,8 +68,9 @@
 //!   machine's confirmed votes, and `Σ P_t + I = Σ D_t + B + U + F + X`,
 //!   where `F` is the unit's no-record count and `X` the excluded records
 //!   whose ballot paper is among the unit's counted ballots (an excluded
-//!   record still cast or `RECEIVED`: `UNATTESTED`, `SHARE_MISSING`, a test
-//!   ballot cast).
+//!   record still cast, `RECEIVED`, or damaged or wrong-district and
+//!   included by the law: `UNATTESTED`, `SHARE_MISSING`, a test ballot
+//!   cast).
 //!
 //! Every trustee signature covers the quorum message (the body's object
 //! hash and the participating trustees, [`ityv_state::quorum_message`]),
@@ -438,12 +439,20 @@ const fn receipt_of(outcome: ReceiptOutcome) -> Receipt {
 }
 
 /// Whether a record's ballot paper is among the counted ballots of its
-/// unit: it was cast into the box, or its envelope was received.
+/// unit: it was cast into the box, its envelope was received, or the law
+/// included a damaged or wrong-district envelope (§10.6 item 6). A record
+/// the scope excludes for another reason (`UNATTESTED`, `SHARE_MISSING`)
+/// is then in `X` of §11.5.
 const fn paper_counted(state: RecordState) -> bool {
-    matches!(
-        state.primary(),
-        Primary::Cast | Primary::Receipt(Receipt::Received)
-    )
+    match state.primary() {
+        Primary::Cast | Primary::Receipt(Receipt::Received) => true,
+        Primary::Receipt(Receipt::Damaged | Receipt::WrongDistrict) => {
+            matches!(state.legal_decision(), Some(true))
+        }
+        Primary::ChallengedSpoiled
+        | Primary::Quarantined
+        | Primary::Receipt(Receipt::Late | Receipt::NotReceived) => false,
+    }
 }
 
 /// Whether a record awaits the law (§10.6 item 6).
