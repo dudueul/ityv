@@ -1877,3 +1877,43 @@ fn a_huge_count_does_not_stop_the_station() {
     assert_eq!(run.station().last_slot, Some(153));
     assert_eq!(run.station().alarms, [alarm(152, ProgressAlarm::Negative)]);
 }
+
+#[test]
+fn the_spare_reports_after_the_swap_in_later_slots() {
+    // `U-1A` fails after slot 150; the spare reports "after swap" from 151
+    // on, in every slot after the swap's, and closes at 153.
+    let swap = checkin_swap(151, [1, 1, 0, 0], &WITNESSES);
+    let mut events = openings();
+    events.push(t(checkin_tick(
+        150,
+        [1, 1, 0, 0],
+        CheckinProgressState::Checking,
+    )));
+    for (slot, c, state) in [
+        (151, [2, 2, 0, 0], CheckinProgressState::AfterSwap),
+        (152, [3, 3, 0, 0], CheckinProgressState::AfterSwap),
+        (153, [3, 3, 0, 0], CheckinProgressState::Closed),
+    ] {
+        events.push(t(spare_tick(slot, c, state)));
+    }
+    for (i, &(slot, _, b1, b2)) in CLEAN.iter().enumerate() {
+        let bs = if i + 1 == CLEAN.len() {
+            BoxProgressState::Closed
+        } else {
+            BoxProgressState::Casting
+        };
+        events.push(t(box_tick(B1, slot, b1, bs)));
+        events.push(t(box_tick(B2, slot, b2, bs)));
+    }
+    events.push(w(swap));
+    events.extend(station_close());
+    let run = go(&events);
+    assert!(
+        run.station().refusals.is_empty(),
+        "{:?}",
+        run.station().refusals
+    );
+    assert_eq!(run.station().ticks, 4);
+    assert!(run.station().suspended);
+    assert_eq!(run.station().holds, HoldSet::empty());
+}
