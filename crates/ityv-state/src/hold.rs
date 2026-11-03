@@ -161,11 +161,41 @@ pub enum HoldReason {
     /// A challenge opening cannot be taken: the device's signature does
     /// not verify, or it names no accepted record of its box (§8).
     ChallengeRejected = 46,
+    /// A challenge opening the device signed does not reconstruct its
+    /// record: the opened values do not open the commitments, or the
+    /// modules' contributions do not give the cast id and randomness, or
+    /// name other counters (§8 item 3, VC-028). The device is quarantined
+    /// and its paper compared in full (§8 item 5).
+    OpeningMismatch = 47,
+    /// A participation set cannot be taken: the check-in unit's signature
+    /// does not verify under a unit key the station had by its frame, the
+    /// module signatures are not one per party from that unit's party
+    /// modules in chamber order or one does not verify, the genesis's last
+    /// state has no such station, or a second set for the station carries
+    /// other pseudonyms (§6.5, §14 6, VC-084).
+    ParticipationSetInvalid = 48,
+    /// A pseudonym appears more than once in the participation sets of the
+    /// election, within one station or across stations: a double check-in
+    /// to look into (§6.5, §6.6, VC-018).
+    DuplicatePseudonym = 49,
+    /// A module provisioning or party key ceremony record cannot be taken:
+    /// not the record the genesis pins, a signature that does not verify
+    /// or a missing signer group, fields that disagree with the genesis, no
+    /// entropy commitment, a party key check that differs from the party's
+    /// ceremony, or a second ceremony for a party (§6.4, §9.4.2, §14 6,
+    /// VC-092, VC-093, VC-095).
+    KeyProvisioningInvalid = 50,
+    /// A station's issuance count or observer count (periodic or final)
+    /// cannot be taken: a signature does not verify under the roster keys
+    /// of the state in force at its frame, or its signers do not have the
+    /// roles it needs. A later count that is taken does not hide it
+    /// (§6.3, §6.5, §10.2, §14 6, VC-016, VC-018).
+    StationCountRefused = 51,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 52] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -213,6 +243,11 @@ impl HoldReason {
         Self::RecordSetMismatch,
         Self::DisputeRefused,
         Self::ChallengeRejected,
+        Self::OpeningMismatch,
+        Self::ParticipationSetInvalid,
+        Self::DuplicatePseudonym,
+        Self::KeyProvisioningInvalid,
+        Self::StationCountRefused,
     ];
 
     /// The reason's code.

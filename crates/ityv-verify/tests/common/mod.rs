@@ -112,8 +112,19 @@ pub fn sign(
     purpose: &[u8],
     object: &[u8],
 ) -> &'static [u8; HYBRID_SIG_LEN] {
+    sign_seeded(key, purpose, object, object.len() as u64)
+}
+
+/// As [`sign`], with the hedged signing randomness drawn from `seed`: a
+/// second, different signature over the same object.
+pub fn sign_seeded(
+    key: &HybridSigningKey,
+    purpose: &[u8],
+    object: &[u8],
+    seed: u64,
+) -> &'static [u8; HYBRID_SIG_LEN] {
     let purpose = Purpose::new(purpose).unwrap();
-    let mut rng = ChaCha20Rng::seed_from_u64(object.len() as u64);
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
     leak(signature_bytes(
         &sign_hybrid(key, &purpose, object, &mut rng).unwrap(),
     ))
@@ -861,4 +872,19 @@ pub fn module_signing(n: u16) -> &'static HybridSigningKey {
 /// The registered key of module entry `n`.
 pub fn module_key(n: u16) -> &'static [u8; HYBRID_VK_LEN] {
     registered(MODULE_BASE + n)
+}
+
+// ---------------------------------------------------------------------
+// Progress- and participation-stage helpers.
+
+/// The signing key of trustee `n` of [`Draft::standard`] (`T-P1-1` is 0,
+/// then `T-P1-2`, `T-P2-1`, `T-P2-2`, `T-J`, `T-A`, `T-C`, `T-N`).
+pub fn trustee_signing(n: u16) -> &'static HybridSigningKey {
+    signing(TRUSTEE_BASE + n)
+}
+
+/// The signing key of check-in unit `n` (the `n` given to
+/// `checkin_unit`: `U-1A` 0, `U-1B` 1, `U-2A` 2, `U-2B` 3).
+pub fn unit_signing(n: u16) -> &'static HybridSigningKey {
+    signing(UNIT_BASE + n)
 }

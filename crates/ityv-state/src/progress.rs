@@ -609,7 +609,7 @@ struct Pending {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Previous {
     issued: u64,
-    sheets_in: u64,
+    sheets_in: i128,
     negative: bool,
     high: bool,
     conditions: [bool; 3],
@@ -690,8 +690,10 @@ impl<'a> StationProgress<'a> {
         }
     }
 
-    /// Takes a box tick accepted by its [`BoxStream`]. A tick in fallback
-    /// suspends the alarms (§7.10 item 5).
+    /// Takes a box tick accepted by its [`BoxStream`]. The tick's own state
+    /// suspends nothing: only an accepted `FallbackDeclared` or device swap
+    /// does, through [`Self::suspend`] (§7.10 item 5), so a device cannot
+    /// turn the alarms off by saying it is in fallback.
     ///
     /// # Errors
     /// [`Error::Mismatch`] for another election or a box not at this
@@ -708,14 +710,12 @@ impl<'a> StationProgress<'a> {
             .ok_or(Error::Mismatch)?;
         let count = self.sheets_in.get_mut(index).ok_or(Error::Mismatch)?;
         *count = p.sheets_in;
-        if p.state == BoxProgressState::Fallback {
-            self.suspended = true;
-        }
         Ok(())
     }
 
-    /// Takes a check-in tick accepted by the [`CheckinStream`]. A tick after
-    /// a unit swap suspends the alarms.
+    /// Takes a check-in tick accepted by the [`CheckinStream`]. As for a box
+    /// tick, its state suspends nothing; an accepted `CheckinUnitSwap` does,
+    /// through [`Self::suspend`].
     ///
     /// # Errors
     /// [`Error::Mismatch`] for another election or station.
@@ -729,9 +729,6 @@ impl<'a> StationProgress<'a> {
         self.issued = p.issued;
         self.spoiled = p.spoiled;
         self.returned = p.returned;
-        if p.state == CheckinProgressState::AfterSwap {
-            self.suspended = true;
-        }
         Ok(())
     }
 
@@ -742,28 +739,23 @@ impl<'a> StationProgress<'a> {
         self.suspended = true;
     }
 
-    /// The current sheets outside the boxes.
-    ///
-    /// # Errors
-    /// [`Error::Overflow`] (not reachable: the counts are at most ten
-    /// `u64` values).
-    pub fn out(&self) -> Result<i128, Error> {
-        let sheets_in = self.sheets_in_total()?;
-        out_of(
-            self.issued,
-            sheets_in,
-            self.spoiled,
-            self.returned,
-            self.carried_out,
-        )
-        .ok_or(Error::Overflow)
+    /// The current sheets outside the boxes, exact: at most
+    /// [`MAX_STATION_BOXES`] + 4 counts of 64 bits each, far inside `i128`.
+    #[must_use]
+    pub fn out(&self) -> i128 {
+        i128::from(self.issued)
+            .saturating_sub(self.sheets_in_total())
+            .saturating_sub(i128::from(self.spoiled))
+            .saturating_sub(i128::from(self.returned))
+            .saturating_sub(i128::from(self.carried_out))
     }
 
-    fn sheets_in_total(&self) -> Result<u64, Error> {
+    /// The sheets in every box of the station, exact (no saturation is
+    /// reachable: [`MAX_STATION_BOXES`] counts of 64 bits).
+    fn sheets_in_total(&self) -> i128 {
         self.sheets_in
             .iter()
-            .try_fold(0u64, |acc, v| acc.checked_add(*v))
-            .ok_or(Error::Overflow)
+            .fold(0i128, |acc, v| acc.saturating_add(i128::from(*v)))
     }
 
     /// Closes slot `slot` with the latest counts and raises the alarms that
@@ -785,8 +777,8 @@ impl<'a> StationProgress<'a> {
             return Err(Error::Mismatch);
         }
         self.next_slot = Some(slot.checked_add(1).ok_or(Error::Overflow)?);
-        let sheets_in = self.sheets_in_total()?;
-        let out = self.out()?;
+        let sheets_in = self.sheets_in_total();
+        let out = self.out();
         let quiet = self
             .previous
             .is_some_and(|p| p.issued == self.issued && p.sheets_in == sheets_in);

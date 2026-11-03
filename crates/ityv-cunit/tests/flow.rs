@@ -455,6 +455,27 @@ fn run_challenge_in(w: &World, style: &[u8], chunks: usize, option: u16) {
         assert_eq!(opened.counter, mock.last_issue().counter);
         assert_eq!(opened.cid.0, mock.last_issue().cid);
     }
+    // What the verifier recomputes (ityv-verify `records`, VC-028): the
+    // modules and counters are the record's, in its order, and the cast id
+    // is `SHA3-512("ityv:castid:v1" ‖ 0x00 ‖ cid_1 ‖ …)[0..24]`.
+    let opened: Vec<(&[u8], u64)> = body
+        .modules()
+        .map(|m| (m.module_id.as_bytes(), m.counter))
+        .collect();
+    let counted: Vec<(&[u8], u64)> = rec
+        .body()
+        .module_counters()
+        .iter()
+        .map(|c| (c.module_id.as_bytes(), c.counter))
+        .collect();
+    assert_eq!(opened, counted);
+    let mut hasher = ityv_crypto::Sha3Hasher::new();
+    hasher.absorb(b"ityv:castid:v1");
+    hasher.absorb(&[0x00]);
+    for m in body.modules() {
+        hasher.absorb(&m.cid.0);
+    }
+    assert_eq!(&hasher.finish()[..24], body.cast_id().0.as_slice());
 
     // Trustees decrypt their shares and a qualified set reconstructs every
     // secret; the reconstructed values equal the opening (§9.1 order).

@@ -16,6 +16,8 @@
 //! | [`authority`] | The signed legal authorization that grants every capability | §4.4, VC-006..008 |
 //! | [`boxes`] | 4. Every expected box through its state machine, following genesis amendments: opening, records, fallback, device swap, close invariants, late closes, custody, completeness | §4.3, §7, §14 4, VC-037..040, VC-100, VC-105, VC-106 |
 //! | [`records`] | 5. Cast records: OR proofs, record signatures, batch attestations, counter continuity, record set roots, `UNATTESTED` | §7.2.1, §7.5, §7.6, §14 5, VC-025..027, VC-053, VC-057 |
+//! | [`progress`] | Voting progress record: device streams in slot order, device swaps, station alarms and on-site checks, close comparisons | §7.10, ADR-0027, VC-102, VC-103, VC-106 |
+//! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
 //! | [`report`] | Every stage over one ledger and the status ladder | §14 (end), VC-049, VC-050 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -33,11 +35,10 @@
 //!   left out, reported as a [`index::Finding`], and puts the box it
 //!   belongs to (or the whole ledger) under `HOLD_REVIEW`.
 //!
-//! What this crate does **not** do yet (ROADMAP M5): the participation,
-//! tally, audit, split-view, connectivity and software stages (6–8,
-//! 10–12), the full dispute stage (9: the report holds on any unresolved
-//! dispute), and the progress stage; so the highest status
-//! [`report::verify_ledger`] gives is `SOURCE_COMPLETENESS_CHECKED`.
+//! What this crate does **not** do yet (ROADMAP M5): the tally, audit,
+//! split-view, connectivity and software stages (7–8, 10–12); so the
+//! highest status [`report::verify_ledger`] gives is
+//! `SOURCE_COMPLETENESS_CHECKED`.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -50,10 +51,12 @@ pub mod authority;
 pub mod boxes;
 pub mod checkpoint;
 mod cross;
-mod disputes;
+pub mod disputes;
 pub mod error;
 pub mod genesis;
 pub mod index;
+pub mod participation;
+pub mod progress;
 pub mod records;
 pub mod report;
 mod sets;
@@ -71,12 +74,21 @@ pub use checkpoint::{
     CheckpointChain, CheckpointFinding, CheckpointFindingKind, VerifiedCheckpoint,
     verify_checkpoints,
 };
+pub use disputes::{Decision, DisputeEntry, DisputeStage, verify_disputes};
 pub use error::{Error, Reference, Rule};
 pub use genesis::{
     AmendableSets, AmendmentInput, FixedSets, GenesisInput, VerifiedGenesis, verify_genesis,
 };
 pub use index::{
     Finding, FindingKind, IndexedEvent, LedgerIndex, OPAQUE_SCHEMAS, Scope, build_index,
+};
+pub use participation::{
+    CountFinding, KeyFinding, KeyProblem, ParticipationStage, SetFinding, SetProblem,
+    StationParticipation, verify_participation,
+};
+pub use progress::{
+    BoxProgressReport, CloseCheck, MAX_PROGRESS_SLOTS, ProgressReason, ProgressRefusal,
+    ProgressStage, RaisedAlarm, StationProgressReport, bucket_slots, verify_progress,
 };
 pub use records::{
     AcceptedRecord, BatchFinding, BatchProblem, BoxRecords, RecordRefusal, RecordStage,

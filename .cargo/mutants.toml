@@ -19,6 +19,10 @@ exclude_re = [
     # one event), so `<` and `<=` between their frames agree
     # (crates/ityv-verify/src/index.rs, `amendment_frames`).
     "replace < with <= in LedgerIndex<'a>::amendment_frames",
+    # Equivalent: a tick and a close never share a frame (a frame carries
+    # one event), so `>` and `>=` between their frames agree
+    # (crates/ityv-verify/src/progress.rs, `after_close`).
+    "replace > with >= in after_close",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)

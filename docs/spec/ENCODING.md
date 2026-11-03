@@ -57,7 +57,7 @@ offset  size  field
 - 보존 서명(SLH-DSA-SHAKE-256s)도 같은 64바이트 다이제스트를 서명하며 `purpose`를 FIPS 205 컨텍스트 문자열로 넘긴다. Ed25519는 다이제스트만 서명한다(컨텍스트 없음).
 - 서명·키·암호문의 인코딩은 길이 접두사 없는 고정폭 `[u8; N]`이다(§2). 서명 묶음 `HybridSig`는 `mldsa87: [u8; 4627] ‖ ed25519: [u8; 64]`(4,691바이트), 보존 서명은 `[u8; 29792]`다.
 
-- 헤더 없는 필드 묶음: 다음 세 용도는 객체가 아니라 필드의 정규 인코딩(§2)을 헤더 없이 이어 붙인 바이트열을 위 서명 메시지의 `obj`로 쓴다. `attest-challenge`(Ed25519만): `election_id ‖ station_id ‖ observer_id ‖ nonce`(§8.19). `module-attestation`(하이브리드): `device_id ‖ challenge ‖ module_id ‖ build ‖ image_hash ‖ boot_count`(§8.28). `attest-summary`(Ed25519만): `AttestationSummary`의 1–7번 필드(§8.30). 필드 묶음은 해시하거나 공표하지 않으며 서명 입력으로만 쓴다.
+- 헤더 없는 필드 묶음: 다음 여섯 용도는 객체가 아니라 필드의 정규 인코딩(§2)을 헤더 없이 이어 붙인 바이트열을 위 서명 메시지의 `obj`로 쓴다. `attest-challenge`(Ed25519만): `election_id ‖ station_id ‖ observer_id ‖ nonce`(§8.19). `module-attestation`(하이브리드): `device_id ‖ challenge ‖ module_id ‖ build ‖ image_hash ‖ boot_count`(§8.28). `attest-summary`(Ed25519만): `AttestationSummary`의 1–7번 필드(§8.30). `participation-set`(하이브리드): `ParticipationSet`의 1–4번 필드(§8.25). `module-provisioned`(하이브리드): `ModuleProvisioned`의 1–14번 필드(§8.31). `party-key`(하이브리드): `PartyKeyCeremony`의 1–8번 필드(§8.32). 필드 묶음은 해시하거나 공표하지 않으며 서명 입력으로만 쓴다. 뒤의 세 객체는 필드 묶음이 객체 본문의 앞부분 그대로이므로, 검증기는 본문에서 그 바이트를 잘라 서명을 확인한다(다시 인코딩하지 않는다).
 
 서로 다른 용도의 서명을 재사용할 수 없도록 `purpose`가 다르면 메시지가 다르다. 같은 객체를 다른 선거에 재생할 수 없도록 모든 객체 본문은 `election_id: Ident<64>`를 첫 필드로 가진다.
 
@@ -462,6 +462,8 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 
 최대 크기는 약 4.2MB로, 연결 감사의 프레임 1개(§8.22)를 넘으면 같은 일정의 연속 프레임으로 나간다(PROTOCOL §5.8).
 
+디코더 규칙: `count`가 65,536을 넘으면 `ValueOutOfRange`(`count` 위치), `pseudonyms` 개수와 다르면 `InvariantViolation`(배열 개수 위치), 앞 가명보다 작은 가명은 `NotSorted`(그 가명 위치). `module_sigs`는 4개 이하(`CountExceedsMax`)이고 같은 `module_id`가 두 번 나오면 `Duplicate`. 개수(genesis 정당 수 n)와 순서(챔버 코드 순, 각각 서명한 카운터·가명 유닛의 정당 모듈)는 genesis가 있어야 알 수 있어 검증기가 확인한다(PROTOCOL §14 6항). `counter_sig`의 키는 그 투표소의 카운터·가명 유닛(사용 중 또는 예비) 키이고, 집합을 실은 프레임에 시행 중인 상태까지의 어느 genesis 상태의 키든 된다.
+
 ### 8.26 `ReleaseManifestBody` (`schema_id` 0x0021, `schema_version` 1)
 
 | 순서 | 필드 | 형 | 규칙 |
@@ -549,6 +551,8 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 14 | `prf_key_check` | `Option<[u8; 32]>` | 카운터·가명 유닛의 정당 모듈이면 존재, 그 밖에는 부재. `HMAC-SHA-256(key_c, "ityv:prfcheck:v2")` |
 | 15 | `signatures` | `Array<{actor_id: Ident<64>, sig: [u8; 4691]}, 16>` | 위원회·챔버·참관인 하이브리드 서명, `actor_id` 오름차순, 중복 없음, purpose `module-provisioned`. 서명 대상은 필드 1–14의 인코딩 |
 
+디코더 규칙: `chamber`가 1–7 밖이면 `ValueOutOfRange`, `member_count`가 1–8 밖이면 `ValueOutOfRange`. `prf_key_check`가 있으면 챔버가 정당 챔버(1–4)이고 `se_present`가 1이어야 한다(아니면 `InvariantViolation`, 존재 태그 위치). 그 모듈이 정말 카운터·가명 유닛의 정당 모듈인지는 genesis가 정하므로 검증기가 확인한다. `signatures`의 `actor_id`: 위원회는 예약 ID `committee`(genesis 본문의 위원회 키), 챔버 구성원은 그 챔버 `TrusteeEntry`의 `trustee_id`, 참관인은 명부(그 프레임에 시행 중인 상태까지)의 참관인 `signer_id`. 서명자는 위원회, 그 모듈 챔버의 구성원 1명 이상, 서로 다른 조직의 참관인 2명 이상이며, 서명자들의 키는 어느 반쪽도 같지 않다(VC-098). 검증기는 또 genesis 모듈 항목의 `provisioned_hash`가 이 객체의 해시이고, `chamber`가 그 항목의 챔버, `device_id`가 이 기록을 고정하면서 이 모듈을 목록에 둔 가장 이른 상태의 장치(투표함 `box_id` 또는 카운터·가명 유닛 `unit_id`; 어느 장치 목록에도 없는 예비 모듈이면 어느 genesis 상태의 투표함이나 카운터·가명 유닛), `member_count`가 genesis `chambers`의 그 챔버 `members`, `entropy_commitment`가 0이 아님(VC-095)을 확인한다.
+
 ### 8.32 `PartyKeyCeremony` (`schema_id` 0x0027, `schema_version` 1)
 
 정당 열쇠 생성 절차의 기록이다(PROTOCOL §6.4). 키, 몫, 엔트로피는 담지 않는다.
@@ -564,6 +568,8 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 7 | `prf_key_check` | `[u8; 32]` | 이 정당 모든 확인 모듈의 `ModuleProvisioned`와 같아야 함(VC-093) |
 | 8 | `time_bucket` | `u64` | |
 | 9 | `signatures` | `Array<{actor_id: Ident<64>, sig: [u8; 4691]}, 16>` | 위원회, 참석 정당 구성원, 서로 다른 조직의 참관인 2 이상. purpose `party-key`. 서명 대상은 필드 1–8의 인코딩 |
+
+디코더 규칙: `chamber`가 1–4 밖이면 `ValueOutOfRange`. `share_threshold`는 1 이상(0이면 `ValueOutOfRange`, 그 위치), `share_threshold ≤ share_count ≤ 8`을 어기면 `ValueOutOfRange`(`share_count` 위치). `share_holders` 개수가 `share_count`와 다르면 `InvariantViolation`, `trustee_id`가 오름차순이 아니면 `NotSorted`/`Duplicate`. 검증기 규칙: 챔버가 genesis 정당의 챔버이고, 몫 보관자가 모두 그 정당 챔버의 구성원이며 `hsm_model`이 서로 다르다(§6.4 2항 "구성원마다 서로 다른 제품"). 서명자는 위원회(`committee`), 모든 몫 보관자, 서로 다른 조직의 참관인 2명 이상이다(몫을 HSM에 받은 사람은 그 자리에 있었으므로). 같은 정당의 두 번째 유효 절차가 다른 필드를 가지면 충돌이다.
 
 ### 8.33–8.43 사람이 서명하는 이벤트와 genesis 항목 (M5 1단계, ADR-0025)
 

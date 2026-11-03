@@ -13,13 +13,13 @@ ityv는 손기표 종이 원본 위에 끝단 간 검증(E2E) 암호 계층을 �
 ## 읽는 순서
 
 1. `GLOSSARY.md` 용어. 모든 문서가 이 용어를 쓴다.
-2. `docs/adr/` 결정기록 14건. 왜 이렇게 설계했는지.
+2. `docs/adr/` 결정기록 32건(ADR-0000은 서식). 왜 이렇게 설계했는지.
 3. `CONSTITUTION.md` 공학 규칙과 검증 사다리.
 4. `docs/spec/PROTOCOL.md` 프로토콜 명세. `docs/spec/ENCODING.md` 정규 인코딩. `docs/spec/FAILURE_CASES.md` 장애·공격 경우의 수.
 5. `docs/legal/LEGAL_ANNEX.md` 법령 개정 권고와 단계 활성화. `docs/governance/GOVERNANCE.md` 거버넌스.
 6. `docs/usecases/`, `docs/ballot/`, `docs/processing/` 사용례, 투표지 모양, 처리 흐름.
 7. `docs/assurance/` 위협·요구사항 수확, P0 게이트, 검증 사다리, 행동 명세.
-8. `crates/` 신뢰 기반 크레이트. 첫 크레이트는 `ityv-encoding`.
+8. `crates/` 신뢰 기반 크레이트. 정규 인코딩 `ityv-encoding`, 암호 `ityv-crypto`, 공개원장 `ityv-ledger`, 커밋먼트 유닛 `ityv-cunit`, 상태 기계 `ityv-state`, 공개 검증기 `ityv-verify`. 크레이트마다 README가 무엇을 보장하고 무엇을 보장하지 않는지 적는다.
 9. `docs/ROADMAP.md` 다음 단계.
 
 ## 빌드와 검사

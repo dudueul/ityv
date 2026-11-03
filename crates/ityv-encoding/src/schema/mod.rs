@@ -19,6 +19,7 @@ pub mod events;
 pub mod genesis;
 pub mod genesis_body;
 pub mod ledger_frame;
+pub mod participation;
 pub mod progress;
 pub mod scan_count;
 pub mod share_package;
@@ -85,6 +86,9 @@ pub const SCHEMA_BOX_CLOSE: SchemaId = SchemaId::new(0x001A);
 /// `ScanCountAttest` (ENCODING.md §8.15, `0x001B`).
 pub const SCHEMA_SCAN_COUNT_ATTEST: SchemaId = SchemaId::new(0x001B);
 
+/// `ParticipationSet` (ENCODING.md §8.25).
+pub const SCHEMA_PARTICIPATION_SET: SchemaId = SchemaId::new(0x0020);
+
 /// `DeviceAttestationBody` (ENCODING.md §8.28, `0x0023`).
 pub const SCHEMA_DEVICE_ATTESTATION_BODY: SchemaId = SchemaId::new(0x0023);
 
@@ -93,6 +97,12 @@ pub const SCHEMA_DEVICE_ATTESTATION: SchemaId = SchemaId::new(0x0024);
 
 /// `AttestationSummary` (ENCODING.md §8.30, `0x0025`).
 pub const SCHEMA_ATTESTATION_SUMMARY: SchemaId = SchemaId::new(0x0025);
+
+/// `ModuleProvisioned` (ENCODING.md §8.31).
+pub const SCHEMA_MODULE_PROVISIONED: SchemaId = SchemaId::new(0x0026);
+
+/// `PartyKeyCeremony` (ENCODING.md §8.32).
+pub const SCHEMA_PARTY_KEY_CEREMONY: SchemaId = SchemaId::new(0x0027);
 
 /// `CustodyHandoffBody` (ENCODING.md §6, `0x0008`).
 pub const SCHEMA_CUSTODY_HANDOFF_BODY: SchemaId = SchemaId::new(0x0008);

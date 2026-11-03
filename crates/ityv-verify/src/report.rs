@@ -17,10 +17,20 @@
 //!    `SOURCE_COMPLETENESS_CHECKED` from `LOG_CONSISTENT`, so a box still
 //!    open is not a hold);
 //! 5. records ([`crate::verify_records`]);
-//! 9. disputes: a dispute still unresolved after every dispute event
-//!    holds the ledger, and so does a dispute event that cannot be taken
-//!    (a signature that does not verify, a filing without its capability,
-//!    a change that does not apply).
+//! - the voting progress record ([`crate::verify_progress`], §7.10, part
+//!   of the box invariants): a stream, alarm or close comparison that does
+//!   not hold holds its box or station;
+//! 6. participation ([`crate::verify_participation`]): passed when every
+//!    station's identities, party ceremony and provisioning record could be
+//!    checked; not run while one is not yet on the ledger; an event that
+//!    cannot be taken, a repeated pseudonym or an identity that does not
+//!    hold holds the ledger;
+//! 9. disputes ([`crate::verify_disputes`]): a dispute still unresolved
+//!    after every dispute event holds the ledger, and so does a dispute
+//!    event or legal decision that cannot be taken (a signature that does
+//!    not verify, a filing without its capability, a change that does not
+//!    apply, a decision of no registered authority or naming no dispute);
+//!    each legal decision is shown next to its dispute.
 //!
 //! The legal authorization ([`crate::authorize_ledger`]) gives the scopes;
 //! without `BALLOT_MARK` the report says that only counts back the result.
@@ -32,13 +42,11 @@
 //! `ityv_ledger::check_board`). Until the anchors are satisfied the status
 //! stays `UNVERIFIED`.
 //!
-//! What the report does not reach yet: participation, tally, audit,
-//! split view, connectivity and software (stages 6–8, 10–12), so the
-//! highest status it gives is `SOURCE_COMPLETENESS_CHECKED`.
+//! What the report does not reach yet: tally, audit, split view,
+//! connectivity and software (stages 7–8, 10–12), so the highest status
+//! it gives is `SOURCE_COMPLETENESS_CHECKED`.
 
-use alloc::vec::Vec;
-
-use ityv_encoding::{CaptureProfile, ScopeSet, Seq};
+use ityv_encoding::{CaptureProfile, ScopeSet};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
 use ityv_state::status::{Step, evaluate};
 use ityv_state::{Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport};
@@ -46,9 +54,11 @@ use ityv_state::{Evidence, HoldReason, HoldSet, Outcome, Publication, StatusRepo
 use crate::authority::{AuthorityStage, authorize_ledger};
 use crate::boxes::{BoxStage, verify_boxes};
 use crate::checkpoint::{CheckpointChain, verify_checkpoints};
-use crate::disputes::{dispute_steps, unresolved};
+use crate::disputes::{DisputeStage, verify_disputes};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{LedgerIndex, build_index};
+use crate::participation::{ParticipationStage, verify_participation};
+use crate::progress::{ProgressStage, verify_progress};
 use crate::records::{RecordStage, verify_records};
 
 /// What the caller observed outside the ledger: the publication deadlines
@@ -69,8 +79,9 @@ pub struct Report<'a> {
     checkpoints: CheckpointChain,
     boxes: BoxStage<'a>,
     records: RecordStage<'a>,
-    open_disputes: usize,
-    refused_disputes: Vec<Seq>,
+    progress: ProgressStage<'a>,
+    participation: ParticipationStage<'a>,
+    disputes: DisputeStage<'a>,
     evidence: Evidence,
     status: StatusReport,
 }
@@ -106,16 +117,22 @@ impl<'a> Report<'a> {
         &self.records
     }
 
-    /// The disputes unresolved after every dispute event on the ledger.
+    /// The voting progress record.
     #[must_use]
-    pub const fn open_disputes(&self) -> usize {
-        self.open_disputes
+    pub const fn progress(&self) -> &ProgressStage<'a> {
+        &self.progress
     }
 
-    /// The frames of the dispute events that could not be taken.
+    /// The participation ledger (stage 6).
     #[must_use]
-    pub fn refused_disputes(&self) -> &[Seq] {
-        &self.refused_disputes
+    pub const fn participation(&self) -> &ParticipationStage<'a> {
+        &self.participation
+    }
+
+    /// The disputes (stage 9).
+    #[must_use]
+    pub const fn disputes(&self) -> &DisputeStage<'a> {
+        &self.disputes
     }
 
     /// What was handed to the status rule, step by step.
@@ -184,9 +201,9 @@ pub fn verify_ledger<'a>(
     let checkpoints = verify_checkpoints(genesis, &index, &authority);
     let boxes = verify_boxes(genesis, &index, &authority);
     let records = verify_records(genesis, &index, &boxes);
-    let disputes = dispute_steps(genesis, &index, &authority);
-    let open_disputes = unresolved(&disputes.steps);
-    let refused_disputes = disputes.refused;
+    let progress = verify_progress(genesis, &index, &boxes);
+    let participation = verify_participation(genesis, &index, &boxes, &records);
+    let disputes = verify_disputes(genesis, &index, &authority);
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
         acc.union(without_close_missing(r.holds))
@@ -197,8 +214,9 @@ pub fn verify_ledger<'a>(
         .union(checkpoints.holds())
         .union(box_holds)
         .union(records.holds())
-        .with_if(open_disputes > 0, HoldReason::OpenDispute)
-        .with_if(!refused_disputes.is_empty(), HoldReason::DisputeRefused);
+        .union(progress.holds())
+        .union(participation.holds())
+        .union(disputes.holds());
     let scopes = authority
         .authorization()
         .map_or(ScopeSet::empty(), ityv_state::Authorization::scopes);
@@ -219,6 +237,14 @@ pub fn verify_ledger<'a>(
             },
         )
         .with_step(Step::Records, Outcome::Passed)
+        .with_step(
+            Step::Participation,
+            if participation.complete() {
+                Outcome::Passed
+            } else {
+                Outcome::NotRun
+            },
+        )
         .with_anchors(publications.anchors)
         .with_board(publications.board)
         .with_holds(holds);
@@ -232,8 +258,9 @@ pub fn verify_ledger<'a>(
         checkpoints,
         boxes,
         records,
-        open_disputes,
-        refused_disputes,
+        progress,
+        participation,
+        disputes,
         evidence,
         status,
     }
