@@ -27,20 +27,20 @@ use common::{
     module_signing, modules, object, sign, sign_genesis_with, signing, trustee_signing,
     unit_signing,
 };
-use ityv_crypto::{HybridSigningKey, object_hash};
+use ityv_crypto::{HybridSigningKey, Purpose, object_hash, sign_hybrid};
 use ityv_encoding::{
     ActorSig, Attestation, BoxClose, BoxCloseBody, BoxCloseParts, BoxId, BoxOpenedBody,
-    BoxOpenedParts, ChamberCode, CloseCounts, ElectionId, Encode, EventRole, EventSig, Hash512,
-    Ident, IssuanceCountBody, IssuanceCountParts, KEM_EK_LEN, ModuleCounter, ModuleCounters,
-    ModuleId, ModuleProvisioned, ModuleProvisionedMessage, ModuleProvisionedParts,
-    ObserverCountAttestBody, ObserverCountKind, ObserverCountParts, OrgId, ParticipationMessage,
-    ParticipationModuleSig, ParticipationSet, PartyKeyCeremony, PartyKeyMessage, PartyKeyParts,
-    Pseudonyms, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_BOX_OPENED_BODY,
-    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId,
-    ShareHolder, SignerId, SignerRole, StationId, StationKind, StationProgressPolicy, TimeBucket,
-    TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
+    BoxOpenedParts, ChamberCode, CloseCounts, ElectionId, Encode, EventRole, EventSig,
+    HYBRID_SIG_LEN, Hash512, Ident, IssuanceCountBody, IssuanceCountParts, KEM_EK_LEN,
+    ModuleCounter, ModuleCounters, ModuleId, ModuleProvisioned, ModuleProvisionedMessage,
+    ModuleProvisionedParts, ObserverCountAttestBody, ObserverCountKind, ObserverCountParts, OrgId,
+    ParticipationMessage, ParticipationModuleSig, ParticipationSet, PartyKeyCeremony,
+    PartyKeyMessage, PartyKeyParts, Pseudonyms, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY,
+    SCHEMA_BOX_OPENED_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
+    SCHEMA_WITNESSED_EVENT, SchemaId, ShareHolder, SignerId, SignerRole, StationId, StationKind,
+    StationProgressPolicy, TimeBucket, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
 };
 use ityv_state::{HoldReason, HoldSet};
 use ityv_verify::{
@@ -48,6 +48,8 @@ use ityv_verify::{
     StationParticipation, VerifiedGenesis, authorize_ledger, build_index, verify_boxes,
     verify_genesis, verify_participation, verify_records,
 };
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 
 const SEAL: Hash512 = Hash512([0x5e; 64]);
 const OPEN_BUCKET: u64 = 100;
@@ -266,6 +268,8 @@ enum CeremonyFlaw {
     Forged,
     Stranger,
     Later,
+    /// The same fields under other signature bytes.
+    Reseeded,
 }
 
 /// The ceremony of party chamber `chamber` (P1 or P2), with `flaw`.
@@ -330,12 +334,36 @@ fn ceremony(chamber: ChamberCode, flaw: Option<CeremonyFlaw>) -> &'static [u8] {
         Some(CeremonyFlaw::Stranger) => signers.push((b"T-J", trustee_signing(4))),
         _ => {}
     }
-    let sigs = actor_sigs(&signers, b"party-key", message);
+    let mut sigs = actor_sigs(&signers, b"party-key", message);
+    if flaw == Some(CeremonyFlaw::Reseeded) {
+        for s in &mut sigs {
+            if s.actor_id.as_bytes() == b"committee" {
+                s.sig = reseeded_sign(signing(COMMITTEE), b"party-key", message);
+            }
+        }
+    }
     object(
         SCHEMA_PARTY_KEY_CEREMONY,
         SCHEMA_VERSION_1,
         &PartyKeyCeremony::new(message, &sigs).unwrap(),
     )
+}
+
+/// `key`'s signature over `message` under `purpose`, with other signing
+/// randomness than `common::sign`: other bytes, the same signer.
+fn reseeded_sign(
+    key: &HybridSigningKey,
+    purpose: &[u8],
+    message: &[u8],
+) -> &'static [u8; HYBRID_SIG_LEN] {
+    let purpose = Purpose::new(purpose).unwrap();
+    let mut rng = ChaCha20Rng::seed_from_u64(0x5EED);
+    let sig = sign_hybrid(key, &purpose, message, &mut rng).unwrap();
+    let mut out = [0u8; HYBRID_SIG_LEN];
+    let (ml, ed) = out.split_at_mut(sig.mldsa87().len());
+    ml.copy_from_slice(sig.mldsa87());
+    ed.copy_from_slice(sig.ed25519());
+    leak(out)
 }
 
 // ---------------------------------------------------------------------
@@ -1160,6 +1188,20 @@ fn a_ceremony_needs_its_party_its_holders_and_every_signer_group() {
         );
         assert!(!run.stage.complete());
     }
+}
+
+#[test]
+fn the_same_ceremony_under_other_signature_bytes_is_no_conflict() {
+    let world = world();
+    let again = ceremony(ChamberCode::P1, Some(CeremonyFlaw::Reseeded));
+    assert_ne!(again, ceremony(ChamberCode::P1, None));
+    let mut events = clean(world);
+    events.insert(2, (SCHEMA_PARTY_KEY_CEREMONY, again));
+    let run = go(&events);
+    assert!(run.stage.key_findings().is_empty());
+    assert_eq!(run.stage.holds(), HoldSet::empty());
+    assert_eq!(run.stage.ceremonies()[0].1.get(), 3);
+    assert!(run.stage.complete());
 }
 
 #[test]

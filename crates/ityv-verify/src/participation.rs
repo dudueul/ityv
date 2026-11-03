@@ -964,6 +964,8 @@ pub fn verify_participation<'a>(
         .map(|((_, hash), pin)| (pin.module_id, Hash512(*hash)))
         .collect();
 
+    // A repeated pseudonym holds every station that has it (all accepted
+    // sets are of stations of the last state), so the fold carries it.
     let holds = stations
         .iter()
         .fold(HoldSet::empty(), |acc, s| acc.union(s.holds))
@@ -971,8 +973,7 @@ pub fn verify_participation<'a>(
             !set_findings.is_empty(),
             HoldReason::ParticipationSetInvalid,
         )
-        .with_if(!key_findings.is_empty(), HoldReason::KeyProvisioningInvalid)
-        .with_if(duplicates > 0, HoldReason::DuplicatePseudonym);
+        .with_if(!key_findings.is_empty(), HoldReason::KeyProvisioningInvalid);
     ParticipationStage {
         stations,
         set_findings,
