@@ -232,11 +232,18 @@ pub enum HoldReason {
     /// accepted record of that box, or the record does not await the law
     /// (§10.6 item 6, VC-099).
     TallyEffectRefused = 58,
+    /// A receipt resolution cannot be taken: its trustees' signatures do not
+    /// verify or do not form a qualified quorum, it lacks the
+    /// `CRYPTO_TALLY_AID` capability for its day, its box is not an
+    /// out-of-district box of the genesis or was not closed before it, its
+    /// entries are not exactly the box's cast records, or the box already
+    /// has one (§10.6 items 2 and 5, §14 7).
+    ReceiptResolutionRefused = 59,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 59] = [
+    pub const ALL: [Self; 60] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -296,6 +303,7 @@ impl HoldReason {
         Self::PaperCountRefused,
         Self::PaperCountMismatch,
         Self::TallyEffectRefused,
+        Self::ReceiptResolutionRefused,
     ];
 
     /// The reason's code.
