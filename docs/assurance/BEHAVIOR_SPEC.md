@@ -480,7 +480,7 @@
 | —(VC-106) | `progress::ObserverCount`(참관인만, 마감 구분), `CheckinUnitSwap`·`BoxUnitSwap`(사무원 2·참관인 2, 예비 키는 genesis 항목, 확인 못 한 누계는 보류), `CheckinStream::finish`·`issuance_verdict`의 마감 수; `tests/progress.rs` `box_stream_close_and_swap`, `box_swap_refusals`, `checkin_swap_and_count_refusals`, `observer_counts_are_signed_by_observers` | ADR-0028 |
 | 025, 082, 267(보강) | 명부·투표소 키·두 기관 키·법정 권한 기관 키는 증명된 genesis 항목과 본문에서만 옴(`RosterEntry` = 증명된 `RosterSigner`, `BoxSpec::new`, `authorize`가 genesis가 고정한 승인 객체만 받음, `LegalReference::from_signed`는 `Authority` 역할의 명부 항목; `tests/auth.rs` `authorize_takes_keys_and_object_from_the_genesis`, `legal_reference_needs_the_authority_signature`, `tests/boxes.rs` `spec_is_the_genesis_entry`) | VC-004, VC-098 |
 
-## 12. `ityv-verify` 대응 (M5 2b·2c, ADR-0029·ADR-0030)
+## 12. `ityv-verify` 대응 (M5 2b–2d, ADR-0029–ADR-0031)
 
 경로는 `crates/ityv-verify/` 기준이다. genesis 시험은 규칙마다 그 규칙만 어긴 genesis를 실제 하이브리드 서명으로 만들어 거부를 확인한다(`tests/common/mod.rs`의 `Draft`). 체크포인트·승인·투표함 시험의 이벤트도 모두 실제 하이브리드 서명이다.
 
@@ -510,5 +510,13 @@
 | —(빠진 투표함) | 변경으로 빠진 투표함의 이벤트는 거부·보류(`events_of_a_box_an_amendment_removed_are_held`) | |
 | —(VC-038, 관외) | 마감 앞 그 투표소의 마지막 `IssuanceCount`로 봉투 수 대조(`an_out_of_district_box_closes_with_its_station_issuance`) | |
 | —(상태 순서) | 상태에 맞지 않는 이벤트 거부, 대체 상태 출입, 수량 불일치 보류, 색인 보류의 전달(`events_out_of_their_state_are_refused`, `a_fallback_comes_and_goes_while_the_box_is_open`, `counts_that_disagree_with_the_ledger_hold_the_close`, `the_index_holds_reach_the_box`, `a_refused_opening_leaves_the_box_to_the_next_one`) | |
-| —(장치 교체) | `BoxUnitSwap`은 `Unsupported`로 거부, 투표함 보류(`a_device_swap_is_not_yet_followed`) | 변경 추적은 다음 단계 |
-| 014, 059 | — | M5 2d 이후: 상태 사다리 |
+| —(VC-105, VC-106, 변경 추적) | `boxes::verify_boxes`: 이벤트마다 그 프레임의 genesis 상태(`state_at`)의 명부·장치 키, `BallotBox::follow`, 그 상태에 없는 투표함의 이벤트 거부, 열린 투표함의 장치 키 변경 뒤 `BoxUnitSwap` 전의 장치 서명 마감 거부, 교체는 그런 변경 뒤 열린 투표함에서만(`tests/boxes.rs` `a_box_follows_a_device_swap_witnessed_on_site`, `a_new_device_closes_only_after_its_amendment_and_the_swap`, `a_swap_needs_an_amendment_and_an_open_box`, `a_roster_change_applies_from_the_amendment_frame`, `an_amendment_missing_from_the_ledger_holds_the_box`, `an_amendment_after_the_close_is_followed_without_a_swap`, `a_box_an_amendment_adds_runs_from_the_amendment_frame`) | ADR-0031 |
+| —(변경의 적용 프레임) | `VerifiedGenesis`의 모든 상태와 `LedgerIndex::amendment_frames`·`state_at`, 장부에 없거나 순서가 바뀐 변경은 `AmendmentMissing`(`tests/index.rs` `every_applied_amendment_must_be_on_the_ledger_in_order`) | §4.3 |
+| —(VC-025, VC-026) | `records::verify_records`의 기록 검사(genesis 투표양식의 선택지 수, 커밋먼트 점, OR 증명); `tests/records.rs` `a_record_whose_proof_or_style_fails_is_rejected` | `RecordRejected` |
+| —(VC-053, 기록 서명) | 장치·모듈 Ed25519 기록 서명, 프레임의 genesis 상태까지의 키, 같은 모듈 카운터의 두 기록(`a_record_signature_that_does_not_verify_is_rejected`, `records_sharing_a_module_counter_are_both_rejected`, `a_key_counts_from_the_frame_of_its_state_and_stays_valid_after`, `a_record_naming_a_module_the_box_had_not_by_its_frame_is_rejected`) | VC-068 |
+| —(VC-053, 배치) | 배치 서명·모듈·배치 번호, 모듈별 구간 연속성과 마감 안, 구성원 수와 root, 구간을 가로지르는 기록(`a_batch_whose_count_or_root_is_wrong_attests_nothing`, `a_batch_signature_or_module_that_fails_attests_nothing`, `two_bodies_under_one_batch_index_attest_nothing`, `counter_ranges_run_from_one_without_gap_or_overlap`, `a_record_whose_counters_straddle_two_batches_is_unattested`, `a_range_beyond_the_close_is_a_finding`, `ranges_are_per_module`) | `BatchInvalid` |
+| —(VC-057) | `UNATTESTED` 목록과 늦은 배치 마감의 증명(`a_record_in_no_batch_is_unattested_until_a_late_batch_attests_it`) | 보류 없음 |
+| —(VC-027) | 유효 마감의 기록 집합 root(`the_close_must_carry_the_root_of_the_records`, `a_clean_box_passes`) | `RecordSetMismatch` |
+| 014, 161(보강) | `report::verify_ledger`는 모든 단계를 돌린 뒤 `ityv_state::status::evaluate`로 상태 하나를 낸다. 앵커 전·덮이지 않은 프레임이 있으면 `UNVERIFIED`(`tests/report.rs` `nothing_anchored_is_unverified`, `frames_no_checkpoint_covers_keep_the_ledger_unverified`) | VC-050 |
+| 056(보강), 059 | 열린 투표함은 보류가 아니라 완전성 미달: `LOG_CONSISTENT`, 모두 닫히면 `SOURCE_COMPLETENESS_CHECKED`(그 이상은 6–8단계 이후)(`an_open_box_under_an_anchored_checkpoint_is_log_consistent`, `every_box_closed_is_source_completeness_checked`) | VC-049 |
+| 057, 058(보강) | 미해결 분쟁, 늦은 게시판, 체크포인트 위반, 승인 없음은 `HOLD_REVIEW`(`a_hold_anywhere_is_hold_review`) | |

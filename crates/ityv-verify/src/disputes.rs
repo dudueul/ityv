@@ -173,3 +173,9 @@ pub(crate) fn dispute_steps(
     }
     steps
 }
+
+/// The number of disputes unresolved after every step.
+pub(crate) fn unresolved(steps: &[DisputeStep]) -> usize {
+    let last: BTreeMap<[u8; 64], bool> = steps.iter().map(|s| (s.filing, s.unresolved)).collect();
+    last.values().filter(|open| **open).count()
+}
