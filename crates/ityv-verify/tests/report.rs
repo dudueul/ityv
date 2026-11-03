@@ -80,7 +80,8 @@ fn world() -> &'static World {
         d.units = std::vec![
             ityv_encoding::ReportingUnitEntry::new(
                 ityv_encoding::ReportingUnitId::new(b"RU-1").unwrap(),
-                1
+                1,
+                ityv_encoding::OrgId::new(b"NEC-D").unwrap()
             )
             .unwrap()
         ];
@@ -154,7 +155,7 @@ fn opened() -> &'static [u8] {
     );
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }
@@ -247,7 +248,7 @@ fn witnessed(
         .collect();
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }
@@ -366,7 +367,7 @@ fn filing_at(bucket: u64) -> &'static [u8] {
     ];
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }
@@ -566,8 +567,12 @@ fn a_hold_anywhere_is_hold_review() {
     book.push(SCHEMA_WITNESSED_EVENT, opened());
     let f = filing();
     book.push(SCHEMA_WITNESSED_EVENT, f);
-    let w: WitnessedEvent<'static> =
-        ityv_encoding::decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, f).unwrap();
+    let w: WitnessedEvent<'static> = ityv_encoding::decode_object(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        f,
+    )
+    .unwrap();
     book.disputes.push(object_hash(w.body_bytes()));
     book.checkpoint();
     let report = book.report(ANCHORED);

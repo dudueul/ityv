@@ -30,8 +30,36 @@ pub mod witnessed;
 
 use crate::primitives::SchemaId;
 
-/// Schema version used by every schema defined in this crate.
+/// Schema version 1, the version of every schema [`schema_version`] does
+/// not name.
 pub const SCHEMA_VERSION_1: u16 = 1;
+
+/// The current version of `WitnessedEvent` (`0x0028`): version 2 admits
+/// the event role 9, the district commission chair (ADR-0035). Version 1
+/// did not.
+pub const SCHEMA_VERSION_WITNESSED: u16 = 2;
+
+/// The current version of `RosterSigner` (`0x003A`): version 2 admits the
+/// roster role 5, the district commission chair (ADR-0035).
+pub const SCHEMA_VERSION_ROSTER_SIGNER: u16 = 2;
+
+/// The current version of `ReportingUnitEntry` (`0x0038`): version 2
+/// adds the commission that reports the unit's paper count (ADR-0035).
+pub const SCHEMA_VERSION_REPORTING_UNIT: u16 = 2;
+
+/// The current version of schema `schema`, the only one this crate
+/// encodes and decodes (ENCODING.md §3: a change of shape takes a new
+/// version, and a version number is never reused for another shape).
+#[must_use]
+pub const fn schema_version(schema: SchemaId) -> u16 {
+    match schema.get() {
+        0x0002 => genesis_body::SCHEMA_VERSION_GENESIS,
+        0x0028 => SCHEMA_VERSION_WITNESSED,
+        0x0038 => SCHEMA_VERSION_REPORTING_UNIT,
+        0x003A => SCHEMA_VERSION_ROSTER_SIGNER,
+        _ => SCHEMA_VERSION_1,
+    }
+}
 
 /// `LedgerFrame` (ENCODING.md §6, `0x0001`).
 pub const SCHEMA_LEDGER_FRAME: SchemaId = SchemaId::new(0x0001);

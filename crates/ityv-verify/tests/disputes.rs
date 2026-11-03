@@ -110,7 +110,11 @@ fn dispute_signed(
     let event = WitnessedEvent::new(body, &sigs).unwrap();
     (
         filing.unwrap_or_else(|| object_hash(body)),
-        object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event),
+        object(
+            SCHEMA_WITNESSED_EVENT,
+            ityv_encoding::SCHEMA_VERSION_WITNESSED,
+            &event,
+        ),
     )
 }
 
@@ -151,7 +155,11 @@ fn decision(dispute_hash: Hash512, by: Signer) -> &'static [u8] {
         sig: sign(signing(by.key), b"legal-decision", body),
     }];
     let event = WitnessedEvent::new(body, &sigs).unwrap();
-    object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event)
+    object(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &event,
+    )
 }
 
 /// The dispute stage of a ledger of the genesis (frame 1), the legal

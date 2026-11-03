@@ -75,8 +75,12 @@ macro_rules! check {
         let content = render($title, $schema, $vectors);
         check_file($name, &content);
         self_check(&content, |b| {
-            let v: $ty = decode_object($schema, SCHEMA_VERSION_1, b)?;
-            Ok(encode_to_vec($schema, SCHEMA_VERSION_1, &v))
+            let v: $ty = decode_object($schema, ityv_encoding::schema_version($schema), b)?;
+            Ok(encode_to_vec(
+                $schema,
+                ityv_encoding::schema_version($schema),
+                &v,
+            ))
         });
     }};
 }
@@ -85,7 +89,7 @@ fn kind<'a, T: Decode<'a> + core::fmt::Debug>(
     schema: SchemaId,
     bytes: &'a [u8],
 ) -> (ErrorKind, usize) {
-    let err = decode_object::<T>(schema, SCHEMA_VERSION_1, bytes).unwrap_err();
+    let err = decode_object::<T>(schema, ityv_encoding::schema_version(schema), bytes).unwrap_err();
     (err.kind(), err.offset())
 }
 
@@ -437,9 +441,17 @@ fn progress_check_in_witnessed_event() {
     let event = WitnessedEvent::new(&body, &witnesses).unwrap();
     assert_eq!(event.purpose(), b"progress-check");
     assert_eq!(event.body_schema(), SCHEMA_PROGRESS_CHECK_BODY);
-    let bytes = encode_to_vec(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event);
-    let back: WitnessedEvent<'_> =
-        decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &bytes).unwrap();
+    let bytes = encode_to_vec(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &event,
+    );
+    let back: WitnessedEvent<'_> = decode_object(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &bytes,
+    )
+    .unwrap();
     assert_eq!(back, event);
     // One clerk, one observer organisation, or a device: refused.
     assert!(WitnessedEvent::new(&body, &witnesses[1..]).is_err());

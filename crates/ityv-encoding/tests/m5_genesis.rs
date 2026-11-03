@@ -465,15 +465,23 @@ fn small_entry_vectors() {
 
     // ReportingUnitEntry (0x0038).
     let ru = ReportingUnitId::new(b"ru-11-0042").unwrap();
-    let unit_entry = ReportingUnitEntry::new(ru, 3).unwrap();
+    let unit_entry =
+        ReportingUnitEntry::new(ru, 3, ityv_encoding::OrgId::new(b"NEC-D").unwrap()).unwrap();
     assert_eq!(unit_entry.unit_id(), ru);
     assert_eq!(unit_entry.box_count(), 3);
+    assert_eq!(unit_entry.commission_org().as_bytes(), b"NEC-D");
     assert_eq!(unit_entry.key(), b"ru-11-0042");
     assert_eq!(
-        ReportingUnitEntry::new(ru, 0).unwrap_err().kind(),
+        ReportingUnitEntry::new(ru, 0, ityv_encoding::OrgId::new(b"NEC-D").unwrap())
+            .unwrap_err()
+            .kind(),
         ErrorKind::ValueOutOfRange
     );
-    let bytes = encode_to_vec(SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_VERSION_1, &unit_entry);
+    let bytes = encode_to_vec(
+        SCHEMA_REPORTING_UNIT_ENTRY,
+        ityv_encoding::SCHEMA_VERSION_REPORTING_UNIT,
+        &unit_entry,
+    );
     let count_at = HEADER_LEN + ident_len(b"ru-11-0042");
     let mut v = std::vec![valid("three boxes", bytes.clone())];
     let mut b = bytes.clone();
@@ -484,7 +492,7 @@ fn small_entry_vectors() {
         "reporting_unit_entry.txt",
         "ReportingUnitEntry",
         SCHEMA_REPORTING_UNIT_ENTRY,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_REPORTING_UNIT,
         &v,
     );
 
@@ -537,13 +545,36 @@ fn small_entry_vectors() {
         appointment_hash: patterned64(0x78),
     };
     assert_eq!(clerk.key(), b"c1");
-    let bytes = encode_to_vec(SCHEMA_ROSTER_SIGNER, SCHEMA_VERSION_1, &clerk);
+    let bytes = encode_to_vec(
+        SCHEMA_ROSTER_SIGNER,
+        ityv_encoding::SCHEMA_VERSION_ROSTER_SIGNER,
+        &clerk,
+    );
     let role_at = HEADER_LEN + ident_len(b"c1");
     let mut v = std::vec![
         valid("clerk of a station", bytes.clone()),
         valid(
             "legal authority",
-            encode_to_vec(SCHEMA_ROSTER_SIGNER, SCHEMA_VERSION_1, &court)
+            encode_to_vec(
+                SCHEMA_ROSTER_SIGNER,
+                ityv_encoding::SCHEMA_VERSION_ROSTER_SIGNER,
+                &court
+            )
+        ),
+        valid(
+            "district commission chair (version 2)",
+            encode_to_vec(
+                SCHEMA_ROSTER_SIGNER,
+                ityv_encoding::SCHEMA_VERSION_ROSTER_SIGNER,
+                &RosterSigner {
+                    signer_id: signer(b"chair-11"),
+                    role: RosterRole::Chair,
+                    org_id: org(b"NEC-11"),
+                    station_id: None,
+                    key: &VK_B,
+                    appointment_hash: patterned64(0x79),
+                }
+            )
         ),
     ];
     let mut b = bytes.clone();
@@ -558,7 +589,7 @@ fn small_entry_vectors() {
         "roster_signer.txt",
         "RosterSigner",
         SCHEMA_ROSTER_SIGNER,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_ROSTER_SIGNER,
         &v,
     );
 
@@ -1774,12 +1805,12 @@ fn checkin_events_are_witnessed() {
     // A decoded event keeps the observers-only rule.
     let bytes = encode_to_vec(
         ityv_encoding::SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(&count, &[o1, o2]).unwrap(),
     );
     let back: WitnessedEvent<'_> = decode_object(
         ityv_encoding::SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &bytes,
     )
     .unwrap();

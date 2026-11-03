@@ -119,7 +119,10 @@ impl Set {
     fn of<'a, T: GenesisEntry<'a> + Encode>(mut items: Vec<T>) -> Self {
         items.sort_by(|a, b| a.key().cmp(b.key()));
         let schema = T::SET.schema().unwrap();
-        let objects: Vec<&'static [u8]> = items.iter().map(|t| encode(schema, 1, t)).collect();
+        let objects: Vec<&'static [u8]> = items
+            .iter()
+            .map(|t| encode(schema, T::SET.version(), t))
+            .collect();
         let keys = items.iter().map(|t| t.key().to_vec()).collect();
         let hashes = objects.iter().map(|o| object_hash(o)).collect();
         Self {
@@ -486,6 +489,12 @@ impl Built {
     }
 }
 
+/// The reporting unit of the test genesis.
+fn reporting_unit() -> ReportingUnitEntry<'static> {
+    let commission = ityv_encoding::OrgId::new(b"NEC-D").unwrap();
+    ReportingUnitEntry::new(ReportingUnitId::new(b"RU-1").unwrap(), 2, commission).unwrap()
+}
+
 /// The genesis body for `legal` (the pinned legal authorization hash) and
 /// a `BOX-001` of `profile`, with its sets.
 pub(crate) fn body(
@@ -513,9 +522,7 @@ pub(crate) fn body(
             StationProgressPolicy::new(StationId::new(b"ST-1").unwrap(), 3, 6).unwrap(),
             StationProgressPolicy::new(StationId::new(b"ST-2").unwrap(), 2, 6).unwrap(),
         ]),
-        Set::of(std::vec![
-            ReportingUnitEntry::new(ReportingUnitId::new(b"RU-1").unwrap(), 2).unwrap()
-        ]),
+        Set::of(std::vec![reporting_unit()]),
         Set::of(std::vec![
             CustodyRoute::new(
                 RouteId::new(b"R-1").unwrap(),

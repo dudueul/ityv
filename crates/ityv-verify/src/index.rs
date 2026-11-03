@@ -43,6 +43,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
     CheckinUnitSwapBody, CustodyHandoffBody, Decode, DeviceAttestation, DisputeEventBody,
@@ -58,8 +59,8 @@ use ityv_encoding::{
     SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_CHECK_BODY,
     SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY,
     SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION,
-    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody, Seq,
-    SignedGenesis, SignedLegalAuthorization, StationId, WitnessedEvent, decode_object,
+    SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody, Seq, SignedGenesis,
+    SignedLegalAuthorization, StationId, WitnessedEvent, decode_object,
 };
 use ityv_ledger::{
     ChainHead, ChainState, Error as LedgerError, FrameStream, Record, SCHEMA_SIGNED_CHECKPOINT,
@@ -345,7 +346,7 @@ impl<'a> LedgerIndex<'a> {
 }
 
 fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
-    decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
+    decode_object(schema, schema_version(schema), bytes).ok()
 }
 
 /// Whom a witnessed event concerns, and its election, from its body.

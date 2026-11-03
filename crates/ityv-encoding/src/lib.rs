@@ -102,7 +102,7 @@ pub use schema::genesis_body::{
     GenesisKind, GenesisParts, GenesisWitnessSig, MAX_CHAMBERS, MAX_GENESIS_BODY_LEN,
     MAX_GENESIS_WITNESSES, MAX_PARTIES, MAX_PARTY_NAME_LEN, MIN_DIVERSITY, MIN_PARTIES, MIN_QUORUM,
     MIN_WITNESSES, PURPOSE_GENESIS, PURPOSE_GENESIS_AMENDMENT, PartyEntry, SCHEMA_VERSION_GENESIS,
-    SetCommitment, SignedGenesis, WitnessQuorum,
+    SetCommitment, SignedGenesis, WitnessQuorum, expected_chamber,
 };
 pub use schema::ledger_frame::LedgerFrame;
 pub use schema::participation::{
@@ -130,12 +130,12 @@ pub use schema::share_package::{
 pub use schema::slip::{MAX_SLIP_BODY_LEN, MAX_TRACKING_CODES, Slip, SlipBody};
 pub use schema::tally::{
     AggregateOpeningBody, AggregateOpeningParts, EXCLUSION_LEN, ExclusionEntry, ExclusionReason,
-    Exclusions, MAX_CANDIDATES, MAX_EXCLUSIONS, MAX_QUORUM_BODY_LEN, MAX_QUORUM_SIGS,
-    MAX_RECEIPT_ENTRIES, MAX_TALLY_COUNT, PURPOSE_AGGREGATE_OPENING, PURPOSE_PAPER_COUNT,
-    PURPOSE_RECEIPT_RESOLUTION, PURPOSE_TALLY_SCOPE, PaperCountParts, PaperCountReportBody,
-    PaperVotes, QuorumKind, QuorumSig, QuorumSigned, RECEIPT_ENTRY_LEN, ReceiptEntries,
-    ReceiptEntry, ReceiptOutcome, ReceiptResolutionBody, ReceiptResolutionParts, TallyScopeBody,
-    TallyScopeParts,
+    Exclusions, MAX_CANDIDATES, MAX_EXCLUSIONS, MAX_QUORUM_BODY_LEN, MAX_QUORUM_MESSAGE_LEN,
+    MAX_QUORUM_SIGS, MAX_RECEIPT_ENTRIES, MAX_TALLY_COUNT, PURPOSE_AGGREGATE_OPENING,
+    PURPOSE_PAPER_COUNT, PURPOSE_RECEIPT_RESOLUTION, PURPOSE_TALLY_SCOPE, PaperCountParts,
+    PaperCountReportBody, PaperVotes, QuorumKind, QuorumSig, QuorumSigned, RECEIPT_ENTRY_LEN,
+    ReceiptEntries, ReceiptEntry, ReceiptOutcome, ReceiptResolutionBody, ReceiptResolutionParts,
+    TallyScopeBody, TallyScopeParts, write_quorum_message,
 };
 pub use schema::util::{
     Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, HYBRID_VK_LEN, MAX_CHUNKS, MAX_MODULES,
@@ -164,6 +164,7 @@ pub use schema::{
     SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS,
     SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_STATION_ENTRY,
     SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_TRUSTEE_ENTRY,
-    SCHEMA_VERSION_1, SCHEMA_WITNESS_ROSTER_ENTRY, SCHEMA_WITNESSED_EVENT,
+    SCHEMA_VERSION_1, SCHEMA_VERSION_REPORTING_UNIT, SCHEMA_VERSION_ROSTER_SIGNER,
+    SCHEMA_VERSION_WITNESSED, SCHEMA_WITNESS_ROSTER_ENTRY, SCHEMA_WITNESSED_EVENT, schema_version,
 };
 pub use writer::Writer;

@@ -37,6 +37,8 @@ use ityv_encoding::{
     SignerId, TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId, WITNESSED_BODY_SCHEMAS,
     WitnessedEvent, Writer, decode_object, purpose_of, roles_satisfied,
 };
+use ityv_encoding::{MAX_QUORUM_MESSAGE_LEN, write_quorum_message};
+use proptest::prelude::*;
 use std::vec::Vec;
 
 static SIG_A: [u8; HYBRID_SIG_LEN] = [0xA1; HYBRID_SIG_LEN];
@@ -122,7 +124,7 @@ fn kind_of<'a, T: Decode<'a> + core::fmt::Debug>(
     schema: SchemaId,
     bytes: &'a [u8],
 ) -> (ErrorKind, usize) {
-    let err = decode_object::<T>(schema, SCHEMA_VERSION_1, bytes).unwrap_err();
+    let err = decode_object::<T>(schema, ityv_encoding::schema_version(schema), bytes).unwrap_err();
     (err.kind(), err.offset())
 }
 
@@ -485,9 +487,17 @@ fn a_paper_count_report_is_signed_by_the_chair_and_two_observer_orgs() {
     let event = WitnessedEvent::new(body, &[chair, obs_a, obs_b]).unwrap();
     assert_eq!(event.purpose(), PURPOSE_PAPER_COUNT);
     assert_eq!(event.body_schema(), SCHEMA_PAPER_COUNT_REPORT_BODY);
-    let bytes = encode_to_vec(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event);
-    let back: WitnessedEvent<'_> =
-        decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &bytes).unwrap();
+    let bytes = encode_to_vec(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &event,
+    );
+    let back: WitnessedEvent<'_> = decode_object(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &bytes,
+    )
+    .unwrap();
     assert_eq!(back, event);
     let parsed: PaperCountReportBody<'_> = back.body(SCHEMA_PAPER_COUNT_REPORT_BODY).unwrap();
     assert_eq!(parsed.parts().votes.as_slice(), [5, 2]);
@@ -661,4 +671,193 @@ fn a_receipt_resolution_decoder_reports_each_rule_where_it_breaks() {
         kind_of::<QuorumSigned<'_>>(SCHEMA_QUORUM_SIGNED, &wrapped),
         (ErrorKind::ValueOutOfRange, HEADER_LEN + 4 + first + 64)
     );
+}
+
+/// `n` exclusions, ascending by record hash, with reasons and bases drawn
+/// from `seeds`.
+fn drawn_exclusions(seeds: &[(u8, u8)]) -> &'static [u8] {
+    let list: Vec<ExclusionEntry> = seeds
+        .iter()
+        .enumerate()
+        .map(|(i, (reason, basis))| {
+            let mut record = [0u8; 64];
+            record[..4].copy_from_slice(&u32::try_from(i).unwrap().to_be_bytes());
+            ExclusionEntry {
+                record_hash: Hash512(record),
+                reason: ExclusionReason::ALL[usize::from(*reason) % 8],
+                basis: Hash512([basis.saturating_add(1); 64]),
+            }
+        })
+        .collect();
+    entries(&list)
+}
+
+proptest! {
+    /// Every valid tally scope survives an object round trip.
+    #[test]
+    fn tally_scope_round_trip(
+        included in 0..=MAX_TALLY_COUNT,
+        no_record in 0..=MAX_TALLY_COUNT,
+        root in any::<[u8; 32]>(),
+        seeds in prop::collection::vec((any::<u8>(), any::<u8>()), 0..12),
+        bucket in any::<u64>(),
+    ) {
+        let mut r = [0u8; 64];
+        r[..32].copy_from_slice(&root);
+        let parts = TallyScopeParts {
+            included_count: included,
+            included_root: Hash512(r),
+            no_record_count: no_record,
+            exclusions: Exclusions::new(drawn_exclusions(&seeds)).unwrap(),
+            time_bucket: TimeBucket::new(bucket),
+            ..scope_parts(Exclusions::EMPTY)
+        };
+        let body = TallyScopeBody::new(&parts).unwrap();
+        let bytes = encode_to_vec(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &body);
+        prop_assert_eq!(bytes.len(), HEADER_LEN + body.encoded_len());
+        let back: TallyScopeBody<'_> =
+            decode_object(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(back.parts(), &parts);
+        prop_assert_eq!(back.parts().exclusions.len(), seeds.len());
+    }
+
+    /// Every valid aggregate opening survives a round trip.
+    #[test]
+    fn aggregate_opening_round_trip(
+        chunk in 0u8..8,
+        t in any::<[u8; 32]>(),
+        r in any::<[u8; 32]>(),
+        s in any::<[u8; 32]>(),
+        scope in 1u8..=255,
+        bucket in any::<u64>(),
+    ) {
+        let parts = AggregateOpeningParts {
+            scope_hash: Hash512([scope; 64]),
+            packed_sum: Scalar32(t),
+            rand_sum: Scalar32(r),
+            id_sum: Scalar32(s),
+            time_bucket: TimeBucket::new(bucket),
+            ..opening_parts(chunk)
+        };
+        let body = AggregateOpeningBody::new(&parts).unwrap();
+        let bytes = encode_to_vec(SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_VERSION_1, &body);
+        let back: AggregateOpeningBody<'_> =
+            decode_object(SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(back.parts(), &parts);
+    }
+
+    /// Every valid receipt resolution survives a round trip.
+    #[test]
+    fn receipt_resolution_round_trip(
+        outcomes in prop::collection::vec(1u8..=5, 0..16),
+        bucket in any::<u64>(),
+    ) {
+        let list: Vec<(u8, ReceiptOutcome)> = outcomes
+            .iter()
+            .enumerate()
+            .map(|(i, o)| (u8::try_from(i).unwrap(), ReceiptOutcome::from_code(*o).unwrap()))
+            .collect();
+        let parts = ReceiptResolutionParts {
+            time_bucket: TimeBucket::new(bucket),
+            ..receipt_parts(receipt_entries(&list))
+        };
+        let body = ReceiptResolutionBody::new(&parts);
+        let bytes = encode_to_vec(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &body);
+        let back: ReceiptResolutionBody<'_> =
+            decode_object(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(back.parts(), &parts);
+        let decoded: Vec<ReceiptOutcome> = back.parts().entries.iter().map(|e| e.outcome).collect();
+        let drawn: Vec<ReceiptOutcome> = list.iter().map(|(_, o)| *o).collect();
+        prop_assert_eq!(decoded, drawn);
+    }
+
+    /// Every valid paper count report survives a round trip.
+    #[test]
+    fn paper_count_round_trip(
+        votes in prop::collection::vec(0..=MAX_TALLY_COUNT, 1..=MAX_CANDIDATES),
+        invalid in 0..=MAX_TALLY_COUNT,
+        bucket in any::<u64>(),
+    ) {
+        let parts = PaperCountParts {
+            invalid,
+            time_bucket: TimeBucket::new(bucket),
+            ..paper_parts(&votes)
+        };
+        let body = PaperCountReportBody::new(&parts).unwrap();
+        let bytes = encode_to_vec(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &body);
+        let back: PaperCountReportBody<'_> =
+            decode_object(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(back.parts(), &parts);
+        prop_assert_eq!(back.parts().votes.as_slice(), votes.as_slice());
+    }
+
+    /// Every valid quorum envelope, of any of its three bodies and one to
+    /// 64 ascending trustees, survives a round trip, and its quorum
+    /// message names exactly its trustees after the body hash.
+    #[test]
+    fn quorum_signed_round_trip(
+        which in 0u8..3,
+        trustees in 1usize..=MAX_QUORUM_SIGS,
+    ) {
+        let body = match which {
+            0 => scope_bytes(),
+            1 => opening_bytes(),
+            _ => receipt_bytes(),
+        };
+        let names: Vec<&'static [u8]> = (0..trustees)
+            .map(|i| leak(std::format!("T-{i:02}").into_bytes()))
+            .collect();
+        let sigs: Vec<QuorumSig<'static>> = names.iter().map(|n| sig(n, &SIG_A)).collect();
+        let event = QuorumSigned::new(body, &sigs).unwrap();
+        let bytes = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
+        let back: QuorumSigned<'_> =
+            decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(back, event);
+        let hash = Hash512([0x5A; 64]);
+        let mut from_event = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
+        let mut w = Writer::new(&mut from_event);
+        back.write_message(&hash, &mut w).unwrap();
+        let n = w.finish();
+        let ids: Vec<TrusteeId<'static>> =
+            names.iter().map(|n| TrusteeId::new(n).unwrap()).collect();
+        let mut from_list = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
+        let mut w = Writer::new(&mut from_list);
+        write_quorum_message(&hash, &ids, &mut w).unwrap();
+        prop_assert_eq!(w.finish(), n);
+        prop_assert_eq!(&from_event[..n], &from_list[..n]);
+        prop_assert_eq!(&from_event[..64], hash.as_bytes().as_slice());
+        let count = u32::try_from(trustees).unwrap().to_be_bytes();
+        prop_assert_eq!(&from_event[64..68], count.as_slice());
+    }
+}
+
+#[test]
+fn the_quorum_message_needs_ascending_trustees_and_fits_the_bound() {
+    let hash = Hash512([0x5A; 64]);
+    let mut buf = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
+    let a = TrusteeId::new(b"T-A").unwrap();
+    let b = TrusteeId::new(b"T-B").unwrap();
+    for bad in [&[][..], &[b, a][..], &[a, a][..]] {
+        let mut w = Writer::new(&mut buf);
+        assert_eq!(
+            write_quorum_message(&hash, bad, &mut w).unwrap_err().kind(),
+            ErrorKind::InvariantViolation
+        );
+    }
+    let too_many: Vec<TrusteeId<'static>> = (0..=MAX_QUORUM_SIGS)
+        .map(|i| TrusteeId::new(leak(std::format!("T-{i:02}").into_bytes())).unwrap())
+        .collect();
+    let mut w = Writer::new(&mut buf);
+    assert!(write_quorum_message(&hash, &too_many, &mut w).is_err());
+    // The longest message: 64 trustees of 64-byte identifiers.
+    let longest: Vec<TrusteeId<'static>> = (0..MAX_QUORUM_SIGS)
+        .map(|i| {
+            let mut id = std::format!("{i:02}").into_bytes();
+            id.resize(64, b'x');
+            TrusteeId::new(leak(id)).unwrap()
+        })
+        .collect();
+    let mut w = Writer::new(&mut buf);
+    write_quorum_message(&hash, &longest, &mut w).unwrap();
+    assert_eq!(w.finish(), MAX_QUORUM_MESSAGE_LEN);
 }

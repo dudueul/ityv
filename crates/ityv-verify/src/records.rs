@@ -81,11 +81,12 @@ use ityv_crypto::{
     Proof, Purpose, RecordPurpose, RecordSignature, RecordVerifyingKey, Scalar, Sha3Hasher,
     Statement, verify, verify_opening, verify_record,
 };
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, CastRecord, ChallengeOpening, Decode, Encode, HYBRID_SIG_LEN,
     HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, ModuleId, Reader, SCHEMA_BATCH_ATTEST,
-    SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_VERSION_1, SchemaId,
-    Seq, Writer, decode_object,
+    SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SchemaId, Seq, Writer,
+    decode_object,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{
@@ -289,7 +290,7 @@ fn module_message(
 }
 
 fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
-    decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
+    decode_object(schema, schema_version(schema), bytes).ok()
 }
 
 /// What checking one box needs.

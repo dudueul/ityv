@@ -64,6 +64,7 @@ use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Purpose, Verified};
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, CaptureProfile, CastRecord, ChallengeOpening,
     CloseCounts, Decode, EventRole, FallbackBody, FallbackKind, GenesisBox, HYBRID_SIG_LEN,
@@ -71,8 +72,7 @@ use ityv_encoding::{
     SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD,
     SCHEMA_CHALLENGE_OPENING, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_FALLBACK_BODY,
     SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
-    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
-    WitnessedEvent, decode_object,
+    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_WITNESSED_EVENT, SchemaId, Seq, WitnessedEvent, decode_object,
 };
 use ityv_state::{
     BallotBox, BallotMark, BoxSpec, BoxUnitSwap, Cap, CloseTokens, Closed, Counted, Fallback,
@@ -306,7 +306,7 @@ const BOX_BODY_SCHEMAS: [SchemaId; 7] = [
 ];
 
 fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
-    decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
+    decode_object(schema, schema_version(schema), bytes).ok()
 }
 
 /// What preparing a box's events needs.

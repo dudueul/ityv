@@ -97,14 +97,15 @@ use ityv_crypto::{
     AccessStructure, Bases, Commitment, Purpose, Scalar, decode_digits, sum_commitments,
     verify_aggregate,
 };
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     AggregateOpeningParts, BallotStyleId, BoxClose, CaptureProfile, CastRecord, ChallengeOpening,
     Decode, DisputeType, EventRole, ExclusionReason, GenesisBox, HYBRID_SIG_LEN, HYBRID_VK_LEN,
     Hash512, PaperCountParts, PaperCountReportBody, QuorumKind, QuorumSigned, ReceiptOutcome,
     ReceiptResolutionParts, ReportingUnitId, RosterRole, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD,
     SCHEMA_CHALLENGE_OPENING, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
-    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TallyEffect, TallyScopeParts,
-    TimeBucket, TrusteeEntry, WitnessedEvent, decode_object,
+    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TallyEffect, TallyScopeParts, TimeBucket, TrusteeEntry,
+    WitnessedEvent, decode_object,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{
@@ -419,7 +420,7 @@ const fn awaits_law(state: RecordState) -> bool {
 }
 
 fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
-    decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
+    decode_object(schema, schema_version(schema), bytes).ok()
 }
 
 /// One accepted record of a box and what the tally knows of it.

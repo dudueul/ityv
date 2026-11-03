@@ -646,7 +646,11 @@ fn witnessed(
         })
         .collect();
     let event = WitnessedEvent::new(body, &sigs).unwrap();
-    object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event)
+    object(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &event,
+    )
 }
 
 /// A signer set: (identifier, role, organisation) in identifier order.

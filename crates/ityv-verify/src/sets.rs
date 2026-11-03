@@ -7,9 +7,8 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use ityv_crypto::hash::object_hash;
-use ityv_encoding::{
-    EntrySet, GenesisEntry, Hash512, SCHEMA_VERSION_1, SetCommitment, decode_object,
-};
+use ityv_encoding::schema_version;
+use ityv_encoding::{EntrySet, GenesisEntry, Hash512, SetCommitment, decode_object};
 use ityv_ledger::{Accumulator, InclusionProof, MAX_DEPTH, leaf_hash, node_hash, sorted_set_root};
 
 use crate::error::{Error, Rule};
@@ -109,8 +108,8 @@ impl<'a, T: GenesisEntry<'a>> Set<'a, T> {
         let mut tree = Accumulator::empty();
         for (index, &bytes) in entries.iter().enumerate() {
             let at = |rule| Error::entry(state, set, index, rule);
-            let value: T =
-                decode_object(schema, SCHEMA_VERSION_1, bytes).map_err(|_| at(Rule::Decode))?;
+            let value: T = decode_object(schema, schema_version(schema), bytes)
+                .map_err(|_| at(Rule::Decode))?;
             if let Some(rule) = items
                 .last()
                 .and_then(|previous| successor(previous.value.key(), value.key()))

@@ -160,7 +160,11 @@ fn dispute_with(
     let event = WitnessedEvent::new(body, &sigs).unwrap();
     (
         body,
-        object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event),
+        object(
+            SCHEMA_WITNESSED_EVENT,
+            ityv_encoding::SCHEMA_VERSION_WITNESSED,
+            &event,
+        ),
     )
 }
 

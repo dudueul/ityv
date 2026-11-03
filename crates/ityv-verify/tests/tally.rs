@@ -124,7 +124,12 @@ fn draft() -> Draft {
             common::token(b"obs-b", b"PARTY-B", 0xC2),
         ],
     );
-    d.units[0] = ReportingUnitEntry::new(ReportingUnitId::new(RU1).unwrap(), 1).unwrap();
+    d.units[0] = ReportingUnitEntry::new(
+        ReportingUnitId::new(RU1).unwrap(),
+        1,
+        ityv_encoding::OrgId::new(b"NEC-D").unwrap(),
+    )
+    .unwrap();
     d.modules
         .retain(|m| !m.module_id.as_bytes().starts_with(b"M-B2"));
     d.styles.push(
@@ -246,7 +251,7 @@ fn witnessed(
         .collect();
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }

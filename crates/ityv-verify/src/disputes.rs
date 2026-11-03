@@ -34,11 +34,12 @@ use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Purpose, Verified};
+use ityv_encoding::SCHEMA_VERSION_WITNESSED;
 use ityv_encoding::{
     BoxId, Day, DisputeAction, DisputeEventBody, DisputeType, EventRole, HYBRID_SIG_LEN,
     HYBRID_VK_LEN, Hash512, LegalOutcome, OrgId, RosterRole, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Seq, TallyEffect,
-    WitnessedEvent, decode_object,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_WITNESSED_EVENT, Seq, TallyEffect, WitnessedEvent,
+    decode_object,
 };
 use ityv_state::status::LegalReference;
 use ityv_state::{
@@ -143,7 +144,7 @@ fn prepare<'a>(
         .filter(|e| e.schema == SCHEMA_WITNESSED_EVENT)
         .filter_map(|e| {
             let event: WitnessedEvent<'a> =
-                decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, e.bytes?).ok()?;
+                decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_WITNESSED, e.bytes?).ok()?;
             let schema = event.body_schema();
             let (material, authority) = if schema == SCHEMA_DISPUTE_EVENT_BODY {
                 (material(&event, genesis), None)

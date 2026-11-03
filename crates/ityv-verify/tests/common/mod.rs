@@ -344,8 +344,18 @@ impl Draft {
             StationProgressPolicy::new(StationId::new(b"ST-2").unwrap(), 2, 8).unwrap(),
         ];
         let units = std::vec![
-            ReportingUnitEntry::new(ReportingUnitId::new(b"RU-1").unwrap(), 2).unwrap(),
-            ReportingUnitEntry::new(ReportingUnitId::new(b"RU-2").unwrap(), 1).unwrap(),
+            ReportingUnitEntry::new(
+                ReportingUnitId::new(b"RU-1").unwrap(),
+                2,
+                ityv_encoding::OrgId::new(b"NEC-D").unwrap()
+            )
+            .unwrap(),
+            ReportingUnitEntry::new(
+                ReportingUnitId::new(b"RU-2").unwrap(),
+                1,
+                ityv_encoding::OrgId::new(b"NEC-D").unwrap()
+            )
+            .unwrap(),
         ];
         let routes = std::vec![
             CustodyRoute::new(
@@ -522,7 +532,7 @@ fn encode_set<'a, T: GenesisEntry<'a> + Encode + Clone>(items: &[T]) -> Vec<&'st
     let schema = T::SET.schema().unwrap();
     items
         .iter()
-        .map(|t| object(schema, SCHEMA_VERSION_1, t))
+        .map(|t| object(schema, T::SET.version(), t))
         .collect()
 }
 

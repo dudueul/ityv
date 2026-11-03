@@ -169,7 +169,6 @@ pub(crate) fn ident_len(id: &[u8]) -> usize {
 // Published vector files (ENCODING.md §7).
 // ---------------------------------------------------------------------------
 
-use ityv_encoding::SCHEMA_VERSION_1;
 use std::string::String;
 
 /// One published vector: valid, or invalid with the expected error.
@@ -180,7 +179,12 @@ pub(crate) struct Vector {
 }
 
 pub(crate) fn render(title: &str, schema: SchemaId, vectors: &[Vector]) -> String {
-    render_version(title, schema, SCHEMA_VERSION_1, vectors)
+    render_version(
+        title,
+        schema,
+        ityv_encoding::schema_version(schema),
+        vectors,
+    )
 }
 
 pub(crate) fn render_version(

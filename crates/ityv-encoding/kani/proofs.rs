@@ -451,6 +451,7 @@ use crate::schema::events::{
 };
 use crate::schema::genesis::{CaptureProfile, RosterRole, StationKind};
 use crate::schema::genesis_body::AmendmentReason;
+use crate::schema::tally::{ExclusionReason, ReceiptOutcome};
 use crate::schema::witnessed::EventRole;
 
 static E1: ElectionId<'static> = match ElectionId::new(b"E") {
@@ -518,6 +519,14 @@ fn event_codes_are_exact() {
         (
             ObserverCountKind::from_code(code).map(ObserverCountKind::code),
             1..=2,
+        ),
+        (
+            ExclusionReason::from_code(code).map(ExclusionReason::code),
+            1..=8,
+        ),
+        (
+            ReceiptOutcome::from_code(code).map(ReceiptOutcome::code),
+            1..=5,
         ),
     ];
     for (decoded, range) in checks {

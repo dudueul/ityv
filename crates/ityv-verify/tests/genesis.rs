@@ -321,6 +321,7 @@ fn refuses_a_reporting_unit_whose_count_differs() {
     draft.units[0] = ityv_encoding::ReportingUnitEntry::new(
         ityv_encoding::ReportingUnitId::new(b"RU-1").unwrap(),
         3,
+        ityv_encoding::OrgId::new(b"NEC-D").unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -334,6 +335,7 @@ fn refuses_a_reporting_unit_whose_count_differs() {
         ityv_encoding::ReportingUnitEntry::new(
             ityv_encoding::ReportingUnitId::new(b"RU-3").unwrap(),
             1,
+            ityv_encoding::OrgId::new(b"NEC-D").unwrap(),
         )
         .unwrap(),
     );
@@ -677,6 +679,7 @@ fn a_new_box_needs_every_set_to_agree() {
     draft.units[1] = ityv_encoding::ReportingUnitEntry::new(
         ityv_encoding::ReportingUnitId::new(b"RU-2").unwrap(),
         2,
+        ityv_encoding::OrgId::new(b"NEC-D").unwrap(),
     )
     .unwrap();
     verify(&draft).unwrap();

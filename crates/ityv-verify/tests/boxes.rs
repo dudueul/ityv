@@ -192,7 +192,7 @@ fn witnessed(schema: SchemaId, body: &'static [u8], signers: &[By]) -> &'static 
         .collect();
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }
@@ -788,7 +788,8 @@ fn every_box_closed_is_complete() {
             d.units = std::vec![
                 ityv_encoding::ReportingUnitEntry::new(
                     ityv_encoding::ReportingUnitId::new(b"RU-1").unwrap(),
-                    1
+                    1,
+                    ityv_encoding::OrgId::new(b"NEC-D").unwrap()
                 )
                 .unwrap()
             ];
@@ -884,7 +885,7 @@ fn a_forged_or_unregistered_signature_is_refused() {
             .collect();
         object(
             SCHEMA_WITNESSED_EVENT,
-            SCHEMA_VERSION_1,
+            ityv_encoding::SCHEMA_VERSION_WITNESSED,
             &WitnessedEvent::new(body, &sigs).unwrap(),
         )
     };
@@ -943,7 +944,7 @@ fn a_signer_unknown_to_the_roster_leaves_no_tokens() {
             .collect();
         object(
             SCHEMA_WITNESSED_EVENT,
-            SCHEMA_VERSION_1,
+            ityv_encoding::SCHEMA_VERSION_WITNESSED,
             &WitnessedEvent::new(body, &sigs).unwrap(),
         )
     };
@@ -1885,6 +1886,7 @@ fn a_box_an_amendment_adds_runs_from_the_amendment_frame() {
     draft.units[0] = ityv_encoding::ReportingUnitEntry::new(
         ityv_encoding::ReportingUnitId::new(b"RU-1").unwrap(),
         1,
+        ityv_encoding::OrgId::new(b"NEC-D").unwrap(),
     )
     .unwrap();
     let (body, authorization) = common::legal_authorization(

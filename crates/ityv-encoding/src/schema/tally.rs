@@ -28,10 +28,13 @@
 //! `AggregateOpeningBody` or `ReceiptResolutionBody` object of at most
 //! [`MAX_QUORUM_BODY_LEN`] bytes),
 //! `sigs` (one to [`MAX_QUORUM_SIGS`] entries of `trustee_id ‖ sig`,
-//! strictly ascending by trustee). Every signature is a hybrid signature
-//! over exactly the body bytes, purpose `tally-scope`, `aggregate-opening`
-//! or `receipt-resolution` by the body's schema. The signers are the
-//! participating members (PROTOCOL.md §10.6 item 2, §11.2).
+//! strictly ascending by trustee). Every signature is a hybrid signature,
+//! purpose `tally-scope`, `aggregate-opening` or `receipt-resolution` by
+//! the body's schema, over the quorum message `body_hash ‖ trustees`
+//! ([`write_quorum_message`]): the body's object hash (ENCODING.md §4) and
+//! the participating trustees in the envelope's order, so that no one can
+//! re-wrap the body with another set of participants without their
+//! signatures (PROTOCOL.md §10.6 item 2, §11.2).
 //!
 //! `PaperCountReportBody`: `election_id`, `reporting_unit_id`,
 //! `ballot_style_id`, `votes` (one to [`MAX_CANDIDATES`] counts, candidate
@@ -91,6 +94,10 @@ pub const MAX_QUORUM_SIGS: usize = 64;
 /// Longest body a `QuorumSigned` carries: a `TallyScopeBody` with three
 /// 64-byte identifiers and [`MAX_EXCLUSIONS`] exclusions.
 pub const MAX_QUORUM_BODY_LEN: usize = 8_454_456;
+
+/// Longest quorum message: a 64-byte body hash and [`MAX_QUORUM_SIGS`]
+/// trustee identifiers of at most 64 bytes.
+pub const MAX_QUORUM_MESSAGE_LEN: usize = 64 + 4 + MAX_QUORUM_SIGS * (4 + IDENT_MAX_STANDARD);
 
 /// Most candidates of a ballot style (PROTOCOL.md §7.4, `choices ≤ 70`).
 pub const MAX_CANDIDATES: usize = 70;
@@ -788,6 +795,33 @@ pub struct QuorumSig<'a> {
     pub sig: &'a [u8; HYBRID_SIG_LEN],
 }
 
+/// Writes the quorum message of a body with object hash `body_hash`
+/// signed by `trustees` (ascending): `body_hash: Hash512 ‖ trustees:
+/// Array<Ident<64>, 64>`. Every participating trustee signs it.
+///
+/// # Errors
+/// `InvariantViolation` at 0 for no trustee, more than
+/// [`MAX_QUORUM_SIGS`] or trustees not strictly ascending; the writer's
+/// error if `w` is too short.
+pub fn write_quorum_message(
+    body_hash: &Hash512,
+    trustees: &[TrusteeId<'_>],
+    w: &mut Writer<'_>,
+) -> Result<(), Error> {
+    if trustees.is_empty()
+        || trustees.len() > MAX_QUORUM_SIGS
+        || !ascending_by(trustees, |t| t.as_bytes())
+    {
+        return Err(invalid(0));
+    }
+    body_hash.encode(w)?;
+    w.write_count(trustees.len(), MAX_QUORUM_SIGS)?;
+    for t in trustees {
+        t.encode(w)?;
+    }
+    Ok(())
+}
+
 /// Reads the schema of an embedded body and validates it completely.
 fn classify(bytes: &[u8]) -> Result<QuorumKind, Error> {
     if bytes.len() > MAX_QUORUM_BODY_LEN {
@@ -823,7 +857,9 @@ fn classify(bytes: &[u8]) -> Result<QuorumKind, Error> {
 /// errors, rebased; `SchemaMismatch` for another schema, `LengthExceedsMax`
 /// for a longer body); one to [`MAX_QUORUM_SIGS`] signatures
 /// (`InvariantViolation` for none, `CountExceedsMax` for more), strictly
-/// ascending by trustee (`NotSorted`, `Duplicate`).
+/// ascending by trustee (`NotSorted`, `Duplicate`). Each signature covers
+/// the quorum message ([`QuorumSigned::write_message`]), which names every
+/// participating trustee: the list is part of what each of them signed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuorumSigned<'a> {
     body_bytes: &'a [u8],
@@ -903,6 +939,20 @@ impl<'a> QuorumSigned<'a> {
             self.body_bytes,
         )
         .ok()
+    }
+
+    /// Writes the quorum message its trustees sign, given the body's
+    /// object hash `body_hash` ([`write_quorum_message`]).
+    ///
+    /// # Errors
+    /// The writer's error if `w` is shorter than the message.
+    pub fn write_message(&self, body_hash: &Hash512, w: &mut Writer<'_>) -> Result<(), Error> {
+        body_hash.encode(w)?;
+        w.write_count(usize::from(self.count), MAX_QUORUM_SIGS)?;
+        for s in self.sigs() {
+            s.trustee_id.encode(w)?;
+        }
+        Ok(())
     }
 
     /// The signatures in ascending trustee order.

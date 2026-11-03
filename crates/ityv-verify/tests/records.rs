@@ -170,7 +170,7 @@ fn witnessed(schema: SchemaId, body: &'static [u8], device: bool) -> &'static [u
         .collect();
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }

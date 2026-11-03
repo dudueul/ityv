@@ -98,6 +98,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use ityv_crypto::{HybridSigned, Purpose, Verified};
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     BoxClose, BoxId, BoxOpenedBody, BoxProgressBody, BoxProgressState, BoxUnitSwapBody,
     CheckinProgressBody, CheckinProgressState, CheckinUnitSwapBody, Decode, EventRole,
@@ -106,8 +107,8 @@ use ityv_encoding::{
     SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
     SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK,
-    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq, StationEntry, StationId, TimeBucket,
-    WitnessedEvent, decode_object,
+    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, StationEntry, StationId, TimeBucket, WitnessedEvent,
+    decode_object,
 };
 use ityv_state::{
     BoxStream, BoxUnitSwap, CheckinStream, CheckinUnitSwap, Error, HoldReason, HoldSet,
@@ -324,7 +325,7 @@ type Tokens<'t> = Option<Vec<Token<'t>>>;
 type Keys<'a> = BTreeMap<&'a [u8], &'a [u8; HYBRID_VK_LEN]>;
 
 fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
-    decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
+    decode_object(schema, schema_version(schema), bytes).ok()
 }
 
 /// A tick, decoded, with the material of every key that may have signed

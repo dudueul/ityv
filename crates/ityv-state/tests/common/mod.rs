@@ -35,10 +35,10 @@ use ityv_encoding::{
     ModuleIds, ModuleOpening, ModuleRange, ObjectHeader, OrgId, Point32, Reader, RosterRole,
     SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE_BODY, SCHEMA_BOX_OPENED_BODY,
     SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
-    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_SEAL_CHANGE_BODY,
-    SCHEMA_VERSION_1, Scalar32, Scalars, SchemaId, Scope, ScopeSet, SealChangeBody,
-    SealChangeParts, SealChangeReason, SignerId, SignerRole, StationId, TimeBucket, Token192,
-    WitnessedEvent, encode_object, purpose_of,
+    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_SEAL_CHANGE_BODY, Scalar32,
+    Scalars, SchemaId, Scope, ScopeSet, SealChangeBody, SealChangeParts, SealChangeReason,
+    SignerId, SignerRole, StationId, TimeBucket, Token192, WitnessedEvent, encode_object,
+    purpose_of,
 };
 use ityv_encoding::{CaptureProfile, CustodyRoute, GenesisBox};
 use ityv_state::{Authorization, BoxSpec, CloseTokens, Profile, RosterEntry, Signed};
@@ -238,7 +238,13 @@ pub(crate) fn signature_bytes(signature: &HybridSignature) -> [u8; HYBRID_SIG_LE
 /// A complete object of `schema`, leaked.
 pub(crate) fn object<T: Encode>(schema: SchemaId, value: &T) -> &'static [u8] {
     let mut buf = std::vec![0u8; 8192];
-    let len = encode_object(schema, SCHEMA_VERSION_1, value, &mut buf).unwrap();
+    let len = encode_object(
+        schema,
+        ityv_encoding::schema_version(schema),
+        value,
+        &mut buf,
+    )
+    .unwrap();
     buf.truncate(len);
     leak_slice(buf)
 }
