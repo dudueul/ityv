@@ -861,3 +861,43 @@ fn the_quorum_message_needs_ascending_trustees_and_fits_the_bound() {
     write_quorum_message(&hash, &longest, &mut w).unwrap();
     assert_eq!(w.finish(), MAX_QUORUM_MESSAGE_LEN);
 }
+
+#[test]
+fn every_schema_has_its_current_version() {
+    use ityv_encoding::{
+        EntrySet, SCHEMA_GENESIS_BODY, SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_ROSTER_SIGNER,
+        SCHEMA_VERSION_GENESIS, SCHEMA_VERSION_REPORTING_UNIT, SCHEMA_VERSION_ROSTER_SIGNER,
+        SCHEMA_VERSION_WITNESSED, schema_version,
+    };
+    assert_eq!(schema_version(SCHEMA_GENESIS_BODY), SCHEMA_VERSION_GENESIS);
+    assert_eq!(SCHEMA_VERSION_GENESIS, 6);
+    assert_eq!(
+        schema_version(SCHEMA_WITNESSED_EVENT),
+        SCHEMA_VERSION_WITNESSED
+    );
+    assert_eq!(SCHEMA_VERSION_WITNESSED, 2);
+    assert_eq!(
+        schema_version(SCHEMA_REPORTING_UNIT_ENTRY),
+        SCHEMA_VERSION_REPORTING_UNIT
+    );
+    assert_eq!(SCHEMA_VERSION_REPORTING_UNIT, 2);
+    assert_eq!(
+        schema_version(SCHEMA_ROSTER_SIGNER),
+        SCHEMA_VERSION_ROSTER_SIGNER
+    );
+    assert_eq!(SCHEMA_VERSION_ROSTER_SIGNER, 2);
+    for schema in [
+        SCHEMA_TALLY_SCOPE_BODY,
+        SCHEMA_AGGREGATE_OPENING_BODY,
+        SCHEMA_QUORUM_SIGNED,
+        SCHEMA_PAPER_COUNT_REPORT_BODY,
+        SCHEMA_RECEIPT_RESOLUTION_BODY,
+    ] {
+        assert_eq!(schema_version(schema), SCHEMA_VERSION_1);
+    }
+    assert_eq!(EntrySet::ReportingUnits.version(), 2);
+    assert_eq!(EntrySet::Roster.version(), 2);
+    assert_eq!(EntrySet::Boxes.version(), SCHEMA_VERSION_1);
+    // The appointment hashes are not objects.
+    assert_eq!(EntrySet::Appointments.version(), SCHEMA_VERSION_1);
+}
