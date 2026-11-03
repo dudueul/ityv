@@ -17,7 +17,7 @@
 //! | [`boxes`] | Ballot-box life cycle as typestate | §10, VC-037..040 |
 //! | [`custody`] | Custody chain and seal changes | §10.3, VC-040 |
 //! | [`issuance`] | Issuance and participation identities | `FAILURE_CASES.md` §0 |
-//! | [`tally`] | Tally-scope and aggregate-opening gates | §11.1, §11.2, VC-057, VC-063 |
+//! | [`tally`] | Tally-scope and aggregate-opening gates, trustee quorum, paper comparison | §11.1, §11.2, §11.5, VC-057, VC-063, VC-075 |
 //! | [`dispute`] | Dispute life cycle | §13, VC-048, VC-049 |
 //! | [`status`] | The verifier status vocabulary | §14, VC-049, VC-050 |
 //! | [`progress`] | Progress streams, alarms, observer counts and device swaps | §6.2, §6.3, §7.10, VC-102, VC-103 |
@@ -119,4 +119,8 @@ pub use status::{
     Evidence, LegalReference, Outcome, PURPOSE_LEGAL_DECISION, Publication, Status, StatusReport,
     Step, evaluate,
 };
-pub use tally::{LATE_CLOSE_WINDOW, TallyReadiness, admit_aggregate_opening, admit_tally_scope};
+pub use tally::{
+    LATE_CLOSE_WINDOW, MachineCount, PaperComparison, PaperCount, QuorumTokens, TallyReadiness,
+    access_structure, admit_aggregate_opening, admit_tally_scope, check_quorum,
+    checkpointed_before, compare_paper,
+};

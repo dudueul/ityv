@@ -191,11 +191,52 @@ pub enum HoldReason {
     /// roles it needs. A later count that is taken does not hide it
     /// (§6.3, §6.5, §10.2, §14 6, VC-016, VC-018).
     StationCountRefused = 51,
+    /// A tally scope cannot be taken: its trustees' signatures do not
+    /// verify or do not form a qualified quorum, it lacks the
+    /// `CRYPTO_TALLY_AID` capability for its day, it names a ballot style
+    /// or reporting unit the genesis does not have, it comes before every
+    /// box of its style closed, before the receipts and legal decisions it
+    /// waits for or within the late-close window, or another scope of the
+    /// style and unit was already taken (§11.1, §14 7, VC-057, VC-099).
+    TallyScopeRefused = 52,
+    /// A tally scope the trustees signed is not what the ledger gives: the
+    /// included records' count or root, the excluded records, an
+    /// exclusion's reason (the first of §11.1 that applies) or its basis,
+    /// or the unit's emergency-slot ballots summed over its scopes differ
+    /// (§11.1, §14 7, VC-042).
+    TallyScopeMismatch = 53,
+    /// An aggregate opening cannot be taken: its trustees' signatures do
+    /// not verify or do not form a qualified quorum, it lacks the
+    /// capability, it names a chunk the style does not have or a scope that
+    /// was not taken, its scope was in no witness checkpoint before it
+    /// (VC-063), or the chunk was already opened (§11.2, §14 7).
+    AggregateRefused = 54,
+    /// An aggregate opening does not open the sum of the included records'
+    /// commitments, or its packed sum has digits out of range (§11.2,
+    /// §11.3, VC-024, VC-043, VC-044). The trustees localize the faulty box
+    /// by bisection and open its records.
+    AggregateMismatch = 55,
+    /// A paper count report cannot be taken: a signature does not verify
+    /// under the roster keys of the state in force at its frame (the chair
+    /// and observers of two organisations), it names a ballot style or
+    /// reporting unit the genesis does not have or another number of
+    /// candidates, or the unit's style already has a report (§11.5).
+    PaperCountRefused = 56,
+    /// A unit's paper count is below the machine's confirmed votes for a
+    /// candidate, or the totals differ (§11.5, VC-075). Not evidence of
+    /// fraud by itself: the audit's reason codes find the cause, and the
+    /// unit's boxes get a larger sample.
+    PaperCountMismatch = 57,
+    /// A legal decision with a tally effect cannot be applied: its dispute
+    /// is not a `POSTAL` dispute naming a record, the record is not an
+    /// accepted record of that box, or the record does not await the law
+    /// (§10.6 item 6, VC-099).
+    TallyEffectRefused = 58,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 59] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -248,6 +289,13 @@ impl HoldReason {
         Self::DuplicatePseudonym,
         Self::KeyProvisioningInvalid,
         Self::StationCountRefused,
+        Self::TallyScopeRefused,
+        Self::TallyScopeMismatch,
+        Self::AggregateRefused,
+        Self::AggregateMismatch,
+        Self::PaperCountRefused,
+        Self::PaperCountMismatch,
+        Self::TallyEffectRefused,
     ];
 
     /// The reason's code.

@@ -104,6 +104,12 @@ impl<T> Entry<T> {
             head: TEST_HEAD,
         }
     }
+
+    /// The same entry recorded under another head, for unit tests only.
+    #[cfg(test)]
+    pub(crate) fn with_head(self, head: Hash512) -> Self {
+        Self { head, ..self }
+    }
 }
 
 /// Refuses `entries` unless all were proved against one head.

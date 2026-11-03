@@ -633,7 +633,8 @@ mod tests {
         let o3 = person(b"o3", RosterRole::Observer, b"PARTY-A");
         let k1 = person(b"k1", RosterRole::Custodian, b"POLICE");
         let j1 = person(b"j1", RosterRole::Authority, b"COURT");
-        let roster = [c1, c2, o1, o2, o3, k1, j1];
+        let h1 = person(b"h1", RosterRole::Chair, b"NEC");
+        let roster = [c1, c2, o1, o2, o3, k1, j1, h1];
         let check = |set: &[RosterEntry<'static>]| {
             let named: std::vec::Vec<_> = set.iter().map(|e| named(e)).collect();
             check_witness_set(&named, &roster)
@@ -648,6 +649,8 @@ mod tests {
         // A custodian or a legal authority does not witness a box event.
         assert_eq!(check(&[c1, c2, o1, o2, k1]), Err(Error::NotRegistered));
         assert_eq!(check(&[c1, c2, o1, o2, j1]), Err(Error::NotRegistered));
+        // Nor does a commission chair.
+        assert_eq!(check(&[c1, c2, o1, o2, h1]), Err(Error::NotRegistered));
         // Registered with another role or organisation.
         let wrong_role = person(b"c1", RosterRole::Observer, b"NEC");
         assert_eq!(check(&[wrong_role, c2, o1, o2]), Err(Error::NotRegistered));
