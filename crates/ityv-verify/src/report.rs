@@ -25,6 +25,11 @@
 //!    checked; not run while one is not yet on the ledger; an event that
 //!    cannot be taken, a repeated pseudonym or an identity that does not
 //!    hold holds the ledger;
+//! 7. tally ([`crate::verify_tally`]): passed when every ballot style and
+//!    reporting unit of the genesis has a tally scope that is the
+//!    recomputation, an opening of every chunk that verifies, and a paper
+//!    count that agrees; not run while any of them is not yet on the
+//!    ledger; a refused event or a mismatch holds;
 //! 9. disputes ([`crate::verify_disputes`]): a dispute still unresolved
 //!    after every dispute event holds the ledger, and so does a dispute
 //!    event or legal decision that cannot be taken (a signature that does
@@ -42,9 +47,10 @@
 //! `ityv_ledger::check_board`). Until the anchors are satisfied the status
 //! stays `UNVERIFIED`.
 //!
-//! What the report does not reach yet: tally, audit, split view,
-//! connectivity and software (stages 7–8, 10–12), so the highest status
-//! it gives is `SOURCE_COMPLETENESS_CHECKED`.
+//! With the participation ledger complete and every unit's tally passed,
+//! the status reaches `CRYPTO_TALLY_VERIFIED`. What the report does not
+//! reach yet: audit, split view, connectivity and software (stages 8,
+//! 10–12), so `PAPER_AUDITED` is out of reach.
 
 use ityv_encoding::{CaptureProfile, ScopeSet};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
@@ -60,6 +66,7 @@ use crate::index::{LedgerIndex, build_index};
 use crate::participation::{ParticipationStage, verify_participation};
 use crate::progress::{ProgressStage, verify_progress};
 use crate::records::{RecordStage, verify_records};
+use crate::tally::{TallyStage, verify_tally};
 
 /// What the caller observed outside the ledger: the publication deadlines
 /// (PROTOCOL.md §5.5, `FAILURE_CASES.md` §8).
@@ -82,6 +89,7 @@ pub struct Report<'a> {
     progress: ProgressStage<'a>,
     participation: ParticipationStage<'a>,
     disputes: DisputeStage<'a>,
+    tally: TallyStage<'a>,
     evidence: Evidence,
     status: StatusReport,
 }
@@ -133,6 +141,12 @@ impl<'a> Report<'a> {
     #[must_use]
     pub const fn disputes(&self) -> &DisputeStage<'a> {
         &self.disputes
+    }
+
+    /// The tally (stage 7).
+    #[must_use]
+    pub const fn tally(&self) -> &TallyStage<'a> {
+        &self.tally
     }
 
     /// What was handed to the status rule, step by step.
@@ -204,6 +218,15 @@ pub fn verify_ledger<'a>(
     let progress = verify_progress(genesis, &index, &boxes);
     let participation = verify_participation(genesis, &index, &boxes, &records);
     let disputes = verify_disputes(genesis, &index, &authority);
+    let tally = verify_tally(
+        genesis,
+        &index,
+        &authority,
+        &checkpoints,
+        &boxes,
+        &records,
+        &disputes,
+    );
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
         acc.union(without_close_missing(r.holds))
@@ -216,7 +239,8 @@ pub fn verify_ledger<'a>(
         .union(records.holds())
         .union(progress.holds())
         .union(participation.holds())
-        .union(disputes.holds());
+        .union(disputes.holds())
+        .union(tally.holds());
     let scopes = authority
         .authorization()
         .map_or(ScopeSet::empty(), ityv_state::Authorization::scopes);
@@ -245,6 +269,14 @@ pub fn verify_ledger<'a>(
                 Outcome::NotRun
             },
         )
+        .with_step(
+            Step::Tally,
+            if tally.passed() {
+                Outcome::Passed
+            } else {
+                Outcome::NotRun
+            },
+        )
         .with_anchors(publications.anchors)
         .with_board(publications.board)
         .with_holds(holds);
@@ -261,6 +293,7 @@ pub fn verify_ledger<'a>(
         progress,
         participation,
         disputes,
+        tally,
         evidence,
         status,
     }

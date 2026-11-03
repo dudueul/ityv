@@ -18,6 +18,7 @@
 //! | [`records`] | 5. Cast records: OR proofs, record signatures, batch attestations, counter continuity, record set roots, `UNATTESTED` | §7.2.1, §7.5, §7.6, §14 5, VC-025..027, VC-053, VC-057 |
 //! | [`progress`] | Voting progress record: device streams in slot order, device swaps, station alarms and on-site checks, close comparisons | §7.10, ADR-0027, VC-102, VC-103, VC-106 |
 //! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
+//! | [`tally`] | 7. Tally: receipt resolutions, legal tally effects, tally scopes recomputed, aggregate openings against the commitments, paper counts per reporting unit | §10.6, §11, §14 7, VC-024, VC-042..044, VC-057, VC-063, VC-075, VC-099 |
 //! | [`report`] | Every stage over one ledger and the status ladder | §14 (end), VC-049, VC-050 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -35,10 +36,10 @@
 //!   left out, reported as a [`index::Finding`], and puts the box it
 //!   belongs to (or the whole ledger) under `HOLD_REVIEW`.
 //!
-//! What this crate does **not** do yet (ROADMAP M5): the tally, audit,
-//! split-view, connectivity and software stages (7–8, 10–12); so the
+//! What this crate does **not** do yet (ROADMAP M5): the audit,
+//! split-view, connectivity and software stages (8, 10–12); so the
 //! highest status [`report::verify_ledger`] gives is
-//! `SOURCE_COMPLETENESS_CHECKED`.
+//! `CRYPTO_TALLY_VERIFIED`.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -61,6 +62,7 @@ pub mod records;
 pub mod report;
 mod sets;
 mod sigs;
+pub mod tally;
 
 // Kani harnesses live outside `src/` because they carry a file-level lint
 // relaxation, which CONSTITUTION.md §1.1 forbids under `src/`.
@@ -95,3 +97,7 @@ pub use records::{
     RejectedRecord, verify_records,
 };
 pub use report::{Publications, Report, verify_ledger};
+pub use tally::{
+    ChunkOpening, ExpectedExclusion, OpeningOutcome, ScopeProblem, TallyEvent, TallyRefusal,
+    TallyRefused, TallyStage, UnitTally, verify_tally,
+};
