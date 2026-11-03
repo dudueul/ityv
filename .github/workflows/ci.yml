@@ -118,7 +118,10 @@ jobs:
     continue-on-error: true
     # Every mutant still runs; the larger crates are split into shards on
     # separate runners and each runner tests two mutants at a time, so the
-    # whole workflow finishes in about an hour instead of over four.
+    # whole workflow finishes in about an hour instead of over four. A
+    # shard must stay well under the six-hour job limit: ityv-verify (whose
+    # tests build real OR proofs) and ityv-state took close to three hours
+    # in one shard, so they are split too.
     strategy:
       fail-fast: false
       matrix:
@@ -132,8 +135,11 @@ jobs:
           - { crate: ityv-cunit, shard: 1/4 }
           - { crate: ityv-cunit, shard: 2/4 }
           - { crate: ityv-cunit, shard: 3/4 }
-          - { crate: ityv-state, shard: 0/1 }
-          - { crate: ityv-verify, shard: 0/1 }
+          - { crate: ityv-state, shard: 0/2 }
+          - { crate: ityv-state, shard: 1/2 }
+          - { crate: ityv-verify, shard: 0/3 }
+          - { crate: ityv-verify, shard: 1/3 }
+          - { crate: ityv-verify, shard: 2/3 }
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: dtolnay/rust-toolchain@master

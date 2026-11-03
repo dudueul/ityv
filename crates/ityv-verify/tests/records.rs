@@ -26,7 +26,7 @@ use common::{
 };
 use ityv_crypto::{
     Bases, CastId, ChunkIndex, Commitment, MAX_CHUNKS, Opening, OptionCount, OptionIndex,
-    RecordPurpose, Scalar, Statement, commit, object_hash, prove, sign_ed25519_half,
+    RecordPurpose, Scalar, Sha3Hasher, Statement, commit, object_hash, prove, sign_ed25519_half,
 };
 use ityv_encoding::{
     Attestation, BallotStyleId, BatchAttest, BatchAttestBody, BatchAttestParts, BoxClose,
@@ -41,7 +41,7 @@ use ityv_encoding::{
     Token192, WitnessedEvent, Writer, purpose_of,
 };
 use ityv_ledger::sorted_set_root;
-use ityv_state::{HoldReason, RecordStatus};
+use ityv_state::{HoldReason, HoldSet, RecordStatus};
 use ityv_verify::{
     AuthorityStage, BatchFinding, BatchProblem, BoxRecords, BoxStage, LedgerIndex, RecordRefusal,
     RecordStage, VerifiedGenesis, authorize_ledger, build_index, verify_boxes, verify_genesis,
@@ -233,19 +233,60 @@ fn module_message(body_hash: &Hash512, module: &'static [u8], counter: u64) -> V
     buf[..len].to_vec()
 }
 
+/// The secrets of a record as the device derives them (PROTOCOL.md §7.3):
+/// each module's cast-id contribution and randomness, the cast id
+/// `SHA3-512("ityv:castid:v1" ‖ 0x00 ‖ cid_1 ‖ …)[0..24]` and the summed
+/// randomness.
+struct Secrets {
+    cids: Vec<[u8; 24]>,
+    rands: Vec<Vec<Scalar>>,
+    cast_id: CastId,
+    rand: [Scalar; MAX_CHUNKS],
+    /// The stream, to go on with the proof.
+    rng: ChaCha20Rng,
+}
+
+fn secrets(r: &Rec) -> Secrets {
+    let mut rng = ChaCha20Rng::seed_from_u64(r.seed);
+    let chunks = usize::from(OptionCount::new(OPTIONS).unwrap().chunk_count());
+    let mut hasher = Sha3Hasher::new();
+    hasher.absorb(b"ityv:castid:v1");
+    hasher.absorb(&[0x00]);
+    let mut cids = Vec::new();
+    let mut rands = Vec::new();
+    let mut rand = [Scalar::ZERO; MAX_CHUNKS];
+    for _ in r.mods {
+        let mut cid = [0u8; 24];
+        rng.fill_bytes(&mut cid);
+        hasher.absorb(&cid);
+        let part: Vec<Scalar> = (0..chunks).map(|_| Scalar::random(&mut rng)).collect();
+        for (sum, p) in rand.iter_mut().zip(&part) {
+            *sum = sum.add(p);
+        }
+        cids.push(cid);
+        rands.push(part);
+    }
+    let digest = hasher.finish();
+    Secrets {
+        cids,
+        rands,
+        cast_id: CastId::new(Token192(digest[..24].try_into().unwrap())),
+        rand,
+        rng,
+    }
+}
+
 /// The record object of `r`.
 fn record(r: &Rec) -> &'static [u8] {
     let bases = Bases::derive();
-    let mut rng = ChaCha20Rng::seed_from_u64(r.seed);
+    let Secrets {
+        cast_id,
+        rand,
+        mut rng,
+        ..
+    } = secrets(r);
     let options = OptionCount::new(OPTIONS).unwrap();
     let chunks = options.chunk_count();
-    let mut token = [0u8; 24];
-    rng.fill_bytes(&mut token);
-    let cast_id = CastId::new(Token192(token));
-    let mut rand = [Scalar::ZERO; MAX_CHUNKS];
-    for slot in rand.iter_mut().take(usize::from(chunks)) {
-        *slot = Scalar::random(&mut rng);
-    }
     let option = OptionIndex::new(r.option).unwrap();
     let commitments: Vec<Commitment> = (0..chunks)
         .map(|j| {
@@ -1081,30 +1122,86 @@ impl WithCount for Bat {
     }
 }
 
-/// A `ChallengeOpening` of the record `record_obj` (counter `counter` on
-/// both modules), device-signed with key number `device`.
-fn opening_of(record_obj: &'static [u8], counter: u64, device: u16) -> &'static [u8] {
+/// What a challenge opening changes from the device's genuine values.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tamper {
+    /// None: the opening reconstructs its record.
+    Genuine,
+    /// Names another ballot style.
+    Style,
+    /// The first module's counter is off by one.
+    Counter,
+    /// The first module's randomness is off: the sum no longer holds.
+    ModuleRand,
+    /// The first module's cast-id contribution is changed: it no longer
+    /// derives the cast id.
+    Cid,
+    /// Opens another option.
+    Option,
+    /// A second, zero chunk on every randomness list.
+    ExtraChunk,
+}
+
+/// A `ChallengeOpening` of the record `r`, device-signed with key number
+/// `device`, changed by `tamper`.
+fn opening_of(r: &Rec, device: u16, tamper: Tamper) -> &'static [u8] {
     use ityv_encoding::{
-        ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_CHUNKS, ModuleOpening,
-        SCHEMA_CHALLENGE_OPENING_BODY, Scalar32, Scalars,
+        ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_CHUNKS as ENC_CHUNKS,
+        ModuleOpening, SCHEMA_CHALLENGE_OPENING_BODY, Scalar32, Scalars,
     };
-    let rand: &'static Scalars<MAX_CHUNKS> = leak(Scalars::new(&[Scalar32([1; 32])]).unwrap());
-    let mods: Vec<ModuleOpening<'static>> = [P1, P2]
+    let secrets = secrets(r);
+    let raw = |values: &[Scalar]| -> Scalars<ENC_CHUNKS> {
+        let mut out: Vec<Scalar32> = values.iter().map(|v| Scalar32(v.to_bytes())).collect();
+        if tamper == Tamper::ExtraChunk {
+            out.push(Scalar32([0; 32]));
+        }
+        Scalars::new(&out).unwrap()
+    };
+    let chunks = secrets.rands[0].len();
+    let rand: &'static Scalars<ENC_CHUNKS> = leak(raw(&secrets.rand[..chunks]));
+    let mods: Vec<ModuleOpening<'static>> = r
+        .mods
         .iter()
-        .map(|&m| ModuleOpening {
-            module_id: common::module(m),
-            counter,
-            rand: Scalars::new(&[Scalar32([1; 32])]).unwrap(),
-            cid: Token192([2; 24]),
+        .zip(secrets.cids.iter().zip(&secrets.rands))
+        .enumerate()
+        .map(|(i, (&(m, counter, _), (cid, part)))| {
+            let first = i == 0;
+            let mut part = part.clone();
+            if first && tamper == Tamper::ModuleRand {
+                part[0] = part[0].add(&Scalar::ONE);
+            }
+            let mut cid = *cid;
+            if first && tamper == Tamper::Cid {
+                cid[0] ^= 1;
+            }
+            ModuleOpening {
+                module_id: common::module(m),
+                counter: if first && tamper == Tamper::Counter {
+                    counter + 1
+                } else {
+                    counter
+                },
+                rand: raw(&part),
+                cid: Token192(cid),
+            }
         })
         .collect();
     let body = ChallengeOpeningBody::new(&ChallengeOpeningParts {
         election_id: election(),
         box_id: box_id(),
-        ballot_style_id: BallotStyleId::new(STYLE).unwrap(),
-        record_hash: code(record_obj),
-        option_index: 2,
-        cast_id: Token192([3; 24]),
+        ballot_style_id: BallotStyleId::new(if tamper == Tamper::Style {
+            b"STYLE-2"
+        } else {
+            r.style
+        })
+        .unwrap(),
+        record_hash: code(record(r)),
+        option_index: if tamper == Tamper::Option {
+            r.option + 1
+        } else {
+            r.option
+        },
+        cast_id: secrets.cast_id.token(),
         rand,
         modules: leak_slice(mods),
     })
@@ -1156,7 +1253,7 @@ fn a_challenged_record_is_published_but_not_cast() {
         w(opened()),
         r(recs[0]),
         r(recs[1]),
-        ch(opening_of(recs[1], 2, BOX_DEVICE_BASE)),
+        ch(opening_of(&rec(2), BOX_DEVICE_BASE, Tamper::Genuine)),
         r(recs[2]),
         b(batch(&bat(0, 1, 3, &cast))),
         c(close_after_challenge(&cast)),
@@ -1167,6 +1264,7 @@ fn a_challenged_record_is_published_but_not_cast() {
     let rep = report(&run);
     assert!(rep.holds.is_empty(), "{rep:?}");
     assert!(rep.refused_challenges.is_empty());
+    assert!(rep.failed_openings.is_empty());
     assert_eq!(
         statuses(&run),
         [
@@ -1180,7 +1278,7 @@ fn a_challenged_record_is_published_but_not_cast() {
     let run = go(&[
         w(opened()),
         r(recs[0]),
-        ch(opening_of(recs[1], 2, BOX_DEVICE_BASE)),
+        ch(opening_of(&rec(2), BOX_DEVICE_BASE, Tamper::Genuine)),
         r(recs[1]),
         r(recs[2]),
         b(batch(&bat(0, 1, 3, &cast))),
@@ -1188,6 +1286,51 @@ fn a_challenged_record_is_published_but_not_cast() {
     ]);
     assert!(report(&run).holds.is_empty(), "{:?}", report(&run));
     assert!(run.boxes.report(BOX).unwrap().holds.is_empty());
+}
+
+#[test]
+fn a_challenge_opening_must_reconstruct_its_record() {
+    // VC-028: the device signed the opening, so the record is challenged
+    // and not cast whatever the opening says; one that does not reconstruct
+    // the record holds the box (the device is quarantined, §8 item 5).
+    let (recs, codes) = three();
+    let cast = [codes[0], codes[2]];
+    for tamper in [
+        Tamper::Style,
+        Tamper::Counter,
+        Tamper::ModuleRand,
+        Tamper::Cid,
+        Tamper::Option,
+        Tamper::ExtraChunk,
+    ] {
+        let run = go(&[
+            w(opened()),
+            r(recs[0]),
+            r(recs[1]),
+            ch(opening_of(&rec(2), BOX_DEVICE_BASE, tamper)),
+            r(recs[2]),
+            b(batch(&bat(0, 1, 3, &cast))),
+            c(close_after_challenge(&cast)),
+        ]);
+        let rep = report(&run);
+        assert_eq!(
+            rep.failed_openings,
+            [ityv_encoding::Seq::new(6).unwrap()],
+            "{tamper:?}"
+        );
+        assert!(rep.refused_challenges.is_empty(), "{tamper:?}");
+        assert_eq!(
+            rep.holds,
+            HoldSet::empty().with(HoldReason::OpeningMismatch),
+            "{tamper:?}"
+        );
+        assert_eq!(
+            statuses(&run)[1],
+            (5, RecordStatus::ChallengedSpoiled),
+            "{tamper:?}"
+        );
+        assert_eq!(rep.record_set_root, Some(root(&cast)), "{tamper:?}");
+    }
 }
 
 #[test]
@@ -1200,7 +1343,7 @@ fn a_challenge_opening_must_verify_and_name_a_record_of_the_box() {
         w(opened()),
         r(recs[0]),
         r(recs[1]),
-        ch(opening_of(recs[1], 2, common::SPARE_BASE)),
+        ch(opening_of(&rec(2), common::SPARE_BASE, Tamper::Genuine)),
         r(recs[2]),
         b(batch(&bat(0, 1, 3, &cast))),
         c(close_after_challenge(&cast)),
@@ -1217,7 +1360,7 @@ fn a_challenge_opening_must_verify_and_name_a_record_of_the_box() {
     let run = go(&[
         w(opened()),
         r(recs[0]),
-        ch(opening_of(recs[1], 2, BOX_DEVICE_BASE)),
+        ch(opening_of(&rec(2), BOX_DEVICE_BASE, Tamper::Genuine)),
         r(recs[2]),
         b(batch(&bat(0, 1, 3, &cast))),
         c(close_after_challenge(&cast)),

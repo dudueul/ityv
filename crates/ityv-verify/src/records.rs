@@ -57,9 +57,15 @@
 //! listed, not held: the tally scope excludes it (§11.1), the box stage
 //! holds an open batch, and a late batch close can still attest it.
 //!
-//! What this stage does not prove: that a challenge opening's values
-//! reconstruct its record's commitments and proof (VC-028, the challenge
-//! stage); the state of a record a quarantine entry names (`ImprintFailure`
+//! A challenge opening that verifies is also reconstructed (PROTOCOL.md §8
+//! item 3, VC-028): the opened option, cast id and summed randomness must
+//! open every commitment of the record, the modules' contributions must sum
+//! to that randomness, derive that cast id, and carry the record's module
+//! counters. One that does not is a device fault: the record stays
+//! challenged and the box is held ([`HoldReason::OpeningMismatch`]); §8
+//! item 5 then quarantines the device and compares its paper in full.
+//!
+//! What this stage does not prove: the state of a record a quarantine entry names (`ImprintFailure`
 //! has no ledger schema yet, so such a record is counted as cast); that a record's share package
 //! reached the trustees (VC-036); anything about a box with no accepted
 //! close beyond its records and batches (the box stage holds it).
@@ -69,8 +75,9 @@ use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{
-    Bases, Commitment, OptionCount, Proof, Purpose, RecordPurpose, RecordSignature,
-    RecordVerifyingKey, Statement, verify, verify_record,
+    Bases, CastId, Commitment, MAX_CHUNKS as CRYPTO_MAX_CHUNKS, Opening, OptionCount, OptionIndex,
+    Proof, Purpose, RecordPurpose, RecordSignature, RecordVerifyingKey, Scalar, Sha3Hasher,
+    Statement, verify, verify_opening, verify_record,
 };
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, CastRecord, ChallengeOpening, Decode, Encode, HYBRID_SIG_LEN,
@@ -193,6 +200,9 @@ pub struct BoxRecords<'a> {
     /// not verify, or no accepted record of the box with the hash it
     /// names.
     pub refused_challenges: Vec<Seq>,
+    /// The frames of the challenge openings that verify but do not
+    /// reconstruct their record (VC-028): the device is at fault.
+    pub failed_openings: Vec<Seq>,
     /// The sorted-set root of the accepted records' tracking codes, when
     /// the box has an accepted close to compare it with.
     pub record_set_root: Option<Hash512>,
@@ -324,25 +334,22 @@ impl<'a> Ctx<'_, 'a> {
         keys
     }
 
-    /// Checks one cast record.
-    fn record(&self, seq: Seq, record: &CastRecord<'_>) -> Result<(), RecordRefusal> {
-        let body = record.body();
-        let style = self
-            .genesis
-            .ballot_style(body.ballot_style_id().as_bytes())
-            .ok_or(RecordRefusal::Style)?;
-        let options = style
+    /// The option count of ballot style `style_id` in the genesis.
+    fn options(&self, style_id: &[u8]) -> Option<OptionCount> {
+        self.genesis
+            .ballot_style(style_id)?
             .choices()
             .checked_add(2)
             .and_then(OptionCount::new)
+    }
+
+    /// Checks one cast record.
+    fn record(&self, seq: Seq, record: &CastRecord<'_>) -> Result<(), RecordRefusal> {
+        let body = record.body();
+        let options = self
+            .options(body.ballot_style_id().as_bytes())
             .ok_or(RecordRefusal::Style)?;
-        let commitments: Option<Vec<Commitment>> = body
-            .commitments()
-            .as_slice()
-            .iter()
-            .map(|p| Commitment::from_point32(*p).ok())
-            .collect();
-        let commitments = commitments.ok_or(RecordRefusal::Proof)?;
+        let commitments = commitments_of(record).ok_or(RecordRefusal::Proof)?;
         let statement = Statement::new(
             body.election_id(),
             body.box_id().ident(),
@@ -439,12 +446,106 @@ impl<'a> Ctx<'_, 'a> {
     }
 }
 
+/// The commitments of a record, as group elements.
+fn commitments_of(record: &CastRecord<'_>) -> Option<Vec<Commitment>> {
+    record
+        .body()
+        .commitments()
+        .as_slice()
+        .iter()
+        .map(|p| Commitment::from_point32(*p).ok())
+        .collect()
+}
+
+/// Label of the cast-id derivation (PROTOCOL.md §7.3 step 2).
+const LABEL_CAST_ID: &[u8] = b"ityv:castid:v1";
+
+/// Whether the challenge opening `opening` reconstructs the record `record`
+/// (PROTOCOL.md §8 item 3, VC-028): the same ballot style; the opened
+/// option, cast id and summed randomness open every commitment; the modules' contributions sum to that randomness chunk by
+/// chunk; the cast id is the one their contributions derive; and the
+/// modules and counters are the record's.
+fn opening_reconstructs(
+    bases: &Bases,
+    options: OptionCount,
+    record: &CastRecord<'_>,
+    opening: &ChallengeOpening<'_>,
+) -> bool {
+    let o = opening.body();
+    let r = record.body();
+    // The index put the opening and the record in the same box of the
+    // election; the style is the opening's own claim.
+    let same_style = o.ballot_style_id().as_bytes() == r.ballot_style_id().as_bytes();
+    // The modules and their counters are the record's, in the same order
+    // (both ascending by module identifier).
+    let same_counters = o
+        .modules()
+        .map(|m| (m.module_id.as_bytes(), m.counter))
+        .eq(r
+            .module_counters()
+            .iter()
+            .map(|c| (c.module_id.as_bytes(), c.counter)));
+    if !(same_style && same_counters) {
+        return false;
+    }
+    // The summed randomness, and each module's share of it, chunk by chunk.
+    let chunks = usize::from(options.chunk_count());
+    let Some(rand) = scalars(o.rand().as_slice(), chunks) else {
+        return false;
+    };
+    let mut sums = [Scalar::ZERO; CRYPTO_MAX_CHUNKS];
+    for m in o.modules() {
+        let Some(part) = scalars(m.rand.as_slice(), chunks) else {
+            return false;
+        };
+        for (sum, p) in sums.iter_mut().zip(part.iter()) {
+            *sum = sum.add(p);
+        }
+    }
+    if sums != rand {
+        return false;
+    }
+    // The cast id the modules' contributions derive.
+    let mut hasher = Sha3Hasher::new();
+    hasher.absorb(LABEL_CAST_ID);
+    hasher.absorb(&[0x00]);
+    for m in o.modules() {
+        hasher.absorb(&m.cid.0);
+    }
+    let digest = hasher.finish();
+    if digest.get(..24) != Some(o.cast_id().0.as_slice()) {
+        return false;
+    }
+    let (Some(option), Some(commitments)) =
+        (OptionIndex::new(o.option_index()), commitments_of(record))
+    else {
+        return false;
+    };
+    let opened = Opening::new(option, CastId::new(*o.cast_id()), rand);
+    verify_opening(bases, options, &commitments, &opened).is_ok()
+}
+
+/// Exactly `chunks` canonical scalars, padded with zero to the chunk
+/// capacity.
+fn scalars(raw: &[ityv_encoding::Scalar32], chunks: usize) -> Option<[Scalar; CRYPTO_MAX_CHUNKS]> {
+    let mut out = [Scalar::ZERO; CRYPTO_MAX_CHUNKS];
+    if raw.len() != chunks {
+        return None;
+    }
+    for (slot, s) in out.get_mut(..chunks)?.iter_mut().zip(raw) {
+        *slot = Scalar::from_canonical_bytes(s.0).ok()?;
+    }
+    Some(out)
+}
+
 /// A record the stage accepted, with its counters.
 struct Counted<'a> {
     seq: Seq,
     tracking_code: Hash512,
     counters: Vec<(&'a [u8], u64)>,
     style_test: bool,
+    /// The record, to reconstruct a challenge of it.
+    record: CastRecord<'a>,
 }
 
 /// A batch whose signatures and modules held and whose batch index no
@@ -542,10 +643,52 @@ struct Collected<'a> {
     counted: Vec<Counted<'a>>,
     rejected: Vec<RejectedRecord>,
     batches: Vec<(Seq, BatchAttest<'a>)>,
-    /// Each challenge opening's frame, the record hash it names, and
-    /// whether its device signature verifies.
-    challenges: Vec<(Seq, Hash512, bool)>,
+    /// Each challenge opening's frame, the opening, and whether its device
+    /// signature verifies.
+    challenges: Vec<(Seq, ChallengeOpening<'a>, bool)>,
     close: Option<BoxClose<'a>>,
+}
+
+/// What the challenge openings of a box did.
+#[derive(Default)]
+struct Judged {
+    /// The tracking codes of the records the device opened.
+    challenged: BTreeSet<[u8; 64]>,
+    /// The openings refused: no valid device signature, or no accepted
+    /// record of the box by that hash.
+    refused: Vec<Seq>,
+    /// The openings taken that do not reconstruct their record.
+    failed: Vec<Seq>,
+}
+
+/// Takes each challenge opening of a box against its accepted records.
+fn judge_challenges<'a>(
+    ctx: &Ctx<'_, 'a>,
+    accepted: &[Counted<'a>],
+    challenges: &[(Seq, ChallengeOpening<'a>, bool)],
+) -> Judged {
+    let mut out = Judged::default();
+    for (seq, opening, signed) in challenges {
+        let record_hash = *opening.body().record_hash();
+        let record = accepted
+            .iter()
+            .find(|r| r.tracking_code == record_hash)
+            .map(|r| &r.record);
+        if let (true, Some(record)) = (*signed, record) {
+            // The device opened the record: it is challenged. An opening
+            // that does not reconstruct it is a device fault (VC-028).
+            out.challenged.insert(record_hash.0);
+            let reconstructs = ctx
+                .options(record.body().ballot_style_id().as_bytes())
+                .is_some_and(|options| opening_reconstructs(ctx.bases, options, record, opening));
+            if !reconstructs {
+                out.failed.push(*seq);
+            }
+        } else {
+            out.refused.push(*seq);
+        }
+    }
+    out
 }
 
 /// Decodes the box's events and checks each record.
@@ -575,6 +718,7 @@ fn collect<'a>(ctx: &Ctx<'_, 'a>, events: &[&IndexedEvent<'a>]) -> Collected<'a>
                         .map(|c| (c.module_id.as_bytes(), c.counter))
                         .collect(),
                     style_test: is_test_style(record.body().ballot_style_id()),
+                    record,
                 }),
                 Err(refusal) => out.rejected.push(RejectedRecord {
                     seq: e.seq,
@@ -589,8 +733,7 @@ fn collect<'a>(ctx: &Ctx<'_, 'a>, events: &[&IndexedEvent<'a>]) -> Collected<'a>
         } else if e.schema == SCHEMA_CHALLENGE_OPENING {
             if let Some(opening) = decode::<ChallengeOpening<'a>>(e.schema, bytes) {
                 let signed = ctx.challenge_signed(e.seq, &opening);
-                out.challenges
-                    .push((e.seq, *opening.body().record_hash(), signed));
+                out.challenges.push((e.seq, opening, signed));
             }
         } else if e.schema == SCHEMA_BOX_CLOSE
             && let Some(c) = decode::<BoxClose<'a>>(e.schema, bytes)
@@ -769,16 +912,11 @@ fn run_box<'a>(
 
     // The records the device opened for a challenge: never attested, not in
     // the close's record set.
-    let codes: BTreeSet<[u8; 64]> = accepted.iter().map(|r| r.tracking_code.0).collect();
-    let mut challenged: BTreeSet<[u8; 64]> = BTreeSet::new();
-    let mut refused_challenges: Vec<Seq> = Vec::new();
-    for (seq, record_hash, signed) in &challenges {
-        if *signed && codes.contains(&record_hash.0) {
-            challenged.insert(record_hash.0);
-        } else {
-            refused_challenges.push(*seq);
-        }
-    }
+    let Judged {
+        challenged,
+        refused: refused_challenges,
+        failed: failed_openings,
+    } = judge_challenges(&ctx, &accepted, &challenges);
     let (opened, accepted): (Vec<Counted<'a>>, Vec<Counted<'a>>) = accepted
         .into_iter()
         .partition(|r| challenged.contains(&r.tracking_code.0));
@@ -829,6 +967,7 @@ fn run_box<'a>(
             !refused_challenges.is_empty(),
             HoldReason::ChallengeRejected,
         )
+        .with_if(!failed_openings.is_empty(), HoldReason::OpeningMismatch)
         .with_if(!findings.is_empty(), HoldReason::BatchInvalid)
         .with_if(root_differs, HoldReason::RecordSetMismatch);
     BoxRecords {
@@ -838,6 +977,7 @@ fn run_box<'a>(
         unattested,
         batches: findings,
         refused_challenges,
+        failed_openings,
         record_set_root,
         holds,
     }

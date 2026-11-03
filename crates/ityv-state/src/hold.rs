@@ -161,11 +161,17 @@ pub enum HoldReason {
     /// A challenge opening cannot be taken: the device's signature does
     /// not verify, or it names no accepted record of its box (§8).
     ChallengeRejected = 46,
+    /// A challenge opening the device signed does not reconstruct its
+    /// record: the opened values do not open the commitments, or the
+    /// modules' contributions do not give the cast id and randomness, or
+    /// name other counters (§8 item 3, VC-028). The device is quarantined
+    /// and its paper compared in full (§8 item 5).
+    OpeningMismatch = 47,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 48] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -213,6 +219,7 @@ impl HoldReason {
         Self::RecordSetMismatch,
         Self::DisputeRefused,
         Self::ChallengeRejected,
+        Self::OpeningMismatch,
     ];
 
     /// The reason's code.
