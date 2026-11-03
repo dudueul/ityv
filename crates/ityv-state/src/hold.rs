@@ -138,11 +138,26 @@ pub enum HoldReason {
     /// the ledger carries the amendments out of order, so the frame from
     /// which each state applies is unknown (§4.3).
     AmendmentMissing = 41,
+    /// A cast record of the box was rejected: its ballot style is not in
+    /// the genesis, its proof does not verify, a record signature does not
+    /// verify under a key the box had by its frame, it names a module the
+    /// box does not have, or another record carries the same module
+    /// counter (§7.2.1, §7.5, §14 5, VC-025, VC-026, VC-068).
+    RecordRejected = 42,
+    /// A batch attestation of the box does not hold: a signature, a module
+    /// outside the box, two bodies under one batch index, a counter range
+    /// with a gap or an overlap or beyond the close, a record straddling
+    /// batches, or a record count or records root its member records do not
+    /// give (§7.2.1, §14 5, VC-053).
+    BatchInvalid = 43,
+    /// The close's record set root is not the sorted-set root of the box's
+    /// accepted records (§7.8, §14 5, VC-027).
+    RecordSetMismatch = 44,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 45] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -185,6 +200,9 @@ impl HoldReason {
         Self::AuthorizationMissing,
         Self::AuthorizationInvalid,
         Self::AmendmentMissing,
+        Self::RecordRejected,
+        Self::BatchInvalid,
+        Self::RecordSetMismatch,
     ];
 
     /// The reason's code.

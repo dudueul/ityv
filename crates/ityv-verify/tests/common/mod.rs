@@ -849,3 +849,16 @@ impl Ledger {
         leak_slice(self.stream.clone())
     }
 }
+
+// ---------------------------------------------------------------------
+// Record-stage helpers.
+
+/// The signing key of module entry `n` (the `n` given to `module_entry`).
+pub fn module_signing(n: u16) -> &'static HybridSigningKey {
+    signing(MODULE_BASE + n)
+}
+
+/// The registered key of module entry `n`.
+pub fn module_key(n: u16) -> &'static [u8; HYBRID_VK_LEN] {
+    registered(MODULE_BASE + n)
+}

@@ -14,6 +14,7 @@
 //! | [`checkpoint`] | 2. Checkpoint chain: witness quorum and diversity, successor rules, roots recomputed from the ledger | §5.3, §5.4, §14 2, VC-011..014 |
 //! | [`index`] | 3. Frame chain, event hashes, canonical events, replayed events, records after close | §5.1, §14 3, VC-010, VC-039, VC-101 |
 //! | [`authority`] | The signed legal authorization that grants every capability | §4.4, VC-006..008 |
+//! | [`records`] | 5. Cast records: OR proofs, record signatures, batch attestations, counter continuity, record set roots, `UNATTESTED` | §7.2.1, §7.5, §7.6, §14 5, VC-025..027, VC-053, VC-057 |
 //! | [`boxes`] | 4. Every expected box through its state machine: opening, records, fallback, close invariants, late closes, custody, completeness | §7, §14 4, VC-037..040, VC-100 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -50,6 +51,7 @@ mod disputes;
 pub mod error;
 pub mod genesis;
 pub mod index;
+pub mod records;
 mod sets;
 mod sigs;
 
@@ -71,4 +73,8 @@ pub use genesis::{
 };
 pub use index::{
     Finding, FindingKind, IndexedEvent, LedgerIndex, OPAQUE_SCHEMAS, Scope, build_index,
+};
+pub use records::{
+    AcceptedRecord, BatchFinding, BatchProblem, BoxRecords, RecordRefusal, RecordStage,
+    RejectedRecord, verify_records,
 };
