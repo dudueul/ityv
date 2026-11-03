@@ -1034,6 +1034,29 @@ fn a_record_naming_a_module_the_box_had_not_by_its_frame_is_rejected() {
     }
 }
 
+#[test]
+fn ranges_are_per_module() {
+    // M-B1-P2 consumed one counter more than M-B1-P1 before the second
+    // record: the batch's ranges differ by module.
+    let r1 = record(&rec(1));
+    let r2 = record(&Rec {
+        mods: leak_slice(std::vec![(P1, 2, P1_KEY), (P2, 3, P2_KEY)]),
+        ..rec(2)
+    });
+    let mut per_module = bat(0, 1, 2, &[code(r1), code(r2)]);
+    per_module.ranges[1].2 = 3;
+    let run = go(&[w(opened()), r(r1), r(r2), b(batch(&per_module))]);
+    assert!(findings(&run).is_empty(), "{:?}", findings(&run));
+    assert!(report(&run).unattested.is_empty());
+    assert_eq!(
+        statuses(&run),
+        [
+            (4, RecordStatus::CastCommitted),
+            (5, RecordStatus::CastCommitted)
+        ]
+    );
+}
+
 trait WithCount {
     fn with_count(self, count: Option<u16>) -> Self;
 }
