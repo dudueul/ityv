@@ -83,8 +83,8 @@ pub use index::{
     Finding, FindingKind, IndexedEvent, LedgerIndex, OPAQUE_SCHEMAS, Scope, build_index,
 };
 pub use participation::{
-    KeyFinding, KeyProblem, ParticipationStage, SetFinding, SetProblem, StationParticipation,
-    verify_participation,
+    CountFinding, KeyFinding, KeyProblem, ParticipationStage, SetFinding, SetProblem,
+    StationParticipation, verify_participation,
 };
 pub use progress::{
     BoxProgressReport, CloseCheck, MAX_PROGRESS_SLOTS, ProgressReason, ProgressRefusal,

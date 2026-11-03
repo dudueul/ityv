@@ -185,11 +185,17 @@ pub enum HoldReason {
     /// ceremony, or a second ceremony for a party (§6.4, §9.4.2, §14 6,
     /// VC-092, VC-093, VC-095).
     KeyProvisioningInvalid = 50,
+    /// A station's issuance count or observer count (periodic or final)
+    /// cannot be taken: a signature does not verify under the roster keys
+    /// of the state in force at its frame, or its signers do not have the
+    /// roles it needs. A later count that is taken does not hide it
+    /// (§6.3, §6.5, §10.2, §14 6, VC-016, VC-018).
+    StationCountRefused = 51,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -241,6 +247,7 @@ impl HoldReason {
         Self::ParticipationSetInvalid,
         Self::DuplicatePseudonym,
         Self::KeyProvisioningInvalid,
+        Self::StationCountRefused,
     ];
 
     /// The reason's code.

@@ -14,21 +14,28 @@
 //! * **Module provisioning records** (`ModuleProvisioned`, `0x0026`). Every
 //!   module of every genesis state needs the record whose object hash its
 //!   entry pins, signed by the committee, a member of the module's chamber
-//!   and observers of two or more organisations; with the entry's chamber,
-//!   the device that lists the module (for a spare no device lists, a box
-//!   or check-in unit of some genesis state), the chamber's member count,
-//!   a non-zero entropy commitment (VC-095), and for a check-in unit's
-//!   party module a secure element and the party ceremony's key check
-//!   (VC-093); no other module carries a key check.
+//!   and observers of two or more organisations; with the entry's chamber
+//!   (every state that pins the record must give the same one), the device
+//!   that lists the module (for a spare no device lists, a box or check-in
+//!   unit of some genesis state), the chamber's member count, a non-zero
+//!   entropy commitment (VC-095), and, when the module is a check-in unit's
+//!   party module in any state that pins the record, a secure element and
+//!   the party ceremony's key check (VC-093); no other module carries a
+//!   key check.
 //! * **Participation sets** (`ParticipationSet`, `0x0020`). Every station
 //!   of the genesis's last state needs one: signed by a check-in unit of
 //!   the station (in service or spare, in any genesis state up to the
 //!   set's frame) and by one party module per party of the genesis, each a
 //!   module of that unit, in chamber order P1…Pn (VC-084). A second set
-//!   for the station with other pseudonyms is a conflict. Then the
-//!   identities (VC-018): `count` is the station's final observer count
-//!   (the last `ObserverCountAttest` of kind final), and the station's
-//!   last `IssuanceCount` balances against its boxes:
+//!   for the station with other pseudonyms is a conflict.
+//! * **Station counts** (`IssuanceCount`, `ObserverCountAttest`). Every one
+//!   on the ledger must be taken: its signatures verify under the roster
+//!   of the state in force at its frame and its signers have the roles it
+//!   needs (VC-016). One that is not is listed and holds, whatever comes
+//!   after it. Then the identities (VC-018), with the last count of each
+//!   kind that was taken: the set's `count` is the station's final
+//!   observer count (the last `ObserverCountAttest` of kind final), and
+//!   the station's last `IssuanceCount` balances against its boxes:
 //!   `ityv_state::issuance_verdict` with the cast and challenged records
 //!   the record stage accepted and the ballots without a record and
 //!   quarantined from each box's close. Across every accepted set no
@@ -36,13 +43,16 @@
 //!
 //! Every signature is verified under the key the genesis registers for
 //! the signer: units and modules in any state up to the event's frame,
-//! observers on the roster of those states, trustees and the committee
-//! from the genesis. One signer's keys may not share a half with
-//! another's (VC-098).
+//! observers on the roster of any of those states (newest first: an
+//! amendment may give an observer a new key, and a record signed before
+//! it carries the old one), trustees and the committee from the genesis;
+//! a station count under the roster of the state in force at its frame.
+//! One signer's key may not share a half with another's (VC-098).
 //!
 //! An event that cannot be taken is evidence: it is listed, and holds the
 //! ledger ([`HoldReason::ParticipationSetInvalid`],
-//! [`HoldReason::KeyProvisioningInvalid`]), as does a repeated pseudonym
+//! [`HoldReason::KeyProvisioningInvalid`],
+//! [`HoldReason::StationCountRefused`]), as does a repeated pseudonym
 //! ([`HoldReason::DuplicatePseudonym`]) and a station whose identities do
 //! not hold ([`HoldReason::ParticipationMismatch`] and the issuance
 //! reasons). What is not yet on the ledger leaves the stage incomplete
@@ -52,8 +62,12 @@
 //!
 //! What this stage does not do yet: `ParticipationRestriction` (VC-094),
 //! `DuplicateIdentification` (VC-076), the counter's sequence across a
-//! unit swap (VC-073, restricted), and the subset check against the roll
-//! (§6.5 item 4, after the roll's pseudonym set is published).
+//! unit swap (VC-073, restricted), the subset check against the roll
+//! (§6.5 item 4, after the roll's pseudonym set is published), and the
+//! ceremony's `wrapped_module_count` against the party's modules. A set
+//! published before the amendment that adds its station is refused
+//! (`SetProblem::Station` needs the station in the last state, and the
+//! signing unit in a state up to the set's frame).
 
 use alloc::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use alloc::vec::Vec;
@@ -63,7 +77,7 @@ use ityv_crypto::Purpose;
 use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     ActorSigs, COMMITTEE_ACTOR, ChamberCode, CheckinUnit, Decode, HYBRID_SIG_LEN, HYBRID_VK_LEN,
-    Hash512, ModuleId, ModuleProvisioned, OrgId, PURPOSE_MODULE_PROVISIONED,
+    Hash512, ModuleId, ModuleProvisioned, ObserverCountKind, OrgId, PURPOSE_MODULE_PROVISIONED,
     PURPOSE_PARTICIPATION_SET, PURPOSE_PARTY_KEY, ParticipationSet, PartyKeyCeremony, RosterRole,
     SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
     SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT,
@@ -76,7 +90,7 @@ use ityv_state::{
 
 use crate::boxes::BoxStage;
 use crate::genesis::VerifiedGenesis;
-use crate::index::{IndexedEvent, LedgerIndex};
+use crate::index::{IndexedEvent, LedgerIndex, Scope};
 use crate::records::RecordStage;
 use crate::sigs::Material;
 
@@ -149,6 +163,20 @@ pub struct KeyFinding {
     pub problem: KeyProblem,
 }
 
+/// A station count that was not taken: an issuance count, or an observer
+/// count (periodic or final), whose signatures do not verify under the
+/// roster keys of the state in force at its frame or whose signers do not
+/// have the roles it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CountFinding<'a> {
+    /// The frame that carries it.
+    pub seq: Seq,
+    /// The station it names.
+    pub station_id: StationId<'a>,
+    /// Its body schema (`IssuanceCountBody` or `ObserverCountAttestBody`).
+    pub body_schema: SchemaId,
+}
+
 /// What the stage concluded about one station of the genesis's last
 /// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -159,14 +187,15 @@ pub struct StationParticipation<'a> {
     pub set: Option<Seq>,
     /// The number of pseudonyms in that set.
     pub count: Option<u32>,
-    /// The observers' final check-in count.
+    /// The observers' final check-in count (the last final count taken).
     pub observers: Option<u64>,
-    /// The frame of its last accepted issuance count.
+    /// The frame of its last issuance count taken.
     pub issuance: Option<Seq>,
     /// Whether every box of the station has a close.
     pub closed: bool,
     /// The station's holds: a count that is not the observers' final
-    /// count, the issuance verdict, a repeated pseudonym.
+    /// count, the issuance verdict, a repeated pseudonym, a station count
+    /// not taken.
     pub holds: HoldSet,
 }
 
@@ -185,6 +214,7 @@ pub struct ParticipationStage<'a> {
     stations: Vec<StationParticipation<'a>>,
     set_findings: Vec<SetFinding<'a>>,
     key_findings: Vec<KeyFinding>,
+    count_findings: Vec<CountFinding<'a>>,
     duplicates: u64,
     ceremonies: Vec<(ChamberCode, Seq)>,
     missing_ceremonies: Vec<ChamberCode>,
@@ -217,6 +247,13 @@ impl<'a> ParticipationStage<'a> {
     #[must_use]
     pub fn key_findings(&self) -> &[KeyFinding] {
         &self.key_findings
+    }
+
+    /// The station counts not taken, in frame order, of every station of
+    /// any genesis state.
+    #[must_use]
+    pub fn count_findings(&self) -> &[CountFinding<'a>] {
+        &self.count_findings
     }
 
     /// The repeated pseudonyms across the accepted sets: for each value,
@@ -279,8 +316,14 @@ struct Device<'a> {
 #[derive(Debug, Clone, Copy)]
 struct Pinned<'a> {
     module_id: ModuleId<'a>,
+    /// The chamber of the earliest state that pins the record.
     chamber: ChamberCode,
+    /// Whether every state that pins the record gives that chamber.
+    chamber_fixed: bool,
     device: Option<Device<'a>>,
+    /// Whether the module is a check-in unit's party module in some state
+    /// that pins the record.
+    party_unit: bool,
 }
 
 /// An accepted ceremony.
@@ -326,16 +369,20 @@ enum Actor<'a> {
 }
 
 impl<'a> Ctx<'_, 'a> {
-    /// The signer `actor_id` of a record of chamber `chamber` at frame
-    /// `seq`, with the key it signs with.
-    fn actor(
+    /// The keys the signer `actor_id` of a record of chamber `chamber` at
+    /// frame `seq` may sign with, each with who it makes the signer: the
+    /// committee's, a member of the chamber's, or an observer's in each
+    /// genesis state up to the frame, newest first (an amendment may give
+    /// an observer a new key; a record signed before it carries the old
+    /// one). Empty for anyone else.
+    fn actor_keys(
         &self,
         actor_id: &[u8],
         chamber: ChamberCode,
         seq: Seq,
-    ) -> Option<(Actor<'a>, &'a [u8; HYBRID_VK_LEN])> {
+    ) -> Vec<(Actor<'a>, &'a [u8; HYBRID_VK_LEN])> {
         if actor_id == COMMITTEE_ACTOR {
-            return Some((Actor::Committee, self.genesis.genesis().committee_key()));
+            return alloc::vec![(Actor::Committee, self.genesis.genesis().committee_key())];
         }
         if let Some(t) = self
             .genesis
@@ -343,20 +390,29 @@ impl<'a> Ctx<'_, 'a> {
             .find(|t| t.trustee_id.as_bytes() == actor_id)
         {
             return (t.chamber == chamber)
-                .then_some((Actor::Member(t.trustee_id.as_bytes()), t.key));
+                .then_some((Actor::Member(t.trustee_id.as_bytes()), t.key))
+                .into_iter()
+                .collect();
         }
         let last = self.index.state_at(seq);
-        self.observers
+        let mut keys: Vec<(Actor<'a>, &'a [u8; HYBRID_VK_LEN])> = self
+            .observers
             .iter()
             .take(last.saturating_add(1))
             .rev()
-            .find_map(|o| o.get(actor_id))
+            .filter_map(|o| o.get(actor_id))
             .map(|(org, key)| (Actor::Observer(org.as_bytes()), *key))
+            .collect();
+        // An entry the observer keeps across states is tried once.
+        keys.dedup();
+        keys
     }
 
     /// The signers of a record of chamber `chamber` at frame `seq`, each
-    /// signature verified over `message`; `None` if one is unknown, two
-    /// keys share a half, or a signature does not verify.
+    /// signature verified over `message` under one of the signer's keys;
+    /// `None` if a signature verifies under none of them (an unknown
+    /// signer has none), or the key it verifies under shares a half with
+    /// another signer's.
     fn signers(
         &self,
         sigs: &ActorSigs<'a>,
@@ -369,10 +425,11 @@ impl<'a> Ctx<'_, 'a> {
         let mut keys: Vec<&[u8; HYBRID_VK_LEN]> = Vec::new();
         let mut actors = Vec::new();
         for s in sigs.iter() {
-            let (actor, key) = self.actor(s.actor_id.as_bytes(), chamber, seq)?;
-            if keys.iter().any(|k| keys_share_half(k, key))
-                || !verifies(s.sig, key, &purpose, message)
-            {
+            let (actor, key) = self
+                .actor_keys(s.actor_id.as_bytes(), chamber, seq)
+                .into_iter()
+                .find(|(_, key)| verifies(s.sig, key, &purpose, message))?;
+            if keys.iter().any(|k| keys_share_half(k, key)) {
                 return None;
             }
             keys.push(key);
@@ -453,7 +510,9 @@ fn ceremony<'a>(
 /// The module entries every genesis state pins a provisioning record
 /// for, by module and record hash, with the device that lists the module
 /// in the earliest state that both pins the record and lists the module
-/// (none for a module no such state lists: a spare).
+/// (none for a module no such state lists: a spare), whether the states
+/// that pin it agree on its chamber, and whether one of them makes it a
+/// check-in unit's party module.
 fn pinned<'a>(genesis: &VerifiedGenesis<'a>) -> BTreeMap<(&'a [u8], [u8; 64]), Pinned<'a>> {
     let mut out = BTreeMap::new();
     for state in 0..genesis.state_count() {
@@ -488,11 +547,16 @@ fn pinned<'a>(genesis: &VerifiedGenesis<'a>) -> BTreeMap<(&'a [u8], [u8; 64]), P
                 .or_insert(Pinned {
                     module_id: m.module_id,
                     chamber: m.chamber,
+                    chamber_fixed: true,
                     device: None,
+                    party_unit: false,
                 });
+            let device = devices.get(m.module_id.as_bytes()).copied();
             if pin.device.is_none() {
-                pin.device = devices.get(m.module_id.as_bytes()).copied();
+                pin.device = device;
             }
+            pin.chamber_fixed &= pin.chamber == m.chamber;
+            pin.party_unit |= device.is_some_and(|d| d.checkin_unit) && is_party_chamber(m.chamber);
         }
     }
     out
@@ -532,7 +596,8 @@ fn provisioning<'a>(
         }
     });
     let device_ok = device.is_some_and(|d| d.id == named);
-    if pin.chamber != p.chamber || !device_ok || members != Some(p.member_count) {
+    let chamber_ok = pin.chamber_fixed && pin.chamber == p.chamber;
+    if !chamber_ok || !device_ok || members != Some(p.member_count) {
         return Err(KeyProblem::Fields);
     }
     let actors = ctx
@@ -550,7 +615,12 @@ fn provisioning<'a>(
     if p.entropy_commitment == Hash512::ZERO {
         return Err(KeyProblem::EntropyCommitment);
     }
-    let party_unit_module = device.is_some_and(|d| d.checkin_unit) && is_party_chamber(p.chamber);
+    // A check-in unit's party module in any state that pins the record
+    // (or, for a spare, the unit its record names) needs the key check.
+    let party_unit_module = pin.party_unit
+        || (pin.device.is_none()
+            && device.is_some_and(|d| d.checkin_unit)
+            && is_party_chamber(p.chamber));
     let check_ok = if party_unit_module {
         let expected = ceremonies.get(&p.chamber).map(|c| c.prf_key_check);
         p.se_present
@@ -621,31 +691,77 @@ fn set_signatures(
     }
 }
 
-/// The last witnessed event of `body_schema` among the station's events
-/// that `accept` takes, with its result, verified under the roster of the
-/// state in force at its frame.
-fn last_witnessed<'a, R>(
-    ctx: &Ctx<'_, 'a>,
-    station_id: &[u8],
-    body_schema: SchemaId,
-    accept: impl Fn(&Signed<'_>, &[RosterEntry<'_>]) -> Option<R>,
-) -> Option<(Seq, R)> {
-    let mut last = None;
-    for e in ctx.index.station_events(station_id) {
+/// A station's last counts taken.
+#[derive(Debug, Clone, Copy, Default)]
+struct Counts {
+    /// The last final observer count: frame and total.
+    observers: Option<(Seq, u64)>,
+    /// The frame of the last issuance count.
+    issuance: Option<Seq>,
+    /// Whether one of the station's counts was not taken.
+    refused: bool,
+}
+
+/// What a station count gives when it is taken.
+enum Taken {
+    Issuance,
+    Final(u64),
+    Periodic,
+}
+
+/// Every station count on the ledger, in frame order, verified under the
+/// roster of the state in force at its frame: each station's last counts
+/// taken, and the counts not taken. A count not taken is never skipped:
+/// a later one that is taken does not hide it.
+fn station_counts<'a>(ctx: &Ctx<'_, 'a>) -> (BTreeMap<&'a [u8], Counts>, Vec<CountFinding<'a>>) {
+    let election = ctx.genesis.election_id();
+    let mut counts: BTreeMap<&'a [u8], Counts> = BTreeMap::new();
+    let mut findings = Vec::new();
+    for e in ctx.index.events() {
+        let Scope::Station(station_id) = e.scope else {
+            continue;
+        };
         if e.schema != SCHEMA_WITNESSED_EVENT {
             continue;
         }
+        // The index decoded the event, and its body, to scope it.
         let Some(event) = decode::<WitnessedEvent<'a>>(e) else {
             continue;
         };
-        if event.body_schema() != body_schema {
+        let body = event.body_schema();
+        let taken = if body == SCHEMA_ISSUANCE_COUNT_BODY {
+            with_signed(ctx, e.seq, &event, |s, r| {
+                IssuanceCount::check(s, r).ok().map(|_| Taken::Issuance)
+            })
+        } else if body == SCHEMA_OBSERVER_COUNT_ATTEST_BODY {
+            with_signed(ctx, e.seq, &event, |s, r| {
+                let count = ObserverCount::check(s, r).ok()?;
+                match count.parts().kind {
+                    ObserverCountKind::Periodic => Some(Taken::Periodic),
+                    ObserverCountKind::Final => {
+                        count.final_total(election, station_id).map(Taken::Final)
+                    }
+                }
+            })
+        } else {
             continue;
-        }
-        if let Some(r) = with_signed(ctx, e.seq, &event, &accept) {
-            last = Some((e.seq, r));
+        };
+        let station = counts.entry(station_id.as_bytes()).or_default();
+        match taken {
+            Some(Taken::Issuance) => station.issuance = Some(e.seq),
+            Some(Taken::Final(total)) => station.observers = Some((e.seq, total)),
+            Some(Taken::Periodic) => {}
+            None => {
+                station.refused = true;
+                findings.push(CountFinding {
+                    seq: e.seq,
+                    station_id,
+                    body_schema: body,
+                });
+            }
         }
     }
-    last
+    (counts, findings)
 }
 
 /// Runs `f` on the witnessed event at frame `seq` with its tokens, made
@@ -710,38 +826,32 @@ fn totals(
     Some(t)
 }
 
-/// One station's report.
+/// One station's report, with its counts taken.
 fn station_report<'a>(
     ctx: &Ctx<'_, 'a>,
     station_id: StationId<'a>,
     set: Option<(Seq, u32)>,
+    counts: Counts,
     boxes: &BoxStage<'a>,
     records: &RecordStage<'a>,
 ) -> StationParticipation<'a> {
     let id = station_id.as_bytes();
-    let election = ctx.genesis.election_id();
-    let observers = last_witnessed(ctx, id, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, |s, r| {
-        ObserverCount::check(s, r)
-            .ok()?
-            .final_total(election, station_id)
-    });
-    let issuance = last_witnessed(ctx, id, SCHEMA_ISSUANCE_COUNT_BODY, |s, r| {
-        IssuanceCount::check(s, r).ok().map(|_| ())
-    });
     let totals = totals(ctx.genesis, id, boxes, records);
-    let mut holds = HoldSet::empty();
-    if let (Some((_, count)), Some((_, total))) = (set, observers) {
+    let mut holds = HoldSet::empty().with_if(counts.refused, HoldReason::StationCountRefused);
+    if let (Some((_, count)), Some((_, total))) = (set, counts.observers) {
         holds = holds.with_if(u64::from(count) != total, HoldReason::ParticipationMismatch);
     }
-    if let (Some((obs_seq, _)), Some((iss_seq, ())), Some(t)) = (observers, issuance, totals) {
+    if let (Some((obs_seq, _)), Some(iss_seq), Some(t)) =
+        (counts.observers, counts.issuance, totals)
+    {
         holds = holds.union(issuance_holds(ctx, id, obs_seq, iss_seq, &t));
     }
     StationParticipation {
         station_id,
         set: set.map(|(seq, _)| seq),
         count: set.map(|(_, count)| count),
-        observers: observers.map(|(_, total)| total),
-        issuance: issuance.map(|(seq, ())| seq),
+        observers: counts.observers.map(|(_, total)| total),
+        issuance: counts.issuance,
         closed: totals.is_some(),
         holds,
     }
@@ -936,6 +1046,9 @@ pub fn verify_participation<'a>(
         .map(|(_, id)| *id)
         .collect();
 
+    // 4. Station counts.
+    let (counts, count_findings) = station_counts(&ctx);
+
     let stations: Vec<StationParticipation<'a>> = genesis
         .stations()
         .map(|s| {
@@ -943,7 +1056,8 @@ pub fn verify_participation<'a>(
             let set = accepted
                 .get(id.as_bytes())
                 .map(|(seq, set)| (*seq, set.count()));
-            let mut report = station_report(&ctx, id, set, boxes, records);
+            let station_counts = counts.get(id.as_bytes()).copied().unwrap_or_default();
+            let mut report = station_report(&ctx, id, set, station_counts, boxes, records);
             report.holds = report.holds.with_if(
                 marked_stations.contains(id.as_bytes()),
                 HoldReason::DuplicatePseudonym,
@@ -965,7 +1079,8 @@ pub fn verify_participation<'a>(
         .collect();
 
     // A repeated pseudonym holds every station that has it (all accepted
-    // sets are of stations of the last state), so the fold carries it.
+    // sets are of stations of the last state), so the fold carries it. A
+    // count not taken may be of a station the last state lacks.
     let holds = stations
         .iter()
         .fold(HoldSet::empty(), |acc, s| acc.union(s.holds))
@@ -973,11 +1088,13 @@ pub fn verify_participation<'a>(
             !set_findings.is_empty(),
             HoldReason::ParticipationSetInvalid,
         )
-        .with_if(!key_findings.is_empty(), HoldReason::KeyProvisioningInvalid);
+        .with_if(!key_findings.is_empty(), HoldReason::KeyProvisioningInvalid)
+        .with_if(!count_findings.is_empty(), HoldReason::StationCountRefused);
     ParticipationStage {
         stations,
         set_findings,
         key_findings,
+        count_findings,
         duplicates,
         ceremonies: ceremonies.iter().map(|(c, x)| (*c, x.seq)).collect(),
         missing_ceremonies,

@@ -44,9 +44,9 @@ use ityv_encoding::{
 };
 use ityv_state::{HoldReason, HoldSet};
 use ityv_verify::{
-    KeyProblem, LedgerIndex, ParticipationStage, Scope as EventScope, SetProblem,
-    StationParticipation, VerifiedGenesis, authorize_ledger, build_index, verify_boxes,
-    verify_genesis, verify_participation, verify_records,
+    BoxStage, CountFinding, KeyProblem, LedgerIndex, ParticipationStage, Refusal,
+    Scope as EventScope, SetProblem, StationParticipation, VerifiedGenesis, authorize_ledger,
+    build_index, verify_boxes, verify_genesis, verify_participation, verify_records,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
@@ -189,7 +189,12 @@ enum Flaw {
     OneOrg,
     Forged,
     Stranger,
+    /// Observer `obs-a` signs with the key `rotate_observer` gives them.
+    NewObserverKey,
 }
+
+/// The key number `rotate_observer` gives observer `obs-a`.
+const NEW_OBS_A: u16 = ROSTER_BASE + 20;
 
 /// The provisioning record of module `n`, with `flaw` if any.
 fn provisioning(n: usize, flaw: Option<Flaw>) -> &'static [u8] {
@@ -246,6 +251,7 @@ fn provisioning_of(module: &Module, flaw: Option<Flaw>) -> &'static [u8] {
         Some(Flaw::OneOrg) => signers.retain(|s| s.0 != b"obs-b"),
         Some(Flaw::Forged) => signers[0].1 = signing(SPARE_BASE),
         Some(Flaw::Stranger) => signers.push((b"T-J", trustee_signing(4))),
+        Some(Flaw::NewObserverKey) => signers[2].1 = signing(NEW_OBS_A),
         _ => {}
     }
     let sigs = actor_sigs(&signers, b"module-provisioned", message);
@@ -456,6 +462,18 @@ fn witnessed(
     who: &[(&'static [u8], EventRole)],
     device: Option<(&'static [u8], u16)>,
 ) -> &'static [u8] {
+    witnessed_keyed(schema, body, who, device, None)
+}
+
+/// As [`witnessed`]; with `forger`, every person's signature is made
+/// with that roster key number instead of their own.
+fn witnessed_keyed(
+    schema: SchemaId,
+    body: &'static [u8],
+    who: &[(&'static [u8], EventRole)],
+    device: Option<(&'static [u8], u16)>,
+    forger: Option<u16>,
+) -> &'static [u8] {
     let purpose = purpose_of(schema).unwrap();
     let person = |name: &[u8]| -> (&'static [u8], u16) {
         match name {
@@ -469,7 +487,7 @@ fn witnessed(
         .iter()
         .map(|&(name, role)| {
             let (o, n) = person(name);
-            (name, role, o, ROSTER_BASE + n)
+            (name, role, o, ROSTER_BASE + forger.unwrap_or(n))
         })
         .collect();
     if let Some((box_id, n)) = device {
@@ -596,6 +614,18 @@ fn observer_count(
     count: u64,
     kind: ObserverCountKind,
 ) -> &'static [u8] {
+    observer_count_by(station, unit, count, kind, &OBSERVERS, None)
+}
+
+/// As [`observer_count`], signed by `who`, with `forger`'s key when given.
+fn observer_count_by(
+    station: &'static [u8],
+    unit: &'static [u8],
+    count: u64,
+    kind: ObserverCountKind,
+    who: &[(&'static [u8], EventRole)],
+    forger: Option<u16>,
+) -> &'static [u8] {
     let body = ObserverCountAttestBody::new(&ObserverCountParts {
         election_id: election(),
         station_id: StationId::new(station).unwrap(),
@@ -605,12 +635,23 @@ fn observer_count(
         time_bucket: TimeBucket::new(CLOSE_BUCKET),
     });
     let body = object(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, &body);
-    witnessed(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, body, &OBSERVERS, None)
+    witnessed_keyed(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, body, who, None, forger)
 }
 
 /// The issuance count of `station`: `issued` ballots, `spoiled` of them
 /// spoiled by voters, a stock of 10.
 fn issuance(station: &'static [u8], issued: u64, spoiled: u64) -> &'static [u8] {
+    issuance_by(station, issued, spoiled, &WITNESSES, None)
+}
+
+/// As [`issuance`], signed by `who`, with `forger`'s key when given.
+fn issuance_by(
+    station: &'static [u8],
+    issued: u64,
+    spoiled: u64,
+    who: &[(&'static [u8], EventRole)],
+    forger: Option<u16>,
+) -> &'static [u8] {
     let body = IssuanceCountBody::new(&IssuanceCountParts {
         election_id: election(),
         station_id: StationId::new(station).unwrap(),
@@ -624,7 +665,7 @@ fn issuance(station: &'static [u8], issued: u64, spoiled: u64) -> &'static [u8] 
         time_bucket: TimeBucket::new(CLOSE_BUCKET),
     });
     let body = object(SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_VERSION_1, &body);
-    witnessed(SCHEMA_ISSUANCE_COUNT_BODY, body, &WITNESSES, None)
+    witnessed_keyed(SCHEMA_ISSUANCE_COUNT_BODY, body, who, None, forger)
 }
 
 /// The check-in units: identifier, key number, party modules (key
@@ -764,6 +805,7 @@ fn clean(world: &World) -> Vec<(SchemaId, &'static [u8])> {
 
 struct Run {
     index: &'static LedgerIndex<'static>,
+    boxes: &'static BoxStage<'static>,
     stage: ParticipationStage<'static>,
 }
 
@@ -782,6 +824,7 @@ fn run_in(world: &World, events: &[(SchemaId, &'static [u8])]) -> Run {
     let records = leak(verify_records(world.genesis, index, boxes));
     Run {
         index,
+        boxes,
         stage: verify_participation(world.genesis, index, boxes, records),
     }
 }
@@ -805,6 +848,7 @@ fn a_clean_election_is_complete_and_holds_nothing() {
     assert_eq!(stage.holds(), HoldSet::empty());
     assert!(stage.set_findings().is_empty());
     assert!(stage.key_findings().is_empty());
+    assert!(stage.count_findings().is_empty());
     assert_eq!(stage.duplicates(), 0);
     assert!(stage.missing_ceremonies().is_empty());
     assert!(stage.missing_provisioning().is_empty());
@@ -839,15 +883,11 @@ fn the_index_scopes_the_new_events() {
             .iter()
             .all(|s| *s == EventScope::Election)
     );
+    // Provisioning records concern the election, not their device: they
+    // may come before the amendment that adds it.
     let provisioning = scope_of(SCHEMA_MODULE_PROVISIONED);
-    assert_eq!(
-        provisioning[0],
-        EventScope::Box(BoxId::new(b"BOX-1").unwrap())
-    );
-    assert_eq!(
-        provisioning[8],
-        EventScope::Station(StationId::new(b"ST-1").unwrap())
-    );
+    assert_eq!(provisioning.len(), MODULES.len());
+    assert!(provisioning.iter().all(|s| *s == EventScope::Election));
     assert_eq!(
         scope_of(SCHEMA_PARTICIPATION_SET),
         [
@@ -1444,4 +1484,261 @@ fn a_spare_module_names_a_device_of_the_genesis() {
         run.stage.missing_provisioning()[0].0.as_bytes(),
         b"M-SPARE-P2"
     );
+}
+
+// ---------------------------------------------------------------------
+// Station counts not taken.
+
+/// The station counts not taken: frame, station, body schema.
+fn count_problems(run: &Run) -> Vec<(u64, &'static [u8], SchemaId)> {
+    run.stage
+        .count_findings()
+        .iter()
+        .map(|f: &CountFinding<'static>| (f.seq.get(), f.station_id.as_bytes(), f.body_schema))
+        .collect()
+}
+
+/// An observer count's signers, one of them a clerk on the roster.
+const MISCAST_OBSERVERS: [(&[u8], EventRole); 2] = [
+    (b"clerk-1", EventRole::Observer),
+    (b"obs-a", EventRole::Observer),
+];
+
+/// An issuance count's signers: a clerk and an observer on the roster
+/// trade roles.
+const MISCAST_WITNESSES: [(&[u8], EventRole); 4] = [
+    (b"clerk-1", EventRole::Clerk),
+    (b"clerk-2", EventRole::Observer),
+    (b"obs-a", EventRole::Observer),
+    (b"obs-b", EventRole::Clerk),
+];
+
+/// The frame of `events[i]` (after the genesis and the authorization).
+fn frame(i: usize) -> u64 {
+    3 + i as u64
+}
+
+#[test]
+fn a_station_count_not_taken_is_listed_and_held_whatever_follows() {
+    let world = world();
+    let mut events = key_events(world);
+    let first = events.len();
+    events.extend(station_events());
+    // Before ST-1's final count: a final count of 999 whose obs-b
+    // signature is made with obs-a's key.
+    events.insert(
+        first + 3,
+        w(observer_count_by(
+            b"ST-1",
+            b"U-1A",
+            999,
+            ObserverCountKind::Final,
+            &OBSERVERS,
+            Some(2),
+        )),
+    );
+    // After the counts: a periodic count signed the same way, and a final
+    // count and an issuance count whose signatures verify but whose
+    // signers claim roles the roster does not give them.
+    let tail = events.len();
+    events.extend([
+        w(observer_count_by(
+            b"ST-1",
+            b"U-1A",
+            2,
+            ObserverCountKind::Periodic,
+            &OBSERVERS,
+            Some(2),
+        )),
+        w(observer_count_by(
+            b"ST-1",
+            b"U-1A",
+            3,
+            ObserverCountKind::Final,
+            &MISCAST_OBSERVERS,
+            None,
+        )),
+        w(issuance_by(b"ST-1", 4, 1, &MISCAST_WITNESSES, None)),
+    ]);
+    events.extend(sets());
+    let run = go(&events);
+    assert_eq!(
+        count_problems(&run),
+        [
+            (
+                frame(first + 3),
+                b"ST-1".as_slice(),
+                SCHEMA_OBSERVER_COUNT_ATTEST_BODY
+            ),
+            (frame(tail), b"ST-1", SCHEMA_OBSERVER_COUNT_ATTEST_BODY),
+            (frame(tail + 1), b"ST-1", SCHEMA_OBSERVER_COUNT_ATTEST_BODY),
+            (frame(tail + 2), b"ST-1", SCHEMA_ISSUANCE_COUNT_BODY),
+        ]
+    );
+    // The identities use the counts taken: 3 and the issuance count.
+    let st1 = run.stage.station(b"ST-1").unwrap();
+    assert_eq!(st1.observers, Some(3));
+    assert_eq!(st1.issuance.unwrap().get(), frame(first + 6));
+    assert!(st1.complete());
+    assert_eq!(st1.holds, only(HoldReason::StationCountRefused));
+    assert_eq!(run.stage.station(b"ST-2").unwrap().holds, HoldSet::empty());
+    assert_eq!(run.stage.holds(), only(HoldReason::StationCountRefused));
+}
+
+#[test]
+fn a_count_not_taken_of_a_station_the_last_state_lacks_still_holds() {
+    let world = leak(amended_world(&[], Some(rename_station)));
+    let mut events = key_events(world);
+    events.push(w(issuance_by(b"ST-2", 2, 0, &WITNESSES, Some(3))));
+    let at = events.len() - 1;
+    events.push((SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()));
+    let run = go_in(world, &events);
+    assert_eq!(
+        count_problems(&run),
+        [(frame(at), b"ST-2".as_slice(), SCHEMA_ISSUANCE_COUNT_BODY)]
+    );
+    assert!(run.stage.station(b"ST-2").is_none());
+    assert!(
+        run.stage
+            .stations()
+            .iter()
+            .all(|s| s.holds == HoldSet::empty())
+    );
+    assert_eq!(run.stage.holds(), only(HoldReason::StationCountRefused));
+}
+
+// ---------------------------------------------------------------------
+// Amendments of observers and modules.
+
+/// Observer `obs-a` gets a new roster key.
+fn rotate_observer(d: &mut Draft) {
+    d.roster[2].key = common::registered(NEW_OBS_A);
+}
+
+#[test]
+fn an_observer_signs_with_a_key_of_any_state_up_to_the_frame() {
+    // Module 0's record is signed with obs-a's new key, every other
+    // record and the ceremonies with the old one.
+    let world = leak(amended_world(
+        &[(0, Flaw::NewObserverKey)],
+        Some(rotate_observer),
+    ));
+    // After the amendment, both keys verify.
+    let mut events = std::vec![(SCHEMA_SIGNED_GENESIS, world.amendment.unwrap())];
+    events.extend(key_events(world));
+    let run = go_in(world, &events);
+    assert!(run.stage.key_findings().is_empty());
+    assert!(run.stage.missing_ceremonies().is_empty());
+    assert!(run.stage.missing_provisioning().is_empty());
+    // Before it, the new key does not.
+    let mut events = key_events(world);
+    events.push((SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()));
+    let run = go_in(world, &events);
+    assert_eq!(
+        key_problems(&run),
+        [(frame(2), SCHEMA_MODULE_PROVISIONED, KeyProblem::Signature)]
+    );
+    assert_eq!(run.stage.missing_provisioning().len(), 1);
+}
+
+/// `M-B1-P1` and `M-U1A-P1` change places: the box module becomes a
+/// party module of check-in unit `U-1A`, under the same pinned record.
+fn swap_box_and_unit_module(d: &mut Draft) {
+    d.boxes[0] = common::genesis_box(0, b"BOX-1", b"ST-1", b"RU-1", &[b"M-U1A-P1", b"M-B1-P2"]);
+    d.stations[0] = common::station(
+        b"ST-1",
+        StationKind::ElectionDay,
+        common::checkin_unit(0, b"U-1A", &[b"M-B1-P1", b"M-U1A-P2"]),
+        common::checkin_unit(1, b"U-1B", &[b"M-U1B-P1", b"M-U1B-P2"]),
+        &[b"BOX-1", b"BOX-2"],
+        &[
+            common::token(b"obs-a", b"PARTY-A", 0xC1),
+            common::token(b"obs-b", b"PARTY-B", 0xC2),
+        ],
+    );
+}
+
+#[test]
+fn a_record_a_unit_party_module_takes_in_any_state_needs_its_key_check() {
+    let world = leak(amended_world(&[], Some(swap_box_and_unit_module)));
+    let mut events = key_events(world);
+    events.push((SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()));
+    let run = go_in(world, &events);
+    // M-B1-P1's record (a box's: no secure element, no check) is refused;
+    // M-U1A-P1's (a unit's, with its check) stays good in a box.
+    assert_eq!(
+        key_problems(&run),
+        [(frame(2), SCHEMA_MODULE_PROVISIONED, KeyProblem::KeyCheck)]
+    );
+}
+
+/// `M-B2-J` becomes a module of chamber A, under the same pinned record.
+fn rechamber_module(d: &mut Draft) {
+    d.modules[4].chamber = ChamberCode::A;
+}
+
+#[test]
+fn every_state_that_pins_a_record_must_give_its_chamber() {
+    let world = leak(amended_world(&[], Some(rechamber_module)));
+    let mut events = key_events(world);
+    events.push((SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()));
+    let run = go_in(world, &events);
+    assert_eq!(
+        key_problems(&run),
+        [(frame(6), SCHEMA_MODULE_PROVISIONED, KeyProblem::Fields)]
+    );
+}
+
+/// Box `BOX-4` of `ST-2` comes with modules `M-B4-P1` and `M-B4-P2`.
+fn add_box(d: &mut Draft) {
+    d.boxes.push(common::genesis_box(
+        3,
+        b"BOX-4",
+        b"ST-2",
+        b"RU-2",
+        &[b"M-B4-P1", b"M-B4-P2"],
+    ));
+    d.stations[1] = common::station(
+        b"ST-2",
+        StationKind::EarlyVoting,
+        common::checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        common::checkin_unit(3, b"U-2B", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        &[b"BOX-3", b"BOX-4"],
+        &[],
+    );
+    d.units[1] = ityv_encoding::ReportingUnitEntry::new(
+        ityv_encoding::ReportingUnitId::new(b"RU-2").unwrap(),
+        2,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_record_before_the_amendment_that_adds_its_box_is_taken() {
+    // The modules are spares of the first state; the amendment puts them
+    // in BOX-4. Their records come first, as made.
+    let world = leak(spare_world(
+        &[],
+        Some(add_box),
+        &[
+            (m(b"M-B4-P1", ChamberCode::P1, b"BOX-4", false), 16),
+            (m(b"M-B4-P2", ChamberCode::P2, b"BOX-4", false), 17),
+        ],
+    ));
+    let mut events = key_events(world);
+    events.push((SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()));
+    let run = go_in(world, &events);
+    assert!(run.stage.key_findings().is_empty());
+    assert!(run.stage.missing_provisioning().is_empty());
+    // The box's stage never sees them.
+    let report = run.boxes.report(b"BOX-4").unwrap();
+    assert!(
+        !report
+            .refusals
+            .iter()
+            .any(|r| r.refusal == Refusal::Unexpected),
+        "{:?}",
+        report.refusals
+    );
+    assert!(!report.holds.contains(HoldReason::BoxEventRefused));
 }

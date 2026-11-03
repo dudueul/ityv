@@ -485,10 +485,12 @@ fn classify<'a>(
         let p = decode::<ParticipationSet<'a>>(schema, bytes)?;
         Classified::new(Scope::Station(p.station_id()), Role::Other, p.election_id())
     } else if schema == SCHEMA_MODULE_PROVISIONED {
-        // The module's device: its box, or its station's check-in unit.
+        // The election, not the module's device: the record is made
+        // before the election and may come before the amendment that adds
+        // its device, where a box's stage would refuse it. The
+        // participation stage reads every record.
         let m = decode::<ModuleProvisioned<'a>>(schema, bytes)?;
-        let scope = device_scope(genesis, m.parts().device_id.as_bytes());
-        Classified::new(scope, Role::Other, m.parts().election_id)
+        Classified::new(Scope::Election, Role::Other, m.parts().election_id)
     } else if schema == SCHEMA_PARTY_KEY_CEREMONY {
         let c = decode::<PartyKeyCeremony<'a>>(schema, bytes)?;
         Classified::new(Scope::Election, Role::Other, c.message().election_id())
