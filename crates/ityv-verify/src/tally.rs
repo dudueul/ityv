@@ -121,10 +121,11 @@ use ityv_encoding::{
     AggregateOpeningParts, BallotStyleId, BoxClose, CaptureProfile, CastRecord, ChallengeOpening,
     Decode, DisputeType, ExclusionReason, GenesisBox, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512,
     MAX_QUORUM_MESSAGE_LEN, PaperCountParts, PaperCountReportBody, QuorumKind, QuorumSigned,
-    ReceiptOutcome, ReceiptResolutionParts, ReportingUnitEntry, ReportingUnitId, SCHEMA_BOX_CLOSE,
-    SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_LATE_BATCH_CLOSE_BODY,
-    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
-    TallyEffect, TallyScopeParts, TimeBucket, TrusteeEntry, WitnessedEvent, decode_object,
+    ReceiptOutcome, ReceiptResolutionParts, ReportingUnitEntry, ReportingUnitId,
+    SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
+    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
+    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TallyEffect, TallyScopeParts, TimeBucket, TrusteeEntry,
+    WitnessedEvent, decode_object,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{
@@ -483,7 +484,9 @@ struct BoxInfo<'a> {
     /// The resolution taken: its frame and body hash.
     resolution: Option<(Seq, Hash512)>,
     /// The frames of the late closes taken: every close after the first,
-    /// and every late batch close.
+    /// every late batch close, and every batch attestation after the first
+    /// close (the box stage pairs a late batch close with its batch in
+    /// either order, so the later of the two completes it).
     late: Vec<Seq>,
     records: Vec<Rec<'a>>,
 }
@@ -557,6 +560,10 @@ fn box_info<'a>(
                     info.late.push(e.seq);
                 }
                 info.effective = Some((e.hash, body.counts().without_record));
+            }
+        } else if e.schema == SCHEMA_BATCH_ATTEST {
+            if info.close.is_some() {
+                info.late.push(e.seq);
             }
         } else if e.schema == SCHEMA_WITNESSED_EVENT {
             let late_batch = decode::<WitnessedEvent<'a>>(e.schema, bytes)

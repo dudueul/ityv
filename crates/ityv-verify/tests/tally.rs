@@ -1488,12 +1488,15 @@ fn a_late_close_after_a_scope_of_its_style_is_refused() {
     // the window it declares); after it, the scope has fixed UNATTESTED.
     let at = book.q(scope(scope_body(&s)));
     let late_batch = batch_at(B1, 1, 2, 3, &[test.code, late.code], CLOSE_BUCKET + 5);
-    book.push(SCHEMA_BATCH_ATTEST, late_batch);
+    let batch_seq = book.push(SCHEMA_BATCH_ATTEST, late_batch);
     let late_close = book.w(late_batch_close(late_batch, CLOSE_BUCKET + 5));
     let stage = book.run();
     assert_eq!(
         refused(&stage),
-        [(late_close, TallyEvent::LateClose, TallyRefusal::AfterScope)]
+        [
+            (batch_seq, TallyEvent::LateClose, TallyRefusal::AfterScope),
+            (late_close, TallyEvent::LateClose, TallyRefusal::AfterScope),
+        ]
     );
     let u = unit1(&stage);
     assert_eq!(u.scope.map(Seq::get), Some(at));
@@ -1501,6 +1504,35 @@ fn a_late_close_after_a_scope_of_its_style_is_refused() {
     assert!(stage.holds().contains(HoldReason::LateCloseAfterScope));
     // The record stage took the late batch: the scope no longer agrees.
     assert!(u.holds.contains(HoldReason::TallyScopeMismatch));
+    // The late batch close before the scope, its batch after it: the
+    // pair is completed after the scope, and the batch's frame is refused.
+    let mut book = Book::new(world());
+    let (kept, test, late, closed) = mixed(&mut book);
+    let late_batch = batch_at(B1, 1, 2, 3, &[test.code, late.code], CLOSE_BUCKET + 5);
+    book.w(late_batch_close(late_batch, CLOSE_BUCKET + 5));
+    let mut s = spec(STYLE1, RU1, &[kept.code]);
+    s.no_record = 1;
+    s.exclusions = std::vec![
+        exclusion(
+            test.code,
+            ExclusionReason::TestBallot,
+            object_hash(test.event)
+        ),
+        exclusion(late.code, ExclusionReason::Unattested, closed),
+    ];
+    book.q(scope(scope_body(&s)));
+    let batch_after = book.push(SCHEMA_BATCH_ATTEST, late_batch);
+    let stage = book.run();
+    assert_eq!(
+        refused(&stage),
+        [(batch_after, TallyEvent::LateClose, TallyRefusal::AfterScope)]
+    );
+    assert!(
+        unit1(&stage)
+            .holds
+            .contains(HoldReason::LateCloseAfterScope)
+    );
+
     // A scope of another style does not refuse BOX-1's late closes.
     let mut book = Book::new(world());
     mixed(&mut book);
