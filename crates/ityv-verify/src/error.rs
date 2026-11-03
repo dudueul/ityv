@@ -78,6 +78,10 @@ pub enum Rule {
     SharedModule,
     /// A chamber's trustees are not exactly its `n_c` members (VC-067).
     Trustees,
+    /// A chamber has more members than threshold sharing can serve
+    /// (`n_c` ≤ 8, `ityv_crypto::MAX_MEMBERS`): no quorum of it could ever
+    /// be checked, so every tally event would be refused.
+    ChamberSize,
     /// An observer token names someone who is not an observer of the
     /// token's organisation at the token's station on the roster, or its
     /// check key is another token's.

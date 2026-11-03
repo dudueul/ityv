@@ -847,7 +847,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 | 9 | `committee_key` | `[u8; 2624]` | 위원회 하이브리드 공개키. 선관위 키와 반쪽 하나라도 같으면 `InvariantViolation` |
 | 10 | `quorum` | `u8` × 6 | `n`, `q`, `f`, 조직·공급자·지역 하한. `13 ≤ n ≤ 64`, `9 ≤ q ≤ n`, `2q − n > f`, 하한은 7·4·3 이상 `q` 이하(아니면 `ValueOutOfRange`) |
 | 11 | `parties` | `Array<{chamber: u8, name: Bytes<128>, seats: u16, evidence_hash: Hash512}, 4>` | 2–4개(1개 이하 `InvariantViolation`), i번째의 `chamber`는 `P(i+1)`, 이름은 비지 않은 UTF-8(아니면 `ValueOutOfRange`), 의석 내림차순(어기면 `InvariantViolation`, VC-067), `evidence_hash` 0이 아님 |
-| 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`) |
+| 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`). `members`가 8을 넘는 genesis는 검증기가 받지 않는다(임계 분산의 용량, `Rule::ChamberSize`, ADR-0035) |
 | 13 | `sets` | `{count: u64, root: Hash512}` × 11 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
 
 집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`). 1–8은 변경할 수 있고 9–11은 선거 동안 고정이다.

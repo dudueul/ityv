@@ -481,6 +481,52 @@ fn refuses_trustees_that_do_not_fill_their_chambers() {
 }
 
 #[test]
+fn refuses_a_chamber_larger_than_threshold_sharing_serves() {
+    // J with nine members and nine trustees: every other rule holds, but
+    // no quorum of nine could be shared or checked.
+    let mut draft = Draft::standard();
+    for c in &mut draft.chambers {
+        if c.chamber == ChamberCode::J {
+            c.members = 9;
+        }
+    }
+    let names: [&'static [u8]; 8] = [
+        b"T-J2", b"T-J3", b"T-J4", b"T-J5", b"T-J6", b"T-J7", b"T-J8", b"T-J9",
+    ];
+    for (i, name) in names.iter().enumerate() {
+        draft.trustees.push(ityv_encoding::TrusteeEntry {
+            trustee_id: ityv_encoding::TrusteeId::new(name).unwrap(),
+            chamber: ChamberCode::J,
+            org_id: common::org(b"TRUST-ORG"),
+            key: common::registered(common::SPARE_BASE + i as u16),
+            appointment_hash: common::appointment(120 + i as u8),
+        });
+    }
+    draft.appointments = draft.referenced_appointments();
+    let err = verify(&draft).unwrap_err();
+    assert_eq!(err.set, Some(EntrySet::Trustees));
+    assert_eq!(err.rule, Rule::ChamberSize);
+    // Eight is the most.
+    let mut draft = Draft::standard();
+    for c in &mut draft.chambers {
+        if c.chamber == ChamberCode::J {
+            c.members = 8;
+        }
+    }
+    for (i, name) in names.iter().take(7).enumerate() {
+        draft.trustees.push(ityv_encoding::TrusteeEntry {
+            trustee_id: ityv_encoding::TrusteeId::new(name).unwrap(),
+            chamber: ChamberCode::J,
+            org_id: common::org(b"TRUST-ORG"),
+            key: common::registered(common::SPARE_BASE + i as u16),
+            appointment_hash: common::appointment(120 + i as u8),
+        });
+    }
+    draft.appointments = draft.referenced_appointments();
+    assert!(verify(&draft).is_ok());
+}
+
+#[test]
 fn refuses_an_observer_token_of_someone_else() {
     let mut draft = Draft::standard();
     // The token names clerk-1, who is not an observer.
