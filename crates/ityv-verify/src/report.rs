@@ -17,6 +17,9 @@
 //!    `SOURCE_COMPLETENESS_CHECKED` from `LOG_CONSISTENT`, so a box still
 //!    open is not a hold);
 //! 5. records ([`crate::verify_records`]);
+//! - the voting progress record ([`crate::verify_progress`], §7.10, part
+//!   of the box invariants): a stream, alarm or close comparison that does
+//!   not hold holds its box or station;
 //! 9. disputes ([`crate::verify_disputes`]): a dispute still unresolved
 //!    after every dispute event holds the ledger, and so does a dispute
 //!    event or legal decision that cannot be taken (a signature that does
@@ -49,6 +52,7 @@ use crate::checkpoint::{CheckpointChain, verify_checkpoints};
 use crate::disputes::{DisputeStage, verify_disputes};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{LedgerIndex, build_index};
+use crate::progress::{ProgressStage, verify_progress};
 use crate::records::{RecordStage, verify_records};
 
 /// What the caller observed outside the ledger: the publication deadlines
@@ -69,6 +73,7 @@ pub struct Report<'a> {
     checkpoints: CheckpointChain,
     boxes: BoxStage<'a>,
     records: RecordStage<'a>,
+    progress: ProgressStage<'a>,
     disputes: DisputeStage<'a>,
     evidence: Evidence,
     status: StatusReport,
@@ -103,6 +108,12 @@ impl<'a> Report<'a> {
     #[must_use]
     pub const fn records(&self) -> &RecordStage<'a> {
         &self.records
+    }
+
+    /// The voting progress record.
+    #[must_use]
+    pub const fn progress(&self) -> &ProgressStage<'a> {
+        &self.progress
     }
 
     /// The disputes (stage 9).
@@ -177,6 +188,7 @@ pub fn verify_ledger<'a>(
     let checkpoints = verify_checkpoints(genesis, &index, &authority);
     let boxes = verify_boxes(genesis, &index, &authority);
     let records = verify_records(genesis, &index, &boxes);
+    let progress = verify_progress(genesis, &index, &boxes);
     let disputes = verify_disputes(genesis, &index, &authority);
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
@@ -188,6 +200,7 @@ pub fn verify_ledger<'a>(
         .union(checkpoints.holds())
         .union(box_holds)
         .union(records.holds())
+        .union(progress.holds())
         .union(disputes.holds());
     let scopes = authority
         .authorization()
@@ -222,6 +235,7 @@ pub fn verify_ledger<'a>(
         checkpoints,
         boxes,
         records,
+        progress,
         disputes,
         evidence,
         status,

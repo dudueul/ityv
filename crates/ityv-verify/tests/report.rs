@@ -20,7 +20,7 @@ use std::vec::Vec;
 use common::{
     BOX_DEVICE_BASE, COMMISSION, COMMITTEE, Draft, Ledger, ROSTER_BASE, SIGNERS, WITNESS_IDS,
     hybrid_signature, id, leak, leak_slice, modules, object, sign, sign_genesis_with, signing,
-    witness_signing,
+    unit_signing, witness_signing,
 };
 use ityv_crypto::object_hash;
 use ityv_encoding::{
@@ -32,6 +32,13 @@ use ityv_encoding::{
     SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
     SCHEMA_WITNESSED_EVENT, SchemaId, Scope, Seq, SignerId, SignerRole, TimeBucket, TreeSize,
     WitnessedEvent,
+};
+use ityv_encoding::{
+    BoxProgressBody, BoxProgressParts, BoxProgressState, CheckinProgressBody, CheckinProgressParts,
+    CheckinProgressState, IssuanceCountBody, IssuanceCountParts, ObserverCountAttestBody,
+    ObserverCountKind, ObserverCountParts, ProgressTick, SCHEMA_BOX_PROGRESS_BODY,
+    SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_PROGRESS_TICK, StationId, UnitId, purpose_of,
 };
 use ityv_ledger::{
     Breach, EMPTY_ROOT, SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry,
@@ -218,6 +225,111 @@ fn close_of(device_signed: bool, set: Hash512) -> &'static [u8] {
     )
 }
 
+/// A `WitnessedEvent` over `body` of `schema`, signed by `people` (in
+/// ascending identifier order).
+fn witnessed(
+    schema: SchemaId,
+    body: &'static [u8],
+    people: &[(&[u8], EventRole)],
+) -> &'static [u8] {
+    let purpose = purpose_of(schema).unwrap();
+    let sigs: Vec<EventSig<'static>> = people
+        .iter()
+        .map(|&(who, role)| {
+            let (o, n) = person(who);
+            EventSig {
+                signer_id: SignerId::new(leak_slice(who.to_vec())).unwrap(),
+                role,
+                org_id: OrgId::new(o).unwrap(),
+                sig: sign(signing(n), purpose, body),
+            }
+        })
+        .collect();
+    object(
+        SCHEMA_WITNESSED_EVENT,
+        SCHEMA_VERSION_1,
+        &WitnessedEvent::new(body, &sigs).unwrap(),
+    )
+}
+
+/// The voting progress record of a day on which nobody voted: one closing
+/// tick of the box's device and of the station's check-in unit in the
+/// opening's slot, the station's issuance count and the observers' final
+/// count (PROTOCOL.md §7.10).
+fn progress() -> [(SchemaId, &'static [u8]); 4] {
+    let station = StationId::new(b"ST-1").unwrap();
+    let body = BoxProgressBody::new(&BoxProgressParts {
+        election_id: common::election(),
+        box_id: BoxId::new(BOX).unwrap(),
+        slot: 150,
+        sheets_in: 0,
+        state: BoxProgressState::Closed,
+    });
+    let body = object(SCHEMA_BOX_PROGRESS_BODY, SCHEMA_VERSION_1, &body);
+    let sig = sign(signing(BOX_DEVICE_BASE), b"box-progress", body);
+    let box_tick = object(
+        SCHEMA_PROGRESS_TICK,
+        SCHEMA_VERSION_1,
+        &ProgressTick::new(body, sig).unwrap(),
+    );
+    let body = CheckinProgressBody::new(&CheckinProgressParts {
+        election_id: common::election(),
+        station_id: station,
+        unit_id: UnitId::new(b"U-1A").unwrap(),
+        slot: 150,
+        checkins: 0,
+        issued: 0,
+        spoiled: 0,
+        returned: 0,
+        state: CheckinProgressState::Closed,
+    })
+    .unwrap();
+    let body = object(SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_VERSION_1, &body);
+    let sig = sign(unit_signing(0), b"checkin-progress", body);
+    let checkin_tick = object(
+        SCHEMA_PROGRESS_TICK,
+        SCHEMA_VERSION_1,
+        &ProgressTick::new(body, sig).unwrap(),
+    );
+    let body = IssuanceCountBody::new(&IssuanceCountParts {
+        election_id: common::election(),
+        station_id: station,
+        stock_received: 50,
+        issued: 0,
+        voter_spoiled: 0,
+        returned: 0,
+        unused: 50,
+        printer_waste: 0,
+        envelopes: None,
+        time_bucket: TimeBucket::new(140),
+    });
+    let body = object(SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_VERSION_1, &body);
+    let issuance = witnessed(SCHEMA_ISSUANCE_COUNT_BODY, body, &PEOPLE);
+    let body = ObserverCountAttestBody::new(&ObserverCountParts {
+        election_id: common::election(),
+        station_id: station,
+        unit_id: UnitId::new(b"U-1A").unwrap(),
+        count: 0,
+        kind: ObserverCountKind::Final,
+        time_bucket: TimeBucket::new(140),
+    });
+    let body = object(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, &body);
+    let observers = witnessed(
+        SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+        body,
+        &[
+            (b"obs-a", EventRole::Observer),
+            (b"obs-b", EventRole::Observer),
+        ],
+    );
+    [
+        (SCHEMA_PROGRESS_TICK, box_tick),
+        (SCHEMA_PROGRESS_TICK, checkin_tick),
+        (SCHEMA_WITNESSED_EVENT, issuance),
+        (SCHEMA_WITNESSED_EVENT, observers),
+    ]
+}
+
 /// A dispute filing signed by the commission and the committee.
 fn filing() -> &'static [u8] {
     filing_at(120)
@@ -283,6 +395,13 @@ impl Book {
         book.push(SCHEMA_SIGNED_GENESIS, w.signed);
         book.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, w.authorization);
         book
+    }
+
+    /// Pushes the day's progress record ([`progress`]).
+    fn progress(&mut self) {
+        for (schema, event) in progress() {
+            self.push(schema, event);
+        }
     }
 
     fn push(&mut self, schema: SchemaId, event: &'static [u8]) {
@@ -397,6 +516,7 @@ fn a_hold_of_a_box_reaches_the_status() {
     // and nothing else is wrong.
     let mut book = Book::new();
     book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.progress();
     book.push(SCHEMA_BOX_CLOSE, close_with(false));
     book.checkpoint();
     let report = book.report(ANCHORED);
@@ -412,6 +532,7 @@ fn a_hold_of_a_box_reaches_the_status() {
 fn every_box_closed_is_source_completeness_checked() {
     let mut book = Book::new();
     book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.progress();
     book.push(SCHEMA_BOX_CLOSE, close());
     book.checkpoint();
     let report = book.report(ANCHORED);
@@ -428,6 +549,7 @@ fn frames_no_checkpoint_covers_keep_the_ledger_unverified() {
     let mut book = Book::new();
     book.push(SCHEMA_WITNESSED_EVENT, opened());
     book.checkpoint();
+    book.progress();
     book.push(SCHEMA_BOX_CLOSE, close());
     let report = book.report(ANCHORED);
     assert_eq!(report.status().status(), Status::Unverified);
@@ -532,6 +654,7 @@ fn holds_of_the_record_stage_and_the_index_reach_the_status() {
     // A close whose record set root is not the root of the box's records.
     let mut book = Book::new();
     book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.progress();
     book.push(SCHEMA_BOX_CLOSE, close_of(true, Hash512([0x01; 64])));
     book.checkpoint();
     let report = book.report(ANCHORED);
@@ -563,4 +686,25 @@ fn holds_of_the_record_stage_and_the_index_reach_the_status() {
     assert_eq!(report.status().status(), Status::HoldReview);
     assert!(report.status().holds().contains(HoldReason::EventReplayed));
     assert!(report.status().holds().contains(HoldReason::StepFailed));
+}
+
+#[test]
+fn a_box_closed_without_its_progress_record_is_held() {
+    // VC-102: the device's last tick is compared with its close; with no
+    // tick at all the box (and its station) is held.
+    let mut book = Book::new();
+    book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.push(SCHEMA_BOX_CLOSE, close());
+    book.checkpoint();
+    let report = book.report(ANCHORED);
+    assert!(report.boxes().complete());
+    assert!(report.boxes().reports()[0].holds.is_empty());
+    assert!(
+        report
+            .progress()
+            .holds()
+            .contains(HoldReason::ProgressStream)
+    );
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert_eq!(report.status().holds(), report.progress().holds());
 }
