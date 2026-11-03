@@ -1063,7 +1063,7 @@ fn chain_voting_raises_the_floor_alarm_once() {
     .unwrap();
     assert_eq!(e.holds(), HoldSet::empty().with(HoldReason::CarryOut));
     assert!(e.counterfoil_required());
-    assert_eq!(e.out(), Ok(0));
+    assert_eq!(e.out(), 0);
     assert_eq!(e.waiting().count(), 0);
     // The relay continues: the next voter brings the marked sheet in and
     // takes the new one out — the gap stays at one sheet on top of the
@@ -1297,11 +1297,30 @@ fn suspension_and_slot_order() {
     let before = e;
     assert_eq!(e.close_slot(5), Err(Error::Mismatch));
     assert_eq!(e, before);
-    // A fallback tick suspends; no alarm afterwards.
+    // A tick's own state suspends nothing (a device cannot turn the
+    // alarms off by saying it is in fallback or after a swap): the high
+    // alarm still fires.
     e.record_box(box_body(box_id(), 1, 0, BoxProgressState::Fallback))
         .unwrap();
+    e.record_checkin(&checkin_body(
+        1,
+        [9, 9, 0, 0],
+        CheckinProgressState::AfterSwap,
+    ))
+    .unwrap();
+    assert!(!e.suspended());
+    assert!(e.close_slot(1).unwrap().raised.is_empty());
+    assert!(
+        e.close_slot(2)
+            .unwrap()
+            .raised
+            .contains(ProgressAlarm::High)
+    );
+    // Only the caller suspends, on the accepted events.
+    let mut e = evaluator();
+    e.suspend();
     assert!(e.suspended());
-    for s in 1..6 {
+    for s in 0..6 {
         e.record_checkin(&checkin_body(
             s,
             [9, 9, 0, 0],
@@ -1311,15 +1330,6 @@ fn suspension_and_slot_order() {
         assert!(e.close_slot(s).unwrap().raised.is_empty());
     }
     assert!(e.finish().is_empty());
-    // A check-in tick after a swap suspends, as does the caller.
-    let mut e = evaluator();
-    e.record_checkin(&checkin_body(
-        0,
-        [1, 1, 0, 0],
-        CheckinProgressState::AfterSwap,
-    ))
-    .unwrap();
-    assert!(e.suspended());
     let mut e = evaluator();
     step(&mut e, 0, 0, 0);
     step(&mut e, 1, 2, 3);

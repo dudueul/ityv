@@ -49,7 +49,11 @@
 //!    a `CheckinUnitSwap` moves the station's stream to its spare unit.
 //!    Either suspends the station's alarms from its slot, as does an
 //!    accepted `FallbackDeclared` from the first slot of its time bucket
-//!    (§7.10 item 5); a tick in fallback or after a swap suspends them too.
+//!    (§7.10 item 5). Nothing else does: a box tick in fallback with no
+//!    `FallbackDeclared` of its box accepted by its slot, or a check-in
+//!    tick after a swap with no `CheckinUnitSwap` taken by its slot, is
+//!    refused ([`ProgressReason::Undeclared`]), so a device cannot turn the
+//!    alarms off by saying so.
 //! 6. **Checks.** A `ProgressCheck` counts as recorded in the last slot its
 //!    time bucket overlaps: the window of two slots must hold for the whole
 //!    bucket, and a correction (finding 3) is judged by the slot after the
@@ -68,9 +72,16 @@
 //!    the station; and its alarms still waiting are unresolved. Before
 //!    then only the holds so far count: a ledger read during voting is not
 //!    held for what has not come yet.
-//! 9. **Bound.** A station's slots run at most [`MAX_PROGRESS_SLOTS`] past
-//!    its first slot; a tick or swap later than that is refused.
-//! 10. **Holds.** Every refused event is listed and holds: a tick, swap or
+//! 9. **After the close.** A device sends exactly one closing tick after
+//!    its close (ADR-0027). After the frame of a box's first accepted
+//!    close, the box's only tick taken is one in the closing state; after
+//!    the frame at which the station's last box closed, the same holds for
+//!    the check-in unit. Any other tick after it is refused
+//!    ([`ProgressReason::AfterClose`], §7.10 item 8), so a missing slot
+//!    cannot be filled in once the close has been compared.
+//! 10. **Bound.** A station's slots run at most [`MAX_PROGRESS_SLOTS`] past
+//!     its first slot; a tick or swap later than that is refused.
+//! 11. **Holds.** Every refused event is listed and holds: a tick, swap or
 //!     count `PROGRESS_STREAM`, a check `PROGRESS_UNRESOLVED`. A box's
 //!     stream holds its box; the check-in stream, the alarms and the
 //!     station's refusals hold every box of the station
@@ -88,10 +99,11 @@ use alloc::vec::Vec;
 
 use ityv_crypto::{HybridSigned, Purpose, Verified};
 use ityv_encoding::{
-    BoxClose, BoxId, BoxOpenedBody, BoxProgressBody, BoxUnitSwapBody, CheckinProgressBody,
-    CheckinUnitSwapBody, Decode, EventRole, FallbackBody, FallbackKind, HYBRID_SIG_LEN,
-    HYBRID_VK_LEN, ObserverCountAttestBody, ObserverCountKind, ProgressAlarm, ProgressCheckBody,
-    ProgressTick, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
+    BoxClose, BoxId, BoxOpenedBody, BoxProgressBody, BoxProgressState, BoxUnitSwapBody,
+    CheckinProgressBody, CheckinProgressState, CheckinUnitSwapBody, Decode, EventRole,
+    FallbackBody, FallbackKind, HYBRID_SIG_LEN, HYBRID_VK_LEN, ObserverCountAttestBody,
+    ObserverCountKind, ProgressAlarm, ProgressBody, ProgressCheckBody, ProgressTick,
+    SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
     SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK,
     SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Seq, StationEntry, StationId, TimeBucket,
@@ -133,6 +145,14 @@ pub enum ProgressReason {
     /// A tick, swap or check of a box or station that never opened (no
     /// accepted `BoxOpened`).
     NotOpened,
+    /// A box tick in fallback with no `FallbackDeclared` of its box
+    /// accepted by its slot, or a check-in tick after a swap with no
+    /// `CheckinUnitSwap` taken by its slot (§7.10 item 5).
+    Undeclared,
+    /// A tick other than the device's closing tick, after the frame of its
+    /// box's (or, for the check-in unit, its station's) close (§7.10 item
+    /// 8).
+    AfterClose,
     /// A slot more than [`MAX_PROGRESS_SLOTS`] after the station's first
     /// slot, or a time bucket with no slot.
     OutOfRange,
@@ -433,6 +453,8 @@ struct BoxItems<'a> {
     closed: bool,
     /// Its last accepted `BoxClose`.
     close: Option<BoxClose<'a>>,
+    /// The frame of its first accepted `BoxClose`.
+    closed_at: Option<Seq>,
     ticks: Vec<Tick<'a>>,
     /// Its accepted `BoxUnitSwap` events, at their slots.
     swaps: Vec<Slotted<'a>>,
@@ -451,6 +473,7 @@ fn box_items<'a>(shared: &Shared<'_, 'a>, box_id: BoxId<'a>) -> BoxItems<'a> {
         fallbacks: Vec::new(),
         closed: report.is_some_and(|r| matches!(r.phase, Phase::Closed | Phase::Counted)),
         close: None,
+        closed_at: None,
         ticks: Vec::new(),
         swaps: Vec::new(),
         refused: Vec::new(),
@@ -473,6 +496,7 @@ fn box_items<'a>(shared: &Shared<'_, 'a>, box_id: BoxId<'a>) -> BoxItems<'a> {
         } else if e.schema == SCHEMA_BOX_CLOSE {
             if let Some(close) = decode(e.schema, bytes) {
                 items.close = Some(close);
+                items.closed_at = items.closed_at.or(Some(e.seq));
             }
         } else if e.schema == SCHEMA_WITNESSED_EVENT
             && let Some(w) = decode::<WitnessedEvent<'a>>(e.schema, bytes)
@@ -663,23 +687,34 @@ trait Device<'a> {
     /// Takes one tick.
     fn take_tick(
         &mut self,
-        tick: &ProgressTick<'a>,
+        tick: &Tick<'a>,
         token: &Token<'_>,
-    ) -> Result<Option<Self::Body>, Error>;
+    ) -> Result<Option<Self::Body>, ProgressReason>;
 
-    /// Takes one witnessed swap, checked against the roster of its state.
+    /// Takes one witnessed swap at its slot, checked against the roster of
+    /// its state.
     fn take_swap(
         &mut self,
         shared: &Shared<'_, 'a>,
-        swap: &Witnessed<'a>,
+        swap: &Slotted<'a>,
         tokens: &[Token<'_>],
     ) -> Result<(), Error>;
+}
+
+/// Whether `tick`, at frame `seq`, comes after the close at `closed_at`
+/// without being the closing tick.
+fn after_close(seq: Seq, closed_at: Option<Seq>, closing: bool) -> bool {
+    !closing && closed_at.is_some_and(|c| seq.get() > c.get())
 }
 
 /// A commitment unit's stream.
 struct BoxDevice<'a> {
     stream: BoxStream<'a>,
     box_id: BoxId<'a>,
+    /// The first slot of the box's accepted fallbacks.
+    fallback_from: Option<u64>,
+    /// The frame of the box's first accepted close.
+    closed_at: Option<Seq>,
 }
 
 impl<'a> Device<'a> for BoxDevice<'a> {
@@ -687,18 +722,32 @@ impl<'a> Device<'a> for BoxDevice<'a> {
 
     fn take_tick(
         &mut self,
-        tick: &ProgressTick<'a>,
+        tick: &Tick<'a>,
         token: &Token<'_>,
-    ) -> Result<Option<Self::Body>, Error> {
-        self.stream.accept(tick, token)
+    ) -> Result<Option<Self::Body>, ProgressReason> {
+        if let ProgressBody::Box(body) = tick.signed.body() {
+            let state = body.parts().state;
+            if after_close(tick.seq, self.closed_at, state == BoxProgressState::Closed) {
+                return Err(ProgressReason::AfterClose);
+            }
+            if state == BoxProgressState::Fallback
+                && self.fallback_from.is_none_or(|f| tick.slot() < f)
+            {
+                return Err(ProgressReason::Undeclared);
+            }
+        }
+        self.stream
+            .accept(&tick.signed, token)
+            .map_err(ProgressReason::State)
     }
 
     fn take_swap(
         &mut self,
         shared: &Shared<'_, 'a>,
-        swap: &Witnessed<'a>,
+        swap: &Slotted<'a>,
         tokens: &[Token<'_>],
     ) -> Result<(), Error> {
+        let swap = &swap.item;
         let signed = Signed {
             event: &swap.event,
             tokens,
@@ -716,29 +765,58 @@ impl<'a> Device<'a> for BoxDevice<'a> {
     }
 }
 
-impl<'a> Device<'a> for CheckinStream<'a> {
+/// The check-in unit's stream.
+struct CheckinDevice<'a> {
+    stream: CheckinStream<'a>,
+    /// The first slot of the swaps the stream took.
+    swapped_from: Option<u64>,
+    /// The frame at which the station's last box closed, once all are.
+    closed_at: Option<Seq>,
+}
+
+impl<'a> Device<'a> for CheckinDevice<'a> {
     type Body = CheckinProgressBody<'a>;
 
     fn take_tick(
         &mut self,
-        tick: &ProgressTick<'a>,
+        tick: &Tick<'a>,
         token: &Token<'_>,
-    ) -> Result<Option<Self::Body>, Error> {
-        self.accept(tick, token)
+    ) -> Result<Option<Self::Body>, ProgressReason> {
+        if let ProgressBody::Checkin(body) = tick.signed.body() {
+            let state = body.parts().state;
+            if after_close(
+                tick.seq,
+                self.closed_at,
+                state == CheckinProgressState::Closed,
+            ) {
+                return Err(ProgressReason::AfterClose);
+            }
+            if state == CheckinProgressState::AfterSwap
+                && self.swapped_from.is_none_or(|f| tick.slot() < f)
+            {
+                return Err(ProgressReason::Undeclared);
+            }
+        }
+        self.stream
+            .accept(&tick.signed, token)
+            .map_err(ProgressReason::State)
     }
 
     fn take_swap(
         &mut self,
         shared: &Shared<'_, 'a>,
-        swap: &Witnessed<'a>,
+        swap: &Slotted<'a>,
         tokens: &[Token<'_>],
     ) -> Result<(), Error> {
         let signed = Signed {
-            event: &swap.event,
+            event: &swap.item.event,
             tokens,
         };
-        let checked = CheckinUnitSwap::check(&signed, shared.roster(swap.state))?;
-        CheckinStream::swap(self, &checked)
+        let checked = CheckinUnitSwap::check(&signed, shared.roster(swap.item.state))?;
+        self.stream.swap(&checked)?;
+        // Steps run in slot order: the first swap taken is the earliest.
+        self.swapped_from = self.swapped_from.or(Some(swap.slot));
+        Ok(())
     }
 }
 
@@ -812,16 +890,16 @@ fn run_stream<'a, D: Device<'a>>(
         } else {
             match step {
                 Step::Tick(_, None) | Step::Swap(_, None) => Err(ProgressReason::Signature),
-                Step::Tick(t, Some(token)) => match device.take_tick(&t.signed, token) {
+                Step::Tick(t, Some(token)) => match device.take_tick(t, token) {
                     Ok(Some(body)) => {
                         pass.usable.push((slot, t.seq, body));
                         Ok(())
                     }
                     Ok(None) => Err(ProgressReason::Unused),
-                    Err(e) => Err(ProgressReason::State(e)),
+                    Err(reason) => Err(reason),
                 },
                 Step::Swap(s, Some(tokens)) => device
-                    .take_swap(shared, &s.item, tokens)
+                    .take_swap(shared, s, tokens)
                     .map(|()| pass.swapped.push(slot))
                     .map_err(ProgressReason::State),
             }
@@ -886,7 +964,16 @@ fn run_box<'a>(
     });
     let (pass, stream) = match opened {
         Some(Ok(stream)) => {
-            let mut device = BoxDevice { stream, box_id: id };
+            let mut device = BoxDevice {
+                stream,
+                box_id: id,
+                fallback_from: items
+                    .fallbacks
+                    .iter()
+                    .filter_map(|b| bucket_slots(*b).map(|(start, _)| start))
+                    .min(),
+                closed_at: items.closed_at,
+            };
             let pass = run_stream(
                 shared,
                 &mut device,
@@ -1243,18 +1330,31 @@ fn run_station<'a>(
         }
         None => (None, None),
     };
+    // The station closes at the frame its last box closed, once every box
+    // has.
+    let closed_at = items
+        .boxes
+        .iter()
+        .map(|b| b.closed_at)
+        .collect::<Option<Vec<Seq>>>()
+        .and_then(|frames| frames.into_iter().max_by_key(|s| s.get()));
     let (pass, stream) = match stream {
-        Some(Ok(mut stream)) => {
+        Some(Ok(stream)) => {
+            let mut device = CheckinDevice {
+                stream,
+                swapped_from: None,
+                closed_at,
+            };
             let pass = run_stream(
                 shared,
-                &mut stream,
+                &mut device,
                 &items.ticks,
                 &tokens.ticks,
                 &items.swaps,
                 &tokens.swaps,
                 horizon,
             );
-            (pass, Some(stream))
+            (pass, Some(device.stream))
         }
         Some(Err(e)) => (
             Pass::refused(&items.ticks, &items.swaps, ProgressReason::State(e)),

@@ -1481,23 +1481,45 @@ fn a_fallback_suspends_the_station() {
     // A fallback with no slot does not suspend.
     let run = running(&quiet_rows()[..4], &[w(fallback(B1, u64::MAX))]);
     assert!(!run.station().suspended);
-    // A tick in fallback suspends the station from its slot.
-    let mut events = openings();
-    for s in 150..=155 {
-        let state = if s == 151 {
-            BoxProgressState::Fallback
-        } else {
-            BoxProgressState::Casting
-        };
-        events.push(t(checkin_tick(
-            s,
-            [1, 1, 0, 0],
-            CheckinProgressState::Checking,
-        )));
-        events.push(t(box_tick(B1, s, 0, state)));
-        events.push(t(box_tick(B2, s, 0, BoxProgressState::Casting)));
-    }
-    let run = go(&events);
+    // A tick in fallback suspends nothing by itself (a device cannot turn
+    // the alarms off by saying so): with no fallback of its box declared by
+    // its slot it is refused and holds its box, and the alarm stands.
+    let fallback_tick = box_tick(B1, 151, 0, BoxProgressState::Fallback);
+    let day = |declared: Option<u64>| {
+        let mut events = openings();
+        events.extend(declared.map(|bucket| w(fallback(B1, bucket))));
+        for s in 150..=155 {
+            events.push(t(checkin_tick(
+                s,
+                [1, 1, 0, 0],
+                CheckinProgressState::Checking,
+            )));
+            events.push(t(if s == 151 {
+                fallback_tick
+            } else {
+                box_tick(B1, s, 0, BoxProgressState::Casting)
+            }));
+            events.push(t(box_tick(B2, s, 0, BoxProgressState::Casting)));
+        }
+        go(&events)
+    };
+    let run = day(None);
+    assert_eq!(run.station().alarms, [alarm(152, ProgressAlarm::Floor)]);
+    assert!(!run.station().suspended);
+    assert_eq!(
+        run.of(B1).refusals,
+        [run.refused(fallback_tick, ProgressReason::Undeclared)]
+    );
+    assert!(run.of(B1).holds.contains(HoldReason::ProgressStream));
+    // Declared in bucket 102 (from slot 153): still too late for the tick.
+    let run = day(Some(102));
+    assert_eq!(
+        run.of(B1).refusals,
+        [run.refused(fallback_tick, ProgressReason::Undeclared)]
+    );
+    // Declared in bucket 101 (from slot 151): the tick is taken.
+    let run = day(Some(101));
+    assert!(run.of(B1).refusals.is_empty(), "{:?}", run.of(B1).refusals);
     assert!(
         run.station().alarms.is_empty(),
         "{:?}",
@@ -1545,7 +1567,8 @@ fn the_check_in_unit_hands_over_to_its_spare() {
     assert!(st.suspended);
     // The failed unit's tick after the swap is refused.
     let mut late = events.clone();
-    late.insert(late.len() - 1, t(old));
+    let at = late.iter().position(|e| e.1 == swap).unwrap();
+    late.insert(at + 1, t(old));
     let run = go(&late);
     assert_eq!(
         run.station().refusals,
@@ -1553,7 +1576,8 @@ fn the_check_in_unit_hands_over_to_its_spare() {
     );
     assert_eq!(run.station().holds, hold(HoldReason::ProgressStream));
     // A swap the witnesses did not sign is refused, and the spare's ticks
-    // with it.
+    // with it: the one after the swap says so with no swap taken
+    // (`Undeclared`), the closing one is not the bound unit's.
     let forged = checkin_swap(152, [2, 2, 0, 0], &FORGED);
     let mut bad = events.clone();
     let at = bad.iter().position(|e| e.1 == swap).unwrap();
@@ -1563,7 +1587,7 @@ fn the_check_in_unit_hands_over_to_its_spare() {
     assert_eq!(
         reasons,
         [
-            ProgressReason::State(Error::SignatureSigner),
+            ProgressReason::Undeclared,
             ProgressReason::State(Error::SignatureSigner),
             ProgressReason::Signature,
         ]
@@ -1678,7 +1702,9 @@ fn a_box_continues_on_its_spare_device_after_the_amendment() {
     let early = box_tick_by(SPARE_DEVICE, B1, 151, 1, BoxProgressState::Casting);
     let mut bad = std::vec![events[0], events[1], t(early)];
     bad.extend_from_slice(&events[2..]);
-    bad.push(t(old));
+    // Before the closes (after them it would be refused as after the close).
+    let at = bad.iter().position(|e| e.0 == SCHEMA_CAST_RECORD).unwrap();
+    bad.insert(at, t(old));
     let run = run_in(a, &bad);
     assert_eq!(
         run.of(B1).refusals,
@@ -1780,4 +1806,74 @@ fn progress_events_of_a_removed_station_are_held() {
     assert_eq!(run.progress.holds(), hold(HoldReason::ProgressStream));
     // ST-1 is unaffected.
     assert_eq!(run.station().holds, HoldSet::empty());
+}
+
+#[test]
+fn only_the_closing_tick_comes_after_the_close() {
+    // The device's closing tick after its close is taken (the device sends
+    // it after closing, ADR-0027).
+    let mut events = openings();
+    events.extend(open_ticks(&CLEAN[..3]));
+    events.extend(station_close());
+    events.extend(ticks(&CLEAN[3..]));
+    let run = go(&events);
+    run.clean_below();
+    assert_eq!(run.progress.holds(), HoldSet::empty());
+    // A slot left out is held, and filling it in after the close does not
+    // help (§7.10 item 8): the box's tick and the check-in unit's.
+    let gap = box_tick(B1, 151, 1, BoxProgressState::Casting);
+    let checkin_gap = checkin_tick(151, [2, 2, 0, 0], CheckinProgressState::Checking);
+    let mut events: Vec<Ev> = day_with(&[])
+        .into_iter()
+        .filter(|e| e.1 != gap && e.1 != checkin_gap)
+        .collect();
+    let run = go(&events);
+    assert!(run.of(B1).holds.contains(HoldReason::ProgressStream));
+    events.push(t(gap));
+    events.push(t(checkin_gap));
+    let run = go(&events);
+    assert_eq!(
+        run.of(B1).refusals,
+        [run.refused(gap, ProgressReason::AfterClose)]
+    );
+    assert!(run.of(B1).holds.contains(HoldReason::ProgressStream));
+    assert_eq!(
+        run.station().refusals,
+        [run.refused(checkin_gap, ProgressReason::AfterClose)]
+    );
+    assert!(run.station().holds.contains(HoldReason::ProgressStream));
+    // A check-in tick after one box closed but before the station's last
+    // box did is still on time.
+    let mut events = openings();
+    events.extend(open_ticks(&CLEAN[..3]));
+    events.extend(closed(B1, 2));
+    events.extend(ticks(&CLEAN[3..]));
+    events.extend(closed(B2, 1));
+    events.push(w(issuance(3)));
+    events.push(w(observers(3)));
+    let run = go(&events);
+    assert!(
+        run.station().refusals.is_empty(),
+        "{:?}",
+        run.station().refusals
+    );
+    assert!(run.of(B1).refusals.is_empty(), "{:?}", run.of(B1).refusals);
+}
+
+#[test]
+fn a_huge_count_does_not_stop_the_station() {
+    // One box reports u64::MAX sheets: the station's sum is exact, the
+    // slots go on being closed and the alarms raised (a device cannot end
+    // the evaluation, and with it the holds so far).
+    let rows: [Row; 4] = [
+        (150, [1, 1, 0, 0], 0, 0),
+        (151, [2, 2, 0, 0], u64::MAX, 1),
+        (152, [3, 3, 0, 0], u64::MAX, 1),
+        (153, [3, 3, 0, 0], u64::MAX, 1),
+    ];
+    let mut events = openings();
+    events.extend(ticks(&rows));
+    let run = go(&events);
+    assert_eq!(run.station().last_slot, Some(153));
+    assert_eq!(run.station().alarms, [alarm(152, ProgressAlarm::Negative)]);
 }

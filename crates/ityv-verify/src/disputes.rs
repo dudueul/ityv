@@ -93,30 +93,38 @@ fn material(event: &WitnessedEvent<'_>, genesis: &VerifiedGenesis<'_>) -> Option
     Material::new(pairs?.into_iter())
 }
 
-/// The legal authority that signed `event` at frame `seq`, as the roster
-/// of the genesis state in force there (or, failing that, of an earlier
-/// state) registers it: the same signer, organisation and role.
+/// The legal authority that signed `event` at frame `seq` and its key: an
+/// entry the roster of the genesis state in force there, or of an earlier
+/// state, registers for the same signer, organisation and role, whose key
+/// verifies the signature (the newest such state first, so a key an
+/// amendment rotated is still found under the state that had it).
 fn authority_of<'a>(
     event: &WitnessedEvent<'_>,
     seq: Seq,
     rosters: &[Vec<RosterEntry<'a>>],
     index: &LedgerIndex<'_>,
-) -> Option<RosterEntry<'a>> {
+) -> Option<(RosterEntry<'a>, Material)> {
     // The decoder admits exactly one signature, of the authority role
     // (`ityv_encoding::roles_satisfied`).
     let sig = event.sigs().next()?;
+    let purpose = Purpose::new(event.purpose())?;
     let state = index.state_at(seq);
-    rosters.get(..=state)?.iter().rev().find_map(|roster| {
-        roster
-            .iter()
-            .find(|r| {
-                let s = r.get();
-                s.role == RosterRole::Authority
-                    && s.signer_id.as_bytes() == sig.signer_id.as_bytes()
-                    && s.org_id.as_bytes() == sig.org_id.as_bytes()
-            })
-            .copied()
-    })
+    rosters
+        .get(..=state)?
+        .iter()
+        .rev()
+        .flat_map(|roster| roster.iter())
+        .filter(|r| {
+            let s = r.get();
+            s.role == RosterRole::Authority
+                && s.signer_id.as_bytes() == sig.signer_id.as_bytes()
+                && s.org_id.as_bytes() == sig.org_id.as_bytes()
+        })
+        .find_map(|r| {
+            let material = Material::new(core::iter::once((sig.sig, r.get().key)))?;
+            material.verify(&purpose, event.body_bytes())?;
+            Some((*r, material))
+        })
 }
 
 /// The dispute events and legal decisions of the ledger, decoded, in frame
@@ -137,12 +145,12 @@ fn prepare<'a>(
             let (material, authority) = if schema == SCHEMA_DISPUTE_EVENT_BODY {
                 (material(&event, genesis), None)
             } else if schema == SCHEMA_LEGAL_DECISION_REF_BODY {
-                let authority = authority_of(&event, e.seq, rosters, index);
-                let material = authority.as_ref().and_then(|a| {
-                    let sig = event.sigs().next()?;
-                    Material::new(core::iter::once((sig.sig, a.get().key)))
-                });
-                (material, authority)
+                // No registered key that verifies: no material, so no
+                // tokens, and the decision is refused.
+                authority_of(&event, e.seq, rosters, index)
+                    .map_or((None, None), |(authority, material)| {
+                        (Some(material), Some(authority))
+                    })
             } else {
                 return None;
             };

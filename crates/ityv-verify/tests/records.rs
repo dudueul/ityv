@@ -1140,6 +1140,10 @@ enum Tamper {
     Option,
     /// A second, zero chunk on every randomness list.
     ExtraChunk,
+    /// The last module's entry left out.
+    DropModule,
+    /// The summed randomness not a canonical scalar.
+    NonCanonical,
 }
 
 /// A `ChallengeOpening` of the record `r`, device-signed with key number
@@ -1158,11 +1162,17 @@ fn opening_of(r: &Rec, device: u16, tamper: Tamper) -> &'static [u8] {
         Scalars::new(&out).unwrap()
     };
     let chunks = secrets.rands[0].len();
-    let rand: &'static Scalars<ENC_CHUNKS> = leak(raw(&secrets.rand[..chunks]));
+    let rand: &'static Scalars<ENC_CHUNKS> = leak(if tamper == Tamper::NonCanonical {
+        Scalars::new(&[Scalar32([0xFF; 32])]).unwrap()
+    } else {
+        raw(&secrets.rand[..chunks])
+    });
+    let kept = r.mods.len() - usize::from(tamper == Tamper::DropModule);
     let mods: Vec<ModuleOpening<'static>> = r
         .mods
         .iter()
         .zip(secrets.cids.iter().zip(&secrets.rands))
+        .take(kept)
         .enumerate()
         .map(|(i, (&(m, counter, _), (cid, part)))| {
             let first = i == 0;
@@ -1174,6 +1184,9 @@ fn opening_of(r: &Rec, device: u16, tamper: Tamper) -> &'static [u8] {
             if first && tamper == Tamper::Cid {
                 cid[0] ^= 1;
             }
+            // (A module list of another length than the summed one does not
+            // encode: `ChallengeOpeningBody::new` refuses it.)
+            let rand = raw(&part);
             ModuleOpening {
                 module_id: common::module(m),
                 counter: if first && tamper == Tamper::Counter {
@@ -1181,7 +1194,7 @@ fn opening_of(r: &Rec, device: u16, tamper: Tamper) -> &'static [u8] {
                 } else {
                     counter
                 },
-                rand: raw(&part),
+                rand,
                 cid: Token192(cid),
             }
         })
@@ -1302,6 +1315,8 @@ fn a_challenge_opening_must_reconstruct_its_record() {
         Tamper::Cid,
         Tamper::Option,
         Tamper::ExtraChunk,
+        Tamper::DropModule,
+        Tamper::NonCanonical,
     ] {
         let run = go(&[
             w(opened()),

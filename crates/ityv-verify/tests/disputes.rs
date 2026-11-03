@@ -19,16 +19,16 @@ mod common;
 use std::sync::OnceLock;
 
 use common::{
-    COMMISSION, COMMITTEE, Ledger, ROSTER_BASE, SPARE_BASE, authorized, leak, object, sign,
-    sign_seeded, signing,
+    COMMISSION, COMMITTEE, Draft, Ledger, ROSTER_BASE, SIGNERS, SPARE_BASE, authorized, leak,
+    object, sign, sign_genesis_with, sign_seeded, signing,
 };
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     BoxId, Day, DisputeAction, DisputeEventBody, DisputeEventParts, DisputeType, EventRole,
     EventSig, Hash512, LegalDecisionRefBody, LegalDecisionRefParts, LegalOutcome, OrgId,
     SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Seq, SignerId,
-    TallyEffect, TimeBucket, WitnessedEvent,
+    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Scope,
+    Seq, SignerId, TallyEffect, TimeBucket, WitnessedEvent,
 };
 use ityv_state::{DisputeStatus, HoldReason, HoldSet};
 use ityv_verify::{
@@ -157,17 +157,71 @@ fn decision(dispute_hash: Hash512, by: Signer) -> &'static [u8] {
 /// The dispute stage of a ledger of the genesis (frame 1), the legal
 /// authorization (frame 2) and `events` (from frame 3).
 fn run(events: &[&'static [u8]]) -> DisputeStage<'static> {
+    let events: Vec<(SchemaId, &'static [u8])> = events
+        .iter()
+        .map(|e| (SCHEMA_WITNESSED_EVENT, *e))
+        .collect();
+    run_in(verified(), authorized().0.signed, authorized().1, &events)
+}
+
+fn run_in(
+    genesis: &'static VerifiedGenesis<'static>,
+    signed_genesis: &'static [u8],
+    authorization: &'static [u8],
+    events: &[(SchemaId, &'static [u8])],
+) -> DisputeStage<'static> {
     let mut ledger = Ledger::new();
-    ledger.push(SCHEMA_SIGNED_GENESIS, authorized().0.signed);
-    ledger.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, authorized().1);
-    for e in events {
-        ledger.push(SCHEMA_WITNESSED_EVENT, e);
+    ledger.push(SCHEMA_SIGNED_GENESIS, signed_genesis);
+    ledger.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, authorization);
+    for &(schema, e) in events {
+        ledger.push(schema, e);
     }
-    let index = leak(build_index(verified(), ledger.bytes(), &ledger.events));
+    let index = leak(build_index(genesis, ledger.bytes(), &ledger.events));
     assert!(index.findings().is_empty(), "{:?}", index.findings());
-    let authority = leak(authorize_ledger(verified(), index));
+    let authority = leak(authorize_ledger(genesis, index));
     assert!(authority.holds().is_empty(), "{:?}", authority.holds());
-    verify_disputes(verified(), index, authority)
+    verify_disputes(genesis, index, authority)
+}
+
+/// A genesis whose one amendment gives the court the key number
+/// [`NEW_COURT`]; with the signed genesis, the authorization and the
+/// signed amendment.
+struct Rotated {
+    genesis: &'static VerifiedGenesis<'static>,
+    signed: &'static [u8],
+    authorization: &'static [u8],
+    amendment: &'static [u8],
+}
+
+const NEW_COURT: u16 = ROSTER_BASE + 8;
+
+fn rotated() -> &'static Rotated {
+    static ROTATED: OnceLock<&'static Rotated> = OnceLock::new();
+    ROTATED.get_or_init(|| {
+        let draft = Draft::standard();
+        let (body, authorization) = common::legal_authorization(
+            &[Scope::PublicBoard, Scope::TrusteeBody, Scope::BallotMark],
+            20_000,
+            20_100,
+        );
+        let built = leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+            p.legal_authorization_hash = object_hash(body);
+        }));
+        let mut next = draft.clone();
+        for r in &mut next.roster {
+            if r.signer_id.as_bytes() == b"court" {
+                r.key = common::registered(NEW_COURT);
+            }
+        }
+        let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
+        let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+        leak(Rotated {
+            genesis,
+            signed: built.signed,
+            authorization,
+            amendment: amendment.signed,
+        })
+    })
 }
 
 fn seqs(n: &[u64]) -> Vec<Seq> {
@@ -255,6 +309,49 @@ fn a_legal_decision_is_shown_next_to_its_dispute_and_changes_nothing() {
     let stage = run(&[filed, decision(filing, THE_COURT)]);
     assert_eq!(stage.disputes()[0].decisions.len(), 1);
     assert_eq!(stage.disputes()[0].status, DisputeStatus::Open);
+    assert!(stage.refused().is_empty());
+}
+
+#[test]
+fn a_decision_is_checked_under_the_court_keys_of_its_frame() {
+    // The court's key is rotated by an amendment (frame 4). A decision
+    // after it is taken under either key (the old one is the court's in an
+    // earlier state); before it, only the old key is the court's.
+    let r = rotated();
+    let (filing, filed) = dispute(DisputeAction::Filed, None, 1, false);
+    let old = decision(filing, THE_COURT);
+    let new = decision(
+        filing,
+        Signer {
+            key: NEW_COURT,
+            ..THE_COURT
+        },
+    );
+    let w = |e| (SCHEMA_WITNESSED_EVENT, e);
+    let amend = (SCHEMA_SIGNED_GENESIS, r.amendment);
+    for d in [old, new] {
+        let stage = run_in(
+            r.genesis,
+            r.signed,
+            r.authorization,
+            &[w(filed), amend, w(d)],
+        );
+        assert!(stage.refused().is_empty(), "{:?}", stage.refused());
+        assert_eq!(stage.disputes()[0].decisions.len(), 1);
+    }
+    let stage = run_in(
+        r.genesis,
+        r.signed,
+        r.authorization,
+        &[w(filed), w(new), amend],
+    );
+    assert_eq!(stage.refused(), seqs(&[4]));
+    let stage = run_in(
+        r.genesis,
+        r.signed,
+        r.authorization,
+        &[w(filed), w(old), amend],
+    );
     assert!(stage.refused().is_empty());
 }
 
