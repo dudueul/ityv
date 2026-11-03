@@ -77,7 +77,7 @@ use ityv_ledger::{
 };
 use ityv_state::{HoldReason, HoldSet, Publication, Status};
 use ityv_verify::{
-    ExpectedExclusion, LedgerIndex, OpeningOutcome, Publications, ScopeProblem, TallyEvent,
+    ExpectedExclusion, LedgerIndex, OpeningOutcome, Publications, Report, ScopeProblem, TallyEvent,
     TallyRefusal, TallyRefused, TallyStage, UnitTally, VerifiedGenesis, authorize_ledger,
     build_index, verify_boxes, verify_checkpoints, verify_disputes, verify_genesis, verify_ledger,
     verify_records, verify_tally,
@@ -2475,7 +2475,7 @@ fn provisioning(m: (&'static [u8], ChamberCode, &'static [u8], u16, bool)) -> &'
             module_id: ModuleId::new(name).unwrap(),
             device_id: id(device),
             chamber,
-            member_count: 2,
+            member_count: if chamber == ChamberCode::J { 1 } else { 2 },
             pad_length: 1 << 20,
             chassis_id: id(b"CH-1"),
             pad_card_id: id(b"PAD-1"),
@@ -2488,10 +2488,15 @@ fn provisioning(m: (&'static [u8], ChamberCode, &'static [u8], u16, bool)) -> &'
         })
         .unwrap(),
     );
-    let member: (&'static [u8], u16) = if chamber == ChamberCode::P1 {
-        (b"T-P1-1", 0)
-    } else {
-        (b"T-P2-1", 2)
+    let member: (&'static [u8], u16) = match chamber {
+        ChamberCode::P1 => (b"T-P1-1", 0),
+        ChamberCode::J => (b"T-J", 4),
+        ChamberCode::P2
+        | ChamberCode::P3
+        | ChamberCode::P4
+        | ChamberCode::A
+        | ChamberCode::C
+        | ChamberCode::N => (b"T-P2-1", 2),
     };
     let sigs = actor_sigs(
         &[
@@ -2593,23 +2598,35 @@ fn participation(n: u8) -> &'static [u8] {
 /// closing ticks of BOX-1 and U-1A, the issuance count and the observers'
 /// final count (PROTOCOL.md §7.10, §10.2).
 fn station_record(n: u64) -> Vec<(SchemaId, &'static [u8])> {
+    station_record_of(&[(B1, n)])
+}
+
+/// As [`station_record`] for ST-1 with the boxes `boxes` and their voters.
+fn station_record_of(boxes: &[(Bx, u64)]) -> Vec<(SchemaId, &'static [u8])> {
     let station = StationId::new(b"ST-1").unwrap();
-    let body = object(
-        SCHEMA_BOX_PROGRESS_BODY,
-        SCHEMA_VERSION_1,
-        &BoxProgressBody::new(&BoxProgressParts {
-            election_id: common::election(),
-            box_id: BoxId::new(B1.id).unwrap(),
-            slot: 150,
-            sheets_in: n,
-            state: BoxProgressState::Closed,
-        }),
-    );
-    let box_tick = object(
-        SCHEMA_PROGRESS_TICK,
-        SCHEMA_VERSION_1,
-        &ProgressTick::new(body, sign(signing(B1.device), b"box-progress", body)).unwrap(),
-    );
+    let n: u64 = boxes.iter().map(|(_, k)| k).sum();
+    let mut ticks: Vec<(SchemaId, &'static [u8])> = Vec::new();
+    for (bx, k) in boxes {
+        let body = object(
+            SCHEMA_BOX_PROGRESS_BODY,
+            SCHEMA_VERSION_1,
+            &BoxProgressBody::new(&BoxProgressParts {
+                election_id: common::election(),
+                box_id: BoxId::new(bx.id).unwrap(),
+                slot: 150,
+                sheets_in: *k,
+                state: BoxProgressState::Closed,
+            }),
+        );
+        ticks.push((
+            SCHEMA_PROGRESS_TICK,
+            object(
+                SCHEMA_PROGRESS_TICK,
+                SCHEMA_VERSION_1,
+                &ProgressTick::new(body, sign(signing(bx.device), b"box-progress", body)).unwrap(),
+            ),
+        ));
+    }
     let body = object(
         SCHEMA_CHECKIN_PROGRESS_BODY,
         SCHEMA_VERSION_1,
@@ -2665,12 +2682,12 @@ fn station_record(n: u64) -> Vec<(SchemaId, &'static [u8])> {
         ),
         &PEOPLE[2..],
     );
-    std::vec![
-        (SCHEMA_PROGRESS_TICK, box_tick),
+    ticks.extend([
         (SCHEMA_PROGRESS_TICK, checkin_tick),
         (SCHEMA_WITNESSED_EVENT, issuance),
         (SCHEMA_WITNESSED_EVENT, observers),
-    ]
+    ]);
+    ticks
 }
 
 /// A one-box election (BOX-1 at ST-1 in RU-1) whose module entries pin
@@ -2810,4 +2827,167 @@ fn a_clean_election_reaches_crypto_tally_verified() {
             .holds()
             .contains(HoldReason::PaperCountMismatch)
     );
+}
+
+// ---------------------------------------------------------------------
+// The report over two units: one without its opening or paper count keeps
+// the ledger below `CRYPTO_TALLY_VERIFIED`.
+
+const B2: Bx = Bx {
+    id: b"BOX-2",
+    device: BOX_DEVICE_BASE + 1,
+    style: STYLE1,
+    options: 7,
+    mods: &[(b"M-B2-J", 4), (b"M-B2-P1", 2), (b"M-B2-P2", 3)],
+    absentee: false,
+};
+
+/// The modules of the two-unit election, as [`ELECTION_MODULES`].
+const TWO_UNIT_MODULES: [(&[u8], ChamberCode, &[u8], u16, bool); 9] = [
+    (b"M-B1-P1", ChamberCode::P1, b"BOX-1", 0, false),
+    (b"M-B1-P2", ChamberCode::P2, b"BOX-1", 1, false),
+    (b"M-B2-P1", ChamberCode::P1, b"BOX-2", 2, false),
+    (b"M-B2-P2", ChamberCode::P2, b"BOX-2", 3, false),
+    (b"M-B2-J", ChamberCode::J, b"BOX-2", 4, false),
+    (b"M-U1A-P1", ChamberCode::P1, b"U-1A", 8, true),
+    (b"M-U1A-P2", ChamberCode::P2, b"U-1A", 9, true),
+    (b"M-U1B-P1", ChamberCode::P1, b"U-1B", 10, true),
+    (b"M-U1B-P2", ChamberCode::P2, b"U-1B", 11, true),
+];
+
+/// ST-1 with BOX-1 in RU-1 and BOX-2 in RU-2, both STYLE-1: two units.
+fn two_unit_world() -> &'static World {
+    static WORLD: OnceLock<&'static World> = OnceLock::new();
+    WORLD.get_or_init(|| {
+        let mut d = Draft::standard();
+        d.boxes = std::vec![
+            common::genesis_box(0, b"BOX-1", b"ST-1", RU1, &[b"M-B1-P1", b"M-B1-P2"]),
+            common::genesis_box(
+                1,
+                b"BOX-2",
+                b"ST-1",
+                RU2,
+                &[b"M-B2-P1", b"M-B2-P2", b"M-B2-J"]
+            ),
+        ];
+        d.stations.truncate(1);
+        d.policies.truncate(1);
+        d.units = std::vec![
+            ReportingUnitEntry::new(
+                ReportingUnitId::new(RU1).unwrap(),
+                1,
+                OrgId::new(b"NEC-D").unwrap()
+            )
+            .unwrap(),
+            ReportingUnitEntry::new(
+                ReportingUnitId::new(RU2).unwrap(),
+                1,
+                OrgId::new(b"NEC-D").unwrap()
+            )
+            .unwrap(),
+        ];
+        d.modules.retain(|m| {
+            TWO_UNIT_MODULES
+                .iter()
+                .any(|e| e.0 == m.module_id.as_bytes())
+        });
+        for entry in &mut d.modules {
+            let m = TWO_UNIT_MODULES
+                .iter()
+                .find(|e| e.0 == entry.module_id.as_bytes())
+                .unwrap();
+            entry.provisioned_hash = object_hash(provisioning(*m));
+        }
+        d.roster.push(common::roster_signer(
+            30,
+            b"chair",
+            RosterRole::Chair,
+            b"NEC-D",
+            None,
+        ));
+        d.appointments = d.referenced_appointments();
+        leak(build(&d, &TALLY_SCOPES))
+    })
+}
+
+/// The whole two-unit ledger, with unit RU-2's opening and paper count
+/// when asked.
+fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
+    let world = two_unit_world();
+    let mut book = Book::new(world);
+    for chamber in [ChamberCode::P1, ChamberCode::P2] {
+        book.push(SCHEMA_PARTY_KEY_CEREMONY, ceremony(chamber));
+    }
+    for m in TWO_UNIT_MODULES {
+        book.push(SCHEMA_MODULE_PROVISIONED, provisioning(m));
+    }
+    let casts1 = box1_closed(&mut book);
+    let casts2 = std::vec![cast(B2, 1, 1), cast(B2, 2, 4)];
+    book.w(opened(B2));
+    for c in &casts2 {
+        book.push(SCHEMA_CAST_RECORD, c.event);
+    }
+    book.push(SCHEMA_BATCH_ATTEST, batch(B2, 0, 1, 2, &codes(&casts2)));
+    book.push(SCHEMA_BOX_CLOSE, close(B2, 2, 2, 0, &codes(&casts2)));
+    for (schema, event) in station_record_of(&[(B1, 3), (B2, 2)]) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(5));
+    book.checkpoint();
+    tally1(
+        &mut book,
+        &casts1,
+        &spec(STYLE1, RU1, &codes(&casts1)),
+        &[1, 1, 1, 0, 0],
+        0,
+    );
+    let body = scope_body(&spec(STYLE1, RU2, &codes(&casts2)));
+    book.q(scope(body));
+    book.checkpoint();
+    if opening2 {
+        book.q(opening(opening_body(
+            STYLE1,
+            RU2,
+            body,
+            0,
+            sums(&casts2, 0),
+        )));
+    }
+    if paper2 {
+        book.w(paper(STYLE1, RU2, &[1, 0, 0, 1, 0], 0));
+    }
+    book.checkpoint();
+    verify_ledger(
+        world.genesis,
+        book.ledger.bytes(),
+        &book.ledger.events,
+        Publications {
+            anchors: Publication::Satisfied,
+            board: Publication::Pending,
+        },
+    )
+}
+
+#[test]
+fn every_unit_must_be_tallied_for_crypto_tally_verified() {
+    let report = two_unit_ledger(true, true);
+    assert_eq!(report.tally().units().len(), 2);
+    assert!(report.tally().passed(), "{:?}", report.tally());
+    assert_eq!(
+        report.status().holds(),
+        HoldSet::empty(),
+        "{:?}",
+        report.status()
+    );
+    assert_eq!(report.status().status(), Status::CryptoTallyVerified);
+    // RU-2 without its opening, or without its paper count: RU-1 alone
+    // passing is not enough, and nothing is held.
+    for (opening2, paper2) in [(false, true), (true, false)] {
+        let report = two_unit_ledger(opening2, paper2);
+        assert!(report.tally().unit(STYLE1, RU1).unwrap().passed());
+        assert!(!report.tally().unit(STYLE1, RU2).unwrap().complete());
+        assert!(!report.tally().passed());
+        assert_eq!(report.status().holds(), HoldSet::empty());
+        assert_eq!(report.status().status(), Status::SourceCompletenessChecked);
+    }
 }

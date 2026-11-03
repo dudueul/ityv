@@ -498,8 +498,8 @@ fn refuses_a_chamber_larger_than_threshold_sharing_serves() {
             trustee_id: ityv_encoding::TrusteeId::new(name).unwrap(),
             chamber: ChamberCode::J,
             org_id: common::org(b"TRUST-ORG"),
-            key: common::registered(common::SPARE_BASE + i as u16),
-            appointment_hash: common::appointment(120 + i as u8),
+            key: common::registered(common::SPARE_BASE + u16::try_from(i).unwrap()),
+            appointment_hash: common::appointment(120 + u8::try_from(i).unwrap()),
         });
     }
     draft.appointments = draft.referenced_appointments();
@@ -518,8 +518,8 @@ fn refuses_a_chamber_larger_than_threshold_sharing_serves() {
             trustee_id: ityv_encoding::TrusteeId::new(name).unwrap(),
             chamber: ChamberCode::J,
             org_id: common::org(b"TRUST-ORG"),
-            key: common::registered(common::SPARE_BASE + i as u16),
-            appointment_hash: common::appointment(120 + i as u8),
+            key: common::registered(common::SPARE_BASE + u16::try_from(i).unwrap()),
+            appointment_hash: common::appointment(120 + u8::try_from(i).unwrap()),
         });
     }
     draft.appointments = draft.referenced_appointments();
