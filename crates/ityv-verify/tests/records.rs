@@ -722,6 +722,35 @@ fn a_record_whose_proof_or_style_fails_is_rejected() {
 }
 
 #[test]
+fn a_record_of_the_style_an_amendment_took_from_its_box_is_rejected() {
+    // BOX-1 is STYLE-1 in the genesis and STYLE-2 after the amendment: the
+    // tally files the box under STYLE-2, so a STYLE-1 record cast before
+    // the amendment would be counted as STYLE-2 votes. It is rejected.
+    fn to_style_2(d: &mut Draft) {
+        for b in &mut d.boxes {
+            if b.box_id.as_bytes() == BOX {
+                b.ballot_style_id = BallotStyleId::new(b"STYLE-2").unwrap();
+            }
+        }
+    }
+    let world = world_with(Some(to_style_2));
+    let before = record(&rec(1));
+    let run = run_in(
+        &world,
+        &[
+            w(opened()),
+            r(before),
+            (SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()),
+        ],
+    );
+    assert_eq!(rejected(&run), [(4, RecordRefusal::Style)]);
+    assert!(report(&run).holds.contains(HoldReason::RecordRejected));
+    // Without the amendment the same record is taken.
+    let run = go(&[w(opened()), r(before)]);
+    assert!(rejected(&run).is_empty());
+}
+
+#[test]
 fn a_record_signature_that_does_not_verify_is_rejected() {
     // The device signature by another box's device; a module signature by
     // another module.

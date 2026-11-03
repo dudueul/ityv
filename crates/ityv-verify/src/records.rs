@@ -7,8 +7,10 @@
 //! longer expects are already gone) and checks:
 //!
 //! 1. every cast record: its ballot style is in the genesis and fixes the
-//!    option count, and it is the box's style or a test style (a record of
-//!    another box's style could be in no tally scope of this box, §11.1);
+//!    option count, and it is the box's style (in the last genesis state,
+//!    where the tally files the box, and in a state up to the record's
+//!    frame) or a test style: a record of another style could be in no
+//!    tally scope of this box (§11.1);
 //!    its commitments are valid points and its OR proof of representation
 //!    verifies (VC-025, VC-026); the device's Ed25519 record
 //!    signature (purpose `cast-record`) over the body object bytes; and for
@@ -83,8 +85,8 @@ use ityv_crypto::{
 };
 use ityv_encoding::schema_version;
 use ityv_encoding::{
-    BatchAttest, BoxClose, BoxId, CastRecord, ChallengeOpening, Decode, Encode, HYBRID_SIG_LEN,
-    HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, ModuleId, Reader, SCHEMA_BATCH_ATTEST,
+    BatchAttest, BoxClose, BoxId, CastRecord, ChallengeOpening, Decode, Encode, GenesisBox,
+    HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, ModuleId, Reader, SCHEMA_BATCH_ATTEST,
     SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SchemaId, Seq, Writer,
     decode_object,
 };
@@ -106,8 +108,9 @@ const MODULE_RECORD_MESSAGE_LEN: usize = 140;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordRefusal {
     /// Its ballot style is not in the genesis, or is neither the box's
-    /// ballot style (in a genesis state up to its frame) nor a test style:
-    /// no tally scope of the box could count it (§11.1).
+    /// ballot style (in the genesis's last state and in a state up to its
+    /// frame) nor a test style: no tally scope of the box could count it
+    /// (§11.1).
     Style,
     /// A commitment is not a valid point, or the OR proof does not decode
     /// or does not verify (VC-025, VC-026).
@@ -339,14 +342,18 @@ impl<'a> Ctx<'_, 'a> {
         keys
     }
 
-    /// Whether `style_id` is the box's ballot style in a genesis state up
-    /// to `seq`'s.
+    /// Whether `style_id` is the box's ballot style in the genesis's last
+    /// state, where the tally files the box (an amendment that changes the
+    /// box's style must not relabel the records cast under the old one),
+    /// and in a genesis state up to `seq`'s.
     fn box_style(&self, seq: Seq, style_id: &[u8]) -> bool {
-        self.states(seq).any(|state| {
-            self.genesis
-                .expected_box_at(state, self.box_id)
-                .is_some_and(|b| b.ballot_style_id.as_bytes() == style_id)
-        })
+        let style_of = |b: &GenesisBox<'_>| b.ballot_style_id.as_bytes() == style_id;
+        self.genesis.expected_box(self.box_id).is_some_and(style_of)
+            && self.states(seq).any(|state| {
+                self.genesis
+                    .expected_box_at(state, self.box_id)
+                    .is_some_and(style_of)
+            })
     }
 
     /// The option count of ballot style `style_id` in the genesis.
