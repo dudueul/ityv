@@ -480,7 +480,7 @@ static ORG_B: OrgId<'static> = match OrgId::new(b"B") {
 fn event_codes_are_exact() {
     let code: u8 = kani::any();
     let role = EventRole::from_code(code);
-    assert_eq!(role.is_some(), (1..=8).contains(&code));
+    assert_eq!(role.is_some(), (1..=9).contains(&code));
     if let Some(r) = role {
         assert_eq!(r.code(), code);
     }
@@ -509,7 +509,7 @@ fn event_codes_are_exact() {
             CaptureProfile::from_code(code).map(CaptureProfile::code),
             1..=3,
         ),
-        (RosterRole::from_code(code).map(RosterRole::code), 1..=4),
+        (RosterRole::from_code(code).map(RosterRole::code), 1..=5),
         (StationKind::from_code(code).map(StationKind::code), 1..=3),
         (
             AmendmentReason::from_code(code).map(AmendmentReason::code),

@@ -547,8 +547,8 @@ fn small_entry_vectors() {
         ),
     ];
     let mut b = bytes.clone();
-    b[role_at] = 5;
-    v.push(invalid("role 5", b, "ValueOutOfRange", role_at));
+    b[role_at] = 6;
+    v.push(invalid("role 6", b, "ValueOutOfRange", role_at));
     let mut b = bytes.clone();
     let n = b.len();
     b[n - 64..].fill(0);

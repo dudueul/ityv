@@ -24,6 +24,7 @@ pub mod progress;
 pub mod scan_count;
 pub mod share_package;
 pub mod slip;
+pub mod tally;
 pub mod util;
 pub mod witnessed;
 
@@ -193,3 +194,15 @@ pub const SCHEMA_BOX_UNIT_SWAP_BODY: SchemaId = SchemaId::new(0x0041);
 
 /// `SignedLegalAuthorization` (ENCODING.md §8.60, `0x0042`).
 pub const SCHEMA_SIGNED_LEGAL_AUTHORIZATION: SchemaId = SchemaId::new(0x0042);
+
+/// `TallyScopeBody` (ENCODING.md §8.61, `0x0043`).
+pub const SCHEMA_TALLY_SCOPE_BODY: SchemaId = SchemaId::new(0x0043);
+
+/// `AggregateOpeningBody` (ENCODING.md §8.62, `0x0044`).
+pub const SCHEMA_AGGREGATE_OPENING_BODY: SchemaId = SchemaId::new(0x0044);
+
+/// `QuorumSigned` (ENCODING.md §8.63, `0x0045`).
+pub const SCHEMA_QUORUM_SIGNED: SchemaId = SchemaId::new(0x0045);
+
+/// `PaperCountReportBody` (ENCODING.md §8.64, `0x0046`).
+pub const SCHEMA_PAPER_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x0046);

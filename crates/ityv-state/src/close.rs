@@ -249,7 +249,9 @@ where
                     distinct = distinct.saturating_add(1);
                 }
             }
-            RosterRole::Custodian | RosterRole::Authority => return Err(Error::NotRegistered),
+            RosterRole::Custodian | RosterRole::Authority | RosterRole::Chair => {
+                return Err(Error::NotRegistered);
+            }
         }
     }
     if clerks >= min_clerks && distinct >= MIN_OBSERVERS {
@@ -269,7 +271,8 @@ const fn witness_role(role: EventRole) -> Option<RosterRole> {
         | EventRole::Sender
         | EventRole::Receiver
         | EventRole::Authority
-        | EventRole::Device => None,
+        | EventRole::Device
+        | EventRole::Chair => None,
     }
 }
 

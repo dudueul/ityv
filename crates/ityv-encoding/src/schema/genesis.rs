@@ -101,6 +101,10 @@ pub enum RosterRole {
     /// own status (a court or another body the law empowers, PROTOCOL.md
     /// §13).
     Authority = 4,
+    /// The chair of a district election commission (구·시·군 선관위
+    /// 위원장), who signs the paper count of a reporting unit
+    /// (PROTOCOL.md §11.5).
+    Chair = 5,
 }
 
 impl RosterRole {
@@ -118,6 +122,7 @@ impl RosterRole {
             2 => Some(Self::Observer),
             3 => Some(Self::Custodian),
             4 => Some(Self::Authority),
+            5 => Some(Self::Chair),
             _ => None,
         }
     }

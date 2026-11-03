@@ -21,13 +21,15 @@ use crate::schema::events::{
     IssuanceCountBody, LateBatchCloseBody, LegalDecisionRefBody, SealChangeBody,
 };
 use crate::schema::progress::ProgressCheckBody;
+use crate::schema::tally::PaperCountReportBody;
 use crate::schema::util::{HYBRID_SIG_LEN, ascending_by, read_fixed};
 use crate::schema::{
     SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
     SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
     SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY,
-    SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_SEAL_CHANGE_BODY,
+    SCHEMA_VERSION_1,
 };
 use crate::writer::Writer;
 
@@ -44,7 +46,7 @@ pub const MIN_EVENT_CLERKS: usize = 2;
 pub const MIN_EVENT_OBSERVER_ORGS: usize = 2;
 
 /// The body schemas a `WitnessedEvent` may carry.
-pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 13] = [
+pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 14] = [
     SCHEMA_CUSTODY_HANDOFF_BODY,
     SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_LEGAL_DECISION_REF_BODY,
@@ -58,6 +60,7 @@ pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 13] = [
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
     SCHEMA_CHECKIN_UNIT_SWAP_BODY,
     SCHEMA_BOX_UNIT_SWAP_BODY,
+    SCHEMA_PAPER_COUNT_REPORT_BODY,
 ];
 
 /// The signature purpose of a body schema (PROTOCOL.md Appendix B), or
@@ -78,6 +81,7 @@ pub fn purpose_of(schema: SchemaId) -> Option<&'static [u8]> {
         0x003F => b"observer-count",
         0x0040 => b"checkin-swap",
         0x0041 => b"box-swap",
+        0x0046 => b"paper-count",
         _ => return None,
     };
     Some(purpose)
@@ -103,6 +107,9 @@ pub enum EventRole {
     Authority = 7,
     /// The ballot box's commitment unit.
     Device = 8,
+    /// The chair of a district election commission (구·시·군 선관위
+    /// 위원장), who reports the paper count of a reporting unit.
+    Chair = 9,
 }
 
 impl EventRole {
@@ -124,6 +131,7 @@ impl EventRole {
             6 => Some(Self::Receiver),
             7 => Some(Self::Authority),
             8 => Some(Self::Device),
+            9 => Some(Self::Chair),
             _ => None,
         }
     }
@@ -171,7 +179,8 @@ where
             | EventRole::Sender
             | EventRole::Receiver
             | EventRole::Authority
-            | EventRole::Device) => {
+            | EventRole::Device
+            | EventRole::Chair) => {
                 if Some(role) != extra {
                     return false;
                 }
@@ -184,9 +193,10 @@ where
         && extra_ok
 }
 
-/// Observers only, of two or more organisations (`ObserverCountAttest`,
-/// VC-016).
-fn observers_only<'a, F, I>(sigs: F) -> bool
+/// Observers of two or more organisations and, when `extra` is given,
+/// exactly one signer in that role, nothing else (`ObserverCountAttest`
+/// without, `PaperCountReport` with the chair; VC-016, VC-075).
+fn observers_with<'a, F, I>(sigs: F, extra: Option<EventRole>) -> bool
 where
     F: Fn() -> I,
     I: Iterator<Item = EventSig<'a>>,
@@ -195,6 +205,9 @@ where
     let mut distinct = 0usize;
     for s in sigs() {
         if s.role != EventRole::Observer {
+            if Some(s.role) == extra {
+                continue;
+            }
             return false;
         }
         let org = s.org_id.as_bytes();
@@ -205,7 +218,8 @@ where
             distinct = distinct.saturating_add(1);
         }
     }
-    distinct >= MIN_EVENT_OBSERVER_ORGS
+    let extra_ok = extra.is_none_or(|role| count_role(sigs(), role) == 1);
+    distinct >= MIN_EVENT_OBSERVER_ORGS && extra_ok
 }
 
 fn exactly<'a, F, I>(sigs: F, roles: &[EventRole]) -> bool
@@ -226,6 +240,8 @@ where
 ///   nothing else;
 /// * `ObserverCountAttest`: observers of two or more organisations,
 ///   nothing else;
+/// * `PaperCountReport`: the chair of the district commission once,
+///   observers of two or more organisations, nothing else;
 /// * `CustodyHandoff`: exactly one sender and one receiver;
 /// * `DisputeEvent`: exactly the commission and the committee;
 /// * `LegalDecisionRef`: exactly one authority.
@@ -237,7 +253,8 @@ where
     match schema.get() {
         0x0029 => clerks_and_observers(sigs, Some(EventRole::Device)),
         0x002A..=0x002E | 0x0032 | 0x0040 | 0x0041 => clerks_and_observers(sigs, None),
-        0x003F => observers_only(sigs),
+        0x003F => observers_with(sigs, None),
+        0x0046 => observers_with(sigs, Some(EventRole::Chair)),
         0x0008 => exactly(sigs, &[EventRole::Sender, EventRole::Receiver]),
         0x000E => exactly(sigs, &[EventRole::Commission, EventRole::Committee]),
         0x000F => exactly(sigs, &[EventRole::Authority]),
@@ -262,6 +279,7 @@ fn validate_body(schema: SchemaId, bytes: &[u8]) -> Result<(), Error> {
         0x003F => decode_object::<ObserverCountAttestBody<'_>>(schema, v, bytes).map(drop),
         0x0040 => decode_object::<CheckinUnitSwapBody<'_>>(schema, v, bytes).map(drop),
         0x0041 => decode_object::<BoxUnitSwapBody<'_>>(schema, v, bytes).map(drop),
+        0x0046 => decode_object::<PaperCountReportBody<'_>>(schema, v, bytes).map(drop),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }
