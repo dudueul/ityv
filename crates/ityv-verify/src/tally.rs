@@ -649,18 +649,18 @@ struct Ctx<'g, 'a> {
 }
 
 impl<'a> Ctx<'_, 'a> {
-    /// The witnesses' time at frame `at`: the latest time bucket of a valid
-    /// checkpoint recorded before it (0 if none). Trustees and clerks
-    /// declare their own buckets; the late-close window is measured in
-    /// this one (VC-057).
+    /// The witnesses' time at frame `at`: the time bucket of the last valid
+    /// checkpoint recorded before it (0 if none), as PROTOCOL.md §11.1
+    /// says. Trustees and clerks declare their own buckets; the late-close
+    /// window is measured in this one (VC-057). The chain does not require
+    /// buckets to grow, so an earlier checkpoint's later bucket does not
+    /// count.
     fn witness_time(&self, at: Seq) -> TimeBucket {
-        let latest = self
-            .checkpoints
+        self.checkpoints
             .iter()
             .filter(|(frame, _, _)| *frame < at.get())
-            .map(|(_, _, bucket)| bucket.get())
-            .max();
-        TimeBucket::new(latest.unwrap_or(0))
+            .max_by_key(|(frame, _, _)| *frame)
+            .map_or(TimeBucket::new(0), |(_, _, bucket)| *bucket)
     }
 
     /// The `CRYPTO_TALLY_AID` capability for the day of `bucket`.
