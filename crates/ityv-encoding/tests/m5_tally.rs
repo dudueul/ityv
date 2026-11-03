@@ -565,6 +565,11 @@ fn receipt_outcomes_have_the_codes_of_the_resolution() {
     assert_eq!(ReceiptOutcome::from_code(0), None);
     assert_eq!(ReceiptOutcome::from_code(6), None);
     assert_eq!(RECEIPT_ENTRY_LEN, 65);
+    let entry = ReceiptEntry {
+        record_hash: Hash512([1; 64]),
+        outcome: ReceiptOutcome::Late,
+    };
+    assert_eq!(entry.encoded_len(), RECEIPT_ENTRY_LEN);
     assert_eq!(MAX_RECEIPT_ENTRIES, 65_536);
 }
 
@@ -900,4 +905,44 @@ fn every_schema_has_its_current_version() {
     assert_eq!(EntrySet::Boxes.version(), SCHEMA_VERSION_1);
     // The appointment hashes are not objects.
     assert_eq!(EntrySet::Appointments.version(), SCHEMA_VERSION_1);
+}
+
+#[test]
+fn the_largest_count_is_two_to_the_26_minus_one() {
+    // A scope, its no-record count and a paper count at the bound decode.
+    let parts = TallyScopeParts {
+        included_count: MAX_TALLY_COUNT,
+        no_record_count: MAX_TALLY_COUNT,
+        ..scope_parts(Exclusions::EMPTY)
+    };
+    let body = TallyScopeBody::new(&parts).unwrap();
+    let bytes = encode_to_vec(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &body);
+    let back: TallyScopeBody<'_> =
+        decode_object(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(back.parts(), &parts);
+    let parts = PaperCountParts {
+        invalid: MAX_TALLY_COUNT,
+        ..paper_parts(&[MAX_TALLY_COUNT, 0])
+    };
+    let body = PaperCountReportBody::new(&parts).unwrap();
+    let bytes = encode_to_vec(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &body);
+    let back: PaperCountReportBody<'_> =
+        decode_object(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(back.parts(), &parts);
+    // One more is out of range, in the constructors too.
+    assert!(PaperVotes::new(&[MAX_TALLY_COUNT + 1]).is_none());
+    assert!(
+        TallyScopeBody::new(&TallyScopeParts {
+            included_count: MAX_TALLY_COUNT + 1,
+            ..scope_parts(Exclusions::EMPTY)
+        })
+        .is_err()
+    );
+    assert!(
+        PaperCountReportBody::new(&PaperCountParts {
+            invalid: MAX_TALLY_COUNT + 1,
+            ..paper_parts(&[1])
+        })
+        .is_err()
+    );
 }
