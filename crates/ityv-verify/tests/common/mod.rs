@@ -873,3 +873,11 @@ pub fn module_signing(n: u16) -> &'static HybridSigningKey {
 pub fn module_key(n: u16) -> &'static [u8; HYBRID_VK_LEN] {
     registered(MODULE_BASE + n)
 }
+
+// ---------------------------------------------------------------------
+// Progress-stage helpers.
+
+/// The signing key of check-in unit `n` (the `n` given to `checkin_unit`).
+pub fn unit_signing(n: u16) -> &'static HybridSigningKey {
+    signing(UNIT_BASE + n)
+}

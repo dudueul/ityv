@@ -530,6 +530,30 @@ impl<'a> VerifiedGenesis<'a> {
         prove_in(g, &sets.routes, key)
     }
 
+    /// The station `station_id` of state `state`, if any.
+    #[must_use]
+    pub fn station_at(&self, state: usize, station_id: &[u8]) -> Option<&StationEntry<'a>> {
+        self.state(state)?.1.stations.find(station_id)
+    }
+
+    /// The station `key`, proved against state `state`.
+    #[must_use]
+    pub fn station_entry_at(&self, state: usize, key: &[u8]) -> Option<Entry<StationEntry<'a>>> {
+        let (g, sets) = self.state(state)?;
+        prove_in(g, &sets.stations, key)
+    }
+
+    /// The progress policy of station `key`, proved against state `state`.
+    #[must_use]
+    pub fn policy_entry_at(
+        &self,
+        state: usize,
+        key: &[u8],
+    ) -> Option<Entry<StationProgressPolicy<'a>>> {
+        let (g, sets) = self.state(state)?;
+        prove_in(g, &sets.policies, key)
+    }
+
     /// The module `module_id` of state `state`, if any.
     #[must_use]
     pub fn module_at(&self, state: usize, module_id: &[u8]) -> Option<&ModuleEntry<'a>> {
