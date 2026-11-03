@@ -259,10 +259,19 @@ pub struct VerifiedGenesis<'a> {
     genesis: Genesis<'a>,
     anchors: Vec<Anchor>,
     sets: Amendable<'a>,
+    /// The states before the last, from the genesis (state 0) on.
+    history: Vec<State<'a>>,
     fixed: Fixed<'a>,
     /// Every state's devices and places, for scoping ledger events signed
     /// before an amendment changed them.
     seen: Seen<'a>,
+}
+
+/// One earlier genesis state with its checked amendable sets.
+#[derive(Debug, Clone)]
+struct State<'a> {
+    genesis: Genesis<'a>,
+    sets: Amendable<'a>,
 }
 
 /// The boxes, stations and check-in units of every genesis state.
@@ -342,6 +351,7 @@ pub fn verify_genesis<'a>(
     seen.add(&sets);
     let mut anchors = Vec::with_capacity(amendments.len().saturating_add(1));
     anchors.push(genesis.anchor());
+    let mut history = Vec::with_capacity(amendments.len());
 
     for (k, amendment) in amendments.iter().enumerate() {
         let state = u64::try_from(k)
@@ -352,10 +362,14 @@ pub fn verify_genesis<'a>(
                 Rule::Chain(ityv_state::Error::Overflow),
             ))?;
         let next = amend(state, &genesis, &fixed, amendment)?;
-        sets = Amendable::parse(state, &amendment.sets, next.sets())?;
-        cross::check(state, &sets, &fixed, next.body())?;
-        seen.add(&sets);
+        let next_sets = Amendable::parse(state, &amendment.sets, next.sets())?;
+        cross::check(state, &next_sets, &fixed, next.body())?;
+        seen.add(&next_sets);
         anchors.push(next.anchor());
+        history.push(State {
+            genesis,
+            sets: core::mem::replace(&mut sets, next_sets),
+        });
         genesis = next;
     }
 
@@ -363,9 +377,20 @@ pub fn verify_genesis<'a>(
         genesis,
         anchors,
         sets,
+        history,
         fixed,
         seen,
     })
+}
+
+/// The entry `key` of `set`, proved against `genesis`.
+fn prove_in<'a, T: GenesisEntry<'a>>(
+    genesis: &Genesis<'a>,
+    set: &Set<'a, T>,
+    key: &[u8],
+) -> Option<Entry<T>> {
+    let (bytes, index, proof) = set.proof(key)?;
+    genesis.entry(bytes, index, &proof).ok()
 }
 
 /// Verifies one amendment's signatures and applies it to `genesis`.
@@ -468,8 +493,83 @@ impl<'a> VerifiedGenesis<'a> {
     }
 
     fn prove<T: GenesisEntry<'a>>(&self, set: &Set<'a, T>, key: &[u8]) -> Option<Entry<T>> {
-        let (bytes, index, proof) = set.proof(key)?;
-        self.genesis.entry(bytes, index, &proof).ok()
+        prove_in(&self.genesis, set, key)
+    }
+
+    /// The number of states: the genesis (state 0) and one per amendment.
+    #[must_use]
+    pub fn state_count(&self) -> usize {
+        self.history.len().saturating_add(1)
+    }
+
+    /// The genesis and amendable sets of state `state`.
+    fn state(&self, state: usize) -> Option<(&Genesis<'a>, &Amendable<'a>)> {
+        match self.history.get(state) {
+            Some(s) => Some((&s.genesis, &s.sets)),
+            None => (state == self.history.len()).then_some((&self.genesis, &self.sets)),
+        }
+    }
+
+    /// The genesis in state `state` (0 is the genesis, `k` the state after
+    /// the `k`-th amendment), as `ityv-state` holds it.
+    #[must_use]
+    pub fn genesis_at(&self, state: usize) -> Option<&Genesis<'a>> {
+        self.state(state).map(|(g, _)| g)
+    }
+
+    /// The expected box `box_id` of state `state`, if any.
+    #[must_use]
+    pub fn expected_box_at(&self, state: usize, box_id: &[u8]) -> Option<&GenesisBox<'a>> {
+        self.state(state)?.1.boxes.find(box_id)
+    }
+
+    /// The expected box `key`, proved against state `state`.
+    #[must_use]
+    pub fn box_entry_at(&self, state: usize, key: &[u8]) -> Option<Entry<GenesisBox<'a>>> {
+        let (g, sets) = self.state(state)?;
+        prove_in(g, &sets.boxes, key)
+    }
+
+    /// The custody route `key`, proved against state `state`.
+    #[must_use]
+    pub fn route_entry_at(&self, state: usize, key: &[u8]) -> Option<Entry<CustodyRoute<'a>>> {
+        let (g, sets) = self.state(state)?;
+        prove_in(g, &sets.routes, key)
+    }
+
+    /// The module `key`, proved against state `state`.
+    #[must_use]
+    pub fn module_entry_at(&self, state: usize, key: &[u8]) -> Option<Entry<ModuleEntry<'a>>> {
+        let (g, sets) = self.state(state)?;
+        prove_in(g, &sets.modules, key)
+    }
+
+    /// The module `module_id` of state `state`, if any.
+    #[must_use]
+    pub fn module_at(&self, state: usize, module_id: &[u8]) -> Option<&ModuleEntry<'a>> {
+        self.state(state)?.1.modules.find(module_id)
+    }
+
+    /// Every roster signer of state `state`, proved against it, in key
+    /// order (empty for a state that does not exist).
+    #[must_use]
+    pub fn roster_at(&self, state: usize) -> Vec<Entry<RosterSigner<'a>>> {
+        self.state(state)
+            .map(|(g, sets)| {
+                sets.roster
+                    .items()
+                    .iter()
+                    .filter_map(|i| prove_in(g, &sets.roster, i.value.key()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The ballot style `ballot_style_id` (fixed for the election), if
+    /// any.
+    #[must_use]
+    pub fn ballot_style(&self, ballot_style_id: &[u8]) -> Option<&BallotStyleEntry<'a>> {
+        self.fixed.styles.find(ballot_style_id)
     }
 
     /// The expected box `key`, proved against the last state.

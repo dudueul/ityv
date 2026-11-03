@@ -134,11 +134,15 @@ pub enum HoldReason {
     /// forged or broken authorization is evidence, even when a valid one is
     /// also on the ledger (§4.4, VC-006..008).
     AuthorizationInvalid = 40,
+    /// A genesis amendment the verifier applied is not on the ledger, or
+    /// the ledger carries the amendments out of order, so the frame from
+    /// which each state applies is unknown (§4.3).
+    AmendmentMissing = 41,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -180,6 +184,7 @@ impl HoldReason {
         Self::BoxEventRefused,
         Self::AuthorizationMissing,
         Self::AuthorizationInvalid,
+        Self::AmendmentMissing,
     ];
 
     /// The reason's code.

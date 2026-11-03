@@ -18,8 +18,8 @@ mod common;
 use std::vec::Vec;
 
 use common::{
-    Draft, SIGNERS, amendment, checkin_unit, leak_slice, object, sign, sign_genesis_with, signing,
-    standard, station,
+    Draft, SIGNERS, amendment, body_hash, checkin_unit, leak_slice, object, sign,
+    sign_genesis_with, signing, standard, station,
 };
 use ityv_crypto::object_hash;
 use ityv_encoding::{
@@ -498,6 +498,66 @@ fn the_pinned_genesis_its_amendments_and_its_authorization_are_indexed() {
     );
     assert!(idx.findings().is_empty(), "{:?}", idx.findings());
     assert_eq!(idx.events().len(), 4);
+    // The amendment applies from its frame on.
+    assert_eq!(idx.amendment_frames(), [Seq::new(3).unwrap()]);
+    assert_eq!(idx.state_at(Seq::new(3).unwrap()), 0);
+    assert_eq!(idx.state_at(Seq::new(4).unwrap()), 1);
+    assert!(idx.ledger_holds().is_empty());
+}
+
+#[test]
+fn every_applied_amendment_must_be_on_the_ledger_in_order() {
+    let draft = Draft::standard();
+    let built = common::leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |_| {}));
+    let first = amendment(1, built.pin, &built.raw, &SIGNERS);
+    let second = amendment(2, body_hash(first.signed), &built.raw, &SIGNERS);
+    let verified =
+        common::leak(verify_genesis(&built.pin, &built.input(), &[first, second]).unwrap());
+    assert_eq!(verified.state_count(), 3);
+    assert!(verified.genesis_at(3).is_none());
+    assert_eq!(verified.genesis_at(0).unwrap().anchor().head(), &built.pin);
+    assert_eq!(
+        verified.genesis_at(2).unwrap().anchor(),
+        verified.genesis().anchor()
+    );
+    assert!(verified.box_entry_at(1, b"BOX-1").is_some());
+    assert!(verified.box_entry_at(3, b"BOX-1").is_none());
+    assert_eq!(verified.roster_at(0).len(), verified.roster().len());
+    assert!(verified.roster_at(9).is_empty());
+    let run = |events: &[(SchemaId, &'static [u8])]| {
+        let mut ledger = Ledger::new();
+        for (schema, e) in events {
+            ledger.push_as(*schema, e);
+        }
+        let supply: Vec<&'static [u8]> = events.iter().map(|(_, e)| *e).collect();
+        build_index(verified, ledger.bytes(), &supply)
+    };
+    // In order: both apply.
+    let idx = run(&[
+        (SCHEMA_SIGNED_GENESIS, built.signed),
+        (SCHEMA_SIGNED_GENESIS, first.signed),
+        (SCHEMA_SIGNED_GENESIS, second.signed),
+    ]);
+    assert!(idx.ledger_holds().is_empty(), "{:?}", idx.ledger_holds());
+    assert_eq!(
+        idx.amendment_frames(),
+        [Seq::new(2).unwrap(), Seq::new(3).unwrap()]
+    );
+    assert_eq!(idx.state_at(Seq::new(9).unwrap()), 2);
+    // One missing: the ledger is held and only the first applies.
+    let idx = run(&[
+        (SCHEMA_SIGNED_GENESIS, built.signed),
+        (SCHEMA_SIGNED_GENESIS, first.signed),
+    ]);
+    assert!(idx.ledger_holds().contains(HoldReason::AmendmentMissing));
+    assert_eq!(idx.state_at(Seq::new(9).unwrap()), 1);
+    // Out of order: the second before the first.
+    let idx = run(&[
+        (SCHEMA_SIGNED_GENESIS, second.signed),
+        (SCHEMA_SIGNED_GENESIS, first.signed),
+    ]);
+    assert!(idx.ledger_holds().contains(HoldReason::AmendmentMissing));
+    assert_eq!(idx.amendment_frames(), [Seq::new(2).unwrap()]);
 }
 
 #[test]
