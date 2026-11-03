@@ -18,7 +18,9 @@
 //!    open is not a hold);
 //! 5. records ([`crate::verify_records`]);
 //! 9. disputes: a dispute still unresolved after every dispute event
-//!    holds the ledger.
+//!    holds the ledger, and so does a dispute event that cannot be taken
+//!    (a signature that does not verify, a filing without its capability,
+//!    a change that does not apply).
 //!
 //! The legal authorization ([`crate::authorize_ledger`]) gives the scopes;
 //! without `BALLOT_MARK` the report says that only counts back the result.
@@ -34,7 +36,9 @@
 //! split view, connectivity and software (stages 6–8, 10–12), so the
 //! highest status it gives is `SOURCE_COMPLETENESS_CHECKED`.
 
-use ityv_encoding::{CaptureProfile, ScopeSet};
+use alloc::vec::Vec;
+
+use ityv_encoding::{CaptureProfile, ScopeSet, Seq};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
 use ityv_state::status::{Step, evaluate};
 use ityv_state::{Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport};
@@ -66,6 +70,7 @@ pub struct Report<'a> {
     boxes: BoxStage<'a>,
     records: RecordStage<'a>,
     open_disputes: usize,
+    refused_disputes: Vec<Seq>,
     evidence: Evidence,
     status: StatusReport,
 }
@@ -105,6 +110,12 @@ impl<'a> Report<'a> {
     #[must_use]
     pub const fn open_disputes(&self) -> usize {
         self.open_disputes
+    }
+
+    /// The frames of the dispute events that could not be taken.
+    #[must_use]
+    pub fn refused_disputes(&self) -> &[Seq] {
+        &self.refused_disputes
     }
 
     /// What was handed to the status rule, step by step.
@@ -173,7 +184,9 @@ pub fn verify_ledger<'a>(
     let checkpoints = verify_checkpoints(genesis, &index, &authority);
     let boxes = verify_boxes(genesis, &index, &authority);
     let records = verify_records(genesis, &index, &boxes);
-    let open_disputes = unresolved(&dispute_steps(genesis, &index, &authority));
+    let disputes = dispute_steps(genesis, &index, &authority);
+    let open_disputes = unresolved(&disputes.steps);
+    let refused_disputes = disputes.refused;
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
         acc.union(without_close_missing(r.holds))
@@ -184,7 +197,8 @@ pub fn verify_ledger<'a>(
         .union(checkpoints.holds())
         .union(box_holds)
         .union(records.holds())
-        .with_if(open_disputes > 0, HoldReason::OpenDispute);
+        .with_if(open_disputes > 0, HoldReason::OpenDispute)
+        .with_if(!refused_disputes.is_empty(), HoldReason::DisputeRefused);
     let scopes = authority
         .authorization()
         .map_or(ScopeSet::empty(), ityv_state::Authorization::scopes);
@@ -219,6 +233,7 @@ pub fn verify_ledger<'a>(
         boxes,
         records,
         open_disputes,
+        refused_disputes,
         evidence,
         status,
     }

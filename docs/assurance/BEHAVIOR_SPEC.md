@@ -517,6 +517,9 @@
 | —(VC-053, 배치) | 배치 서명·모듈·배치 번호, 모듈별 구간 연속성과 마감 안, 구성원 수와 root, 구간을 가로지르는 기록(`a_batch_whose_count_or_root_is_wrong_attests_nothing`, `a_batch_signature_or_module_that_fails_attests_nothing`, `two_bodies_under_one_batch_index_attest_nothing`, `counter_ranges_run_from_one_without_gap_or_overlap`, `a_record_whose_counters_straddle_two_batches_is_unattested`, `a_range_beyond_the_close_is_a_finding`, `ranges_are_per_module`) | `BatchInvalid` |
 | —(VC-057) | `UNATTESTED` 목록과 늦은 배치 마감의 증명(`a_record_in_no_batch_is_unattested_until_a_late_batch_attests_it`) | 보류 없음 |
 | —(VC-027) | 유효 마감의 기록 집합 root(`the_close_must_carry_the_root_of_the_records`, `a_clean_box_passes`) | `RecordSetMismatch` |
+| —(검증 공개, §8) | 서명된 `ChallengeOpening`이 가리키는 기록은 `CHALLENGED_SPOILED`, 배치·기록 집합·투함 수에서 제외; 서명이 틀리거나 기록이 없는 검증 공개는 `ChallengeRejected`(`a_challenged_record_is_published_but_not_cast`, `a_challenge_opening_must_verify_and_name_a_record_of_the_box`) | VC-028 재구성은 다음 단계 |
+| —(VC-021) | `module_refusals`가 있는 배치는 증명하되 발견과 보류, 장치 이중 서명은 모듈 서명과 무관하게 발견(`a_batch_with_module_refusals_attests_but_is_a_finding`, `device_double_signing_is_found_whatever_the_module_signatures`) | `FAILURE_CASES.md` §4 |
+| —(분쟁 이벤트 거부) | 받을 수 없는 분쟁 이벤트는 목록과 `DisputeRefused`(`tests/report.rs` `a_dispute_event_that_cannot_be_taken_holds_the_ledger`) | 조용히 버리지 않음 |
 | 014, 161(보강) | `report::verify_ledger`는 모든 단계를 돌린 뒤 `ityv_state::status::evaluate`로 상태 하나를 낸다. 앵커 전·덮이지 않은 프레임이 있으면 `UNVERIFIED`(`tests/report.rs` `nothing_anchored_is_unverified`, `frames_no_checkpoint_covers_keep_the_ledger_unverified`) | VC-050 |
 | 056(보강), 059 | 열린 투표함은 보류가 아니라 완전성 미달: `LOG_CONSISTENT`, 모두 닫히면 `SOURCE_COMPLETENESS_CHECKED`(그 이상은 6–8단계 이후)(`an_open_box_under_an_anchored_checkpoint_is_log_consistent`, `every_box_closed_is_source_completeness_checked`) | VC-049 |
-| 057, 058(보강) | 미해결 분쟁, 늦은 게시판, 체크포인트 위반, 승인 없음은 `HOLD_REVIEW`(`a_hold_anywhere_is_hold_review`) | |
+| 057, 058(보강) | 미해결 분쟁, 늦은 게시판, 체크포인트 위반, 승인 없음, 투표함·기록 단계와 색인의 보류는 `HOLD_REVIEW`(`a_hold_anywhere_is_hold_review`, `a_hold_of_a_box_reaches_the_status`, `holds_of_the_record_stage_and_the_index_reach_the_status`) | |

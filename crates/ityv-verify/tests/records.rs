@@ -418,17 +418,8 @@ fn close_with(
     last: u64,
     set: Hash512,
 ) -> &'static [u8] {
-    let counters: Vec<ModuleCounter<'static>> = [P1, P2]
-        .iter()
-        .map(|m| ModuleCounter {
-            module_id: common::module(m),
-            counter: last,
-        })
-        .collect();
-    let body = BoxCloseBody::new(&BoxCloseParts {
-        election_id: election(),
-        box_id: box_id(),
-        counts: CloseCounts {
+    close_counts(
+        CloseCounts {
             paper: records,
             records,
             attested,
@@ -440,6 +431,26 @@ fn close_with(
             stickers: 0,
             spoil_envelopes: 0,
         },
+        open_batches,
+        last,
+        set,
+    )
+}
+
+/// A device-signed close with `counts`, module counters `last` and
+/// `record_set_root`.
+fn close_counts(counts: CloseCounts, open_batches: u8, last: u64, set: Hash512) -> &'static [u8] {
+    let counters: Vec<ModuleCounter<'static>> = [P1, P2]
+        .iter()
+        .map(|m| ModuleCounter {
+            module_id: common::module(m),
+            counter: last,
+        })
+        .collect();
+    let body = BoxCloseBody::new(&BoxCloseParts {
+        election_id: election(),
+        box_id: box_id(),
+        counts,
         record_set_root: set,
         journal_head: Hash512([0x24; 64]),
         seal_digest: SEAL,
@@ -1068,4 +1079,232 @@ impl WithCount for Bat {
             ..self
         }
     }
+}
+
+/// A `ChallengeOpening` of the record `record_obj` (counter `counter` on
+/// both modules), device-signed with key number `device`.
+fn opening_of(record_obj: &'static [u8], counter: u64, device: u16) -> &'static [u8] {
+    use ityv_encoding::{
+        ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_CHUNKS, ModuleOpening,
+        SCHEMA_CHALLENGE_OPENING_BODY, Scalar32, Scalars,
+    };
+    let rand: &'static Scalars<MAX_CHUNKS> = leak(Scalars::new(&[Scalar32([1; 32])]).unwrap());
+    let mods: Vec<ModuleOpening<'static>> = [P1, P2]
+        .iter()
+        .map(|&m| ModuleOpening {
+            module_id: common::module(m),
+            counter,
+            rand: Scalars::new(&[Scalar32([1; 32])]).unwrap(),
+            cid: Token192([2; 24]),
+        })
+        .collect();
+    let body = ChallengeOpeningBody::new(&ChallengeOpeningParts {
+        election_id: election(),
+        box_id: box_id(),
+        ballot_style_id: BallotStyleId::new(STYLE).unwrap(),
+        record_hash: code(record_obj),
+        option_index: 2,
+        cast_id: Token192([3; 24]),
+        rand,
+        modules: leak_slice(mods),
+    })
+    .unwrap();
+    let body = object(SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_VERSION_1, &body);
+    let sig = sign(signing(device), b"challenge", body);
+    object(
+        ityv_encoding::SCHEMA_CHALLENGE_OPENING,
+        SCHEMA_VERSION_1,
+        &ChallengeOpening::new(body, sig).unwrap(),
+    )
+}
+
+fn ch(e: &'static [u8]) -> (SchemaId, &'static [u8]) {
+    (ityv_encoding::SCHEMA_CHALLENGE_OPENING, e)
+}
+
+/// The close of a box whose second record was challenged: two cast records
+/// attested, one challenged, every counter at 3.
+fn close_after_challenge(cast: &[Hash512]) -> &'static [u8] {
+    close_counts(
+        CloseCounts {
+            paper: 2,
+            records: 2,
+            attested: 2,
+            without_record: 0,
+            challenged: 1,
+            quarantined: 0,
+            visits: 2,
+            envelopes: 0,
+            stickers: 0,
+            spoil_envelopes: 1,
+        },
+        0,
+        3,
+        root(cast),
+    )
+}
+
+#[test]
+fn a_challenged_record_is_published_but_not_cast() {
+    // Visit 1 casts counter 1, visit 2 checks counter 2 (its record and the
+    // opening are published, PROTOCOL.md §8), visit 3 casts counter 3. The
+    // batch covers counters 1..3 with the two cast records, and the close's
+    // record set is the cast records.
+    let (recs, codes) = three();
+    let cast = [codes[0], codes[2]];
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        r(recs[1]),
+        ch(opening_of(recs[1], 2, BOX_DEVICE_BASE)),
+        r(recs[2]),
+        b(batch(&bat(0, 1, 3, &cast))),
+        c(close_after_challenge(&cast)),
+    ]);
+    let box_report = run.boxes.report(BOX).unwrap();
+    assert!(box_report.holds.is_empty(), "{:?}", box_report.holds);
+    assert!(box_report.refusals.is_empty(), "{:?}", box_report.refusals);
+    let rep = report(&run);
+    assert!(rep.holds.is_empty(), "{rep:?}");
+    assert!(rep.refused_challenges.is_empty());
+    assert_eq!(
+        statuses(&run),
+        [
+            (4, RecordStatus::CastCommitted),
+            (5, RecordStatus::ChallengedSpoiled),
+            (7, RecordStatus::CastCommitted)
+        ]
+    );
+    assert_eq!(rep.record_set_root, Some(root(&cast)));
+    // The opening may come before its record.
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        ch(opening_of(recs[1], 2, BOX_DEVICE_BASE)),
+        r(recs[1]),
+        r(recs[2]),
+        b(batch(&bat(0, 1, 3, &cast))),
+        c(close_after_challenge(&cast)),
+    ]);
+    assert!(report(&run).holds.is_empty(), "{:?}", report(&run));
+    assert!(run.boxes.report(BOX).unwrap().holds.is_empty());
+}
+
+#[test]
+fn a_challenge_opening_must_verify_and_name_a_record_of_the_box() {
+    let (recs, codes) = three();
+    let cast = [codes[0], codes[2]];
+    // Signed by a key the box never had: refused, and the record it names
+    // counts as cast, so the batch and the close no longer agree with it.
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        r(recs[1]),
+        ch(opening_of(recs[1], 2, common::SPARE_BASE)),
+        r(recs[2]),
+        b(batch(&bat(0, 1, 3, &cast))),
+        c(close_after_challenge(&cast)),
+    ]);
+    let rep = report(&run);
+    assert_eq!(
+        rep.refused_challenges,
+        [ityv_encoding::Seq::new(6).unwrap()]
+    );
+    assert!(rep.holds.contains(HoldReason::ChallengeRejected));
+    assert!(rep.holds.contains(HoldReason::BatchInvalid));
+    assert!(rep.holds.contains(HoldReason::RecordSetMismatch));
+    // Naming a record that is not on the ledger.
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        ch(opening_of(recs[1], 2, BOX_DEVICE_BASE)),
+        r(recs[2]),
+        b(batch(&bat(0, 1, 3, &cast))),
+        c(close_after_challenge(&cast)),
+    ]);
+    let rep = report(&run);
+    assert_eq!(
+        rep.refused_challenges,
+        [ityv_encoding::Seq::new(5).unwrap()]
+    );
+    assert!(rep.holds.contains(HoldReason::ChallengeRejected));
+}
+
+#[test]
+fn a_batch_with_module_refusals_attests_but_is_a_finding() {
+    let (recs, codes) = three();
+    let ranges = leak_slice(
+        [P1, P2]
+            .iter()
+            .map(|&m| ModuleRange {
+                module_id: common::module(m),
+                counter_first: 1,
+                counter_last: 3,
+            })
+            .collect(),
+    );
+    let body = BatchAttestBody::new(&BatchAttestParts {
+        election_id: election(),
+        box_id: box_id(),
+        batch_index: 0,
+        record_count: 3,
+        records_root: root(&codes),
+        module_ranges: ranges,
+        module_refusals: modules(&[P2]),
+        journal_head: Hash512([0x22; 64]),
+        time_bucket: TimeBucket::new(120),
+    })
+    .unwrap();
+    let body = object(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body);
+    let sigs = [ModuleBatchSig {
+        module_id: common::module(P1),
+        sig: sign(module_signing(P1_KEY), b"batch-attest", body),
+    }];
+    let device = sign(signing(BOX_DEVICE_BASE), b"batch-attest", body);
+    let refused = object(
+        SCHEMA_BATCH_ATTEST,
+        SCHEMA_VERSION_1,
+        &BatchAttest::new(body, &sigs, device).unwrap(),
+    );
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        r(recs[1]),
+        r(recs[2]),
+        b(refused),
+        c(close(&codes)),
+    ]);
+    assert_eq!(findings(&run), [(7, BatchProblem::ModuleRefused)]);
+    assert!(report(&run).holds.contains(HoldReason::BatchInvalid));
+    assert!(
+        statuses(&run)
+            .iter()
+            .all(|(_, s)| *s == RecordStatus::CastCommitted)
+    );
+}
+
+#[test]
+fn device_double_signing_is_found_whatever_the_module_signatures() {
+    // Two bodies under batch index 0, both signed by the device; one also
+    // carries a module signature that does not verify.
+    let (recs, codes) = three();
+    let mut forged = bat(0, 1, 3, &codes);
+    forged.ranges = std::vec![(P1, 1, 3, P2_KEY), (P2, 1, 3, P2_KEY)];
+    let other = bat(0, 1, 2, &codes[..2]);
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        r(recs[1]),
+        r(recs[2]),
+        b(batch(&forged)),
+        b(batch(&other)),
+        c(close(&codes)),
+    ]);
+    assert_eq!(
+        findings(&run),
+        [
+            (7, BatchProblem::DoubleIndex),
+            (8, BatchProblem::DoubleIndex)
+        ]
+    );
 }

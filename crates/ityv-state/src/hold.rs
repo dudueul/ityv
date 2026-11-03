@@ -153,11 +153,19 @@ pub enum HoldReason {
     /// The close's record set root is not the sorted-set root of the box's
     /// accepted records (§7.8, §14 5, VC-027).
     RecordSetMismatch = 44,
+    /// A dispute event on the ledger cannot be taken: a signature that
+    /// does not verify under the two authorities' keys, a filing without
+    /// the capability for its day, a change that does not apply or names no
+    /// dispute filed (§13, §14 9).
+    DisputeRefused = 45,
+    /// A challenge opening cannot be taken: the device's signature does
+    /// not verify, or it names no accepted record of its box (§8).
+    ChallengeRejected = 46,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 47] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -203,6 +211,8 @@ impl HoldReason {
         Self::RecordRejected,
         Self::BatchInvalid,
         Self::RecordSetMismatch,
+        Self::DisputeRefused,
+        Self::ChallengeRejected,
     ];
 
     /// The reason's code.

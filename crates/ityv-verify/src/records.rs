@@ -23,11 +23,24 @@
 //!    the close's final counter; the records whose counters fall in a
 //!    batch's ranges are its members, `record_count` is their number and
 //!    `records_root` the sorted-set root of their tracking codes (VC-053);
-//! 3. every accepted record is `CAST_COMMITTED` if exactly one valid batch
-//!    has it as a member, otherwise `UNATTESTED` (VC-057);
-//! 4. the box's effective close (its last accepted `BoxClose`: a late close
+//! 3. every challenge opening: the device's hybrid signature (purpose
+//!    `challenge`) over its body, and its record among the box's accepted
+//!    records. The record it names is `CHALLENGED_SPOILED`: the device
+//!    publishes it so anyone can re-verify its proof (§8.3), but no batch
+//!    attests it and the close's record set leaves it out, as the device
+//!    does. A challenge opening that does not verify, or names no accepted
+//!    record of the box, is refused;
+//! 4. every other accepted record is `CAST_COMMITTED` if exactly one valid
+//!    batch has it as a member, otherwise `UNATTESTED` (VC-057);
+//! 5. the box's effective close (its last accepted `BoxClose`: a late close
 //!    replaces a manual one) carries as `record_set_root` the sorted-set
-//!    root of the tracking codes of every accepted record (VC-027).
+//!    root of the tracking codes of every accepted cast (not challenged)
+//!    record (VC-027).
+//!
+//! A batch that records module refusals (`module_refusals`: a module would
+//! not sign, a counter gap, VC-021) still attests its records with the
+//! signatures it has, but it is a finding: the device is suspected and the
+//! box's paper must be compared in full (`FAILURE_CASES.md` §4).
 //!
 //! The key that verifies a signature at frame `seq` is the box's device key
 //! (or the module's key) in any genesis state from 0 to the state in force
@@ -37,14 +50,17 @@
 //! signatures are Ed25519 under the Ed25519 half of the registered hybrid
 //! key (ENCODING.md §8.43, §8.51).
 //!
-//! A rejected record leaves [`HoldReason::RecordRejected`], a batch
-//! finding [`HoldReason::BatchInvalid`], a close whose record set root
-//! differs [`HoldReason::RecordSetMismatch`]. An `UNATTESTED` record is
+//! A rejected record leaves [`HoldReason::RecordRejected`], a refused
+//! challenge opening [`HoldReason::ChallengeRejected`], a batch finding
+//! [`HoldReason::BatchInvalid`], a close whose record set root differs
+//! [`HoldReason::RecordSetMismatch`]. An `UNATTESTED` record is
 //! listed, not held: the tally scope excludes it (§11.1), the box stage
 //! holds an open batch, and a late batch close can still attest it.
 //!
-//! What this stage does not prove: that a challenge opening reconstructs
-//! its record (VC-028, the challenge stage); that a record's share package
+//! What this stage does not prove: that a challenge opening's values
+//! reconstruct its record's commitments and proof (VC-028, the challenge
+//! stage); the state of a record a quarantine entry names (`ImprintFailure`
+//! has no ledger schema yet, so such a record is counted as cast); that a record's share package
 //! reached the trustees (VC-036); anything about a box with no accepted
 //! close beyond its records and batches (the box stage holds it).
 
@@ -57,9 +73,10 @@ use ityv_crypto::{
     RecordVerifyingKey, Statement, verify, verify_record,
 };
 use ityv_encoding::{
-    BatchAttest, BoxClose, BoxId, CastRecord, Decode, Encode, HYBRID_SIG_LEN, HYBRID_VK_LEN,
-    Hash512, MLDSA87_VK_HALF, ModuleId, Reader, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE,
-    SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, SchemaId, Seq, Writer, decode_object,
+    BatchAttest, BoxClose, BoxId, CastRecord, ChallengeOpening, Decode, Encode, HYBRID_SIG_LEN,
+    HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, ModuleId, Reader, SCHEMA_BATCH_ATTEST,
+    SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_VERSION_1, SchemaId,
+    Seq, Writer, decode_object,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{
@@ -144,6 +161,9 @@ pub enum BatchProblem {
     /// `records_root` is not the root of its member records. The batch
     /// attests nothing.
     RecordsRoot,
+    /// The batch records modules that refused to sign it (a counter gap,
+    /// VC-021). It attests its records with the signatures it has.
+    ModuleRefused,
 }
 
 /// A finding about a batch attestation.
@@ -169,6 +189,10 @@ pub struct BoxRecords<'a> {
     pub unattested: Vec<Hash512>,
     /// The batch findings, in frame order.
     pub batches: Vec<BatchFinding>,
+    /// The frames of the challenge openings refused: a signature that does
+    /// not verify, or no accepted record of the box with the hash it
+    /// names.
+    pub refused_challenges: Vec<Seq>,
     /// The sorted-set root of the accepted records' tracking codes, when
     /// the box has an accepted close to compare it with.
     pub record_set_root: Option<Hash512>,
@@ -363,6 +387,31 @@ impl<'a> Ctx<'_, 'a> {
         Ok(())
     }
 
+    /// Whether the device's hybrid signature of a batch verifies.
+    fn device_signed(&self, seq: Seq, batch: &BatchAttest<'_>) -> bool {
+        Purpose::new(b"batch-attest").is_some_and(|purpose| {
+            hybrid_verifies(
+                batch.device_sig(),
+                &self.device_keys(seq),
+                &purpose,
+                batch.body_bytes(),
+            )
+        })
+    }
+
+    /// Whether the device's hybrid signature of a challenge opening
+    /// verifies (purpose `challenge`).
+    fn challenge_signed(&self, seq: Seq, opening: &ChallengeOpening<'_>) -> bool {
+        Purpose::new(b"challenge").is_some_and(|purpose| {
+            hybrid_verifies(
+                opening.device_sig(),
+                &self.device_keys(seq),
+                &purpose,
+                opening.body_bytes(),
+            )
+        })
+    }
+
     /// Checks one batch's signatures and modules.
     fn batch(&self, seq: Seq, batch: &BatchAttest<'_>) -> Result<(), BatchProblem> {
         let body = batch.body();
@@ -493,6 +542,9 @@ struct Collected<'a> {
     counted: Vec<Counted<'a>>,
     rejected: Vec<RejectedRecord>,
     batches: Vec<(Seq, BatchAttest<'a>)>,
+    /// Each challenge opening's frame, the record hash it names, and
+    /// whether its device signature verifies.
+    challenges: Vec<(Seq, Hash512, bool)>,
     close: Option<BoxClose<'a>>,
 }
 
@@ -502,6 +554,7 @@ fn collect<'a>(ctx: &Ctx<'_, 'a>, events: &[&IndexedEvent<'a>]) -> Collected<'a>
         counted: Vec::new(),
         rejected: Vec::new(),
         batches: Vec::new(),
+        challenges: Vec::new(),
         close: None,
     };
     for e in events {
@@ -532,6 +585,12 @@ fn collect<'a>(ctx: &Ctx<'_, 'a>, events: &[&IndexedEvent<'a>]) -> Collected<'a>
         } else if e.schema == SCHEMA_BATCH_ATTEST {
             if let Some(batch) = decode::<BatchAttest<'a>>(e.schema, bytes) {
                 out.batches.push((e.seq, batch));
+            }
+        } else if e.schema == SCHEMA_CHALLENGE_OPENING {
+            if let Some(opening) = decode::<ChallengeOpening<'a>>(e.schema, bytes) {
+                let signed = ctx.challenge_signed(e.seq, &opening);
+                out.challenges
+                    .push((e.seq, *opening.body().record_hash(), signed));
             }
         } else if e.schema == SCHEMA_BOX_CLOSE
             && let Some(c) = decode::<BoxClose<'a>>(e.schema, bytes)
@@ -577,29 +636,43 @@ fn screen<'a>(
     batches: Vec<(Seq, BatchAttest<'a>)>,
     findings: &mut Vec<BatchFinding>,
 ) -> Vec<Candidate<'a>> {
+    // Device double signing: two bodies the device signed under one batch
+    // index, whatever their module signatures.
+    let mut per_index: BTreeMap<u32, u32> = BTreeMap::new();
+    let signed: Vec<bool> = batches
+        .iter()
+        .map(|(seq, batch)| ctx.device_signed(*seq, batch))
+        .collect();
+    for ((_, batch), device) in batches.iter().zip(&signed) {
+        if *device {
+            let n = per_index.entry(batch.body().batch_index()).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+    }
     let mut candidates: Vec<Candidate<'a>> = Vec::new();
     for (seq, batch) in batches {
-        match ctx.batch(seq, &batch) {
-            Ok(()) => candidates.push(Candidate { seq, batch }),
+        let doubled = per_index
+            .get(&batch.body().batch_index())
+            .is_some_and(|n| *n > 1);
+        let checked = if doubled {
+            Err(BatchProblem::DoubleIndex)
+        } else {
+            ctx.batch(seq, &batch)
+        };
+        match checked {
+            Ok(()) => {
+                if batch.body().module_refusals().iter().next().is_some() {
+                    findings.push(BatchFinding {
+                        seq,
+                        problem: BatchProblem::ModuleRefused,
+                    });
+                }
+                candidates.push(Candidate { seq, batch });
+            }
             Err(problem) => findings.push(BatchFinding { seq, problem }),
         }
     }
-    let mut per_index: BTreeMap<u32, u32> = BTreeMap::new();
-    for c in &candidates {
-        let n = per_index.entry(c.batch.body().batch_index()).or_insert(0);
-        *n = n.saturating_add(1);
-    }
-    let (doubled, single): (Vec<Candidate<'a>>, Vec<Candidate<'a>>) =
-        candidates.into_iter().partition(|c| {
-            per_index
-                .get(&c.batch.body().batch_index())
-                .is_some_and(|n| *n > 1)
-        });
-    findings.extend(doubled.iter().map(|c| BatchFinding {
-        seq: c.seq,
-        problem: BatchProblem::DoubleIndex,
-    }));
-    single
+    candidates
 }
 
 /// Which records the batches attest: a record is a member of the one batch
@@ -688,17 +761,34 @@ fn run_box<'a>(
         counted,
         mut rejected,
         batches,
+        challenges,
         close,
     } = collect(&ctx, &events);
     let accepted = unique_counters(counted, &mut rejected);
     rejected.sort_by_key(|r| r.seq.get());
+
+    // The records the device opened for a challenge: never attested, not in
+    // the close's record set.
+    let codes: BTreeSet<[u8; 64]> = accepted.iter().map(|r| r.tracking_code.0).collect();
+    let mut challenged: BTreeSet<[u8; 64]> = BTreeSet::new();
+    let mut refused_challenges: Vec<Seq> = Vec::new();
+    for (seq, record_hash, signed) in &challenges {
+        if *signed && codes.contains(&record_hash.0) {
+            challenged.insert(record_hash.0);
+        } else {
+            refused_challenges.push(*seq);
+        }
+    }
+    let (opened, accepted): (Vec<Counted<'a>>, Vec<Counted<'a>>) = accepted
+        .into_iter()
+        .partition(|r| challenged.contains(&r.tracking_code.0));
 
     let mut findings: Vec<BatchFinding> = Vec::new();
     let candidates = screen(&ctx, batches, &mut findings);
     ranges(&candidates, close.as_ref(), &mut findings);
     let attested = attest(&accepted, &candidates, &mut findings);
 
-    let records: Vec<AcceptedRecord> = accepted
+    let mut records: Vec<AcceptedRecord> = accepted
         .iter()
         .zip(&attested)
         .map(|(r, a)| AcceptedRecord {
@@ -707,6 +797,18 @@ fn run_box<'a>(
             state: record_state(profile, r.style_test, *a),
         })
         .collect();
+    // The record set of the close: the cast records, before the challenged
+    // ones join the list.
+    let cast_codes: Vec<Hash512> = records.iter().map(|r| r.tracking_code).collect();
+    records.extend(opened.iter().map(|r| {
+        let state = RecordState::new(profile, r.style_test);
+        AcceptedRecord {
+            seq: r.seq,
+            tracking_code: r.tracking_code,
+            state: state.apply(RecordEvent::Challenged).unwrap_or(state),
+        }
+    }));
+    records.sort_by_key(|r| r.seq.get());
     let unattested: Vec<Hash512> = records
         .iter()
         .filter(|r| r.state.status() == RecordStatus::Unattested)
@@ -714,9 +816,7 @@ fn run_box<'a>(
         .collect();
 
     // The record set root of the effective close.
-    let record_set_root = close
-        .as_ref()
-        .and_then(|_| set_root(records.iter().map(|r| r.tracking_code).collect()));
+    let record_set_root = close.as_ref().and_then(|_| set_root(cast_codes));
     let root_differs = close
         .as_ref()
         .is_some_and(|c| record_set_root.as_ref() != Some(c.body().record_set_root()));
@@ -725,6 +825,10 @@ fn run_box<'a>(
     findings.dedup();
     let holds = HoldSet::empty()
         .with_if(!rejected.is_empty(), HoldReason::RecordRejected)
+        .with_if(
+            !refused_challenges.is_empty(),
+            HoldReason::ChallengeRejected,
+        )
         .with_if(!findings.is_empty(), HoldReason::BatchInvalid)
         .with_if(root_differs, HoldReason::RecordSetMismatch);
     BoxRecords {
@@ -733,6 +837,7 @@ fn run_box<'a>(
         rejected,
         unattested,
         batches: findings,
+        refused_challenges,
         record_set_root,
         holds,
     }

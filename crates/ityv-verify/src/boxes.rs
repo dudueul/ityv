@@ -376,7 +376,7 @@ impl<'a> Prep<'_, 'a> {
                     first: Purpose::new(PURPOSE_BOX_CLOSE)?,
                     late: Purpose::new(PURPOSE_LATE_BOX_CLOSE)?,
                     material: pairs.and_then(|p| Material::new(p.into_iter())),
-                    issuance: self.issuance(entry, keys, event.seq),
+                    issuance: self.issuance(entry, event.seq),
                 })))
             })
         } else if schema == SCHEMA_CAST_RECORD {
@@ -394,13 +394,9 @@ impl<'a> Prep<'_, 'a> {
     }
 
     /// For an out-of-district box, the station's last `IssuanceCount`
-    /// before frame `before` (it has no device signature).
-    fn issuance(
-        &self,
-        entry: &GenesisBox<'a>,
-        keys: &Keys<'a>,
-        before: Seq,
-    ) -> Option<WitnessedItem<'a>> {
+    /// before frame `before` (it has no device signature), with the roster
+    /// keys of the state in force at its own frame.
+    fn issuance(&self, entry: &GenesisBox<'a>, before: Seq) -> Option<WitnessedItem<'a>> {
         if entry.profile != CaptureProfile::Absentee {
             return None;
         }
@@ -417,10 +413,11 @@ impl<'a> Prep<'_, 'a> {
                 .and_then(|b| decode::<WitnessedEvent<'a>>(SCHEMA_WITNESSED_EVENT, b))
                 .filter(|w| w.body_schema() == SCHEMA_ISSUANCE_COUNT_BODY)
             {
-                last = Some(w);
+                last = Some((e.seq, w));
             }
         }
-        WitnessedItem::new(&last?, keys, None)
+        let (seq, w) = last?;
+        WitnessedItem::new(&w, self.keys.get(self.index.state_at(seq))?, None)
     }
 }
 
@@ -555,6 +552,10 @@ struct Run<'r, 'g> {
     lates: Vec<(Seq, Signed<'r>)>,
     /// The object hashes of the record, challenge and batch bodies seen.
     bodies: BTreeSet<[u8; 64]>,
+    /// The record hashes the box's challenge openings name: the records of
+    /// challenged ballots, which the device publishes but does not count
+    /// as cast (§8).
+    challenged: BTreeSet<[u8; 64]>,
     refusals: Vec<BoxRefusal>,
     /// The box's spec in each genesis state (`None` where a state does not
     /// have the box).
@@ -828,7 +829,13 @@ impl<'r> Run<'r, '_> {
         {
             return (m, Some(Refusal::Duplicate));
         }
+        let challenged = matches!(item, Item::Record(record)
+            if self.challenged.contains(&object_hash(record.body_bytes()).0));
         match (m, item) {
+            // The record of a challenged ballot: published, not cast.
+            (m @ (Machine::Open(_) | Machine::Fallback(_)), Item::Record(_)) if challenged => {
+                (m, None)
+            }
             (Machine::Open(mut b), Item::Record(record)) => match self.ballot_mark.as_ref() {
                 Some(cap) => {
                     let r = b.record(cap, record.body());
@@ -972,6 +979,18 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
         batches: Vec::new(),
         lates: Vec::new(),
         bodies: BTreeSet::new(),
+        challenged: items
+            .iter()
+            .filter_map(|(_, _, item)| match item {
+                Item::Challenge(opening) => Some(opening.body().record_hash().0),
+                Item::Witnessed(_)
+                | Item::Close(_)
+                | Item::Record(_)
+                | Item::Batch(_)
+                | Item::Absent
+                | Item::Skip => None,
+            })
+            .collect(),
         refusals: Vec::new(),
         specs,
         state: first.map_or(0, |(k, _)| k),
@@ -986,8 +1005,13 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
             (m.phase(), m.holds(), m.counts())
         }
         // The genesis stage proved every box entry and its route, so a
-        // spec `ityv-state` refuses is a refusal of the whole box.
-        None => (Phase::Provisioned, HoldSet::empty(), None),
+        // spec `ityv-state` refuses is a refusal of the whole box: none of
+        // its events is run, and it is held.
+        None => (
+            Phase::Provisioned,
+            HoldSet::empty().with(HoldReason::BoxEventRefused),
+            None,
+        ),
     };
     let unmatched: Vec<Seq> = run
         .batches

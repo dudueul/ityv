@@ -13,7 +13,8 @@
 //! taken changes nothing, so a forged or out-of-order resolution never
 //! removes a dispute from the unresolved set.
 //!
-//! The dispute stage (§14 9) will list the events not taken; the
+//! The events not taken are listed; the report holds the ledger on any
+//! of them (`DisputeRefused`), and on any dispute still unresolved. The
 //! checkpoint stage uses the steps to recompute each checkpoint's dispute
 //! root.
 
@@ -117,12 +118,24 @@ fn file<'r>(
     }
 }
 
-/// The steps of every dispute on the ledger, in frame order.
+/// What the dispute events of a ledger did.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DisputeLog {
+    /// The events taken, in frame order.
+    pub(crate) steps: Vec<DisputeStep>,
+    /// The frames of the dispute events not taken: a signature that does
+    /// not verify, a filing without its capability or filed again, a change
+    /// that does not apply or names no dispute filed.
+    pub(crate) refused: Vec<Seq>,
+}
+
+/// The steps of every dispute on the ledger, in frame order, and the
+/// events refused.
 pub(crate) fn dispute_steps(
     genesis: &VerifiedGenesis<'_>,
     index: &LedgerIndex<'_>,
     authority: &AuthorityStage<'_>,
-) -> Vec<DisputeStep> {
+) -> DisputeLog {
     let prepared = prepare(genesis, index);
     let tokens: Vec<Option<Vec<Verified<HybridSigned<'_>>>>> = prepared
         .iter()
@@ -133,9 +146,12 @@ pub(crate) fn dispute_steps(
         })
         .collect();
     let mut disputes: BTreeMap<[u8; 64], Dispute<'_>> = BTreeMap::new();
-    let mut steps = Vec::new();
+    let mut log = DisputeLog::default();
     for (p, t) in prepared.iter().zip(&tokens) {
-        let Some(t) = t else { continue };
+        let Some(t) = t else {
+            log.refused.push(p.seq);
+            continue;
+        };
         let signed = Signed {
             event: &p.event,
             tokens: t,
@@ -144,6 +160,7 @@ pub(crate) fn dispute_steps(
             .event
             .body::<DisputeEventBody<'_>>(SCHEMA_DISPUTE_EVENT_BODY)
         else {
+            log.refused.push(p.seq);
             continue;
         };
         let parts = body.parts();
@@ -162,16 +179,19 @@ pub(crate) fn dispute_steps(
                 .and_then(|d| d.record(&signed, genesis.genesis()).ok())
                 .map(|d| (key, d))
         };
-        if let Some((key, d)) = taken {
-            steps.push(DisputeStep {
-                seq: p.seq,
-                filing: key,
-                unresolved: d.is_unresolved(),
-            });
-            disputes.insert(key, d);
+        match taken {
+            Some((key, d)) => {
+                log.steps.push(DisputeStep {
+                    seq: p.seq,
+                    filing: key,
+                    unresolved: d.is_unresolved(),
+                });
+                disputes.insert(key, d);
+            }
+            None => log.refused.push(p.seq),
         }
     }
-    steps
+    log
 }
 
 /// The number of disputes unresolved after every step.

@@ -159,6 +159,11 @@ fn close() -> &'static [u8] {
 
 /// A close of an empty box, device-signed or manual.
 fn close_with(device_signed: bool) -> &'static [u8] {
+    close_of(device_signed, EMPTY_ROOT)
+}
+
+/// A close of an empty box with record set root `set`.
+fn close_of(device_signed: bool, set: Hash512) -> &'static [u8] {
     let counters: Vec<ModuleCounter<'static>> = MODULES
         .iter()
         .map(|m| ModuleCounter {
@@ -181,7 +186,7 @@ fn close_with(device_signed: bool) -> &'static [u8] {
             stickers: 0,
             spoil_envelopes: 0,
         },
-        record_set_root: EMPTY_ROOT,
+        record_set_root: set,
         journal_head: Hash512([0x24; 64]),
         seal_digest: SEAL,
         module_counters: ModuleCounters::new(&counters).unwrap(),
@@ -215,6 +220,11 @@ fn close_with(device_signed: bool) -> &'static [u8] {
 
 /// A dispute filing signed by the commission and the committee.
 fn filing() -> &'static [u8] {
+    filing_at(120)
+}
+
+/// As [`filing`], filed in time bucket `bucket`.
+fn filing_at(bucket: u64) -> &'static [u8] {
     let body = DisputeEventBody::new(&DisputeEventParts {
         election_id: common::election(),
         action: DisputeAction::Filed,
@@ -224,7 +234,7 @@ fn filing() -> &'static [u8] {
         evidence_hash: Hash512([0x3E; 64]),
         filing_hash: Hash512::ZERO,
         result_hash: Hash512::ZERO,
-        time_bucket: TimeBucket::new(120),
+        time_bucket: TimeBucket::new(bucket),
     })
     .unwrap();
     let body = object(SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_VERSION_1, &body);
@@ -499,4 +509,58 @@ fn a_hold_anywhere_is_hold_review() {
     );
     // Without BALLOT_MARK only counts back a result.
     assert!(report.status().count_only());
+}
+
+#[test]
+fn a_dispute_event_that_cannot_be_taken_holds_the_ledger() {
+    // A filing both authorities signed, dated after the authorization's
+    // last day: no PUBLIC_BOARD for it, so it is refused, and held.
+    let mut book = Book::new();
+    book.push(SCHEMA_WITNESSED_EVENT, opened());
+    let late = filing_at(96 * 200);
+    book.push(SCHEMA_WITNESSED_EVENT, late);
+    book.checkpoint();
+    let report = book.report(ANCHORED);
+    assert_eq!(report.open_disputes(), 0);
+    assert_eq!(report.refused_disputes(), [Seq::new(4).unwrap()]);
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert!(report.status().holds().contains(HoldReason::DisputeRefused));
+}
+
+#[test]
+fn holds_of_the_record_stage_and_the_index_reach_the_status() {
+    // A close whose record set root is not the root of the box's records.
+    let mut book = Book::new();
+    book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.push(SCHEMA_BOX_CLOSE, close_of(true, Hash512([0x01; 64])));
+    book.checkpoint();
+    let report = book.report(ANCHORED);
+    assert!(
+        report
+            .records()
+            .holds()
+            .contains(HoldReason::RecordSetMismatch)
+    );
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert!(
+        report
+            .status()
+            .holds()
+            .contains(HoldReason::RecordSetMismatch)
+    );
+    // An election event recorded twice: the index holds the whole ledger.
+    let mut book = Book::new();
+    book.push(SCHEMA_SIGNED_GENESIS, world().signed);
+    book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.checkpoint();
+    let report = book.report(ANCHORED);
+    assert!(
+        report
+            .index()
+            .ledger_holds()
+            .contains(HoldReason::EventReplayed)
+    );
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert!(report.status().holds().contains(HoldReason::EventReplayed));
+    assert!(report.status().holds().contains(HoldReason::StepFailed));
 }
