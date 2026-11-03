@@ -55,11 +55,13 @@
 //!   have).
 //! * **Paper count reports** (`PaperCountReportBody` in a
 //!   `WitnessedEvent`, §11.5). Signed by the chair of the district
-//!   commission the unit names (`ReportingUnitEntry::commission_org`, so a
-//!   chair of another district cannot file the unit's report first) and
-//!   by observers of two or more organisations, each under the key the
-//!   roster of the genesis state in force at its frame registers for that
-//!   signer, role and organisation; for a style and unit of the genesis,
+//!   commission the unit names in the genesis state in force at its frame
+//!   (`ReportingUnitEntry::commission_org`, so a chair of another district
+//!   cannot file the unit's report first) and by observers of two or more
+//!   organisations, each registered in that role and organisation in the
+//!   state in force and signing under a key the roster gave them in that
+//!   state or an earlier one (newest first, as the other stages look keys
+//!   up); for a style and unit of the genesis,
 //!   with one count per candidate of the style; at most one per style and
 //!   unit. With the opened counts it is compared by
 //!   [`ityv_state::compare_paper`] (VC-075): no candidate below the
@@ -102,8 +104,10 @@
 //!
 //! What this stage does not prove: that the trustees' shares match the
 //! commitments record by record (an opening that fails says only that some
-//! record's share does not, §11.3); that the chair heads the commission of
-//! the unit (the genesis does not tie a unit to a commission); the
+//! record's share does not, §11.3); that the person the roster registers
+//! as the chair of the unit's commission really heads it (the genesis ties
+//! the unit to the commission, and the roster the chair to its
+//! organisation; it does not require the commission to have a chair); the
 //! receiving commission's label counts (VC-060, no schema yet); that the
 //! witnesses' clocks were right (their checkpoints are anchored in time by
 //! the checkpoint stage, ADR-0034).
@@ -1087,32 +1091,46 @@ fn machine<'c>(t: &UnitTally<'_>, counts: &'c [u64], choices: u16) -> Option<Mac
 
 /// Whether the paper count report `event` of unit `unit` is signed by the
 /// chair of the unit's commission and by observers, as the roster of the
-/// state in force at `seq` registers them.
+/// state in force at `seq` registers them, each under a key the roster
+/// gave the signer in that state or an earlier one.
 fn paper_signed(
     ctx: &Ctx<'_, '_>,
     seq: Seq,
     event: &WitnessedEvent<'_>,
     unit: &Entry<ReportingUnitEntry<'_>>,
 ) -> bool {
-    let roster: Vec<RosterEntry<'_>> = ctx.genesis.roster_at(ctx.index.state_at(seq));
-    // The roster is keyed by signer: the key of the one entry of each
-    // signer. `PaperCount::check` then binds each token to that entry's
-    // role (chair or observer) and organisation (the unit's commission
-    // for the chair).
-    let pairs: Option<Vec<(&[u8; HYBRID_SIG_LEN], &[u8; HYBRID_VK_LEN])>> = event
-        .sigs()
-        .map(|s| {
-            roster
-                .iter()
-                .map(Entry::get)
-                .find(|r| r.signer_id.as_bytes() == s.signer_id.as_bytes())
-                .map(|r| (s.sig, r.key))
-        })
-        .collect();
-    let Some(material) = pairs.and_then(|p| Material::new(p.into_iter())) else {
+    let Some(purpose) = Purpose::new(event.purpose()) else {
         return false;
     };
-    let Some(purpose) = Purpose::new(event.purpose()) else {
+    let state = ctx.index.state_at(seq);
+    let rosters: Vec<Vec<RosterEntry<'_>>> =
+        (0..=state).map(|k| ctx.genesis.roster_at(k)).collect();
+    // Each signature's key: the signer's entry in the state in force or an
+    // earlier one, newest first, whose key verifies it (an amendment may
+    // give a signer a new key; a report signed before it carries the old
+    // one), as the other stages look keys up. `PaperCount::check` then
+    // requires the role and organisation of that entry and of the signer's
+    // entry in force, the chair's being the unit's commission.
+    let keys: Option<Vec<RosterEntry<'_>>> = event
+        .sigs()
+        .map(|s| {
+            rosters
+                .iter()
+                .rev()
+                .flatten()
+                .filter(|r| r.get().signer_id.as_bytes() == s.signer_id.as_bytes())
+                .find(|r| {
+                    Material::new(core::iter::once((s.sig, r.get().key)))
+                        .is_some_and(|m| m.verify(&purpose, event.body_bytes()).is_some())
+                })
+                .copied()
+        })
+        .collect();
+    let (Some(keys), Some(in_force)) = (keys, rosters.last()) else {
+        return false;
+    };
+    let pairs = event.sigs().zip(&keys).map(|(s, k)| (s.sig, k.get().key));
+    let Some(material) = Material::new(pairs) else {
         return false;
     };
     let Some(tokens) = material.verify(&purpose, event.body_bytes()) else {
@@ -1122,7 +1140,7 @@ fn paper_signed(
         event,
         tokens: &tokens,
     };
-    PaperCount::check(&signed, &roster, unit).is_ok()
+    PaperCount::check(&signed, in_force, &keys, unit).is_ok()
 }
 
 /// A ballot style and reporting unit, by their identifiers.

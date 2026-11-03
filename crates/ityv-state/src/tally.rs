@@ -265,25 +265,32 @@ pub struct PaperCount<'a> {
 
 impl<'a> PaperCount<'a> {
     /// Checks a signed paper count report of the reporting unit `unit`:
-    /// the body schema and unit, and a matching token for each signature
-    /// from the key the roster registers for that signer as a chair or an
-    /// observer of the organisation the signature names, the chair's being
-    /// the unit's commission (`ReportingUnitEntry::commission_org`), so
-    /// that a chair of another district cannot report the unit. The
-    /// envelope already admits exactly one chair and observers of two or
-    /// more organisations and nothing else
-    /// (`ityv_encoding::roles_satisfied`).
+    /// the body schema and unit; every signer registered in `roster` (the
+    /// genesis state in force at the report's frame, the unit's state) as a
+    /// chair or an observer of the organisation the signature names, the
+    /// chair's being the unit's commission
+    /// (`ReportingUnitEntry::commission_org`), so that a chair of another
+    /// district cannot report the unit; and a matching token for each
+    /// signature from the key of `keys` registered for the same signer,
+    /// role and organisation. `keys` holds, per signer, the entry whose key
+    /// signed: of the state in force or of an earlier one (an amendment may
+    /// give a signer a new key, and a report signed before it carries the
+    /// old one; the caller tries the newest first). The envelope already
+    /// admits exactly one chair and observers of two or more organisations
+    /// and nothing else (`ityv_encoding::roles_satisfied`).
     ///
     /// # Errors
     /// [`Error::Decode`] if the event is not a paper count report,
     /// [`Error::Mismatch`] if it reports another unit,
     /// [`Error::StaleEntry`] if the unit and the roster come from different
     /// genesis states, [`Error::NotRegistered`] for a signer the roster
-    /// does not register in that role and organisation or a chair of
-    /// another commission, and the errors of [`crate::sig::check_event`].
+    /// does not register in that role and organisation, a chair of
+    /// another commission, or a signer without such an entry in `keys`,
+    /// and the errors of [`crate::sig::check_event`].
     pub fn check(
         signed: &Signed<'a>,
         roster: &[RosterEntry<'_>],
+        keys: &[RosterEntry<'_>],
         unit: &Entry<ReportingUnitEntry<'_>>,
     ) -> Result<Self, Error> {
         let body: PaperCountReportBody<'a> = signed
@@ -313,7 +320,16 @@ impl<'a> PaperCount<'a> {
                 | EventRole::Authority
                 | EventRole::Device => return Err(Error::NotRegistered),
             };
-            roster_key(roster, s.signer_id, role, s.org_id)
+            roster_key(roster, s.signer_id, role, s.org_id)?;
+            keys.iter()
+                .map(Entry::get)
+                .find(|k| {
+                    k.signer_id.as_bytes() == s.signer_id.as_bytes()
+                        && k.role == role
+                        && k.org_id.as_bytes() == s.org_id.as_bytes()
+                })
+                .map(|k| k.key)
+                .ok_or(Error::NotRegistered)
         })?;
         Ok(Self {
             parts: *body.parts(),
@@ -987,6 +1003,22 @@ mod tests {
         roster: &[RosterEntry<'static>],
         unit: &Entry<ReportingUnitEntry<'static>>,
     ) -> Result<PaperCount<'static>, Error> {
+        checked_keys(body, who, roster, roster, unit)
+    }
+
+    /// As [`checked`], with the signers' keys taken from `keys`.
+    fn checked_keys(
+        body: &'static [u8],
+        who: &[(
+            &'static [u8],
+            EventRole,
+            &'static [u8],
+            &'static HybridSigningKey,
+        )],
+        roster: &[RosterEntry<'static>],
+        keys: &[RosterEntry<'static>],
+        unit: &Entry<ReportingUnitEntry<'static>>,
+    ) -> Result<PaperCount<'static>, Error> {
         let mut rng = ChaCha20Rng::seed_from_u64(11);
         let purpose = Box::leak(Box::new(Purpose::new(b"paper-count").unwrap()));
         let signed: Vec<_> = who
@@ -1018,7 +1050,7 @@ mod tests {
             .map(|(_, _, _, vk, sig)| verify_hybrid(vk, purpose, body, sig).unwrap())
             .collect();
         let tokens = Box::leak(tokens.into_boxed_slice());
-        PaperCount::check(&Signed { event, tokens }, roster, unit)
+        PaperCount::check(&Signed { event, tokens }, roster, keys, unit)
     }
 
     /// The paper count body object of `parts`.
@@ -1088,6 +1120,48 @@ mod tests {
         assert_eq!(
             checked(body, &signers, &roster, &stale),
             Err(Error::StaleEntry)
+        );
+    }
+
+    #[test]
+    fn a_paper_count_may_be_signed_under_a_key_of_an_earlier_state() {
+        let body = paper_object(&paper(&[3, 1], 2));
+        let chair = person(b"chair", RosterRole::Chair, b"NEC-11", 50);
+        let obs_b = person(b"obs-b", RosterRole::Observer, b"PARTY-B", 54);
+        // obs-a's key in the state in force, and the one an earlier state
+        // registered.
+        let obs_a_now = person(b"obs-a", RosterRole::Observer, b"PARTY-A", 52);
+        let obs_a_before = person(b"obs-a", RosterRole::Observer, b"PARTY-A", 70);
+        let roster = [chair.0, obs_a_now.0, obs_b.0];
+        let unit = unit_of(b"RU-1");
+        let signers = [
+            (&b"chair"[..], EventRole::Chair, &b"NEC-11"[..], chair.1),
+            (b"obs-a", EventRole::Observer, b"PARTY-A", obs_a_before.1),
+            (b"obs-b", EventRole::Observer, b"PARTY-B", obs_b.1),
+        ];
+        let keys = [chair.0, obs_a_before.0, obs_b.0];
+        assert!(checked_keys(body, &signers, &roster, &keys, &unit).is_ok());
+        // Under the in-force keys only, the old key does not bind.
+        assert_eq!(
+            checked_keys(body, &signers, &roster, &roster, &unit),
+            Err(Error::SignatureSigner)
+        );
+        // The earlier entry must register the same role and organisation.
+        let as_clerk = person(b"obs-a", RosterRole::Clerk, b"PARTY-A", 70);
+        let as_other_org = person(b"obs-a", RosterRole::Observer, b"PARTY-C", 70);
+        let as_other_signer = person(b"obs-z", RosterRole::Observer, b"PARTY-A", 70);
+        for wrong in [as_clerk.0, as_other_org.0, as_other_signer.0] {
+            assert_eq!(
+                checked_keys(body, &signers, &roster, &[chair.0, wrong, obs_b.0], &unit),
+                Err(Error::NotRegistered)
+            );
+        }
+        // A key entry is no registration: the signer must be on the roster
+        // in force.
+        let gone = [chair.0, obs_b.0];
+        assert_eq!(
+            checked_keys(body, &signers, &gone, &keys, &unit),
+            Err(Error::NotRegistered)
         );
     }
 

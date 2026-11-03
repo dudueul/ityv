@@ -191,6 +191,43 @@ fn world() -> &'static World {
     WORLD.get_or_init(|| leak(build(&draft(), &TALLY_SCOPES)))
 }
 
+/// As [`world`], with one amendment: observer obs-a gets a new key and
+/// RU-1 is reported by commission NEC-X; with the signed amendment.
+fn amended_world() -> &'static (World, &'static [u8]) {
+    static WORLD: OnceLock<&'static (World, &'static [u8])> = OnceLock::new();
+    WORLD.get_or_init(|| {
+        let d = draft();
+        let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
+        let built = leak(sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
+            p.legal_authorization_hash = object_hash(body);
+        }));
+        let mut next = d.clone();
+        for r in &mut next.roster {
+            if r.signer_id.as_bytes() == b"obs-a" {
+                r.key = common::registered(ROSTER_BASE + 40);
+            }
+        }
+        next.units[0] = ReportingUnitEntry::new(
+            ReportingUnitId::new(RU1).unwrap(),
+            1,
+            OrgId::new(b"NEC-X").unwrap(),
+        )
+        .unwrap();
+        next.appointments = next.referenced_appointments();
+        let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
+        let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+        leak((
+            World {
+                genesis,
+                pin: built.pin,
+                signed: built.signed,
+                authorization,
+            },
+            amendment.signed,
+        ))
+    })
+}
+
 /// As [`world`], without `CRYPTO_TALLY_AID`.
 fn world_without_aid() -> &'static World {
     static WORLD: OnceLock<&'static World> = OnceLock::new();
@@ -248,6 +285,16 @@ fn witnessed(
     body: &'static [u8],
     who: &[(&'static [u8], EventRole, &'static [u8], u16)],
 ) -> &'static [u8] {
+    witnessed_seeded(body, who, None)
+}
+
+/// As [`witnessed`], the signing randomness drawn from `seed` when given:
+/// the same body and signers under other signature bytes.
+fn witnessed_seeded(
+    body: &'static [u8],
+    who: &[(&'static [u8], EventRole, &'static [u8], u16)],
+    seed: Option<u64>,
+) -> &'static [u8] {
     let schema = ityv_encoding::ObjectHeader::read(&mut ityv_encoding::Reader::new(body))
         .unwrap()
         .schema_id();
@@ -260,7 +307,10 @@ fn witnessed(
             signer_id: SignerId::new(signer).unwrap(),
             role,
             org_id: OrgId::new(o).unwrap(),
-            sig: sign(signing(n), purpose, body),
+            sig: match seed {
+                Some(seed) => common::sign_seeded(signing(n), purpose, body, seed),
+                None => sign(signing(n), purpose, body),
+            },
         })
         .collect();
     object(
@@ -1873,6 +1923,68 @@ fn paper_below_the_machine_or_with_other_totals_holds_the_unit() {
 }
 
 #[test]
+fn a_paper_count_follows_the_amended_commission_and_takes_an_earlier_key() {
+    let (world, amendment) = amended_world();
+    let mut book = Book::new(world);
+    let casts = box1(&mut book);
+    book.push(SCHEMA_SIGNED_GENESIS, amendment);
+    book.checkpoint();
+    let body = scope_body(&spec(STYLE1, RU1, &codes(&casts)));
+    book.q(scope(body));
+    book.checkpoint();
+    book.q(opening(opening_body(STYLE1, RU1, body, 0, sums(&casts, 0))));
+    // obs-a signs under the key of the genesis, which the amendment
+    // replaced; the chair of NEC-D no longer reports RU-1.
+    let old_obs_a = (
+        &b"obs-a"[..],
+        EventRole::Observer,
+        &b"PARTY-A"[..],
+        ROSTER_BASE + 2,
+    );
+    let former = book.w(paper_by(
+        STYLE1,
+        RU1,
+        &[1, 1, 1, 0, 0],
+        0,
+        &[PAPER_SIGNERS[0], old_obs_a, PAPER_SIGNERS[2]],
+    ));
+    let taken = book.w(paper_by(
+        STYLE1,
+        RU1,
+        &[1, 1, 1, 0, 0],
+        0,
+        &[
+            (b"chair-x", EventRole::Chair, b"NEC-X", ROSTER_BASE + 31),
+            old_obs_a,
+            PAPER_SIGNERS[2],
+        ],
+    ));
+    // A key no state gave obs-a.
+    let stranger = book.w(paper_by(
+        STYLE1,
+        RU1,
+        &[1, 1, 1, 0, 0],
+        1,
+        &[
+            (b"chair-x", EventRole::Chair, b"NEC-X", ROSTER_BASE + 31),
+            (b"obs-a", EventRole::Observer, b"PARTY-A", ROSTER_BASE + 41),
+            PAPER_SIGNERS[2],
+        ],
+    ));
+    let stage = book.run();
+    assert_eq!(
+        refused(&stage),
+        [
+            (former, TallyEvent::Paper, TallyRefusal::Signature),
+            (stranger, TallyEvent::Paper, TallyRefusal::Signature),
+        ]
+    );
+    let u = unit1(&stage);
+    assert_eq!(u.paper.map(Seq::get), Some(taken));
+    assert!(u.comparison.unwrap().agrees());
+}
+
+#[test]
 fn a_paper_count_must_be_signed_by_the_chair_and_name_the_style() {
     let mut book = Book::new(world());
     let casts = box1(&mut book);
@@ -1920,7 +2032,16 @@ fn a_paper_count_must_be_signed_by_the_chair_and_name_the_style() {
     ));
     let short = book.w(paper(STYLE1, RU1, &[1, 1, 1, 0], 0));
     let nowhere = book.w(paper(STYLE1, RU2, &[1, 1, 1, 0, 0], 0));
-    let taken = book.w(paper(STYLE1, RU1, &[1, 1, 1, 0, 0], 0));
+    let taken_event = paper(STYLE1, RU1, &[1, 1, 1, 0, 0], 0);
+    let taken = book.w(taken_event);
+    let taken_body = ityv_encoding::decode_object::<WitnessedEvent<'_>>(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        taken_event,
+    )
+    .unwrap()
+    .body_bytes();
+    let resigned = book.w(witnessed_seeded(taken_body, &PAPER_SIGNERS, Some(9)));
     let again = book.w(paper(STYLE1, RU1, &[1, 1, 1, 0, 0], 1));
     let stage = book.run();
     assert_eq!(
@@ -1931,6 +2052,7 @@ fn a_paper_count_must_be_signed_by_the_chair_and_name_the_style() {
             (elsewhere, TallyEvent::Paper, TallyRefusal::Signature),
             (short, TallyEvent::Paper, TallyRefusal::Subject),
             (nowhere, TallyEvent::Paper, TallyRefusal::Subject),
+            (resigned, TallyEvent::Paper, TallyRefusal::Repeated),
             (again, TallyEvent::Paper, TallyRefusal::Conflict),
         ]
     );
