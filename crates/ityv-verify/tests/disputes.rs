@@ -283,7 +283,8 @@ fn disputes_are_listed_in_filing_order_and_each_keeps_its_own_status() {
 fn a_legal_decision_is_shown_next_to_its_dispute_and_changes_nothing() {
     let (filing, filed) = dispute(DisputeAction::Filed, None, 1, false);
     let (_, referred) = dispute(DisputeAction::ReferredLegal, Some(filing), 1, false);
-    let stage = run(&[filed, referred, decision(filing, THE_COURT)]);
+    let decided = decision(filing, THE_COURT);
+    let stage = run(&[filed, referred, decided]);
     assert!(stage.refused().is_empty(), "{:?}", stage.refused());
     let d = &stage.disputes()[0];
     // Referred to the legal track: still unresolved for the machine.
@@ -294,6 +295,7 @@ fn a_legal_decision_is_shown_next_to_its_dispute_and_changes_nothing() {
         d.decisions,
         [Decision {
             seq: Seq::new(5).unwrap(),
+            event_hash: object_hash(decided),
             authority_id: OrgId::new(b"COURT").unwrap(),
             document_hash: Hash512([0x5D; 64]),
             outcome: LegalOutcome::Upheld,

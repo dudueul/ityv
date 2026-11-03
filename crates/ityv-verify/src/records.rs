@@ -7,8 +7,10 @@
 //! longer expects are already gone) and checks:
 //!
 //! 1. every cast record: its ballot style is in the genesis and fixes the
-//!    option count; its commitments are valid points and its OR proof of
-//!    representation verifies (VC-025, VC-026); the device's Ed25519 record
+//!    option count, and it is the box's style or a test style (a record of
+//!    another box's style could be in no tally scope of this box, §11.1);
+//!    its commitments are valid points and its OR proof of representation
+//!    verifies (VC-025, VC-026); the device's Ed25519 record
 //!    signature (purpose `cast-record`) over the body object bytes; and for
 //!    each module counter, that module's Ed25519 record signature (purpose
 //!    `module-record`) over `body_hash ‖ module_id ‖ counter`, the module
@@ -102,7 +104,9 @@ const MODULE_RECORD_MESSAGE_LEN: usize = 140;
 /// Why a cast record was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordRefusal {
-    /// Its ballot style is not in the genesis.
+    /// Its ballot style is not in the genesis, or is neither the box's
+    /// ballot style (in a genesis state up to its frame) nor a test style:
+    /// no tally scope of the box could count it (§11.1).
     Style,
     /// A commitment is not a valid point, or the OR proof does not decode
     /// or does not verify (VC-025, VC-026).
@@ -334,6 +338,16 @@ impl<'a> Ctx<'_, 'a> {
         keys
     }
 
+    /// Whether `style_id` is the box's ballot style in a genesis state up
+    /// to `seq`'s.
+    fn box_style(&self, seq: Seq, style_id: &[u8]) -> bool {
+        self.states(seq).any(|state| {
+            self.genesis
+                .expected_box_at(state, self.box_id)
+                .is_some_and(|b| b.ballot_style_id.as_bytes() == style_id)
+        })
+    }
+
     /// The option count of ballot style `style_id` in the genesis.
     fn options(&self, style_id: &[u8]) -> Option<OptionCount> {
         self.genesis
@@ -346,9 +360,11 @@ impl<'a> Ctx<'_, 'a> {
     /// Checks one cast record.
     fn record(&self, seq: Seq, record: &CastRecord<'_>) -> Result<(), RecordRefusal> {
         let body = record.body();
-        let options = self
-            .options(body.ballot_style_id().as_bytes())
-            .ok_or(RecordRefusal::Style)?;
+        let style = body.ballot_style_id();
+        let options = self.options(style.as_bytes()).ok_or(RecordRefusal::Style)?;
+        if !is_test_style(style) && !self.box_style(seq, style.as_bytes()) {
+            return Err(RecordRefusal::Style);
+        }
         let commitments = commitments_of(record).ok_or(RecordRefusal::Proof)?;
         let statement = Statement::new(
             body.election_id(),

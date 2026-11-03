@@ -690,6 +690,12 @@ fn a_record_whose_proof_or_style_fails_is_rejected() {
         style: b"STYLE-9",
         ..rec(5)
     });
+    // A style of the genesis, but another box's, with a valid proof: the
+    // tally could not count it in this box's scope (§11.1).
+    let foreign_style = record(&Rec {
+        style: b"STYLE-2",
+        ..rec(6)
+    });
     let run = go(&[
         w(opened()),
         r(recs[0]),
@@ -697,11 +703,16 @@ fn a_record_whose_proof_or_style_fails_is_rejected() {
         r(recs[2]),
         r(other_box),
         r(unknown_style),
+        r(foreign_style),
         b(batch(&bat(0, 1, 3, &codes))),
     ]);
     assert_eq!(
         rejected(&run),
-        [(7, RecordRefusal::Proof), (8, RecordRefusal::Style)]
+        [
+            (7, RecordRefusal::Proof),
+            (8, RecordRefusal::Style),
+            (9, RecordRefusal::Style)
+        ]
     );
     let rep = report(&run);
     assert_eq!(rep.rejected[0].tracking_code, code(other_box));

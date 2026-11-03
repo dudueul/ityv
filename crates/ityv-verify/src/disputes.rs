@@ -66,6 +66,8 @@ pub(crate) struct DisputeStep {
 /// tokens need.
 struct Prepared<'a> {
     seq: Seq,
+    /// The event's object hash, as its frame names it.
+    hash: Hash512,
     event: WitnessedEvent<'a>,
     purpose: Purpose<'static>,
     material: Option<Material>,
@@ -157,6 +159,7 @@ fn prepare<'a>(
             };
             Some(Prepared {
                 seq: e.seq,
+                hash: e.hash,
                 purpose: Purpose::new(event.purpose())?,
                 material,
                 authority,
@@ -194,6 +197,9 @@ fn file<'r>(
 pub struct Decision<'a> {
     /// The frame that carries the decision.
     pub seq: Seq,
+    /// The decision event's object hash, as its frame names it: the basis
+    /// a tally scope cites for `LEGAL_EXCLUDED` (PROTOCOL.md §10.6 item 6).
+    pub event_hash: Hash512,
     /// The deciding authority, as the decision and the roster name it.
     pub authority_id: OrgId<'a>,
     /// Hash of the decision document.
@@ -300,6 +306,7 @@ fn decide<'a>(
         key,
         Decision {
             seq: p.seq,
+            event_hash: p.hash,
             authority_id: authority.get().org_id,
             document_hash: body.decision_doc_hash,
             outcome: body.outcome,

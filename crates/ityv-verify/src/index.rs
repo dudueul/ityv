@@ -514,12 +514,18 @@ fn classify<'a>(
         Classified::new(Scope::Election, Role::Other, c.body().parts().election_id)
     } else if schema == SCHEMA_QUORUM_SIGNED {
         // A tally scope or aggregate opening of a ballot style and
-        // reporting unit: the tally stage reads every one.
+        // reporting unit, or the receipt resolution of an out-of-district
+        // box: the tally stage reads every one.
         let q = decode::<QuorumSigned<'a>>(schema, bytes)?;
-        let election = match (q.tally_scope(), q.aggregate_opening()) {
-            (Some(t), _) => t.parts().election_id,
-            (None, Some(o)) => o.parts().election_id,
-            (None, None) => return None,
+        let election = match (
+            q.tally_scope(),
+            q.aggregate_opening(),
+            q.receipt_resolution(),
+        ) {
+            (Some(t), _, _) => t.parts().election_id,
+            (None, Some(o), _) => o.parts().election_id,
+            (None, None, Some(r)) => r.parts().election_id,
+            (None, None, None) => return None,
         };
         Classified::new(Scope::Election, Role::Other, election)
     } else if schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION {
