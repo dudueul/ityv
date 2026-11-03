@@ -202,8 +202,8 @@ pub enum HoldReason {
     /// A tally scope the trustees signed is not what the ledger gives: the
     /// included records' count or root, the excluded records, an
     /// exclusion's reason (the first of §11.1 that applies) or its basis,
-    /// or the unit's emergency-slot ballots summed over its scopes differ
-    /// (§11.1, §14 7, VC-042).
+    /// or the ballots cast without a record, summed over the effective
+    /// closes of the unit's boxes, differ (§11.1, §14 7, VC-042).
     TallyScopeMismatch = 53,
     /// An aggregate opening cannot be taken: its trustees' signatures do
     /// not verify or do not form a qualified quorum, it lacks the
