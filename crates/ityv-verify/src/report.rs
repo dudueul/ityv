@@ -20,6 +20,11 @@
 //! - the voting progress record ([`crate::verify_progress`], §7.10, part
 //!   of the box invariants): a stream, alarm or close comparison that does
 //!   not hold holds its box or station;
+//! 6. participation ([`crate::verify_participation`]): passed when every
+//!    station's identities, party ceremony and provisioning record could be
+//!    checked; not run while one is not yet on the ledger; an event that
+//!    cannot be taken, a repeated pseudonym or an identity that does not
+//!    hold holds the ledger;
 //! 9. disputes ([`crate::verify_disputes`]): a dispute still unresolved
 //!    after every dispute event holds the ledger, and so does a dispute
 //!    event or legal decision that cannot be taken (a signature that does
@@ -37,9 +42,9 @@
 //! `ityv_ledger::check_board`). Until the anchors are satisfied the status
 //! stays `UNVERIFIED`.
 //!
-//! What the report does not reach yet: participation, tally, audit,
-//! split view, connectivity and software (stages 6–8, 10–12), so the
-//! highest status it gives is `SOURCE_COMPLETENESS_CHECKED`.
+//! What the report does not reach yet: tally, audit, split view,
+//! connectivity and software (stages 7–8, 10–12), so the highest status
+//! it gives is `SOURCE_COMPLETENESS_CHECKED`.
 
 use ityv_encoding::{CaptureProfile, ScopeSet};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
@@ -52,6 +57,7 @@ use crate::checkpoint::{CheckpointChain, verify_checkpoints};
 use crate::disputes::{DisputeStage, verify_disputes};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{LedgerIndex, build_index};
+use crate::participation::{ParticipationStage, verify_participation};
 use crate::progress::{ProgressStage, verify_progress};
 use crate::records::{RecordStage, verify_records};
 
@@ -74,6 +80,7 @@ pub struct Report<'a> {
     boxes: BoxStage<'a>,
     records: RecordStage<'a>,
     progress: ProgressStage<'a>,
+    participation: ParticipationStage<'a>,
     disputes: DisputeStage<'a>,
     evidence: Evidence,
     status: StatusReport,
@@ -114,6 +121,12 @@ impl<'a> Report<'a> {
     #[must_use]
     pub const fn progress(&self) -> &ProgressStage<'a> {
         &self.progress
+    }
+
+    /// The participation ledger (stage 6).
+    #[must_use]
+    pub const fn participation(&self) -> &ParticipationStage<'a> {
+        &self.participation
     }
 
     /// The disputes (stage 9).
@@ -189,6 +202,7 @@ pub fn verify_ledger<'a>(
     let boxes = verify_boxes(genesis, &index, &authority);
     let records = verify_records(genesis, &index, &boxes);
     let progress = verify_progress(genesis, &index, &boxes);
+    let participation = verify_participation(genesis, &index, &boxes, &records);
     let disputes = verify_disputes(genesis, &index, &authority);
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
@@ -201,6 +215,7 @@ pub fn verify_ledger<'a>(
         .union(box_holds)
         .union(records.holds())
         .union(progress.holds())
+        .union(participation.holds())
         .union(disputes.holds());
     let scopes = authority
         .authorization()
@@ -222,6 +237,14 @@ pub fn verify_ledger<'a>(
             },
         )
         .with_step(Step::Records, Outcome::Passed)
+        .with_step(
+            Step::Participation,
+            if participation.complete() {
+                Outcome::Passed
+            } else {
+                Outcome::NotRun
+            },
+        )
         .with_anchors(publications.anchors)
         .with_board(publications.board)
         .with_holds(holds);
@@ -236,6 +259,7 @@ pub fn verify_ledger<'a>(
         boxes,
         records,
         progress,
+        participation,
         disputes,
         evidence,
         status,

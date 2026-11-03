@@ -37,8 +37,8 @@
 //!
 //! What this crate does **not** do yet (ROADMAP M5): the tally, audit,
 //! split-view, connectivity and software stages (7–8, 10–12); so the
-//! highest status
-//! [`report::verify_ledger`] gives is `SOURCE_COMPLETENESS_CHECKED`.
+//! highest status [`report::verify_ledger`] gives is
+//! `SOURCE_COMPLETENESS_CHECKED`.
 #![no_std]
 #![forbid(unsafe_code)]
 
