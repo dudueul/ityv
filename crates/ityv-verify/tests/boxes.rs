@@ -66,11 +66,13 @@ fn module(id: &'static [u8]) -> ModuleId<'static> {
     common::module(id)
 }
 
-/// The people of the roster: identifier, organisation, key number.
-const PEOPLE: [(&[u8], &[u8], u16); 7] = [
+/// The people of the roster: identifier, organisation, key number
+/// (`clerk-3` is on the roster only after an amendment).
+const PEOPLE: [(&[u8], &[u8], u16); 8] = [
     (b"cc-1", b"ORG-CC", 6),
     (b"clerk-1", b"ORG-ST", 0),
     (b"clerk-2", b"ORG-ST", 1),
+    (b"clerk-3", b"ORG-ST", 7),
     (b"obs-a", b"PARTY-A", 2),
     (b"obs-b", b"PARTY-B", 3),
     (b"police-1", b"POLICE", 4),
@@ -129,11 +131,17 @@ fn world() -> &'static World {
 // ---------------------------------------------------------------------
 // Events, with real signatures.
 
+/// The key number of the spare commitment unit an amendment registers
+/// for `BOX-1`.
+const SPARE_DEVICE: u16 = common::SPARE_BASE + 10;
+
 /// Who signs a witnessed event.
 #[derive(Clone, Copy)]
 enum By {
     Person(&'static [u8], EventRole),
     Device,
+    /// The spare commitment unit of `BOX-1`.
+    Spare,
     /// A key of its own under a roster identifier: a forged signature.
     Forger(&'static [u8], EventRole),
 }
@@ -168,6 +176,7 @@ fn witnessed(schema: SchemaId, body: &'static [u8], signers: &[By]) -> &'static 
                 b"ORG-ST".as_slice(),
                 BOX_DEVICE_BASE,
             ),
+            By::Spare => (BOX, EventRole::Device, b"ORG-ST".as_slice(), SPARE_DEVICE),
             By::Forger(id, role) => (id, role, person(id).0, common::SPARE_BASE),
         })
         .collect();
@@ -321,6 +330,8 @@ enum Sealed {
     Manual,
     /// By the device under a key of its own (a forged device signature).
     Forged,
+    /// By the spare commitment unit, under `purpose`.
+    Spare(&'static [u8]),
 }
 
 fn close_with(counts: CloseCounts, open_batches: u8, bucket: u64, sealed: Sealed) -> &'static [u8] {
@@ -345,7 +356,7 @@ fn close_with(counts: CloseCounts, open_batches: u8, bucket: u64, sealed: Sealed
     });
     let body = object(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body);
     let purpose: &[u8] = match sealed {
-        Sealed::Device(p) => p,
+        Sealed::Device(p) | Sealed::Spare(p) => p,
         Sealed::Manual | Sealed::Forged => b"box-close",
     };
     let attestations: Vec<Attestation<'static>> = [
@@ -368,6 +379,7 @@ fn close_with(counts: CloseCounts, open_batches: u8, bucket: u64, sealed: Sealed
     let device = match sealed {
         Sealed::Device(p) => Some(sign(signing(BOX_DEVICE_BASE), p, body)),
         Sealed::Forged => Some(sign(signing(common::SPARE_BASE), purpose, body)),
+        Sealed::Spare(p) => Some(sign(signing(SPARE_DEVICE), p, body)),
         Sealed::Manual => None,
     };
     object(
@@ -1318,23 +1330,6 @@ fn custody_and_seal_changes_follow_the_close() {
 }
 
 #[test]
-fn a_device_swap_is_not_yet_followed() {
-    use ityv_encoding::{BoxUnitSwapBody, BoxUnitSwapParts, SCHEMA_BOX_UNIT_SWAP_BODY};
-    let body = BoxUnitSwapBody::new(&BoxUnitSwapParts {
-        election_id: election(),
-        box_id: box_id(),
-        at_slot: 7,
-        confirmed: true,
-        sheets_in: 2,
-    })
-    .unwrap();
-    let body = object(SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_VERSION_1, &body);
-    let swap = witnessed(SCHEMA_BOX_UNIT_SWAP_BODY, body, &WITNESSES);
-    let run = go(&[w(opened()), w(swap)]);
-    assert_eq!(refusals(&run), [(4, Refusal::Unsupported)]);
-}
-
-#[test]
 fn an_out_of_district_box_closes_with_its_station_issuance() {
     let world = world_with(
         &[Scope::PublicBoard, Scope::TrusteeBody, Scope::BallotMark],
@@ -1486,4 +1481,439 @@ fn events_of_a_box_an_amendment_removed_are_held() {
     assert!(r.holds.contains(HoldReason::BoxEventRefused));
     assert!(!r.holds.contains(HoldReason::CloseMissing));
     assert_eq!(reports[2].box_id, BoxId::new(b"BOX-3").unwrap());
+}
+
+// ---------------------------------------------------------------------
+// Amendments: a spare commitment unit and a new clerk.
+
+/// A world whose genesis has one amendment, for the ledger to carry: it
+/// registers a spare commitment unit for `BOX-1` (a new device key) and
+/// adds `clerk-3` to the roster at `ST-1`.
+struct Amended {
+    world: World,
+    amendment: &'static [u8],
+}
+
+fn amended() -> &'static Amended {
+    static AMENDED: OnceLock<&'static Amended> = OnceLock::new();
+    AMENDED.get_or_init(|| leak(amended_with(true)))
+}
+
+/// As [`amended`]; `new_device` false keeps `BOX-1`'s device key (the
+/// amendment only adds `clerk-3`).
+fn amended_with(new_device: bool) -> Amended {
+    let mut draft = Draft::standard();
+    draft.roster.push(roster_signer(
+        6,
+        b"cc-1",
+        RosterRole::Custodian,
+        b"ORG-CC",
+        None,
+    ));
+    draft.appointments = draft.referenced_appointments();
+    let (body, authorization) = common::legal_authorization(
+        &[Scope::PublicBoard, Scope::TrusteeBody, Scope::BallotMark],
+        20_000,
+        20_100,
+    );
+    let built = leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+        p.legal_authorization_hash = object_hash(body);
+    }));
+    let mut next = draft.clone();
+    if new_device {
+        for b in &mut next.boxes {
+            if b.box_id.as_bytes() == BOX {
+                b.device_key = common::registered(SPARE_DEVICE);
+            }
+        }
+    }
+    next.roster.push(roster_signer(
+        7,
+        b"clerk-3",
+        RosterRole::Clerk,
+        b"ORG-ST",
+        Some(STATION),
+    ));
+    next.appointments = next.referenced_appointments();
+    let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
+    let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+    Amended {
+        world: World {
+            genesis,
+            signed_genesis: built.signed,
+            authorization,
+        },
+        amendment: amendment.signed,
+    }
+}
+
+fn g(event: &'static [u8]) -> (SchemaId, &'static [u8]) {
+    (SCHEMA_SIGNED_GENESIS, event)
+}
+
+/// A `BoxUnitSwap` of `BOX-1` at slot `slot`, signed by `signers`.
+fn swap_with(slot: u64, signers: &[By]) -> &'static [u8] {
+    use ityv_encoding::{BoxUnitSwapBody, BoxUnitSwapParts, SCHEMA_BOX_UNIT_SWAP_BODY};
+    let body = BoxUnitSwapBody::new(&BoxUnitSwapParts {
+        election_id: election(),
+        box_id: box_id(),
+        at_slot: slot,
+        confirmed: true,
+        sheets_in: 2,
+    })
+    .unwrap();
+    let body = object(SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_VERSION_1, &body);
+    witnessed(SCHEMA_BOX_UNIT_SWAP_BODY, body, signers)
+}
+
+fn swap(slot: u64) -> &'static [u8] {
+    swap_with(slot, &WITNESSES)
+}
+
+fn spare_close(records: u64) -> &'static [u8] {
+    close_with(
+        counts(records),
+        0,
+        CLOSE_BUCKET,
+        Sealed::Spare(b"box-close"),
+    )
+}
+
+#[test]
+fn a_box_follows_a_device_swap_witnessed_on_site() {
+    // Frames: genesis 1, authorization 2, opening 3, records 4–5,
+    // amendment 6, swap 7, a record the replaced device uploads late 8,
+    // batch 9, the spare's close 10, custody and count after it.
+    let a = amended();
+    let mut events = std::vec![
+        w(opened()),
+        r(record(1)),
+        r(record(2)),
+        g(a.amendment),
+        w(swap(7)),
+        r(record(3)),
+        b(batch(0, 3)),
+        c(spare_close(3)),
+    ];
+    events.extend(handoffs(3).map(w));
+    events.push(w(audit()));
+    let run = run_in(&a.world, &events);
+    assert!(
+        run.index.findings().is_empty(),
+        "{:?}",
+        run.index.findings()
+    );
+    assert_eq!(run.index.amendment_frames(), [seq(6)]);
+    let rep = report(&run);
+    assert!(rep.refusals.is_empty(), "{:?}", rep.refusals);
+    assert_eq!(rep.phase, Phase::Counted);
+    assert!(rep.holds.is_empty(), "{:?}", rep.holds);
+    assert_eq!(rep.counts, Some(counts(3)));
+}
+
+#[test]
+fn a_new_device_closes_only_after_its_amendment_and_the_swap() {
+    let a = amended();
+    // Before the amendment's frame the spare's key is not the box's.
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            r(record(1)),
+            b(batch(0, 1)),
+            c(spare_close(1)),
+            g(a.amendment),
+            w(swap(7)),
+            c(close_with(
+                counts(1),
+                0,
+                CLOSE_BUCKET + 1,
+                Sealed::Spare(b"box-close"),
+            )),
+        ],
+    );
+    assert_eq!(refusals(&run), [(6, Refusal::Signature)]);
+    assert_eq!(report(&run).phase, Phase::Closed);
+
+    // After the amendment but before the swap: out of order; a manual
+    // close is not held back.
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            r(record(1)),
+            b(batch(0, 1)),
+            g(a.amendment),
+            c(spare_close(1)),
+            w(swap(7)),
+            c(close_with(
+                counts(1),
+                0,
+                CLOSE_BUCKET + 1,
+                Sealed::Spare(b"box-close"),
+            )),
+        ],
+    );
+    assert_eq!(refusals(&run), [(7, Refusal::OutOfOrder)]);
+    assert_eq!(report(&run).phase, Phase::Closed);
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            r(record(1)),
+            b(batch(0, 1)),
+            g(a.amendment),
+            c(close_with(counts(1), 0, CLOSE_BUCKET, Sealed::Manual)),
+        ],
+    );
+    assert!(report(&run).refusals.is_empty());
+    assert_eq!(report(&run).phase, Phase::Closed);
+    assert!(report(&run).holds.contains(HoldReason::ManualClose));
+
+    // The replaced device cannot close after the amendment, swap or not.
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            r(record(1)),
+            b(batch(0, 1)),
+            g(a.amendment),
+            w(swap(7)),
+            c(close(1)),
+        ],
+    );
+    assert_eq!(refusals(&run), [(8, Refusal::Signature)]);
+    assert_eq!(report(&run).phase, Phase::Open);
+}
+
+#[test]
+fn a_swap_needs_an_amendment_and_an_open_box() {
+    let a = amended();
+    // Before the amendment: no new key to swap to.
+    let run = run_in(&a.world, &[w(opened()), w(swap(7)), g(a.amendment)]);
+    assert_eq!(refusals(&run), [(4, Refusal::OutOfOrder)]);
+    // Before the opening: the spare opens the box itself, no swap needed.
+    let run = run_in(
+        &a.world,
+        &[
+            g(a.amendment),
+            w(swap(7)),
+            w(opened_at(OPEN_BUCKET, &with_device_spare())),
+            r(record(1)),
+            b(batch(0, 1)),
+            c(spare_close(1)),
+        ],
+    );
+    assert_eq!(refusals(&run), [(4, Refusal::OutOfOrder)]);
+    assert_eq!(report(&run).phase, Phase::Closed);
+    // After the close, and a second swap.
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            r(record(1)),
+            b(batch(0, 1)),
+            c(close_with(counts(1), 0, CLOSE_BUCKET, Sealed::Manual)),
+            g(a.amendment),
+            w(swap(7)),
+        ],
+    );
+    assert_eq!(refusals(&run), [(8, Refusal::OutOfOrder)]);
+    let run = run_in(
+        &a.world,
+        &[w(opened()), g(a.amendment), w(swap(7)), w(swap(8))],
+    );
+    assert_eq!(refusals(&run), [(6, Refusal::OutOfOrder)]);
+    // A swap with a forged signature, or signed as a clerk by someone the
+    // roster registers in another role, is refused and leaves the swap
+    // due.
+    let forged = swap_with(
+        7,
+        &[
+            By::Person(b"clerk-1", EventRole::Clerk),
+            By::Forger(b"clerk-2", EventRole::Clerk),
+            By::Person(b"obs-a", EventRole::Observer),
+            By::Person(b"obs-b", EventRole::Observer),
+        ],
+    );
+    let wrong_role = swap_with(
+        9,
+        &[
+            By::Person(b"clerk-1", EventRole::Clerk),
+            By::Person(b"court", EventRole::Clerk),
+            By::Person(b"obs-a", EventRole::Observer),
+            By::Person(b"obs-b", EventRole::Observer),
+        ],
+    );
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            g(a.amendment),
+            w(forged),
+            w(wrong_role),
+            r(record(1)),
+            b(batch(0, 1)),
+            c(spare_close(1)),
+        ],
+    );
+    let got = refusals(&run);
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(got[0], (5, Refusal::Signature));
+    assert!(matches!(got[1], (6, Refusal::State(_))), "{got:?}");
+    assert_eq!(got[2], (9, Refusal::OutOfOrder));
+}
+
+fn with_device_spare() -> Vec<By> {
+    let mut all = std::vec![By::Spare];
+    all.extend_from_slice(&WITNESSES);
+    all
+}
+
+#[test]
+fn a_roster_change_applies_from_the_amendment_frame() {
+    // The amendment only adds clerk-3: no device swap is due.
+    let a = leak(amended_with(false));
+    let signed_by_clerk_3 = |bucket| {
+        fallback_signed(
+            FallbackKind::Declared,
+            bucket,
+            &[
+                By::Person(b"clerk-1", EventRole::Clerk),
+                By::Person(b"clerk-3", EventRole::Clerk),
+                By::Person(b"obs-a", EventRole::Observer),
+                By::Person(b"obs-b", EventRole::Observer),
+            ],
+        )
+    };
+    let run = run_in(
+        &a.world,
+        &[
+            w(opened()),
+            w(signed_by_clerk_3(110)),
+            g(a.amendment),
+            w(signed_by_clerk_3(111)),
+            r(record(1)),
+            b(batch(0, 1)),
+            c(close(1)),
+        ],
+    );
+    assert_eq!(refusals(&run), [(4, Refusal::Signature)]);
+    assert_eq!(report(&run).phase, Phase::Closed);
+}
+
+/// A fallback event at `bucket` signed by `signers`.
+fn fallback_signed(kind: FallbackKind, bucket: u64, signers: &[By]) -> &'static [u8] {
+    let reason = match kind {
+        FallbackKind::Declared => FallbackReason::ScannerFault,
+        FallbackKind::Ended => FallbackReason::NotApplicable,
+    };
+    let body = FallbackBody::new(&FallbackParts {
+        election_id: election(),
+        box_id: box_id(),
+        kind,
+        reason,
+        statement_hash: Hash512([0x51; 64]),
+        markers: None,
+        time_bucket: TimeBucket::new(bucket),
+    })
+    .unwrap();
+    let body = object(SCHEMA_FALLBACK_BODY, SCHEMA_VERSION_1, &body);
+    witnessed(SCHEMA_FALLBACK_BODY, body, signers)
+}
+
+#[test]
+fn an_amendment_missing_from_the_ledger_holds_the_box() {
+    // The verifier applied the amendment but the ledger does not carry
+    // it: every event is checked under the genesis, and the hold reaches
+    // the box.
+    let a = amended();
+    let run = run_in(&a.world, &life());
+    assert!(run.index.amendment_frames().is_empty());
+    let rep = report(&run);
+    assert!(rep.refusals.is_empty(), "{:?}", rep.refusals);
+    assert_eq!(rep.phase, Phase::Counted);
+    assert!(rep.holds.contains(HoldReason::AmendmentMissing));
+}
+
+#[test]
+fn an_amendment_after_the_close_is_followed_without_a_swap() {
+    let a = amended();
+    let mut events = voting(3);
+    events.push(c(close(3)));
+    events.push(g(a.amendment));
+    events.extend(handoffs(3).map(w));
+    events.push(w(audit()));
+    let run = run_in(&a.world, &events);
+    let rep = report(&run);
+    assert!(rep.refusals.is_empty(), "{:?}", rep.refusals);
+    assert_eq!(rep.phase, Phase::Counted);
+    assert!(rep.holds.is_empty(), "{:?}", rep.holds);
+}
+
+#[test]
+fn a_box_an_amendment_adds_runs_from_the_amendment_frame() {
+    // The genesis has no BOX-1 (ST-1 has BOX-2 alone); the amendment adds
+    // it. Its opening before the amendment's frame is refused; the box
+    // opens and closes after it.
+    let mut draft = Draft::standard();
+    draft.roster.push(roster_signer(
+        6,
+        b"cc-1",
+        RosterRole::Custodian,
+        b"ORG-CC",
+        None,
+    ));
+    draft.appointments = draft.referenced_appointments();
+    let full = draft.clone();
+    draft.boxes.retain(|b| b.box_id.as_bytes() != BOX);
+    let second = draft.stations[1];
+    draft.stations = std::vec![
+        common::station(
+            STATION,
+            ityv_encoding::StationKind::ElectionDay,
+            common::checkin_unit(0, b"U-1A", &[b"M-U1A-P1", b"M-U1A-P2"]),
+            common::checkin_unit(1, b"U-1B", &[b"M-U1B-P1", b"M-U1B-P2"]),
+            &[b"BOX-2"],
+            &[
+                common::token(b"obs-a", b"PARTY-A", 0xC1),
+                common::token(b"obs-b", b"PARTY-B", 0xC2),
+            ],
+        ),
+        second,
+    ];
+    draft.units[0] = ityv_encoding::ReportingUnitEntry::new(
+        ityv_encoding::ReportingUnitId::new(b"RU-1").unwrap(),
+        1,
+    )
+    .unwrap();
+    let (body, authorization) = common::legal_authorization(
+        &[Scope::PublicBoard, Scope::TrusteeBody, Scope::BallotMark],
+        20_000,
+        20_100,
+    );
+    let built = leak(sign_genesis_with(&draft, draft.raw(), &SIGNERS, |p| {
+        p.legal_authorization_hash = object_hash(body);
+    }));
+    let amendment = common::amendment(1, built.pin, &full.raw(), &SIGNERS);
+    let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+    assert!(genesis.expected_box_at(0, BOX).is_none());
+    let world = World {
+        genesis,
+        signed_genesis: built.signed,
+        authorization,
+    };
+    let early = opened_at(OPEN_BUCKET - 1, &with_device(&WITNESSES));
+    let mut events = std::vec![w(early), g(amendment.signed)];
+    events.extend(voting(3));
+    events.push(c(close(3)));
+    let run = run_in(&world, &events);
+    assert!(
+        run.index.findings().is_empty(),
+        "{:?}",
+        run.index.findings()
+    );
+    assert_eq!(refusals(&run), [(3, Refusal::Unexpected)]);
+    assert_eq!(report(&run).phase, Phase::Closed);
+    assert_eq!(report(&run).counts, Some(counts(3)));
 }
