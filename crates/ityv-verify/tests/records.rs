@@ -1308,3 +1308,28 @@ fn device_double_signing_is_found_whatever_the_module_signatures() {
         ]
     );
 }
+
+#[test]
+fn a_body_the_device_did_not_sign_is_no_double_signing() {
+    // A second body under batch index 0 whose device signature is forged:
+    // a signature finding for it, not device double signing, and the
+    // device's own batch still attests.
+    let (recs, codes) = three();
+    let mut forged = bat(0, 1, 2, &codes[..2]);
+    forged.device = common::SPARE_BASE;
+    let run = go(&[
+        w(opened()),
+        r(recs[0]),
+        r(recs[1]),
+        r(recs[2]),
+        b(batch(&bat(0, 1, 3, &codes))),
+        b(batch(&forged)),
+        c(close(&codes)),
+    ]);
+    assert_eq!(findings(&run), [(8, BatchProblem::Signature)]);
+    assert!(
+        statuses(&run)
+            .iter()
+            .all(|(_, s)| *s == RecordStatus::CastCommitted)
+    );
+}
