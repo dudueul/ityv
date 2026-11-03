@@ -1,6 +1,6 @@
 # ADR-0033: 선거인명부의 출처 서명, 다기관 보관, 개인 확인
 
-> English summary: The election commission (NEC) must not be the sole author or the sole keeper of any fact on the voter roll. (1) Every roll fact comes from the authority that owns it and is signed by it. These authorities are: the local government head compiling from resident registration, the court registry for deaths, and the prosecution or courts for disqualifications. The roll is a deterministic merge of those signed extracts. (2) At finalization the canonical roll file goes, encrypted, to custodians in at least two branches of government: a court, the Ministry of the Interior, the independent verification committee, and the parties already entitled to roll copies. Each custodian recomputes the commitment on its own and signs a receipt on the ledger. `RollFreeze` counts only when enough custodians agree on the same roots, so a roll swapped later disagrees with copies the NEC does not hold. (3) Each entry is committed with its own salt. A voter receives their entry and inclusion proof through the existing inspection channel and checks it against the custodian-countersigned root, so a wrongful removal or move shows before finalization. (4) Per-precinct roll counts by age band are published and reconciled with the Ministry's public resident statistics. (5) After freeze, an amendment needs the source authority's signature and fresh custodian receipts. (6) A voter wrongly marked "already voted" in the integrated roll can cast a sealed contested ballot. It counts only if their pseudonym appears nowhere else, and the number of contested marks per station is published. (7) After the election, a court-ordered, all-party sample audit maps a random sample of participating pseudonyms back to roll entries, through the custodians' copy, and checks that those voters exist and were alive. This catches phantom voting, which the pseudonym ledger alone cannot. Legislative amendment 14 gives these duties a legal basis.
+> English summary: The election commission (NEC) must not be the sole author or the sole keeper of any fact on the voter roll. (1) Every roll fact comes from the authority that owns it and is signed by it. These authorities are: the local government head compiling from resident registration, the court registry for deaths, and the prosecution or courts for disqualifications. The roll is a deterministic merge of those signed extracts. (2) At finalization the canonical roll file goes, encrypted, to custodians in at least two branches of government: a court, the Ministry of the Interior, the independent verification committee, and the parties already entitled to roll copies. Each custodian recomputes the commitment on its own and signs a receipt on the ledger. `RollFreeze` counts only when at least three custodians, the court administration and the Ministry of the Interior among them, agree on the same roots, so a roll swapped later disagrees with copies the NEC does not hold. (3) Each entry is committed with its own salt. A voter receives their entry and inclusion proof through the existing inspection channel and checks it against the custodian-countersigned root, so a wrongful removal or move shows before finalization. (4) Per-precinct roll counts by age band are published and reconciled with the Ministry's public resident statistics. (5) After freeze, an amendment needs the source authority's signature and fresh custodian receipts. (6) A voter wrongly marked "already voted" in the integrated roll can cast a sealed contested ballot. It counts only if their pseudonym appears nowhere else, and the number of contested marks per station is published. (7) After the election, a court-ordered, all-party sample audit maps a random sample of participating pseudonyms back to roll entries, through the custodians' copy, and checks that those voters exist and were alive. This catches phantom voting, which the pseudonym ledger alone cannot. Legislative amendment 14 gives these duties a legal basis.
 
 - 상태: 제안
 - 날짜: 2026-11-03
@@ -31,15 +31,15 @@ ADR-0009는 명부 동결 commitment와 추가 전용 변경으로 동결 뒤의
 
    각 추출의 공개부는 출처 기관, 기준 시점, 항목 수, 항목 commitment의 정렬 집합 root다. 원문은 개인정보이므로 공개하지 않고 보관 기관(2항)만 받는다. 출처가 서명하지 않은 사실로는 명부에 넣거나 뺄 수 없다.
 
-2. **다기관 보관(명부 수탁).** 명부가 확정되면 선관위는 정규 명부 파일(항목마다 소금을 포함, 3항)과 그 출처 추출들을 보관 기관마다 그 기관의 공개키로 암호화해 넘긴다. 보관 기관은 셋 이상이며 적어도 둘은 서로 다른 권력에 속한다.
-   - 관할 법원(또는 법원행정처)
-   - 행정안전부
+2. **다기관 보관(명부 수탁).** 명부가 확정되면 선관위는 정규 명부 파일(항목마다 소금을 포함, 3항)과 그 출처 추출들을 보관 기관마다 그 기관의 공개키로 암호화해 넘긴다. 보관 기관은 셋 이상이며 법원행정처(사법)와 행정안전부(행정)를 반드시 포함한다.
+   - 법원행정처(사법)
+   - 행정안전부(행정)
    - 독립검증위원회
    - 명부 사본을 받을 권리가 있는 정당(현행 사본 교부를 서명된 수령으로 바꾼다)
 
    보관 기관은 받은 파일에서 출처 추출의 병합을 다시 계산한다. 그다음 항목 commitment root, 투표구별·연령대별 인원수, 명부 가명 다중집합 root(5호)를 스스로 계산해 `RollCustodyReceipt`에 서명하고 공개원장에 수록한다. 검증기는 `RollFreeze`를 다음 조건이 모두 맞을 때만 받는다.
-   - genesis가 고정한 보관 기관 목록의 정족수(기본 3) 이상이 같은 root에 서명했다.
-   - 서명한 기관이 둘 이상의 권력에 걸친다.
+   - genesis가 고정한 보관 기관 목록의 정족수(셋 이상) 이상이 같은 root에 서명했다.
+   - 서명한 기관에 법원행정처(사법)와 행정안전부(행정)가 함께 있다(개정안 14의 제44조의3 ④).
    - 그 root가 `RollFreeze`의 값과 같다.
 
    하나라도 다르면 명부 단계가 `HOLD_REVIEW`이고(`RollCustodyMismatch`), 분쟁이 된다. 분쟁에서는 보관 기관들의 사본을 대조한다. 선관위의 사본만으로는 어떤 명부도 확정되지 않는다.
@@ -81,7 +81,7 @@ ADR-0009는 명부 동결 commitment와 추가 전용 변경으로 동결 뒤의
 
 8. **검증 조건(새로).**
    - VC-107: 명부는 출처 서명된 추출의 결정적 병합이다.
-   - VC-108: `RollFreeze`는 둘 이상의 권력에 걸친 보관 기관 정족수가 같은 root에 서명할 때만 유효하다.
+   - VC-108: `RollFreeze`는 법원행정처와 행정안전부를 포함한 셋 이상의 보관 기관이 같은 root에 서명할 때만 유효하다.
    - VC-109: 명부 가명 root는 보관 기관이 계산한다.
    - VC-110: 항목마다 소금 commitment가 있고 본인 확인 경로가 있다.
    - VC-111: 동결 뒤 변경에는 출처 서명과 새 보관 영수증이 필요하다.
