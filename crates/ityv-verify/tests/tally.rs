@@ -65,6 +65,10 @@ use ityv_encoding::{
     StationId, StationKind, TallyEffect, TallyScopeBody, TallyScopeParts, TimeBucket, Token192,
     TreeSize, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
 };
+use ityv_encoding::{
+    LateBatchCloseBody, LateBatchCloseParts, LateBatchReason, MAX_QUORUM_MESSAGE_LEN,
+    SCHEMA_LATE_BATCH_CLOSE_BODY, write_quorum_message,
+};
 use ityv_ledger::{
     SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry, root_of_leaves,
     sorted_set_root,
@@ -145,6 +149,14 @@ fn draft() -> Draft {
         b"chair",
         RosterRole::Chair,
         b"NEC-D",
+        None,
+    ));
+    // The chair of a district commission no unit names.
+    d.roster.push(common::roster_signer(
+        31,
+        b"chair-x",
+        RosterRole::Chair,
+        b"NEC-X",
         None,
     ));
     d.appointments = d.referenced_appointments();
@@ -425,6 +437,18 @@ fn sorted(codes: &[Hash512]) -> Vec<Hash512> {
 /// The batch `index` of `bx` over counters `first..=last` of every module,
 /// attesting `members`.
 fn batch(bx: Bx, index: u32, first: u64, last: u64, members: &[Hash512]) -> &'static [u8] {
+    batch_at(bx, index, first, last, members, 120)
+}
+
+/// As [`batch`], in time bucket `bucket`.
+fn batch_at(
+    bx: Bx,
+    index: u32,
+    first: u64,
+    last: u64,
+    members: &[Hash512],
+    bucket: u64,
+) -> &'static [u8] {
     let ranges = leak_slice(
         bx.mods
             .iter()
@@ -444,7 +468,7 @@ fn batch(bx: Bx, index: u32, first: u64, last: u64, members: &[Hash512]) -> &'st
         module_ranges: ranges,
         module_refusals: ModuleIds::EMPTY,
         journal_head: Hash512([0x22; 64]),
-        time_bucket: TimeBucket::new(120),
+        time_bucket: TimeBucket::new(bucket),
     })
     .unwrap();
     let body = object(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body);
@@ -467,6 +491,18 @@ fn batch(bx: Bx, index: u32, first: u64, last: u64, members: &[Hash512]) -> &'st
 /// `records`), `attested` of them attested, `without` ballots without a
 /// record, and the record set `codes`.
 fn close(bx: Bx, records: u64, attested: u64, without: u64, codes: &[Hash512]) -> &'static [u8] {
+    close_as(bx, (records, attested, without), codes, Some(b"box-close"))
+}
+
+/// As [`close`]: `device` names the purpose the device and the people sign
+/// under (`box-close`, `late-box-close`), `None` for a manual close.
+fn close_as(
+    bx: Bx,
+    (records, attested, without): (u64, u64, u64),
+    codes: &[Hash512],
+    device: Option<&[u8]>,
+) -> &'static [u8] {
+    let purpose = device.unwrap_or(b"box-close");
     let counts = CloseCounts {
         paper: if bx.absentee { 0 } else { records + without },
         records,
@@ -509,7 +545,7 @@ fn close(bx: Bx, records: u64, attested: u64, without: u64, codes: &[Hash512]) -
                 SignerRole::Observer
             },
             org_id: OrgId::new(o).unwrap(),
-            sig: sign(signing(n), b"box-close", body),
+            sig: sign(signing(n), purpose, body),
         })
         .collect();
     object(
@@ -517,7 +553,7 @@ fn close(bx: Bx, records: u64, attested: u64, without: u64, codes: &[Hash512]) -
         SCHEMA_VERSION_1,
         &BoxClose::new(
             body,
-            Some(sign(signing(bx.device), b"box-close", body)),
+            device.map(|p| sign(signing(bx.device), p, body)),
             &attestations,
         )
         .unwrap(),
@@ -539,11 +575,40 @@ const QUORUM: [(&[u8], u16); 5] = [
 /// `body` signed by the trustees `who` (identifier, key number,
 /// ascending) under `purpose`.
 fn quorum(body: &'static [u8], purpose: &[u8], who: &[(&'static [u8], u16)]) -> &'static [u8] {
+    quorum_seeded(body, purpose, who, None)
+}
+
+/// The quorum message of `body` signed by `who` (ENCODING.md §8.63).
+fn quorum_message(body: &[u8], who: &[(&'static [u8], u16)]) -> &'static [u8] {
+    let ids: Vec<TrusteeId<'static>> = who
+        .iter()
+        .map(|(t, _)| TrusteeId::new(t).unwrap())
+        .collect();
+    let mut out = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
+    let mut w = Writer::new(&mut out);
+    write_quorum_message(&object_hash(body), &ids, &mut w).unwrap();
+    let n = w.finish();
+    out.truncate(n);
+    leak_slice(out)
+}
+
+/// As [`quorum`], with signing randomness drawn from `seed` when given:
+/// the same body and trustees under other signature bytes.
+fn quorum_seeded(
+    body: &'static [u8],
+    purpose: &[u8],
+    who: &[(&'static [u8], u16)],
+    seed: Option<u64>,
+) -> &'static [u8] {
+    let message = quorum_message(body, who);
     let sigs: Vec<QuorumSig<'static>> = who
         .iter()
         .map(|&(t, n)| QuorumSig {
             trustee_id: TrusteeId::new(t).unwrap(),
-            sig: sign(trustee_signing(n), purpose, body),
+            sig: match seed {
+                Some(seed) => common::sign_seeded(trustee_signing(n), purpose, message, seed),
+                None => sign(trustee_signing(n), purpose, message),
+            },
         })
         .collect();
     object(
@@ -828,8 +893,15 @@ impl Book {
         self.push(SCHEMA_QUORUM_SIGNED, event)
     }
 
-    /// A checkpoint over every frame so far, after the last one.
+    /// A checkpoint over every frame so far, after the last one, in the
+    /// first bucket after the late-close window.
     fn checkpoint(&mut self) -> u64 {
+        self.checkpoint_at(READY + 1)
+    }
+
+    /// A checkpoint over every frame so far, the witnesses' time
+    /// `bucket`.
+    fn checkpoint_at(&mut self, bucket: u64) -> u64 {
         let (seq, previous) = self
             .last
             .map_or((1, Hash512::ZERO), |(seq, hash)| (seq + 1, hash));
@@ -849,7 +921,7 @@ impl Book {
             box_close_root: sorted_set_root(&closes).unwrap(),
             dispute_root: sorted_set_root(&disputes).unwrap(),
             genesis_hash: self.world.pin,
-            time_bucket: TimeBucket::new(READY + 1),
+            time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
         let body = object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &body);
@@ -887,8 +959,17 @@ impl Book {
     }
 }
 
-/// BOX-1 opened with records for options 1, 2 and 3 in one batch, closed.
+/// BOX-1 opened with records for options 1, 2 and 3 in one batch, closed,
+/// and a checkpoint after the late-close window: the witnesses' time from
+/// which a tally scope may be taken.
 fn box1(book: &mut Book) -> Vec<Cast> {
+    let casts = box1_closed(book);
+    book.checkpoint();
+    casts
+}
+
+/// As [`box1`], without the checkpoint.
+fn box1_closed(book: &mut Book) -> Vec<Cast> {
     let casts = std::vec![cast(B1, 1, 1), cast(B1, 2, 2), cast(B1, 3, 3)];
     book.w(opened(B1));
     for c in &casts {
@@ -1064,6 +1145,7 @@ fn mixed(book: &mut Book) -> (Cast, Cast, Cast, Hash512) {
     book.push(SCHEMA_BATCH_ATTEST, batch(B1, 0, 1, 1, &[kept.code]));
     let closed = close(B1, 3, 1, 1, &[kept.code, test.code, late.code]);
     book.push(SCHEMA_BOX_CLOSE, closed);
+    book.checkpoint();
     (kept, test, late, object_hash(closed))
 }
 
@@ -1167,12 +1249,16 @@ fn a_scope_before_its_time_is_refused() {
     assert_eq!(unit1(&stage).holds, only(HoldReason::TallyScopeRefused));
     assert_eq!(stage.holds(), only(HoldReason::TallyScopeRefused));
 
-    // Within the late-close window, then after it: the second is taken.
+    // Within the late-close window by the witnesses' time, though the
+    // trustees date the scope after it; then after it: the second is
+    // taken.
     let mut book = Book::new(world());
-    let casts = box1(&mut book);
+    let casts = box1_closed(&mut book);
+    book.checkpoint_at(CLOSE_BUCKET + 96);
     let mut s = spec(STYLE1, RU1, &codes(&casts));
-    s.bucket = CLOSE_BUCKET + 96;
+    s.bucket = READY + 50;
     let early = book.q(scope(scope_body(&s)));
+    book.checkpoint();
     let (at, _) = tally1(
         &mut book,
         &casts,
@@ -1192,19 +1278,28 @@ fn a_scope_before_its_time_is_refused() {
     assert!(!u.passed());
     assert!(!stage.passed());
 
-    // A second scope after one was taken.
+    // A second scope after one was taken: the same body under other
+    // signature bytes, and another body (a conflict, never silently
+    // "already has one").
     let mut book = Book::new(world());
     let casts = box1(&mut book);
     let s = spec(STYLE1, RU1, &codes(&casts));
-    book.q(scope(scope_body(&s)));
-    let again = book.q(scope(scope_body(&ScopeSpec {
+    let body = scope_body(&s);
+    book.q(scope(body));
+    let again = book.q(quorum_seeded(body, b"tally-scope", &QUORUM, Some(9)));
+    let other = book.q(scope(scope_body(&ScopeSpec {
         bucket: READY + 5,
         ..s
     })));
+    let stage = book.run();
     assert_eq!(
-        refused(&book.run()),
-        [(again, TallyEvent::Scope, TallyRefusal::Repeated)]
+        refused(&stage),
+        [
+            (again, TallyEvent::Scope, TallyRefusal::Repeated),
+            (other, TallyEvent::Scope, TallyRefusal::Conflict),
+        ]
     );
+    assert_eq!(unit1(&stage).holds, only(HoldReason::TallyScopeRefused));
 }
 
 #[test]
@@ -1220,6 +1315,98 @@ fn a_scope_of_no_unit_of_the_genesis_is_refused() {
     // Held, though no unit names it.
     assert_eq!(stage.holds(), only(HoldReason::TallyScopeRefused));
     assert_eq!(unit1(&stage).holds, HoldSet::empty());
+}
+
+/// The late batch close naming the batch `batch_event` (PROTOCOL.md
+/// §7.2.1), signed by the clerks and observers.
+fn late_batch_close(batch_event: &'static [u8], bucket: u64) -> &'static [u8] {
+    let b: BatchAttest<'static> =
+        ityv_encoding::decode_object(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, batch_event).unwrap();
+    let body = LateBatchCloseBody::new(&LateBatchCloseParts {
+        election_id: common::election(),
+        box_id: BoxId::new(b"BOX-1").unwrap(),
+        batch_body_hash: object_hash(b.body_bytes()),
+        reason: LateBatchReason::DeviceRestart,
+        time_bucket: TimeBucket::new(bucket),
+    })
+    .unwrap();
+    witnessed(
+        object(SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_VERSION_1, &body),
+        &PEOPLE,
+    )
+}
+
+#[test]
+fn a_late_close_after_a_scope_of_its_style_is_refused() {
+    let mut book = Book::new(world());
+    let (kept, test, late, closed) = mixed(&mut book);
+    let mut s = spec(STYLE1, RU1, &[kept.code]);
+    s.no_record = 1;
+    s.exclusions = std::vec![
+        exclusion(
+            test.code,
+            ExclusionReason::TestBallot,
+            object_hash(test.event)
+        ),
+        exclusion(late.code, ExclusionReason::Unattested, closed),
+    ];
+    // Before the scope a late batch close would still attest (within
+    // the window it declares); after it, the scope has fixed UNATTESTED.
+    let at = book.q(scope(scope_body(&s)));
+    let late_batch = batch_at(B1, 1, 2, 3, &[test.code, late.code], CLOSE_BUCKET + 5);
+    book.push(SCHEMA_BATCH_ATTEST, late_batch);
+    let late_close = book.w(late_batch_close(late_batch, CLOSE_BUCKET + 5));
+    let stage = book.run();
+    assert_eq!(
+        refused(&stage),
+        [(late_close, TallyEvent::LateClose, TallyRefusal::AfterScope)]
+    );
+    let u = unit1(&stage);
+    assert_eq!(u.scope.map(Seq::get), Some(at));
+    assert!(u.holds.contains(HoldReason::LateCloseAfterScope));
+    assert!(stage.holds().contains(HoldReason::LateCloseAfterScope));
+    // The record stage took the late batch: the scope no longer agrees.
+    assert!(u.holds.contains(HoldReason::TallyScopeMismatch));
+    // A scope of another style does not refuse BOX-1's late closes.
+    let mut book = Book::new(world());
+    mixed(&mut book);
+    box3(&mut book, &[1]);
+    let late_batch = batch_at(B1, 1, 2, 3, &[test.code, late.code], CLOSE_BUCKET + 5);
+    book.q(scope(scope_body(&spec(STYLE2, RU2, &[]))));
+    book.push(SCHEMA_BATCH_ATTEST, late_batch);
+    book.w(late_batch_close(late_batch, CLOSE_BUCKET + 5));
+    let stage = book.run();
+    assert!(
+        stage
+            .refused()
+            .iter()
+            .all(|r| r.event != TallyEvent::LateClose),
+        "{:?}",
+        stage.refused()
+    );
+
+    // A late box close replacing a manual close, after the scope.
+    let mut book = Book::new(world());
+    let casts = std::vec![cast(B1, 1, 1)];
+    book.w(opened(B1));
+    book.push(SCHEMA_CAST_RECORD, casts[0].event);
+    book.push(SCHEMA_BATCH_ATTEST, batch(B1, 0, 1, 1, &codes(&casts)));
+    book.push(
+        SCHEMA_BOX_CLOSE,
+        close_as(B1, (1, 1, 0), &codes(&casts), None),
+    );
+    book.checkpoint();
+    let at = book.q(scope(scope_body(&spec(STYLE1, RU1, &codes(&casts)))));
+    let late_close = book.push(
+        SCHEMA_BOX_CLOSE,
+        close_as(B1, (1, 1, 0), &codes(&casts), Some(b"late-box-close")),
+    );
+    let stage = book.run();
+    assert_eq!(
+        refused(&stage),
+        [(late_close, TallyEvent::LateClose, TallyRefusal::AfterScope)]
+    );
+    assert_eq!(unit1(&stage).scope.map(Seq::get), Some(at));
 }
 
 // ---------------------------------------------------------------------
@@ -1333,14 +1520,22 @@ fn an_opening_before_a_checkpoint_covers_its_scope_is_refused() {
     let sums0 = sums(&casts, 0);
     let early = book.q(opening(opening_at(STYLE1, RU1, body, 0, sums0, READY + 2)));
     book.checkpoint();
-    let taken = book.q(opening(opening_at(STYLE1, RU1, body, 0, sums0, READY + 3)));
-    let again = book.q(opening(opening_at(STYLE1, RU1, body, 0, sums0, READY + 4)));
+    let taken_body = opening_at(STYLE1, RU1, body, 0, sums0, READY + 3);
+    let taken = book.q(opening(taken_body));
+    let again = book.q(quorum_seeded(
+        taken_body,
+        b"aggregate-opening",
+        &QUORUM,
+        Some(9),
+    ));
+    let other = book.q(opening(opening_at(STYLE1, RU1, body, 0, sums0, READY + 4)));
     let stage = book.run();
     assert_eq!(
         refused(&stage),
         [
             (early, TallyEvent::Opening, TallyRefusal::Premature),
             (again, TallyEvent::Opening, TallyRefusal::Repeated),
+            (other, TallyEvent::Opening, TallyRefusal::Conflict),
         ]
     );
     let u = unit1(&stage);
@@ -1508,7 +1703,9 @@ fn a_paper_count_must_be_signed_by_the_chair_and_name_the_style() {
     book.q(opening(opening_body(STYLE1, RU1, body, 0, sums(&casts, 0))));
     // The chair's signature by an observer's key; a clerk for the chair
     // (the envelope admits only the chair and observers, so the clerk
-    // signs in the chair role); four candidates; a unit of no box.
+    // signs in the chair role); the chair of a commission the unit does
+    // not name, filing first; four candidates; a unit of no box; a second,
+    // different report after the one taken (a conflict).
     let forged = book.w(paper_by(
         STYLE1,
         RU1,
@@ -1531,6 +1728,17 @@ fn a_paper_count_must_be_signed_by_the_chair_and_name_the_style() {
             PAPER_SIGNERS[2],
         ],
     ));
+    let elsewhere = book.w(paper_by(
+        STYLE1,
+        RU1,
+        &[1, 1, 1, 0, 0],
+        0,
+        &[
+            (b"chair-x", EventRole::Chair, b"NEC-X", ROSTER_BASE + 31),
+            PAPER_SIGNERS[1],
+            PAPER_SIGNERS[2],
+        ],
+    ));
     let short = book.w(paper(STYLE1, RU1, &[1, 1, 1, 0], 0));
     let nowhere = book.w(paper(STYLE1, RU2, &[1, 1, 1, 0, 0], 0));
     let taken = book.w(paper(STYLE1, RU1, &[1, 1, 1, 0, 0], 0));
@@ -1541,9 +1749,10 @@ fn a_paper_count_must_be_signed_by_the_chair_and_name_the_style() {
         [
             (forged, TallyEvent::Paper, TallyRefusal::Signature),
             (clerk, TallyEvent::Paper, TallyRefusal::Signature),
+            (elsewhere, TallyEvent::Paper, TallyRefusal::Signature),
             (short, TallyEvent::Paper, TallyRefusal::Subject),
             (nowhere, TallyEvent::Paper, TallyRefusal::Subject),
-            (again, TallyEvent::Paper, TallyRefusal::Repeated),
+            (again, TallyEvent::Paper, TallyRefusal::Conflict),
         ]
     );
     let u = unit1(&stage);
@@ -1571,6 +1780,7 @@ fn box3(book: &mut Book, options: &[u16]) -> Vec<Cast> {
     let n = all.len() as u64;
     book.push(SCHEMA_BATCH_ATTEST, batch(B3, 0, 1, n, &all));
     book.push(SCHEMA_BOX_CLOSE, close(B3, n, n, 0, &all));
+    book.checkpoint();
     casts
 }
 
@@ -1735,7 +1945,21 @@ fn a_receipt_resolution_must_resolve_exactly_a_closed_out_of_district_box() {
         ],
         READY,
     ));
-    let taken = book.q(resolution(B3, &both, READY));
+    let taken_event = resolution(B3, &both, READY);
+    let taken = book.q(taken_event);
+    let taken_body = ityv_encoding::decode_object::<QuorumSigned<'_>>(
+        SCHEMA_QUORUM_SIGNED,
+        SCHEMA_VERSION_1,
+        taken_event,
+    )
+    .unwrap()
+    .body_bytes();
+    let same = book.q(quorum_seeded(
+        taken_body,
+        b"receipt-resolution",
+        &QUORUM,
+        Some(9),
+    ));
     let again = book.q(resolution(B3, &both, READY + 1));
     let stage = book.run();
     assert_eq!(
@@ -1745,7 +1969,8 @@ fn a_receipt_resolution_must_resolve_exactly_a_closed_out_of_district_box() {
             (in_person, TallyEvent::Receipt, TallyRefusal::Subject),
             (missing, TallyEvent::Receipt, TallyRefusal::Entries),
             (extra, TallyEvent::Receipt, TallyRefusal::Entries),
-            (again, TallyEvent::Receipt, TallyRefusal::Repeated),
+            (same, TallyEvent::Receipt, TallyRefusal::Repeated),
+            (again, TallyEvent::Receipt, TallyRefusal::Conflict),
         ]
     );
     assert!(taken > extra);

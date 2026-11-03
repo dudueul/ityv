@@ -30,13 +30,14 @@
 //! A violation holds the unit; it is not evidence of fraud by itself (the
 //! person may judge stricter than the machine, §12.3).
 
+use ityv_crypto::hash::object_hash;
 use ityv_crypto::{
     AccessStructure, CHAMBER_COUNT, HybridSigned, Threshold, Verified, is_qualified,
 };
 use ityv_encoding::{
-    ChamberThreshold, ElectionId, EventRole, MAX_QUORUM_SIGS, PaperCountParts,
-    PaperCountReportBody, QuorumSigned, RosterRole, SCHEMA_PAPER_COUNT_REPORT_BODY, TimeBucket,
-    TrusteeEntry,
+    ChamberThreshold, ElectionId, EventRole, MAX_QUORUM_MESSAGE_LEN, MAX_QUORUM_SIGS,
+    PaperCountParts, PaperCountReportBody, QuorumSigned, ReportingUnitEntry, RosterRole,
+    SCHEMA_PAPER_COUNT_REPORT_BODY, TimeBucket, TrusteeEntry, Writer, expected_chamber,
 };
 
 use crate::auth::{Cap, CryptoTallyAid};
@@ -120,40 +121,74 @@ pub fn admit_aggregate_opening(
 /// frame `scope` (VC-063): a checkpoint carried by a frame `c < opening`
 /// whose tree size is at least `scope` (frames `1..=tree_size`).
 /// `checkpoints` gives each valid checkpoint as (its frame, its tree size).
+/// Frames count from 1: frame 0 is no frame, and nothing covers it.
 #[must_use]
 pub fn checkpointed_before<I>(checkpoints: I, scope: u64, opening: u64) -> bool
 where
     I: IntoIterator<Item = (u64, u64)>,
 {
-    checkpoints
-        .into_iter()
-        .any(|(frame, tree_size)| frame < opening && tree_size >= scope)
+    scope != 0
+        && checkpoints
+            .into_iter()
+            .any(|(frame, tree_size)| frame < opening && tree_size >= scope)
 }
 
 /// The chamber access structure Γ of a genesis (PROTOCOL.md §9.2;
 /// ADR-0019) with `parties` party chambers and the chamber thresholds
 /// `chambers` (the genesis body's party count and `chambers`): every
-/// chamber's `k_c`-of-`n_c` threshold. `None` if a threshold is not one
-/// `ityv-crypto` can share (more than eight members) or the party count is
-/// out of range.
+/// chamber's `k_c`-of-`n_c` threshold. The thresholds must name exactly
+/// `P1`…`Pn`, `J`, `A`, `C`, `N`, once each and in that order
+/// ([`ityv_encoding::expected_chamber`]); a chamber missing, repeated or
+/// out of order gives `None` rather than a default. `None` also if a
+/// threshold is not one `ityv-crypto` can share (more than eight members)
+/// or the party count is out of range. The party chambers the genesis
+/// does not have stay unused placeholders (`1`-of-`1`).
 #[must_use]
 pub fn access_structure<I>(parties: usize, chambers: I) -> Option<AccessStructure>
 where
     I: IntoIterator<Item = ChamberThreshold>,
 {
-    let parties = u8::try_from(parties).ok()?;
+    let count = u8::try_from(parties).ok()?;
     let mut inner = [Threshold::new(1, 1)?; CHAMBER_COUNT];
-    for c in chambers {
+    let mut seen = 0usize;
+    for (index, c) in chambers.into_iter().enumerate() {
+        if expected_chamber(index, parties) != Some(c.chamber) {
+            return None;
+        }
         let slot = usize::from(c.chamber.code())
             .checked_sub(1)
             .and_then(|i| inner.get_mut(i))?;
         *slot = Threshold::new(c.threshold, c.members)?;
+        seen = index.checked_add(1)?;
     }
-    AccessStructure::new(parties, inner)
+    if seen != parties.checked_add(4)? {
+        return None;
+    }
+    AccessStructure::new(count, inner)
+}
+
+/// The message every trustee of `event` signs (ENCODING.md §8.63): the
+/// object hash of the body and the participating trustees, written into
+/// `buf`.
+///
+/// # Errors
+/// [`Error::Decode`] cannot occur for a decoded event (the message always
+/// fits); it keeps the function total.
+pub fn quorum_message<'b>(
+    event: &QuorumSigned<'_>,
+    buf: &'b mut [u8; MAX_QUORUM_MESSAGE_LEN],
+) -> Result<&'b [u8], Error> {
+    let mut w = Writer::new(buf);
+    event
+        .write_message(&object_hash(event.body_bytes()), &mut w)
+        .map_err(|_| Error::Decode)?;
+    let len = w.finish();
+    buf.get(..len).ok_or(Error::Decode)
 }
 
 /// A quorum-signed event and the verification tokens of its signatures,
-/// one per signature in the event's (ascending trustee) order.
+/// one per signature in the event's (ascending trustee) order, each over
+/// the event's quorum message ([`quorum_message`]).
 #[derive(Debug, Clone, Copy)]
 pub struct QuorumTokens<'s> {
     /// The event.
@@ -162,11 +197,13 @@ pub struct QuorumTokens<'s> {
     pub tokens: &'s [Verified<HybridSigned<'s>>],
 }
 
-/// Checks the trustee quorum of a tally scope or aggregate opening: every
-/// signer is one of `trustees` (proved against one genesis), every
-/// signature has a token from that trustee's key over the body bytes under
-/// the body's purpose, no two signers' keys share a half, and the signers
-/// form a qualified set of `structure` (PROTOCOL.md §9.2, §11.2).
+/// Checks the trustee quorum of a tally scope, aggregate opening or receipt
+/// resolution: every signer is one of `trustees` (proved against one
+/// genesis), every signature has a token from that trustee's key over the
+/// quorum message (the body's hash and the participating trustees, so that
+/// the list of participants is what each of them signed) under the body's
+/// purpose, no two signers' keys share a half, and the signers form a
+/// qualified set of `structure` (PROTOCOL.md §9.2, §11.2).
 ///
 /// What it does not prove: that the members did reconstruct anything; the
 /// verifier checks an opening against the commitments.
@@ -183,6 +220,8 @@ pub fn check_quorum(
 ) -> Result<(), Error> {
     one_head(trustees)?;
     let event = signed.event;
+    let mut buf = [0u8; MAX_QUORUM_MESSAGE_LEN];
+    let message = quorum_message(event, &mut buf)?;
     let trustee = |id: &[u8]| {
         trustees
             .iter()
@@ -194,7 +233,7 @@ pub fn check_quorum(
         .sigs()
         .map(|s| trustee(s.trustee_id.as_bytes()).map(|t| (s.sig, t.key)));
     check_pairs::<MAX_QUORUM_SIGS, _>(
-        event.body_bytes(),
+        message,
         event.purpose(),
         signed.tokens,
         event.sig_count(),
@@ -217,39 +256,56 @@ pub fn check_quorum(
 }
 
 /// A paper count report whose signatures were bound to the roster: the
-/// chair of the district commission once and observers of two or more
-/// organisations (PROTOCOL.md §11.5).
+/// chair of the district commission that reports the unit, once, and
+/// observers of two or more organisations (PROTOCOL.md §11.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaperCount<'a> {
     parts: PaperCountParts<'a>,
 }
 
 impl<'a> PaperCount<'a> {
-    /// Checks a signed paper count report: the body schema, and a matching
-    /// token for each signature from the key the roster registers for that
-    /// signer as a chair or an observer of the organisation the signature
-    /// names. The envelope already admits exactly one chair and observers
-    /// of two or more organisations and nothing else
+    /// Checks a signed paper count report of the reporting unit `unit`:
+    /// the body schema and unit, and a matching token for each signature
+    /// from the key the roster registers for that signer as a chair or an
+    /// observer of the organisation the signature names, the chair's being
+    /// the unit's commission (`ReportingUnitEntry::commission_org`), so
+    /// that a chair of another district cannot report the unit. The
+    /// envelope already admits exactly one chair and observers of two or
+    /// more organisations and nothing else
     /// (`ityv_encoding::roles_satisfied`).
-    ///
-    /// What it does not prove: that the chair heads the commission of this
-    /// reporting unit (the genesis does not tie a unit to a commission).
     ///
     /// # Errors
     /// [`Error::Decode`] if the event is not a paper count report,
-    /// [`Error::NotRegistered`] for a signer the roster does not register
-    /// in that role and organisation, and the errors of
-    /// [`crate::sig::check_event`].
-    pub fn check(signed: &Signed<'a>, roster: &[RosterEntry<'_>]) -> Result<Self, Error> {
+    /// [`Error::Mismatch`] if it reports another unit,
+    /// [`Error::StaleEntry`] if the unit and the roster come from different
+    /// genesis states, [`Error::NotRegistered`] for a signer the roster
+    /// does not register in that role and organisation or a chair of
+    /// another commission, and the errors of [`crate::sig::check_event`].
+    pub fn check(
+        signed: &Signed<'a>,
+        roster: &[RosterEntry<'_>],
+        unit: &Entry<ReportingUnitEntry<'_>>,
+    ) -> Result<Self, Error> {
         let body: PaperCountReportBody<'a> = signed
             .event
             .body(SCHEMA_PAPER_COUNT_REPORT_BODY)
             .map_err(|_| Error::Decode)?;
+        let u = unit.get();
+        if u.unit_id().as_bytes() != body.parts().reporting_unit_id.as_bytes() {
+            return Err(Error::Mismatch);
+        }
+        if roster.iter().any(|r| r.head() != unit.head()) {
+            return Err(Error::StaleEntry);
+        }
+        let commission = u.commission_org();
         check_event(signed, |s| {
             let role = match s.role {
-                EventRole::Chair => RosterRole::Chair,
+                EventRole::Chair if s.org_id.as_bytes() == commission.as_bytes() => {
+                    RosterRole::Chair
+                }
                 EventRole::Observer => RosterRole::Observer,
-                EventRole::Clerk
+                EventRole::Chair
+                | EventRole::Clerk
                 | EventRole::Commission
                 | EventRole::Committee
                 | EventRole::Sender
@@ -348,17 +404,19 @@ pub fn compare_paper(
 
 #[cfg(test)]
 mod tests {
+    use ityv_crypto::hash::object_hash;
     use ityv_crypto::{
         AccessStructure, Chamber, HybridSigningKey, Purpose, Threshold, sign_hybrid, verify_hybrid,
     };
     use ityv_encoding::{
         AggregateOpeningBody, AggregateOpeningParts, BallotStyleId, BoxId, ChamberCode,
         ChamberThreshold, Day, ElectionId, EventRole, EventSig, HYBRID_SIG_LEN, Hash512,
-        ImprintAuditBody, ImprintAuditParts, OrgId, PaperCountParts, PaperCountReportBody,
-        PaperVotes, QuorumSig, QuorumSigned, ReportingUnitId, RosterRole, RosterSigner,
-        SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY,
-        SCHEMA_VERSION_1, Scalar32, Scope, ScopeSet, SignerId, TimeBucket, TrusteeEntry, TrusteeId,
-        WitnessedEvent, encode_object,
+        ImprintAuditBody, ImprintAuditParts, MAX_QUORUM_MESSAGE_LEN, OrgId, PaperCountParts,
+        PaperCountReportBody, PaperVotes, QuorumSig, QuorumSigned, ReportingUnitEntry,
+        ReportingUnitId, RosterRole, RosterSigner, SCHEMA_AGGREGATE_OPENING_BODY,
+        SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, Scalar32,
+        Scope, ScopeSet, SignerId, TimeBucket, TrusteeEntry, TrusteeId, WitnessedEvent, Writer,
+        encode_object, write_quorum_message,
     };
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
@@ -368,7 +426,7 @@ mod tests {
     use super::{
         LATE_CLOSE_WINDOW, MachineCount, PaperComparison, PaperCount, QuorumTokens, TallyReadiness,
         access_structure, admit_aggregate_opening, admit_tally_scope, check_quorum,
-        checkpointed_before, compare_paper,
+        checkpointed_before, compare_paper, quorum_message,
     };
     use crate::auth::{Authorization, CryptoTallyAid};
     use crate::close::RosterEntry;
@@ -465,6 +523,9 @@ mod tests {
         assert!(checkpointed_before([(5, 3), (12, 10)], 10, 13));
         assert!(!checkpointed_before([(5, 3), (14, 12)], 10, 13));
         assert!(!checkpointed_before([], 1, 2));
+        // Frame 0 is no frame: nothing covers it.
+        assert!(!checkpointed_before([(5, 3)], 0, 13));
+        assert!(checkpointed_before([(5, 3)], 1, 13));
     }
 
     fn key(seed: u8) -> (&'static HybridSigningKey, &'static Key) {
@@ -538,6 +599,19 @@ mod tests {
         entries: &[Entry<TrusteeEntry<'static>>],
         purpose: &[u8],
     ) -> Result<(), Error> {
+        quorum_wrapped(who, who.len(), entries, purpose)
+    }
+
+    /// As [`quorum_of`], but every trustee of `who` signs the quorum
+    /// message naming all of them, and the event carries only the first
+    /// `kept` signatures (in trustee order): re-wrapped with fewer
+    /// participants than signed.
+    fn quorum_wrapped(
+        who: &[(Entry<TrusteeEntry<'static>>, &'static HybridSigningKey)],
+        kept: usize,
+        entries: &[Entry<TrusteeEntry<'static>>],
+        purpose: &[u8],
+    ) -> Result<(), Error> {
         let body = opening_body();
         let purpose = Box::leak(Box::new(Purpose::new(purpose).unwrap()));
         let mut who = who.to_vec();
@@ -547,11 +621,19 @@ mod tests {
                 .as_bytes()
                 .cmp(b.0.get().trustee_id.as_bytes())
         });
+        let ids: Vec<TrusteeId<'static>> = who.iter().map(|t| t.0.get().trustee_id).collect();
+        let mut message = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
+        let mut w = Writer::new(&mut message);
+        write_quorum_message(&object_hash(body), &ids, &mut w).unwrap();
+        let n = w.finish();
+        message.truncate(n);
+        let message: &'static [u8] = Box::leak(message.into_boxed_slice());
         let mut rng = ChaCha20Rng::seed_from_u64(7);
         let signed: Vec<_> = who
             .iter()
+            .take(kept)
             .map(|(t, sk)| {
-                let sig = sign_hybrid(sk, purpose, body, &mut rng).unwrap();
+                let sig = sign_hybrid(sk, purpose, message, &mut rng).unwrap();
                 (t.get().trustee_id, sk.verifying_key(), sig)
             })
             .collect();
@@ -572,10 +654,36 @@ mod tests {
         let event = Box::leak(Box::new(QuorumSigned::new(body, &sigs).unwrap()));
         let tokens: Vec<_> = signed
             .iter()
-            .map(|(_, vk, sig)| verify_hybrid(vk, purpose, body, sig).unwrap())
+            .map(|(_, vk, sig)| verify_hybrid(vk, purpose, message, sig).unwrap())
             .collect();
         let tokens = Box::leak(tokens.into_boxed_slice());
         check_quorum(&QuorumTokens { event, tokens }, entries, &structure())
+    }
+
+    #[test]
+    fn the_quorum_message_is_the_body_hash_and_the_trustees() {
+        let body = opening_body();
+        let sig = Box::leak(Box::new([7u8; HYBRID_SIG_LEN]));
+        let ids = [
+            TrusteeId::new(b"T-A").unwrap(),
+            TrusteeId::new(b"T-J").unwrap(),
+        ];
+        let sigs: Vec<QuorumSig<'static>> = ids
+            .iter()
+            .map(|t| QuorumSig {
+                trustee_id: *t,
+                sig,
+            })
+            .collect();
+        let event = QuorumSigned::new(body, &sigs).unwrap();
+        let mut buf = [0u8; MAX_QUORUM_MESSAGE_LEN];
+        let message = quorum_message(&event, &mut buf).unwrap().to_vec();
+        let mut expected = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
+        let mut w = Writer::new(&mut expected);
+        write_quorum_message(&object_hash(body), &ids, &mut w).unwrap();
+        let n = w.finish();
+        assert_eq!(message, &expected[..n]);
+        assert_eq!(message.len(), 64 + 4 + 2 * (4 + 3));
     }
 
     #[test]
@@ -609,6 +717,17 @@ mod tests {
         assert_eq!(
             quorum_of(&[a, p1a, p2, j, c], &all[1..], purpose),
             Err(Error::NotRegistered)
+        );
+        // Six signed a message naming six; re-wrapped with five of their
+        // signatures, still a qualified set, the list is not what they
+        // signed.
+        assert_eq!(
+            quorum_wrapped(&[a, c, j, n, p1a, p2], 5, &all, purpose),
+            Err(Error::SignatureObject)
+        );
+        assert_eq!(
+            quorum_wrapped(&[a, c, j, n, p1a, p2], 6, &all, purpose),
+            Ok(())
         );
         // Tokens over another purpose do not bind.
         assert_eq!(
@@ -691,14 +810,50 @@ mod tests {
         }
         // A party chamber the genesis does not list keeps a placeholder.
         assert_eq!(s.threshold(Chamber::P3), Threshold::new(1, 1).unwrap());
-        // Nine members cannot be shared; one or five parties are out of
-        // range.
-        assert!(access_structure(2, [threshold(ChamberCode::J, 1, 9)]).is_none());
-        assert!(access_structure(2, [threshold(ChamberCode::J, 2, 1)]).is_none());
+        // Nine members cannot be shared; a threshold above the members is
+        // not one.
+        let mut nine = chambers;
+        nine[2] = threshold(ChamberCode::J, 1, 9);
+        assert!(access_structure(2, nine).is_none());
+        let mut above = chambers;
+        above[2] = threshold(ChamberCode::J, 2, 1);
+        assert!(access_structure(2, above).is_none());
+        // One or five parties are out of range; the party count must be
+        // the chambers'.
         assert!(access_structure(1, chambers).is_none());
         assert!(access_structure(5, chambers).is_none());
         assert!(access_structure(258, chambers).is_none());
-        assert!(access_structure(4, chambers).is_some());
+        assert!(access_structure(3, chambers).is_none());
+        // Every chamber exactly once, in order: none missing (no 1-of-1
+        // default), none twice (no later entry winning), none swapped,
+        // none extra.
+        assert!(access_structure(2, chambers[..5].iter().copied()).is_none());
+        assert!(access_structure(2, chambers[1..].iter().copied()).is_none());
+        let mut twice = chambers.to_vec();
+        twice.insert(3, threshold(ChamberCode::J, 1, 1));
+        assert!(access_structure(2, twice).is_none());
+        let mut swapped = chambers;
+        swapped.swap(2, 3);
+        assert!(access_structure(2, swapped).is_none());
+        let mut extra = chambers.to_vec();
+        extra.push(threshold(ChamberCode::N, 1, 1));
+        assert!(access_structure(2, extra).is_none());
+        assert!(access_structure(2, []).is_none());
+        // Four parties with all eight chambers.
+        let four = [
+            threshold(ChamberCode::P1, 1, 1),
+            threshold(ChamberCode::P2, 1, 1),
+            threshold(ChamberCode::P3, 1, 2),
+            threshold(ChamberCode::P4, 2, 2),
+            threshold(ChamberCode::J, 1, 1),
+            threshold(ChamberCode::A, 1, 1),
+            threshold(ChamberCode::C, 1, 1),
+            threshold(ChamberCode::N, 1, 1),
+        ];
+        let s = access_structure(4, four).unwrap();
+        assert_eq!(s.parties(), 4);
+        assert_eq!(s.threshold(Chamber::P4), Threshold::new(2, 2).unwrap());
+        assert!(access_structure(4, chambers).is_none());
     }
 
     fn paper(votes: &[u64], invalid: u64) -> PaperCountParts<'static> {
@@ -830,6 +985,7 @@ mod tests {
             &'static HybridSigningKey,
         )],
         roster: &[RosterEntry<'static>],
+        unit: &Entry<ReportingUnitEntry<'static>>,
     ) -> Result<PaperCount<'static>, Error> {
         let mut rng = ChaCha20Rng::seed_from_u64(11);
         let purpose = Box::leak(Box::new(Purpose::new(b"paper-count").unwrap()));
@@ -862,13 +1018,12 @@ mod tests {
             .map(|(_, _, _, vk, sig)| verify_hybrid(vk, purpose, body, sig).unwrap())
             .collect();
         let tokens = Box::leak(tokens.into_boxed_slice());
-        PaperCount::check(&Signed { event, tokens }, roster)
+        PaperCount::check(&Signed { event, tokens }, roster, unit)
     }
 
-    #[test]
-    fn a_paper_count_is_bound_to_the_chair_and_the_observers_on_the_roster() {
-        let parts = paper(&[3, 1], 2);
-        let body = PaperCountReportBody::new(&parts).unwrap();
+    /// The paper count body object of `parts`.
+    fn paper_object(parts: &PaperCountParts<'static>) -> &'static [u8] {
+        let body = PaperCountReportBody::new(parts).unwrap();
         let mut buf = std::vec![0u8; 512];
         let n = encode_object(
             SCHEMA_PAPER_COUNT_REPORT_BODY,
@@ -878,18 +1033,80 @@ mod tests {
         )
         .unwrap();
         buf.truncate(n);
-        let body: &'static [u8] = Box::leak(buf.into_boxed_slice());
+        Box::leak(buf.into_boxed_slice())
+    }
+
+    /// Unit `RU-1` reported by commission `NEC-11`.
+    fn unit_of(id: &'static [u8]) -> Entry<ReportingUnitEntry<'static>> {
+        Entry::unproved(
+            ReportingUnitEntry::new(
+                ReportingUnitId::new(id).unwrap(),
+                1,
+                OrgId::new(b"NEC-11").unwrap(),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_paper_count_is_bound_to_its_units_commission() {
+        let body = paper_object(&paper(&[3, 1], 2));
         let chair = person(b"chair", RosterRole::Chair, b"NEC-11", 50);
         let obs_a = person(b"obs-a", RosterRole::Observer, b"PARTY-A", 52);
         let obs_b = person(b"obs-b", RosterRole::Observer, b"PARTY-B", 54);
-        let clerk = person(b"clerk", RosterRole::Clerk, b"NEC-11", 56);
-        let roster = [chair.0, obs_a.0, obs_b.0, clerk.0];
+        let other_chair = person(b"chair-12", RosterRole::Chair, b"NEC-12", 60);
+        let roster = [chair.0, obs_a.0, obs_b.0, other_chair.0];
+        let unit = unit_of(b"RU-1");
         let signers = [
             (&b"chair"[..], EventRole::Chair, &b"NEC-11"[..], chair.1),
             (b"obs-a", EventRole::Observer, b"PARTY-A", obs_a.1),
             (b"obs-b", EventRole::Observer, b"PARTY-B", obs_b.1),
         ];
-        let taken = checked(body, &signers, &roster).unwrap();
+        assert!(checked(body, &signers, &roster, &unit).is_ok());
+        // The chair of another district, registered as a chair, cannot
+        // report this unit.
+        let other_district = [
+            (
+                &b"chair-12"[..],
+                EventRole::Chair,
+                &b"NEC-12"[..],
+                other_chair.1,
+            ),
+            signers[1],
+            signers[2],
+        ];
+        assert_eq!(
+            checked(body, &other_district, &roster, &unit),
+            Err(Error::NotRegistered)
+        );
+        // The unit must be the report's, from the roster's genesis state.
+        assert_eq!(
+            checked(body, &signers, &roster, &unit_of(b"RU-2")),
+            Err(Error::Mismatch)
+        );
+        let stale = unit.with_head(Hash512([9; 64]));
+        assert_eq!(
+            checked(body, &signers, &roster, &stale),
+            Err(Error::StaleEntry)
+        );
+    }
+
+    #[test]
+    fn a_paper_count_is_bound_to_the_chair_and_the_observers_on_the_roster() {
+        let parts = paper(&[3, 1], 2);
+        let body = paper_object(&parts);
+        let chair = person(b"chair", RosterRole::Chair, b"NEC-11", 50);
+        let obs_a = person(b"obs-a", RosterRole::Observer, b"PARTY-A", 52);
+        let obs_b = person(b"obs-b", RosterRole::Observer, b"PARTY-B", 54);
+        let clerk = person(b"clerk", RosterRole::Clerk, b"NEC-11", 56);
+        let roster = [chair.0, obs_a.0, obs_b.0, clerk.0];
+        let unit = unit_of(b"RU-1");
+        let signers = [
+            (&b"chair"[..], EventRole::Chair, &b"NEC-11"[..], chair.1),
+            (b"obs-a", EventRole::Observer, b"PARTY-A", obs_a.1),
+            (b"obs-b", EventRole::Observer, b"PARTY-B", obs_b.1),
+        ];
+        let taken = checked(body, &signers, &roster, &unit).unwrap();
         assert_eq!(taken.parts(), &parts);
         // The chair must be registered as a chair, of that organisation.
         let as_chair = [
@@ -897,14 +1114,17 @@ mod tests {
             signers[1],
             signers[2],
         ];
-        assert_eq!(checked(body, &as_chair, &roster), Err(Error::NotRegistered));
+        assert_eq!(
+            checked(body, &as_chair, &roster, &unit),
+            Err(Error::NotRegistered)
+        );
         let other_org = [
             (&b"chair"[..], EventRole::Chair, &b"NEC-12"[..], chair.1),
             signers[1],
             signers[2],
         ];
         assert_eq!(
-            checked(body, &other_org, &roster),
+            checked(body, &other_org, &roster, &unit),
             Err(Error::NotRegistered)
         );
         // An observer must be registered as an observer.
@@ -914,7 +1134,7 @@ mod tests {
             signers[2],
         ];
         assert_eq!(
-            checked(body, &as_observer, &roster),
+            checked(body, &as_observer, &roster, &unit),
             Err(Error::NotRegistered)
         );
         // A signature under another key does not bind.
@@ -923,7 +1143,10 @@ mod tests {
             (&b"obs-a"[..], EventRole::Observer, &b"PARTY-A"[..], obs_b.1),
             signers[2],
         ];
-        assert_eq!(checked(body, &forged, &roster), Err(Error::SignatureSigner));
+        assert_eq!(
+            checked(body, &forged, &roster, &unit),
+            Err(Error::SignatureSigner)
+        );
         // Another body is not a paper count.
         let audit = ImprintAuditBody::new(&ImprintAuditParts {
             election_id: ElectionId::new(b"E1").unwrap(),
@@ -949,6 +1172,9 @@ mod tests {
             signers[1],
             signers[2],
         ];
-        assert_eq!(checked(audit, &witnesses, &roster), Err(Error::Decode));
+        assert_eq!(
+            checked(audit, &witnesses, &roster, &unit),
+            Err(Error::Decode)
+        );
     }
 }

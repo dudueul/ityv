@@ -43,7 +43,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use ityv_encoding::{
-    CheckpointBody, Hash512, SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, Seq, decode_object,
+    CheckpointBody, Hash512, SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, Seq, TimeBucket, decode_object,
 };
 use ityv_ledger::{
     Accumulator, DiversityPolicy, Error as LedgerError, QuorumProfile, Roster,
@@ -71,6 +71,10 @@ pub struct VerifiedCheckpoint {
     pub root: Hash512,
     /// The object hash of its body (the next checkpoint's previous hash).
     pub body_hash: Hash512,
+    /// The time bucket the witnesses signed: the verifier's only time
+    /// that no single operator declares (the tally's late-close window is
+    /// measured in it, PROTOCOL.md §11.1).
+    pub time_bucket: TimeBucket,
 }
 
 /// The rule a checkpoint broke.
@@ -293,6 +297,7 @@ fn check<'a>(
         tree_size,
         root: parts.root_hash,
         body_hash: signed.body_hash(),
+        time_bucket: parts.time_bucket,
     })
 }
 

@@ -122,5 +122,5 @@ pub use status::{
 pub use tally::{
     LATE_CLOSE_WINDOW, MachineCount, PaperComparison, PaperCount, QuorumTokens, TallyReadiness,
     access_structure, admit_aggregate_opening, admit_tally_scope, check_quorum,
-    checkpointed_before, compare_paper,
+    checkpointed_before, compare_paper, quorum_message,
 };

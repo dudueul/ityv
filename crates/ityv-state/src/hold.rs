@@ -239,11 +239,16 @@ pub enum HoldReason {
     /// entries are not exactly the box's cast records, or the box already
     /// has one (§10.6 items 2 and 5, §14 7).
     ReceiptResolutionRefused = 59,
+    /// A late batch close or late box close of a box was recorded after a
+    /// tally scope of the box's ballot style was taken: the scope fixed
+    /// `UNATTESTED` and the closes it cites (§7.2.1, §10.2, §11.1, VC-057,
+    /// VC-100).
+    LateCloseAfterScope = 60,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 60] = [
+    pub const ALL: [Self; 61] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -304,6 +309,7 @@ impl HoldReason {
         Self::PaperCountMismatch,
         Self::TallyEffectRefused,
         Self::ReceiptResolutionRefused,
+        Self::LateCloseAfterScope,
     ];
 
     /// The reason's code.

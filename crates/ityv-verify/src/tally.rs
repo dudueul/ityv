@@ -28,10 +28,15 @@
 //!   ([`ityv_state::admit_tally_scope`]): every box of the style closed in
 //!   an earlier frame, every out-of-district box of the style with cast
 //!   records resolved in an earlier frame, every record of the style that
-//!   awaits the law decided in an earlier frame, and the scope's own time
-//!   bucket more than 96 buckets after the last close of the style (the
-//!   verifier has no clock; the scope's bucket is its "now"). The scope
-//!   taken is compared with the recomputation: the included records'
+//!   awaits the law decided in an earlier frame, and the witnesses' time
+//!   (the latest time bucket of a valid checkpoint recorded before the
+//!   scope) more than 96 buckets after the last close of the style. The
+//!   verifier has no clock, and the trustees' own bucket is only their
+//!   claim: a forward-dated scope inside the late-close window would fix
+//!   as `UNATTESTED` what a late batch close may still attest (VC-057).
+//!   A late batch close or late box close recorded after a scope of its
+//!   box's style is refused and holds. The scope taken is compared with
+//!   the recomputation: the included records'
 //!   count and sorted-set root, every exclusion's record, reason (the
 //!   first of §11.1 that applies, VC-042) and basis, and the no-record
 //!   count against the unit's closes.
@@ -48,8 +53,10 @@
 //!   (VC-024). Once every chunk opens, the digits are the counts per option,
 //!   and they must sum to the included count.
 //! * **Paper count reports** (`PaperCountReportBody` in a
-//!   `WitnessedEvent`, §11.5). Signed by the district commission's chair
-//!   and observers of two or more organisations, each under the key the
+//!   `WitnessedEvent`, §11.5). Signed by the chair of the district
+//!   commission the unit names (`ReportingUnitEntry::commission_org`, so a
+//!   chair of another district cannot file the unit's report first) and
+//!   by observers of two or more organisations, each under the key the
 //!   roster of the genesis state in force at its frame registers for that
 //!   signer, role and organisation; for a style and unit of the genesis,
 //!   with one count per candidate of the style; at most one per style and
@@ -60,6 +67,14 @@
 //!   whose ballot paper is among the unit's counted ballots (an excluded
 //!   record still cast or `RECEIVED`: `UNATTESTED`, `SHARE_MISSING`, a test
 //!   ballot cast).
+//!
+//! Every trustee signature covers the quorum message (the body's object
+//! hash and the participating trustees, [`ityv_state::quorum_message`]),
+//! so a body cannot be re-wrapped with another list of participants. The
+//! first event taken answers its unit, chunk or box; the same body again
+//! is [`TallyRefusal::Repeated`], another body a [`TallyRefusal::Conflict`]:
+//! both are listed and hold, and a conflict is never silently "already
+//! answered".
 //!
 //! The basis of each exclusion is the object hash of the ledger event that
 //! gives the reason: the cast record itself for `TEST_BALLOT`, the first
@@ -74,7 +89,8 @@
 //! Every event the stage cannot take is listed ([`TallyRefused`]) and
 //! holds: [`HoldReason::ReceiptResolutionRefused`],
 //! [`HoldReason::TallyEffectRefused`], [`HoldReason::TallyScopeRefused`],
-//! [`HoldReason::AggregateRefused`], [`HoldReason::PaperCountRefused`]. A
+//! [`HoldReason::AggregateRefused`], [`HoldReason::PaperCountRefused`],
+//! [`HoldReason::LateCloseAfterScope`]. A
 //! scope that differs from the recomputation holds its unit
 //! ([`HoldReason::TallyScopeMismatch`]), so does an opening that does not
 //! open or whose digits are out of range ([`HoldReason::AggregateMismatch`],
@@ -87,7 +103,9 @@
 //! commitments record by record (an opening that fails says only that some
 //! record's share does not, §11.3); that the chair heads the commission of
 //! the unit (the genesis does not tie a unit to a commission); the
-//! receiving commission's label counts (VC-060, no schema yet).
+//! receiving commission's label counts (VC-060, no schema yet); that the
+//! witnesses' clocks were right (their checkpoints are anchored in time by
+//! the checkpoint stage, ADR-0034).
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
@@ -101,9 +119,10 @@ use ityv_encoding::schema_version;
 use ityv_encoding::{
     AggregateOpeningParts, BallotStyleId, BoxClose, CaptureProfile, CastRecord, ChallengeOpening,
     Decode, DisputeType, EventRole, ExclusionReason, GenesisBox, HYBRID_SIG_LEN, HYBRID_VK_LEN,
-    Hash512, PaperCountParts, PaperCountReportBody, QuorumKind, QuorumSigned, ReceiptOutcome,
-    ReceiptResolutionParts, ReportingUnitId, RosterRole, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD,
-    SCHEMA_CHALLENGE_OPENING, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
+    Hash512, MAX_QUORUM_MESSAGE_LEN, PaperCountParts, PaperCountReportBody, QuorumKind,
+    QuorumSigned, ReceiptOutcome, ReceiptResolutionParts, ReportingUnitEntry, ReportingUnitId,
+    RosterRole, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
+    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
     SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TallyEffect, TallyScopeParts, TimeBucket, TrusteeEntry,
     WitnessedEvent, decode_object,
 };
@@ -112,7 +131,7 @@ use ityv_state::{
     Cap, CryptoTallyAid, Disposition, Entry, Exclusion, HoldReason, HoldSet, MachineCount,
     PaperComparison, PaperCount, Primary, QuorumTokens, Receipt, RecordEvent, RecordState,
     RosterEntry, Signed, TallyReadiness, access_structure, admit_aggregate_opening,
-    admit_tally_scope, check_quorum, checkpointed_before, compare_paper,
+    admit_tally_scope, check_quorum, checkpointed_before, compare_paper, quorum_message,
 };
 
 use crate::authority::{AuthorityStage, day_of};
@@ -140,6 +159,8 @@ pub enum TallyEvent {
     Opening,
     /// A paper count report (§11.5).
     Paper,
+    /// A late batch close or late box close of a box (§7.2.1, §10.2).
+    LateClose,
 }
 
 /// Why the tally stage refused an event.
@@ -170,10 +191,18 @@ pub enum TallyRefusal {
     /// A receipt resolution whose entries are not exactly the box's cast
     /// records.
     Entries,
+    /// The body of the scope, opening, paper count or resolution already
+    /// taken for its unit, chunk or box, again (under other signature
+    /// bytes).
+    Repeated,
     /// A second scope of a style and unit, a second opening of a chunk, a
     /// second paper count of a style and unit, or a second resolution of a
-    /// box, after one was taken.
-    Repeated,
+    /// box, with another body than the one taken: two signed answers to
+    /// one question, which only people can settle.
+    Conflict,
+    /// A late close recorded after a tally scope of its box's style was
+    /// taken: the scope fixed what was attested (VC-057).
+    AfterScope,
     /// A tally effect that cannot apply: the decision's dispute is not a
     /// `POSTAL` dispute naming a box and a record, the record is not an
     /// accepted record of that box, or it does not await the law (or
@@ -374,6 +403,7 @@ const fn refusal_hold(event: TallyEvent) -> HoldReason {
         TallyEvent::Scope => HoldReason::TallyScopeRefused,
         TallyEvent::Opening => HoldReason::AggregateRefused,
         TallyEvent::Paper => HoldReason::PaperCountRefused,
+        TallyEvent::LateClose => HoldReason::LateCloseAfterScope,
     }
 }
 
@@ -450,8 +480,11 @@ struct BoxInfo<'a> {
     /// The effective (last accepted) close: event hash and ballots cast
     /// without a record.
     effective: Option<(Hash512, u64)>,
-    /// The frame of the resolution taken.
-    resolution: Option<Seq>,
+    /// The resolution taken: its frame and body hash.
+    resolution: Option<(Seq, Hash512)>,
+    /// The frames of the late closes taken: every close after the first,
+    /// and every late batch close.
+    late: Vec<Seq>,
     records: Vec<Rec<'a>>,
 }
 
@@ -506,6 +539,7 @@ fn box_info<'a>(
         close: None,
         effective: None,
         resolution: None,
+        late: Vec::new(),
         records: Vec::new(),
     };
     let mut challenges: BTreeMap<[u8; 64], Hash512> = BTreeMap::new();
@@ -519,8 +553,16 @@ fn box_info<'a>(
                 let body = c.body();
                 if info.close.is_none() {
                     info.close = Some((e.seq, body.time_bucket()));
+                } else {
+                    info.late.push(e.seq);
                 }
                 info.effective = Some((e.hash, body.counts().without_record));
+            }
+        } else if e.schema == SCHEMA_WITNESSED_EVENT {
+            let late_batch = decode::<WitnessedEvent<'a>>(e.schema, bytes)
+                .is_some_and(|w| w.body_schema() == SCHEMA_LATE_BATCH_CLOSE_BODY);
+            if late_batch {
+                info.late.push(e.seq);
             }
         } else if e.schema == SCHEMA_CHALLENGE_OPENING
             && let Some(o) = decode::<ChallengeOpening<'a>>(e.schema, bytes)
@@ -574,7 +616,11 @@ impl Trustees<'_> {
         let Some(purpose) = Purpose::new(q.purpose()) else {
             return false;
         };
-        let Some(tokens) = material.verify(&purpose, q.body_bytes()) else {
+        let mut buf = [0u8; MAX_QUORUM_MESSAGE_LEN];
+        let Ok(message) = quorum_message(q, &mut buf) else {
+            return false;
+        };
+        let Some(tokens) = material.verify(&purpose, message) else {
             return false;
         };
         let signed = QuorumTokens {
@@ -591,9 +637,25 @@ struct Ctx<'g, 'a> {
     index: &'g LedgerIndex<'a>,
     authority: &'g AuthorityStage<'a>,
     trustees: Trustees<'a>,
+    /// The valid checkpoints: frame, tree size, time bucket.
+    checkpoints: Vec<(u64, u64, TimeBucket)>,
 }
 
 impl<'a> Ctx<'_, 'a> {
+    /// The witnesses' time at frame `at`: the latest time bucket of a valid
+    /// checkpoint recorded before it (0 if none). Trustees and clerks
+    /// declare their own buckets; the late-close window is measured in
+    /// this one (VC-057).
+    fn witness_time(&self, at: Seq) -> TimeBucket {
+        let latest = self
+            .checkpoints
+            .iter()
+            .filter(|(frame, _, _)| *frame < at.get())
+            .map(|(_, _, bucket)| bucket.get())
+            .max();
+        TimeBucket::new(latest.unwrap_or(0))
+    }
+
     /// The `CRYPTO_TALLY_AID` capability for the day of `bucket`.
     fn cap(&self, bucket: TimeBucket) -> Option<Cap<'a, CryptoTallyAid>> {
         let day = day_of(self.genesis, bucket)?;
@@ -704,8 +766,13 @@ impl<'a> Work<'a> {
         {
             return Err(TallyRefusal::Premature);
         }
-        if info.resolution.is_some() {
-            return Err(TallyRefusal::Repeated);
+        let body_hash = object_hash(q.body_bytes());
+        if let Some((_, taken)) = info.resolution {
+            return Err(if taken == body_hash {
+                TallyRefusal::Repeated
+            } else {
+                TallyRefusal::Conflict
+            });
         }
         let outcomes: BTreeMap<[u8; 64], ReceiptOutcome> = p
             .entries
@@ -721,7 +788,7 @@ impl<'a> Work<'a> {
         if outcomes.len() != p.entries.len() || !outcomes.keys().copied().eq(cast) {
             return Err(TallyRefusal::Entries);
         }
-        info.resolution = Some(e.seq);
+        info.resolution = Some((e.seq, body_hash));
         for rec in info.records.iter_mut().filter(|r| r.cast) {
             if let Some(outcome) = outcomes.get(&rec.code.0)
                 && let Ok(state) = rec.state.apply(RecordEvent::Receipt(receipt_of(*outcome)))
@@ -811,7 +878,7 @@ impl<'a> Work<'a> {
                 Some(_) | None => ready.boxes_closed = false,
             }
             let has_cast = b.records.iter().any(|r| r.cast);
-            if b.absentee() && has_cast && !b.resolution.is_some_and(before) {
+            if b.absentee() && has_cast && !b.resolution.is_some_and(|(seq, _)| before(seq)) {
                 ready.receipts_resolved = false;
             }
             let undecided = b
@@ -835,6 +902,10 @@ struct UnitWork<'a> {
     scope_hash: Option<Hash512>,
     /// The digits of each verified opening, by chunk.
     digits: BTreeMap<u8, [u32; DIGITS]>,
+    /// The body hash of the opening taken, by chunk.
+    opening_hashes: BTreeMap<u8, Hash512>,
+    /// The body hash of the paper count taken.
+    paper_hash: Option<Hash512>,
 }
 
 /// The sorted-set root of `codes` (ascending already).
@@ -906,6 +977,8 @@ fn unit_work<'a>(
         records,
         scope_hash: None,
         digits: BTreeMap::new(),
+        opening_hashes: BTreeMap::new(),
+        paper_hash: None,
     }
 }
 
@@ -1007,9 +1080,15 @@ fn machine<'c>(t: &UnitTally<'_>, counts: &'c [u64], choices: u16) -> Option<Mac
     })
 }
 
-/// Whether the paper count report `event` is signed by the chair and
-/// observers the roster of the state in force at `seq` registers.
-fn paper_signed(ctx: &Ctx<'_, '_>, seq: Seq, event: &WitnessedEvent<'_>) -> bool {
+/// Whether the paper count report `event` of unit `unit` is signed by the
+/// chair of the unit's commission and by observers, as the roster of the
+/// state in force at `seq` registers them.
+fn paper_signed(
+    ctx: &Ctx<'_, '_>,
+    seq: Seq,
+    event: &WitnessedEvent<'_>,
+    unit: &Entry<ReportingUnitEntry<'_>>,
+) -> bool {
     let roster: Vec<RosterEntry<'_>> = ctx.genesis.roster_at(ctx.index.state_at(seq));
     let pairs: Option<Vec<(&[u8; HYBRID_SIG_LEN], &[u8; HYBRID_VK_LEN])>> = event
         .sigs()
@@ -1049,7 +1128,7 @@ fn paper_signed(ctx: &Ctx<'_, '_>, seq: Seq, event: &WitnessedEvent<'_>) -> bool
         event,
         tokens: &tokens,
     };
-    PaperCount::check(&signed, &roster).is_ok()
+    PaperCount::check(&signed, &roster, unit).is_ok()
 }
 
 /// A ballot style and reporting unit, by their identifiers.
@@ -1057,6 +1136,16 @@ type UnitKey<'a> = (&'a [u8], &'a [u8]);
 
 /// The units of the genesis's last state, by (style, unit).
 type Units<'a> = BTreeMap<UnitKey<'a>, UnitWork<'a>>;
+
+/// The refusal of a second event for what `taken` (a body hash) already
+/// answers: the same body again, or a conflict.
+fn again(taken: Hash512, body: &[u8]) -> TallyRefusal {
+    if taken == object_hash(body) {
+        TallyRefusal::Repeated
+    } else {
+        TallyRefusal::Conflict
+    }
+}
 
 /// Whether tally scope `p` (in `q`, at frame `seq`) can be taken for
 /// `unit`.
@@ -1073,10 +1162,10 @@ fn take_scope(
     }
     let cap = ctx.cap(p.time_bucket).ok_or(TallyRefusal::Capability)?;
     let unit = unit.ok_or(TallyRefusal::Subject)?;
-    if unit.tally.scope.is_some() {
-        return Err(TallyRefusal::Repeated);
+    if let Some(taken) = unit.scope_hash {
+        return Err(again(taken, q.body_bytes()));
     }
-    let ready = work.readiness(p.ballot_style_id.as_bytes(), seq, p.time_bucket);
+    let ready = work.readiness(p.ballot_style_id.as_bytes(), seq, ctx.witness_time(seq));
     admit_tally_scope(&cap, p.election_id, &ready).map_err(|_| TallyRefusal::Premature)
 }
 
@@ -1113,10 +1202,9 @@ fn scopes<'a>(
 }
 
 /// Whether aggregate opening `p` (in `q`, at frame `seq`) can be taken for
-/// `unit`, given the valid checkpoints `covered` as (frame, tree size).
+/// `unit`.
 fn take_opening(
     ctx: &Ctx<'_, '_>,
-    covered: &[(u64, u64)],
     unit: Option<&UnitWork<'_>>,
     seq: Seq,
     q: &QuorumSigned<'_>,
@@ -1135,11 +1223,15 @@ fn take_opening(
         .scope
         .filter(|_| unit.scope_hash == Some(p.scope_hash))
         .ok_or(TallyRefusal::NoScope)?;
-    let in_checkpoint = checkpointed_before(covered.iter().copied(), scope.get(), seq.get());
+    let covered = ctx
+        .checkpoints
+        .iter()
+        .map(|(frame, size, _)| (*frame, *size));
+    let in_checkpoint = checkpointed_before(covered, scope.get(), seq.get());
     admit_aggregate_opening(&cap, p.election_id, in_checkpoint)
         .map_err(|_| TallyRefusal::Premature)?;
-    if unit.tally.openings.iter().any(|o| o.chunk == p.chunk) {
-        return Err(TallyRefusal::Repeated);
+    if let Some(taken) = unit.opening_hashes.get(&p.chunk) {
+        return Err(again(*taken, q.body_bytes()));
     }
     Ok(())
 }
@@ -1147,20 +1239,14 @@ fn take_opening(
 /// Takes each aggregate opening and checks it.
 fn openings<'a>(
     ctx: &Ctx<'_, 'a>,
-    checkpoints: &CheckpointChain,
     work: &mut Work<'a>,
     units: &mut Units<'a>,
     openings: &[(Seq, QuorumSigned<'a>, AggregateOpeningParts<'a>)],
 ) {
     let bases = Bases::derive();
-    let covered: Vec<(u64, u64)> = checkpoints
-        .checkpoints()
-        .iter()
-        .map(|c| (c.frame.get(), c.tree_size))
-        .collect();
     for (seq, q, p) in openings {
         let key = (p.ballot_style_id.as_bytes(), p.reporting_unit_id.as_bytes());
-        let taken = take_opening(ctx, &covered, units.get(&key), *seq, q, p);
+        let taken = take_opening(ctx, units.get(&key), *seq, q, p);
         let unit = units.get_mut(&key);
         match (taken, unit) {
             (Ok(()), Some(u)) => {
@@ -1175,6 +1261,8 @@ fn openings<'a>(
                     outcome != OpeningOutcome::Verified,
                     HoldReason::AggregateMismatch,
                 );
+                u.opening_hashes
+                    .insert(p.chunk, object_hash(q.body_bytes()));
                 u.tally.openings.push(ChunkOpening {
                     chunk: p.chunk,
                     seq: *seq,
@@ -1193,7 +1281,8 @@ fn openings<'a>(
 }
 
 /// Whether paper count report `p` (in `event`, at frame `seq`) can be
-/// taken for `unit`.
+/// taken for `unit`: its reporting unit is one of the genesis state in
+/// force at `seq`, whose commission's chair signed it.
 fn take_paper(
     ctx: &Ctx<'_, '_>,
     unit: Option<&UnitWork<'_>>,
@@ -1201,15 +1290,19 @@ fn take_paper(
     event: &WitnessedEvent<'_>,
     p: &PaperCountParts<'_>,
 ) -> Result<(), TallyRefusal> {
-    if !paper_signed(ctx, seq, event) {
+    let entry = ctx
+        .genesis
+        .reporting_unit_entry_at(ctx.index.state_at(seq), p.reporting_unit_id.as_bytes())
+        .ok_or(TallyRefusal::Subject)?;
+    if !paper_signed(ctx, seq, event, &entry) {
         return Err(TallyRefusal::Signature);
     }
     let unit = unit.ok_or(TallyRefusal::Subject)?;
     if p.votes.len() != usize::from(unit.choices) {
         return Err(TallyRefusal::Subject);
     }
-    if unit.tally.paper.is_some() {
-        return Err(TallyRefusal::Repeated);
+    if let Some(taken) = unit.paper_hash {
+        return Err(again(taken, event.body_bytes()));
     }
     Ok(())
 }
@@ -1229,6 +1322,7 @@ fn papers<'a>(
         match (taken, unit) {
             (Ok(()), Some(u)) => {
                 u.tally.paper = Some(*seq);
+                u.paper_hash = Some(object_hash(event.body_bytes()));
                 taken_parts.insert(key, *p);
             }
             (Ok(()), None) => {}
@@ -1241,6 +1335,31 @@ fn papers<'a>(
         }
     }
     taken_parts
+}
+
+/// Refuses every late close of a box recorded after a tally scope of the
+/// box's ballot style was taken (VC-057, VC-100), and holds the box's
+/// unit.
+fn late_closes<'a>(work: &mut Work<'a>, units: &mut Units<'a>) {
+    let mut refused: Vec<(Seq, UnitKey<'a>)> = Vec::new();
+    for b in work.boxes.values() {
+        let style = b.entry.ballot_style_id.as_bytes();
+        let first_scope = units
+            .iter()
+            .filter(|((s, _), _)| *s == style)
+            .filter_map(|(_, u)| u.tally.scope.map(Seq::get))
+            .min();
+        let Some(first) = first_scope else { continue };
+        for late in b.late.iter().filter(|l| l.get() > first) {
+            refused.push((*late, (style, b.entry.reporting_unit_id.as_bytes())));
+        }
+    }
+    for (seq, key) in refused {
+        if let Some(u) = units.get_mut(&key) {
+            u.tally.holds = u.tally.holds.with(HoldReason::LateCloseAfterScope);
+        }
+        work.refuse(seq, TallyEvent::LateClose, TallyRefusal::AfterScope);
+    }
 }
 
 /// Finishes unit `u`: the counts once every chunk verified, and the paper
@@ -1292,6 +1411,11 @@ pub fn verify_tally<'a>(
                 .collect(),
             structure: access_structure(body.parties().count(), body.chambers()),
         },
+        checkpoints: checkpoints
+            .checkpoints()
+            .iter()
+            .map(|c| (c.frame.get(), c.tree_size, c.time_bucket))
+            .collect(),
     };
     let mut work = Work {
         boxes: genesis
@@ -1318,7 +1442,8 @@ pub fn verify_tally<'a>(
         .map(|(key, (style, unit))| (*key, unit_work(&work, genesis, *style, *unit)))
         .collect();
     scopes(&ctx, &mut work, &mut units, &events.scopes);
-    openings(&ctx, checkpoints, &mut work, &mut units, &events.openings);
+    late_closes(&mut work, &mut units);
+    openings(&ctx, &mut work, &mut units, &events.openings);
     let papers = papers(&ctx, &mut work, &mut units, &events.papers);
     for (key, u) in &mut units {
         finish(u, papers.get(key));
