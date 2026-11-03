@@ -382,7 +382,7 @@ fn an_open_box_under_an_anchored_checkpoint_is_log_consistent() {
     assert_eq!(report.status().status(), Status::LogConsistent);
     assert!(!report.boxes().complete());
     assert!(!report.status().count_only());
-    assert_eq!(report.open_disputes(), 0);
+    assert_eq!(report.disputes().unresolved().count(), 0);
     // A second checkpoint right after the first covers the first's frame.
     book.checkpoint();
     let report = book.report(ANCHORED);
@@ -450,7 +450,7 @@ fn a_hold_anywhere_is_hold_review() {
     book.checkpoint();
     let report = book.report(ANCHORED);
     assert!(report.checkpoints().findings().is_empty());
-    assert_eq!(report.open_disputes(), 1);
+    assert_eq!(report.disputes().unresolved().count(), 1);
     assert_eq!(report.status().status(), Status::HoldReview);
     assert!(report.status().holds().contains(HoldReason::OpenDispute));
 
@@ -521,8 +521,8 @@ fn a_dispute_event_that_cannot_be_taken_holds_the_ledger() {
     book.push(SCHEMA_WITNESSED_EVENT, late);
     book.checkpoint();
     let report = book.report(ANCHORED);
-    assert_eq!(report.open_disputes(), 0);
-    assert_eq!(report.refused_disputes(), [Seq::new(4).unwrap()]);
+    assert_eq!(report.disputes().unresolved().count(), 0);
+    assert_eq!(report.disputes().refused(), [Seq::new(4).unwrap()]);
     assert_eq!(report.status().status(), Status::HoldReview);
     assert!(report.status().holds().contains(HoldReason::DisputeRefused));
 }

@@ -53,7 +53,7 @@ use ityv_ledger::{
 use ityv_state::{HoldReason, HoldSet};
 
 use crate::authority::AuthorityStage;
-use crate::disputes::{DisputeStep, dispute_steps};
+use crate::disputes::{DisputeStep, verify_disputes};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
 use crate::sigs::verifying_key;
@@ -324,7 +324,7 @@ pub fn verify_checkpoints<'a>(
         profile: QuorumProfile::new(q.witnesses, q.quorum, q.byzantine_max),
         diversity: DiversityPolicy::new(q.min_orgs, q.min_providers, q.min_regions),
     };
-    let steps = dispute_steps(genesis, index, authority).steps;
+    let steps = verify_disputes(genesis, index, authority).steps;
     let mut prefix = Prefix::new(index, &steps);
     let mut prev: Option<(SignedCheckpoint<'a>, Hash512)> = None;
     let checkpoints = index

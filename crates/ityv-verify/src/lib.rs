@@ -50,7 +50,7 @@ pub mod authority;
 pub mod boxes;
 pub mod checkpoint;
 mod cross;
-mod disputes;
+pub mod disputes;
 pub mod error;
 pub mod genesis;
 pub mod index;
@@ -71,6 +71,7 @@ pub use checkpoint::{
     CheckpointChain, CheckpointFinding, CheckpointFindingKind, VerifiedCheckpoint,
     verify_checkpoints,
 };
+pub use disputes::{Decision, DisputeEntry, DisputeStage, verify_disputes};
 pub use error::{Error, Reference, Rule};
 pub use genesis::{
     AmendableSets, AmendmentInput, FixedSets, GenesisInput, VerifiedGenesis, verify_genesis,
