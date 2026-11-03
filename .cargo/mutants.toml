@@ -23,6 +23,17 @@ exclude_re = [
     # one event), so `>` and `>=` between their frames agree
     # (crates/ityv-verify/src/progress.rs, `after_close`).
     "replace > with >= in after_close",
+    # Equivalent: each compares the frames of two different ledger events
+    # (a checkpoint and a tally scope; a receipt resolution and a legal
+    # decision; a close, resolution or decision and a tally scope; a late
+    # close and a tally scope). A frame carries one event, so the two are
+    # never equal and `<`/`<=` (`>`/`>=`) agree
+    # (crates/ityv-verify/src/tally.rs: `witness_time`, `apply_decision`,
+    # `readiness`, `late_closes`).
+    "replace < with <= in Ctx<'_, 'a>::witness_time",
+    "replace < with <= in Work<'a>::apply_decision",
+    "replace < with <= in Work<'a>::readiness",
+    "replace > with >= in late_closes",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)

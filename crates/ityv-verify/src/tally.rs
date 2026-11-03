@@ -49,9 +49,10 @@
 //!   checked against the recomputed included set: `C_total,j`, the sum of
 //!   the included records' chunk-`j` commitments, must equal `T_j·G_val +
 //!   S·G_id + R_j·H` (VC-043), and every 26-bit digit of `T_j` must be at
-//!   most the included count and zero on an option the style does not have
-//!   (VC-024). Once every chunk opens, the digits are the counts per option,
-//!   and they must sum to the included count.
+//!   most the included count (VC-024). Once every chunk opens, the digits
+//!   of the style's options are the counts per option, and they must sum to
+//!   the included count (so no vote sits on an option the style does not
+//!   have).
 //! * **Paper count reports** (`PaperCountReportBody` in a
 //!   `WitnessedEvent`, §11.5). Signed by the chair of the district
 //!   commission the unit names (`ReportingUnitEntry::commission_org`, so a
@@ -118,13 +119,12 @@ use ityv_crypto::{
 use ityv_encoding::schema_version;
 use ityv_encoding::{
     AggregateOpeningParts, BallotStyleId, BoxClose, CaptureProfile, CastRecord, ChallengeOpening,
-    Decode, DisputeType, EventRole, ExclusionReason, GenesisBox, HYBRID_SIG_LEN, HYBRID_VK_LEN,
-    Hash512, MAX_QUORUM_MESSAGE_LEN, PaperCountParts, PaperCountReportBody, QuorumKind,
-    QuorumSigned, ReceiptOutcome, ReceiptResolutionParts, ReportingUnitEntry, ReportingUnitId,
-    RosterRole, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
-    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TallyEffect, TallyScopeParts, TimeBucket, TrusteeEntry,
-    WitnessedEvent, decode_object,
+    Decode, DisputeType, ExclusionReason, GenesisBox, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512,
+    MAX_QUORUM_MESSAGE_LEN, PaperCountParts, PaperCountReportBody, QuorumKind, QuorumSigned,
+    ReceiptOutcome, ReceiptResolutionParts, ReportingUnitEntry, ReportingUnitId, SCHEMA_BOX_CLOSE,
+    SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_LATE_BATCH_CLOSE_BODY,
+    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
+    TallyEffect, TallyScopeParts, TimeBucket, TrusteeEntry, WitnessedEvent, decode_object,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{
@@ -263,8 +263,8 @@ pub enum OpeningOutcome {
     /// The equation does not hold, or a sum is not a canonical scalar
     /// (VC-043, VC-044).
     Equation,
-    /// The packed sum has a digit out of range: above the included count,
-    /// or on an option the style does not have (VC-024).
+    /// The packed sum has a digit above the included count, or bits above
+    /// the packed range (VC-024).
     Digits,
 }
 
@@ -328,16 +328,16 @@ impl UnitTally<'_> {
             && (0..self.chunks).all(|j| opened.contains(&j))
     }
 
-    /// Whether the unit is complete and everything agrees: the scope is
-    /// the recomputation, every opening verifies, the counts are
-    /// consistent and the paper agrees.
+    /// Whether the unit is complete and holds nothing. Each disagreement
+    /// is a hold: a scope that is not the recomputation
+    /// (`TallyScopeMismatch`), an opening that does not verify or counts
+    /// that do not sum to the included count (`AggregateMismatch`, so a
+    /// complete unit without a hold has its counts), a paper count that
+    /// does not agree (`PaperCountMismatch`, so it has its comparison), and
+    /// every event refused for the unit.
     #[must_use]
     pub fn passed(&self) -> bool {
-        self.complete()
-            && self.holds.is_empty()
-            && self.scope_problems.is_empty()
-            && self.counts.is_some()
-            && self.comparison.is_some_and(PaperComparison::agrees)
+        self.complete() && self.holds.is_empty()
     }
 }
 
@@ -1042,14 +1042,12 @@ fn open(
     let opened = verify_aggregate(bases, &total, &packed, &id, &rand)
         .map_err(|_| OpeningOutcome::Equation)?;
     let digits = decode_digits(opened.get().packed_sum()).map_err(|_| OpeningOutcome::Digits)?;
+    // VC-024: no option has more votes than the unit has records. A digit
+    // on an option the style does not have leaves the counts short of the
+    // included count, which [`counts`] refuses once every chunk opened.
     let included = u64::try_from(u.tally.included.len()).unwrap_or(u64::MAX);
-    let options = usize::from(u.choices).saturating_add(2);
-    let first = chunk.saturating_mul(DIGITS);
-    for (d, digit) in digits.iter().enumerate() {
-        let beyond = first.saturating_add(d) >= options;
-        if u64::from(*digit) > included || (beyond && *digit != 0) {
-            return Err(OpeningOutcome::Digits);
-        }
+    if digits.iter().any(|digit| u64::from(*digit) > included) {
+        return Err(OpeningOutcome::Digits);
     }
     Ok(digits)
 }
@@ -1090,28 +1088,17 @@ fn paper_signed(
     unit: &Entry<ReportingUnitEntry<'_>>,
 ) -> bool {
     let roster: Vec<RosterEntry<'_>> = ctx.genesis.roster_at(ctx.index.state_at(seq));
+    // The roster is keyed by signer: the key of the one entry of each
+    // signer. `PaperCount::check` then binds each token to that entry's
+    // role (chair or observer) and organisation (the unit's commission
+    // for the chair).
     let pairs: Option<Vec<(&[u8; HYBRID_SIG_LEN], &[u8; HYBRID_VK_LEN])>> = event
         .sigs()
         .map(|s| {
-            let role = match s.role {
-                EventRole::Chair => RosterRole::Chair,
-                EventRole::Observer => RosterRole::Observer,
-                EventRole::Clerk
-                | EventRole::Commission
-                | EventRole::Committee
-                | EventRole::Sender
-                | EventRole::Receiver
-                | EventRole::Authority
-                | EventRole::Device => return None,
-            };
             roster
                 .iter()
                 .map(Entry::get)
-                .find(|r| {
-                    r.signer_id.as_bytes() == s.signer_id.as_bytes()
-                        && r.role == role
-                        && r.org_id.as_bytes() == s.org_id.as_bytes()
-                })
+                .find(|r| r.signer_id.as_bytes() == s.signer_id.as_bytes())
                 .map(|r| (s.sig, r.key))
         })
         .collect();

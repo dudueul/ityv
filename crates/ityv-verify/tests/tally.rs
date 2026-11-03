@@ -66,8 +66,10 @@ use ityv_encoding::{
     TreeSize, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
 };
 use ityv_encoding::{
-    LateBatchCloseBody, LateBatchCloseParts, LateBatchReason, MAX_QUORUM_MESSAGE_LEN,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, write_quorum_message,
+    ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, LateBatchCloseBody,
+    LateBatchCloseParts, LateBatchReason, MAX_QUORUM_MESSAGE_LEN, ModuleOpening,
+    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, Scalars,
+    write_quorum_message,
 };
 use ityv_ledger::{
     SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry, root_of_leaves,
@@ -293,6 +295,11 @@ struct Cast {
     option: u16,
     cast_id: CastId,
     rand: [Scalar; MAX_CHUNKS],
+    /// Each module's cast-id contribution and randomness, in module order.
+    parts: &'static [([u8; 24], [Scalar; MAX_CHUNKS])],
+    counter: u64,
+    style: &'static [u8],
+    chunks: u8,
 }
 
 /// The module record message `body_hash ‖ module_id ‖ counter`.
@@ -323,13 +330,21 @@ fn cast_styled(bx: Bx, counter: u64, option: u16, style: &'static [u8], options:
     hasher.absorb(b"ityv:castid:v1");
     hasher.absorb(&[0x00]);
     let mut rand = [Scalar::ZERO; MAX_CHUNKS];
+    let mut parts: Vec<([u8; 24], [Scalar; MAX_CHUNKS])> = Vec::new();
     for _ in bx.mods {
         let mut cid = [0u8; 24];
         rng.fill_bytes(&mut cid);
         hasher.absorb(&cid);
-        for sum in rand.iter_mut().take(usize::from(chunks)) {
-            *sum = sum.add(&Scalar::random(&mut rng));
+        let mut part = [Scalar::ZERO; MAX_CHUNKS];
+        for (sum, p) in rand
+            .iter_mut()
+            .zip(part.iter_mut())
+            .take(usize::from(chunks))
+        {
+            *p = Scalar::random(&mut rng);
+            *sum = sum.add(p);
         }
+        parts.push((cid, part));
     }
     let digest = hasher.finish();
     let cast_id = CastId::new(Token192(digest[..24].try_into().unwrap()));
@@ -418,7 +433,49 @@ fn cast_styled(bx: Bx, counter: u64, option: u16, style: &'static [u8], options:
         option,
         cast_id,
         rand,
+        parts: leak_slice(parts),
+        counter,
+        style,
+        chunks,
     }
+}
+
+/// The device's challenge opening of `c` in `bx` (PROTOCOL.md §8), which
+/// reconstructs the record.
+fn challenge(bx: Bx, c: &Cast) -> &'static [u8] {
+    let chunks = usize::from(c.chunks);
+    let raw = |values: &[Scalar]| -> Scalars<MAX_CHUNKS> {
+        let out: Vec<Scalar32> = values.iter().map(|v| Scalar32(v.to_bytes())).collect();
+        Scalars::new(&out).unwrap()
+    };
+    let mods: Vec<ModuleOpening<'static>> = bx
+        .mods
+        .iter()
+        .zip(c.parts)
+        .map(|(&(m, _), (cid, part))| ModuleOpening {
+            module_id: common::module(m),
+            counter: c.counter,
+            rand: raw(&part[..chunks]),
+            cid: Token192(*cid),
+        })
+        .collect();
+    let body = ChallengeOpeningBody::new(&ChallengeOpeningParts {
+        election_id: common::election(),
+        box_id: BoxId::new(bx.id).unwrap(),
+        ballot_style_id: BallotStyleId::new(c.style).unwrap(),
+        record_hash: c.code,
+        option_index: c.option,
+        cast_id: c.cast_id.token(),
+        rand: leak(raw(&c.rand[..chunks])),
+        modules: leak_slice(mods),
+    })
+    .unwrap();
+    let body = object(SCHEMA_CHALLENGE_OPENING_BODY, SCHEMA_VERSION_1, &body);
+    object(
+        SCHEMA_CHALLENGE_OPENING,
+        SCHEMA_VERSION_1,
+        &ChallengeOpening::new(body, sign(signing(bx.device), b"challenge", body)).unwrap(),
+    )
 }
 
 /// The sorted-set root of `codes`.
@@ -502,7 +559,6 @@ fn close_as(
     codes: &[Hash512],
     device: Option<&[u8]>,
 ) -> &'static [u8] {
-    let purpose = device.unwrap_or(b"box-close");
     let counts = CloseCounts {
         paper: if bx.absentee { 0 } else { records + without },
         records,
@@ -515,12 +571,25 @@ fn close_as(
         stickers: if bx.absentee { records } else { 0 },
         spoil_envelopes: 0,
     };
+    close_full(bx, counts, records, codes, device)
+}
+
+/// A close of `bx` with `counts`, every module's final counter `last`.
+fn close_full(
+    bx: Bx,
+    counts: CloseCounts,
+    last: u64,
+    codes: &[Hash512],
+    device: Option<&[u8]>,
+) -> &'static [u8] {
+    let purpose = device.unwrap_or(b"box-close");
+    let (records, attested) = (counts.records, counts.attested);
     let counters: Vec<ModuleCounter<'static>> = bx
         .mods
         .iter()
         .map(|&(m, _)| ModuleCounter {
             module_id: common::module(m),
-            counter: records,
+            counter: last,
         })
         .collect();
     let body = BoxCloseBody::new(&BoxCloseParts {
@@ -1235,6 +1304,56 @@ fn an_exclusion_cites_the_first_reason_and_its_basis() {
 }
 
 #[test]
+fn a_challenged_record_cites_its_challenge_opening() {
+    let mut book = Book::new(world());
+    let kept = cast(B1, 1, 1);
+    let opened_one = cast(B1, 2, 3);
+    book.w(opened(B1));
+    book.push(SCHEMA_CAST_RECORD, kept.event);
+    book.push(SCHEMA_CAST_RECORD, opened_one.event);
+    let shown = challenge(B1, &opened_one);
+    book.push(SCHEMA_CHALLENGE_OPENING, shown);
+    book.push(SCHEMA_BATCH_ATTEST, batch(B1, 0, 1, 1, &[kept.code]));
+    let counts = CloseCounts {
+        paper: 1,
+        records: 1,
+        attested: 1,
+        without_record: 0,
+        challenged: 1,
+        quarantined: 0,
+        visits: 1,
+        envelopes: 0,
+        stickers: 0,
+        spoil_envelopes: 1,
+    };
+    book.push(
+        SCHEMA_BOX_CLOSE,
+        close_full(B1, counts, 2, &[kept.code], Some(b"box-close")),
+    );
+    book.checkpoint();
+    let mut s = spec(STYLE1, RU1, &[kept.code]);
+    s.exclusions = std::vec![exclusion(
+        opened_one.code,
+        ExclusionReason::ChallengedSpoiled,
+        object_hash(shown)
+    )];
+    tally1(&mut book, &[kept], &s, &[1, 0, 0, 0, 0], 0);
+    let stage = book.run();
+    let u = unit1(&stage);
+    assert_eq!(
+        u.exclusions,
+        [ExpectedExclusion {
+            record_hash: opened_one.code,
+            reason: ExclusionReason::ChallengedSpoiled,
+            basis: Some(object_hash(shown)),
+        }]
+    );
+    // The spoiled ballot is not in the box: nothing to count on paper.
+    assert_eq!(u.excluded_with_paper, 0);
+    assert!(u.passed(), "{u:?}");
+}
+
+#[test]
 fn a_scope_before_its_time_is_refused() {
     // BOX-1 still open.
     let mut book = Book::new(world());
@@ -1248,6 +1367,21 @@ fn a_scope_before_its_time_is_refused() {
     assert_eq!(unit1(&stage).scope, None);
     assert_eq!(unit1(&stage).holds, only(HoldReason::TallyScopeRefused));
     assert_eq!(stage.holds(), only(HoldReason::TallyScopeRefused));
+
+    // The witnesses' time is past the window, but the box's close is in a
+    // later frame than the scope.
+    let mut book = Book::new(world());
+    book.w(opened(B1));
+    let c = cast(B1, 1, 1);
+    book.push(SCHEMA_CAST_RECORD, c.event);
+    book.push(SCHEMA_BATCH_ATTEST, batch(B1, 0, 1, 1, &[c.code]));
+    book.checkpoint();
+    let before_close = book.q(scope(scope_body(&spec(STYLE1, RU1, &[c.code]))));
+    book.push(SCHEMA_BOX_CLOSE, close(B1, 1, 1, 0, &[c.code]));
+    assert_eq!(
+        refused(&book.run()),
+        [(before_close, TallyEvent::Scope, TallyRefusal::Premature)]
+    );
 
     // Within the late-close window by the witnesses' time, though the
     // trustees date the scope after it; then after it: the second is
@@ -2380,6 +2514,7 @@ fn a_clean_election_reaches_crypto_tally_verified() {
         anchored,
     );
     assert!(report.participation().complete());
+    assert!(report.tally().complete());
     assert!(report.tally().passed(), "{:?}", report.tally());
     assert_eq!(report.tally().holds(), HoldSet::empty());
     assert_eq!(
@@ -2389,6 +2524,28 @@ fn a_clean_election_reaches_crypto_tally_verified() {
         report.status()
     );
     assert_eq!(report.status().status(), Status::CryptoTallyVerified);
+
+    // A refused event that names no unit holds the ledger though the unit
+    // passed.
+    let unit_passed = |r: &ityv_verify::Report<'_>| r.tally().unit(STYLE1, RU1).unwrap().passed();
+    book.q(scope(scope_body(&spec(STYLE1, RU2, &[]))));
+    book.checkpoint();
+    let report = verify_ledger(
+        world.genesis,
+        book.ledger.bytes(),
+        &book.ledger.events,
+        anchored,
+    );
+    assert!(unit_passed(&report));
+    assert!(report.tally().complete());
+    assert!(!report.tally().passed());
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert!(
+        report
+            .status()
+            .holds()
+            .contains(HoldReason::TallyScopeRefused)
+    );
 
     // Without the paper count the tally step is not run.
     let mut book = Book::new(world);
