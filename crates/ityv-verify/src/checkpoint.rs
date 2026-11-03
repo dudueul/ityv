@@ -324,7 +324,7 @@ pub fn verify_checkpoints<'a>(
         profile: QuorumProfile::new(q.witnesses, q.quorum, q.byzantine_max),
         diversity: DiversityPolicy::new(q.min_orgs, q.min_providers, q.min_regions),
     };
-    let steps = dispute_steps(genesis, index, authority);
+    let steps = dispute_steps(genesis, index, authority).steps;
     let mut prefix = Prefix::new(index, &steps);
     let mut prev: Option<(SignedCheckpoint<'a>, Hash512)> = None;
     let checkpoints = index

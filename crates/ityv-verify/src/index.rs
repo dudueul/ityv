@@ -187,6 +187,9 @@ pub struct LedgerIndex<'a> {
     ledger: HoldSet,
     chain: ChainState<'a>,
     frame_hashes: Vec<Hash512>,
+    /// The frame of the first accepted `SignedGenesis` of each state (0 is
+    /// the genesis), `None` where the ledger has none.
+    state_frames: Vec<Option<Seq>>,
 }
 
 impl<'a> LedgerIndex<'a> {
@@ -275,6 +278,33 @@ impl<'a> LedgerIndex<'a> {
     #[must_use]
     pub fn frame_hashes(&self) -> &[Hash512] {
         &self.frame_hashes
+    }
+
+    /// The frame that carries each amendment the verifier applied, in
+    /// amendment order (the first is amendment 1), as far as the ledger
+    /// carries them in order. An amendment applies from its frame on.
+    #[must_use]
+    pub fn amendment_frames(&self) -> Vec<Seq> {
+        let mut out: Vec<Seq> = Vec::new();
+        for frame in self.state_frames.iter().skip(1) {
+            match frame {
+                Some(seq) if out.last().is_none_or(|last| last.get() < seq.get()) => {
+                    out.push(*seq);
+                }
+                Some(_) | None => break,
+            }
+        }
+        out
+    }
+
+    /// The genesis state in force at frame `seq`: the number of amendments
+    /// whose frames come before it.
+    #[must_use]
+    pub fn state_at(&self, seq: Seq) -> usize {
+        self.amendment_frames()
+            .iter()
+            .take_while(|f| f.get() < seq.get())
+            .count()
     }
 
     fn hold(&mut self, genesis: &VerifiedGenesis<'a>, scope: Scope<'a>, reason: HoldReason) {
@@ -620,7 +650,19 @@ impl<'a> Builder<'_, 'a> {
             return Err((FindingKind::UnknownSubject, HoldReason::LedgerUnchecked));
         }
         let pinned = match c.role {
-            Role::Pinned(body) => self.genesis.is_applied_body(&body),
+            Role::Pinned(body) => {
+                let state = self
+                    .genesis
+                    .anchors()
+                    .iter()
+                    .position(|a| a.head() == &body);
+                if let Some(slot) = state.and_then(|k| self.index.state_frames.get_mut(k))
+                    && slot.is_none()
+                {
+                    *slot = Some(seq);
+                }
+                state.is_some()
+            }
             Role::Authorization(hash) => {
                 hash == *self.genesis.genesis().body().legal_authorization_hash()
             }
@@ -685,6 +727,7 @@ pub fn build_index<'a>(
             ledger: HoldSet::empty(),
             chain: ChainState::empty(),
             frame_hashes: Vec::new(),
+            state_frames: alloc::vec![None; genesis.state_count()],
         },
     };
     let mut stream = FrameStream::new(frames);
@@ -701,5 +744,11 @@ pub fn build_index<'a>(
             }
         }
     }
-    builder.index
+    let mut index = builder.index;
+    // Every applied amendment must be on the ledger, in order.
+    let carried = index.amendment_frames().len();
+    if carried.saturating_add(1) != genesis.state_count() {
+        index.ledger = index.ledger.with(HoldReason::AmendmentMissing);
+    }
+    index
 }

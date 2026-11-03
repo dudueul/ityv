@@ -134,11 +134,38 @@ pub enum HoldReason {
     /// forged or broken authorization is evidence, even when a valid one is
     /// also on the ledger (§4.4, VC-006..008).
     AuthorizationInvalid = 40,
+    /// A genesis amendment the verifier applied is not on the ledger, or
+    /// the ledger carries the amendments out of order, so the frame from
+    /// which each state applies is unknown (§4.3).
+    AmendmentMissing = 41,
+    /// A cast record of the box was rejected: its ballot style is not in
+    /// the genesis, its proof does not verify, a record signature does not
+    /// verify under a key the box had by its frame, it names a module the
+    /// box does not have, or another record carries the same module
+    /// counter (§7.2.1, §7.5, §14 5, VC-025, VC-026, VC-068).
+    RecordRejected = 42,
+    /// A batch attestation of the box does not hold: a signature, a module
+    /// outside the box, two bodies under one batch index, a counter range
+    /// with a gap or an overlap or beyond the close, a record straddling
+    /// batches, or a record count or records root its member records do not
+    /// give (§7.2.1, §14 5, VC-053).
+    BatchInvalid = 43,
+    /// The close's record set root is not the sorted-set root of the box's
+    /// accepted records (§7.8, §14 5, VC-027).
+    RecordSetMismatch = 44,
+    /// A dispute event on the ledger cannot be taken: a signature that
+    /// does not verify under the two authorities' keys, a filing without
+    /// the capability for its day, a change that does not apply or names no
+    /// dispute filed (§13, §14 9).
+    DisputeRefused = 45,
+    /// A challenge opening cannot be taken: the device's signature does
+    /// not verify, or it names no accepted record of its box (§8).
+    ChallengeRejected = 46,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 47] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -180,6 +207,12 @@ impl HoldReason {
         Self::BoxEventRefused,
         Self::AuthorizationMissing,
         Self::AuthorizationInvalid,
+        Self::AmendmentMissing,
+        Self::RecordRejected,
+        Self::BatchInvalid,
+        Self::RecordSetMismatch,
+        Self::DisputeRefused,
+        Self::ChallengeRejected,
     ];
 
     /// The reason's code.

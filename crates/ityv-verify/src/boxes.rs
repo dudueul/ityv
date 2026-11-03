@@ -24,6 +24,19 @@
 //! (an amendment removed it) is not run: each of its events is refused
 //! and the box is held.
 //!
+//! Amendments (PROTOCOL.md §4.3) apply from the frame that carries them
+//! ([`LedgerIndex::state_at`]). Each event is checked under the genesis
+//! state in force at its frame: its signers' keys are that state's roster
+//! keys and the box's device key in that state, and before the event the
+//! machine follows that state (`BallotBox::follow`) when it is a later
+//! one. An event of a state without the box is refused. A device swap
+//! must be witnessed: when the state in force gives an open box (or one in
+//! fallback) a new device key, a device-signed close is refused until a
+//! `BoxUnitSwap` (two clerks, observers of two organisations) records the
+//! swap on site, and a swap is taken only for an open box whose device key
+//! an amendment changed. A replaced device's own events after the
+//! amendment's frame do not verify under the new key and are refused.
+//!
 //! Every signature is verified here, under the key the genesis registers
 //! for the signer (the box's device key for the device), into a token that
 //! `ityv-state` binds to the signer, role, organisation, purpose and bytes.
@@ -40,10 +53,10 @@
 //!
 //! What this stage does not prove: that a cast record's signatures and
 //! proof are valid, that its batch attestation covers it (the record
-//! stage); that the box's counts agree with the station's progress record
-//! (the progress stage); anything about boxes whose device key an
-//! amendment replaced (a `BoxUnitSwap` is refused here until the stage
-//! follows amendments, so such a box is held).
+//! stage, which also takes a replaced device's records uploaded late);
+//! that the box's counts agree with the station's progress record, or
+//! that the swap's slot and count continue the progress stream (the
+//! progress stage).
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -62,8 +75,8 @@ use ityv_encoding::{
     WitnessedEvent, decode_object,
 };
 use ityv_state::{
-    BallotBox, BallotMark, BoxSpec, Cap, CloseTokens, Closed, Counted, Fallback, HoldReason,
-    HoldSet, Open, PURPOSE_BOX_CLOSE, PURPOSE_LATE_BOX_CLOSE, Provisioned, PublicBoard,
+    BallotBox, BallotMark, BoxSpec, BoxUnitSwap, Cap, CloseTokens, Closed, Counted, Fallback,
+    HoldReason, HoldSet, Open, PURPOSE_BOX_CLOSE, PURPOSE_LATE_BOX_CLOSE, Provisioned, PublicBoard,
     RosterEntry, Signed, Transition,
 };
 
@@ -103,14 +116,12 @@ pub enum Refusal {
     /// A batch attestation after the close without its `LateBatchClose`,
     /// or the reverse.
     Unmatched,
-    /// A device swap: the stage does not yet follow an amendment that
-    /// replaces a box's device key.
-    Unsupported,
     /// A cast record, challenge opening or batch attestation whose body an
     /// earlier event of the box already carries (the same body under other
     /// signature bytes is a different ledger object).
     Duplicate,
-    /// An event of a box the genesis's last state does not expect.
+    /// An event of a box the genesis state in force at its frame (or the
+    /// last state) does not have.
     Unexpected,
 }
 
@@ -247,8 +258,8 @@ enum Item<'a> {
     Record(Box<CastRecord<'a>>),
     Challenge(Box<ChallengeOpening<'a>>),
     Batch(Box<BatchAttest<'a>>),
-    /// A device swap (`BoxUnitSwap`).
-    Swap,
+    /// An event of a genesis state that does not have the box.
+    Absent,
     /// An event of another stage.
     Skip,
 }
@@ -276,7 +287,7 @@ impl Item<'_> {
                 late: c.tokens(&c.late),
                 issuance: c.issuance.as_ref().and_then(WitnessedItem::tokens),
             },
-            Self::Record(_) | Self::Challenge(_) | Self::Batch(_) | Self::Swap | Self::Skip => {
+            Self::Record(_) | Self::Challenge(_) | Self::Batch(_) | Self::Absent | Self::Skip => {
                 ItemTokens::default()
             }
         }
@@ -284,8 +295,9 @@ impl Item<'_> {
 }
 
 /// The body schemas of the witnessed events this stage runs.
-const BOX_BODY_SCHEMAS: [SchemaId; 6] = [
+const BOX_BODY_SCHEMAS: [SchemaId; 7] = [
     SCHEMA_BOX_OPENED_BODY,
+    SCHEMA_BOX_UNIT_SWAP_BODY,
     SCHEMA_FALLBACK_BODY,
     SCHEMA_LATE_BATCH_CLOSE_BODY,
     SCHEMA_SEAL_CHANGE_BODY,
@@ -299,26 +311,48 @@ fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
 
 /// What preparing a box's events needs.
 struct Prep<'x, 'a> {
+    genesis: &'x VerifiedGenesis<'a>,
     index: &'x LedgerIndex<'a>,
-    keys: &'x Keys<'a>,
-    entry: &'x GenesisBox<'a>,
+    /// The roster keys of each genesis state.
+    keys: &'x [Keys<'a>],
+    box_id: BoxId<'a>,
 }
 
 impl<'a> Prep<'_, 'a> {
-    /// Decodes one indexed event of the box.
-    fn item(&self, event: &IndexedEvent<'a>) -> Item<'a> {
+    /// Decodes one indexed event of the box under the genesis state in
+    /// force at its frame ([`LedgerIndex::state_at`]), which it returns
+    /// with the item.
+    fn item(&self, event: &IndexedEvent<'a>) -> (usize, Item<'a>) {
+        let state = self.index.state_at(event.seq);
+        let found = self
+            .genesis
+            .expected_box_at(state, self.box_id.as_bytes())
+            .zip(self.keys.get(state));
+        let item = match found {
+            Some((entry, keys)) => self.decode(event, entry, keys),
+            None => Item::Absent,
+        };
+        (state, item)
+    }
+
+    /// Decodes one event with the box's entry and the roster keys of its
+    /// state.
+    fn decode(
+        &self,
+        event: &IndexedEvent<'a>,
+        entry: &GenesisBox<'a>,
+        keys: &Keys<'a>,
+    ) -> Item<'a> {
         let Some(bytes) = event.bytes else {
             return Item::Skip;
         };
         let schema = event.schema;
-        let device = Some(self.entry.device_key);
+        let device = Some(entry.device_key);
         let item = if schema == SCHEMA_WITNESSED_EVENT {
             decode::<WitnessedEvent<'a>>(schema, bytes).and_then(|w| {
                 let body = w.body_schema();
-                if body == SCHEMA_BOX_UNIT_SWAP_BODY {
-                    Some(Item::Swap)
-                } else if BOX_BODY_SCHEMAS.contains(&body) {
-                    WitnessedItem::new(&w, self.keys, device).map(|w| Item::Witnessed(Box::new(w)))
+                if BOX_BODY_SCHEMAS.contains(&body) {
+                    WitnessedItem::new(&w, keys, device).map(|w| Item::Witnessed(Box::new(w)))
                 } else {
                     // Disputes and other events of the box belong to other
                     // stages.
@@ -329,12 +363,12 @@ impl<'a> Prep<'_, 'a> {
             decode::<BoxClose<'a>>(schema, bytes).and_then(|close| {
                 let pairs: Option<Vec<(&[u8; HYBRID_SIG_LEN], &[u8; HYBRID_VK_LEN])>> = close
                     .device_sig()
-                    .map(|sig| Some((sig, self.entry.device_key)))
+                    .map(|sig| Some((sig, entry.device_key)))
                     .into_iter()
                     .chain(
                         close
                             .attestations()
-                            .map(|a| self.keys.get(a.signer_id.as_bytes()).map(|k| (a.sig, *k))),
+                            .map(|a| keys.get(a.signer_id.as_bytes()).map(|k| (a.sig, *k))),
                     )
                     .collect();
                 Some(Item::Close(Box::new(CloseItem {
@@ -342,7 +376,7 @@ impl<'a> Prep<'_, 'a> {
                     first: Purpose::new(PURPOSE_BOX_CLOSE)?,
                     late: Purpose::new(PURPOSE_LATE_BOX_CLOSE)?,
                     material: pairs.and_then(|p| Material::new(p.into_iter())),
-                    issuance: self.issuance(event.seq),
+                    issuance: self.issuance(entry, event.seq),
                 })))
             })
         } else if schema == SCHEMA_CAST_RECORD {
@@ -360,13 +394,14 @@ impl<'a> Prep<'_, 'a> {
     }
 
     /// For an out-of-district box, the station's last `IssuanceCount`
-    /// before frame `before` (it has no device signature).
-    fn issuance(&self, before: Seq) -> Option<WitnessedItem<'a>> {
-        if self.entry.profile != CaptureProfile::Absentee {
+    /// before frame `before` (it has no device signature), with the roster
+    /// keys of the state in force at its own frame.
+    fn issuance(&self, entry: &GenesisBox<'a>, before: Seq) -> Option<WitnessedItem<'a>> {
+        if entry.profile != CaptureProfile::Absentee {
             return None;
         }
         let mut last = None;
-        for e in self.index.station_events(self.entry.station_id.as_bytes()) {
+        for e in self.index.station_events(entry.station_id.as_bytes()) {
             if e.seq.get() >= before.get() {
                 break;
             }
@@ -378,10 +413,11 @@ impl<'a> Prep<'_, 'a> {
                 .and_then(|b| decode::<WitnessedEvent<'a>>(SCHEMA_WITNESSED_EVENT, b))
                 .filter(|w| w.body_schema() == SCHEMA_ISSUANCE_COUNT_BODY)
             {
-                last = Some(w);
+                last = Some((e.seq, w));
             }
         }
-        WitnessedItem::new(&last?, self.keys, None)
+        let (seq, w) = last?;
+        WitnessedItem::new(&w, self.keys.get(self.index.state_at(seq))?, None)
     }
 }
 
@@ -395,7 +431,7 @@ enum Machine<'r> {
     Counted(BallotBox<'r, Counted<'r>>),
 }
 
-impl Machine<'_> {
+impl<'r> Machine<'r> {
     fn phase(&self) -> Phase {
         match self {
             Self::Spec(_) | Self::Provisioned(_) => Phase::Provisioned,
@@ -422,6 +458,45 @@ impl Machine<'_> {
             Self::Closed(b) => Some(*b.counts()),
             Self::Counted(b) => Some(*b.counts()),
             Self::Spec(_) | Self::Provisioned(_) | Self::Open(_) | Self::Fallback(_) => None,
+        }
+    }
+
+    /// The spec the machine uses.
+    fn spec(&self) -> &BoxSpec<'r> {
+        match self {
+            Self::Spec(spec) => spec,
+            Self::Provisioned(b) => b.spec(),
+            Self::Open(b) => b.spec(),
+            Self::Fallback(b) => b.spec(),
+            Self::Closed(b) => b.spec(),
+            Self::Counted(b) => b.spec(),
+        }
+    }
+
+    /// Follows `spec`, built from a later genesis state.
+    fn follow(self, spec: &BoxSpec<'r>) -> Step<'r> {
+        match self {
+            Self::Spec(_) => (Self::Spec(*spec), None),
+            Self::Provisioned(mut b) => {
+                let r = b.follow(spec);
+                kept(Self::Provisioned(b), r)
+            }
+            Self::Open(mut b) => {
+                let r = b.follow(spec);
+                kept(Self::Open(b), r)
+            }
+            Self::Fallback(mut b) => {
+                let r = b.follow(spec);
+                kept(Self::Fallback(b), r)
+            }
+            Self::Closed(mut b) => {
+                let r = b.follow(spec);
+                kept(Self::Closed(b), r)
+            }
+            Self::Counted(mut b) => {
+                let r = b.follow(spec);
+                kept(Self::Counted(b), r)
+            }
         }
     }
 }
@@ -477,12 +552,59 @@ struct Run<'r, 'g> {
     lates: Vec<(Seq, Signed<'r>)>,
     /// The object hashes of the record, challenge and batch bodies seen.
     bodies: BTreeSet<[u8; 64]>,
+    /// The record hashes the box's challenge openings name: the records of
+    /// challenged ballots, which the device publishes but does not count
+    /// as cast (§8).
+    challenged: BTreeSet<[u8; 64]>,
     refusals: Vec<BoxRefusal>,
+    /// The box's spec in each genesis state (`None` where a state does not
+    /// have the box).
+    specs: Vec<Option<BoxSpec<'r>>>,
+    /// The genesis state the machine follows.
+    state: usize,
+    /// An amendment gave the open box a new device key and no
+    /// `BoxUnitSwap` has recorded the swap yet.
+    swap_due: bool,
 }
 
 impl<'r> Run<'r, '_> {
     fn refuse(&mut self, seq: Seq, refusal: Refusal) {
         self.refusals.push(BoxRefusal { seq, refusal });
+    }
+
+    /// Moves the machine to `state`, the genesis state in force at the
+    /// next event; refuses the event if that state does not have the box.
+    fn advance(&mut self, m: Machine<'r>, state: usize) -> Step<'r> {
+        let Some(spec) = self.specs.get(state).copied().flatten() else {
+            return (m, Some(Refusal::Unexpected));
+        };
+        if state <= self.state {
+            return (m, None);
+        }
+        let open = matches!(m, Machine::Open(_) | Machine::Fallback(_));
+        let replaced = m.spec().device_key() != spec.device_key();
+        let (m, refusal) = m.follow(&spec);
+        if refusal.is_none() {
+            self.state = state;
+            self.swap_due |= open && replaced;
+        }
+        (m, refusal)
+    }
+
+    /// An on-site device swap, taken only when an amendment gave the open
+    /// box a new device key. The index scoped the event to this box and
+    /// election by its body.
+    fn swap(&mut self, spec: &BoxSpec<'_>, signed: &Signed<'_>) -> Option<Refusal> {
+        if !self.swap_due {
+            return Some(Refusal::OutOfOrder);
+        }
+        match BoxUnitSwap::check(signed, spec.roster()) {
+            Ok(_) => {
+                self.swap_due = false;
+                None
+            }
+            Err(e) => Some(Refusal::State(e)),
+        }
     }
 
     /// Opens the box with a signed `BoxOpened`: a `PUBLIC_BOARD`
@@ -558,6 +680,21 @@ impl<'r> Run<'r, '_> {
             } else {
                 (m, Some(Refusal::OutOfOrder))
             }
+        } else if schema == SCHEMA_BOX_UNIT_SWAP_BODY {
+            match m {
+                Machine::Open(b) => {
+                    let r = self.swap(b.spec(), &signed);
+                    (Machine::Open(b), r)
+                }
+                Machine::Fallback(b) => {
+                    let r = self.swap(b.spec(), &signed);
+                    (Machine::Fallback(b), r)
+                }
+                m @ (Machine::Spec(_)
+                | Machine::Provisioned(_)
+                | Machine::Closed(_)
+                | Machine::Counted(_)) => (m, Some(Refusal::OutOfOrder)),
+            }
         } else if schema == SCHEMA_SEAL_CHANGE_BODY {
             match m {
                 Machine::Closed(mut b) => {
@@ -631,8 +768,17 @@ impl<'r> Run<'r, '_> {
         m
     }
 
-    /// A close of an open box, or a late close of a closed one.
-    fn close(m: Machine<'r>, item: &'r CloseItem<'r>, tokens: &'r ItemTokens<'r>) -> Step<'r> {
+    /// A close of an open box, or a late close of a closed one. A device
+    /// signature waits for the on-site record of a device swap.
+    fn close(
+        &self,
+        m: Machine<'r>,
+        item: &'r CloseItem<'r>,
+        tokens: &'r ItemTokens<'r>,
+    ) -> Step<'r> {
+        if self.swap_due && item.close.device_sig().is_some() {
+            return (m, Some(Refusal::OutOfOrder));
+        }
         let late = matches!(m, Machine::Closed(_) | Machine::Counted(_));
         let chosen = if late { &tokens.late } else { &tokens.first };
         let Some(t) = chosen.as_deref().and_then(|t| close_tokens(&item.close, t)) else {
@@ -676,14 +822,20 @@ impl<'r> Run<'r, '_> {
             Item::Record(record) => Some(record.body_bytes()),
             Item::Challenge(opening) => Some(opening.body_bytes()),
             Item::Batch(batch) => Some(batch.body_bytes()),
-            Item::Witnessed(_) | Item::Close(_) | Item::Swap | Item::Skip => None,
+            Item::Witnessed(_) | Item::Close(_) | Item::Absent | Item::Skip => None,
         };
         if let Some(body) = body
             && !self.bodies.insert(object_hash(body).0)
         {
             return (m, Some(Refusal::Duplicate));
         }
+        let challenged = matches!(item, Item::Record(record)
+            if self.challenged.contains(&object_hash(record.body_bytes()).0));
         match (m, item) {
+            // The record of a challenged ballot: published, not cast.
+            (m @ (Machine::Open(_) | Machine::Fallback(_)), Item::Record(_)) if challenged => {
+                (m, None)
+            }
             (Machine::Open(mut b), Item::Record(record)) => match self.ballot_mark.as_ref() {
                 Some(cap) => {
                     let r = b.record(cap, record.body());
@@ -728,10 +880,29 @@ impl<'r> Run<'r, '_> {
         &mut self,
         m: Machine<'r>,
         seq: Seq,
+        state: usize,
         item: &'r Item<'r>,
         tokens: &'r ItemTokens<'r>,
     ) -> Machine<'r> {
-        let (m, refusal) = match item {
+        let (m, refusal) = match self.advance(m, state) {
+            (m, Some(r)) => (m, Some(r)),
+            (m, None) => self.event(m, seq, item, tokens),
+        };
+        if let Some(r) = refusal {
+            self.refuse(seq, r);
+        }
+        m
+    }
+
+    /// One item of the box, with the machine in the item's state.
+    fn event(
+        &mut self,
+        m: Machine<'r>,
+        seq: Seq,
+        item: &'r Item<'r>,
+        tokens: &'r ItemTokens<'r>,
+    ) -> Step<'r> {
+        match item {
             Item::Witnessed(w) => match tokens.first.as_deref() {
                 Some(tokens) => self.witnessed(
                     m,
@@ -743,15 +914,11 @@ impl<'r> Run<'r, '_> {
                 ),
                 None => (m, Some(Refusal::Signature)),
             },
-            Item::Close(c) => Self::close(m, c, tokens),
+            Item::Close(c) => self.close(m, c, tokens),
             Item::Record(_) | Item::Challenge(_) | Item::Batch(_) => self.counted(m, seq, item),
-            Item::Swap => (m, Some(Refusal::Unsupported)),
+            Item::Absent => (m, Some(Refusal::Unexpected)),
             Item::Skip => (m, None),
-        };
-        if let Some(r) = refusal {
-            self.refuse(seq, r);
         }
-        m
     }
 }
 
@@ -760,30 +927,51 @@ struct Shared<'x, 'a> {
     genesis: &'x VerifiedGenesis<'a>,
     index: &'x LedgerIndex<'a>,
     authority: &'x AuthorityStage<'a>,
-    roster: &'x [RosterEntry<'a>],
-    keys: &'x Keys<'a>,
+    /// The roster of each genesis state, proved against it.
+    rosters: &'x [Vec<RosterEntry<'a>>],
+    /// The roster keys of each genesis state.
+    keys: &'x [Keys<'a>],
+}
+
+/// The spec of box `box_id` in genesis state `state`, if the state has it.
+fn spec_at<'x>(shared: &Shared<'x, '_>, state: usize, box_id: &[u8]) -> Option<BoxSpec<'x>> {
+    let genesis = shared.genesis.genesis_at(state)?;
+    let entry = shared.genesis.box_entry_at(state, box_id)?;
+    let route = shared
+        .genesis
+        .route_entry_at(state, entry.get().route_id.as_bytes())?;
+    let roster = shared.rosters.get(state)?;
+    BoxSpec::new(genesis, &entry, &route, roster).ok()
 }
 
 /// Runs one box.
 fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a> {
     let id = entry.box_id;
     let prep = Prep {
+        genesis: shared.genesis,
         index: shared.index,
         keys: shared.keys,
-        entry,
+        box_id: id,
     };
-    let items: Vec<(Seq, Item<'a>)> = shared
+    let items: Vec<(Seq, usize, Item<'a>)> = shared
         .index
         .box_events(id.as_bytes())
-        .map(|e| (e.seq, prep.item(e)))
+        .map(|e| {
+            let (state, item) = prep.item(e);
+            (e.seq, state, item)
+        })
         .collect();
-    let tokens: Vec<ItemTokens<'_>> = items.iter().map(|(_, i)| i.tokens()).collect();
+    let tokens: Vec<ItemTokens<'_>> = items.iter().map(|(_, _, i)| i.tokens()).collect();
 
     let genesis = shared.genesis;
-    let spec = genesis
-        .box_entry(id.as_bytes())
-        .zip(genesis.route_entry(entry.route_id.as_bytes()))
-        .and_then(|(e, route)| BoxSpec::new(genesis.genesis(), &e, &route, shared.roster).ok());
+    let specs: Vec<Option<BoxSpec<'_>>> = (0..genesis.state_count())
+        .map(|k| spec_at(shared, k, id.as_bytes()))
+        .collect();
+    // The machine starts in the first state that has the box.
+    let first = specs
+        .iter()
+        .enumerate()
+        .find_map(|(k, spec)| spec.map(|spec| (k, spec)));
     let mut run = Run {
         genesis,
         authority: shared.authority,
@@ -791,19 +979,39 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
         batches: Vec::new(),
         lates: Vec::new(),
         bodies: BTreeSet::new(),
+        challenged: items
+            .iter()
+            .filter_map(|(_, _, item)| match item {
+                Item::Challenge(opening) => Some(opening.body().record_hash().0),
+                Item::Witnessed(_)
+                | Item::Close(_)
+                | Item::Record(_)
+                | Item::Batch(_)
+                | Item::Absent
+                | Item::Skip => None,
+            })
+            .collect(),
         refusals: Vec::new(),
+        specs,
+        state: first.map_or(0, |(k, _)| k),
+        swap_due: false,
     };
-    let (phase, machine_holds, counts) = match spec {
-        Some(spec) => {
+    let (phase, machine_holds, counts) = match first {
+        Some((_, spec)) => {
             let mut m = Machine::Spec(spec);
-            for ((seq, item), t) in items.iter().zip(&tokens) {
-                m = run.step(m, *seq, item, t);
+            for ((seq, state, item), t) in items.iter().zip(&tokens) {
+                m = run.step(m, *seq, *state, item, t);
             }
             (m.phase(), m.holds(), m.counts())
         }
         // The genesis stage proved every box entry and its route, so a
-        // spec `ityv-state` refuses is a refusal of the whole box.
-        None => (Phase::Provisioned, HoldSet::empty(), None),
+        // spec `ityv-state` refuses is a refusal of the whole box: none of
+        // its events is run, and it is held.
+        None => (
+            Phase::Provisioned,
+            HoldSet::empty().with(HoldReason::BoxEventRefused),
+            None,
+        ),
     };
     let unmatched: Vec<Seq> = run
         .batches
@@ -837,23 +1045,31 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
 }
 
 /// Runs every expected box of the genesis's last state through its state
-/// machine with the box's ledger events.
+/// machine with the box's ledger events, each under the genesis state in
+/// force at its frame.
 #[must_use]
 pub fn verify_boxes<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
     authority: &AuthorityStage<'a>,
 ) -> BoxStage<'a> {
-    let roster = genesis.roster();
-    let keys: Keys<'a> = roster
+    let rosters: Vec<Vec<RosterEntry<'a>>> = (0..genesis.state_count())
+        .map(|k| genesis.roster_at(k))
+        .collect();
+    let keys: Vec<Keys<'a>> = rosters
         .iter()
-        .map(|r| (r.get().signer_id.as_bytes(), r.get().key))
+        .map(|roster| {
+            roster
+                .iter()
+                .map(|r| (r.get().signer_id.as_bytes(), r.get().key))
+                .collect()
+        })
         .collect();
     let shared = Shared {
         genesis,
         index,
         authority,
-        roster: &roster,
+        rosters: &rosters,
         keys: &keys,
     };
     let mut reports: Vec<BoxReport<'a>> = genesis.boxes().map(|b| run_box(&shared, b)).collect();
