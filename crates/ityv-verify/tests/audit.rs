@@ -2406,3 +2406,65 @@ fn a_large_frame_is_audited() {
     assert_eq!(r.status().holds(), HoldSet::empty(), "{:?}", r.audit());
     assert_eq!(r.status().status(), Status::PaperAudited);
 }
+
+/// A style whose frame is empty (a box that received no ballot) has
+/// nothing to sample: its rule is not refused for being clipped to zero,
+/// and its audit concludes with nothing drawn.
+#[test]
+fn an_empty_frame_is_not_a_vacuous_rule() {
+    let world = two_style_world();
+    let mut book = Book::new(world);
+    for chamber in [
+        ityv_encoding::ChamberCode::P1,
+        ityv_encoding::ChamberCode::P2,
+    ] {
+        book.push(SCHEMA_PARTY_KEY_CEREMONY, ceremony(chamber));
+    }
+    for m in TWO_UNIT_MODULES {
+        book.push(SCHEMA_MODULE_PROVISIONED, provisioning(m));
+    }
+    let c1 = box1_closed(&mut book);
+    book.w(opened(B2S));
+    book.push(SCHEMA_BOX_CLOSE, close(B2S, 0, 0, 0, &[]));
+    for (schema, event) in station_record_of(&[(B1, 3), (B2S, 0)]) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    book.checkpoint();
+    tally1(
+        &mut book,
+        &c1,
+        &spec(STYLE1, RU1, &codes(&c1)),
+        &[1, 1, 1, 0, 0],
+        0,
+    );
+    let body = scope_body(&spec(STYLE2, RU2, &[]));
+    book.q(scope(body));
+    book.checkpoint();
+    for chunk in 0..2 {
+        book.q(opening(opening_body(
+            STYLE2,
+            RU2,
+            body,
+            chunk,
+            sums(&[], chunk),
+        )));
+    }
+    book.w(paper(STYLE2, RU2, &[0; 9], 0));
+    book.checkpoint();
+    let (_, s1, s2) = two_style_seeded(&mut book, &c1, &[], &[(1, 0)]);
+    assert!(s2.is_empty());
+    book.q(reference(&s1[0]));
+    book.w(compare(&s1[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed());
+    assert!(audit_refused(&r).is_empty(), "{:?}", audit_refused(&r));
+    let style2 = r.audit().style(STYLE2).unwrap();
+    assert_eq!(style2.frame_count, 0);
+    assert!(r.audit().concluded(style2));
+    assert_eq!(
+        r.status().status(),
+        Status::PaperAudited,
+        "{:?}",
+        r.status()
+    );
+}
