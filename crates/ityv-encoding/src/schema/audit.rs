@@ -40,6 +40,7 @@
 //! record and the signers are the roster's are the verifier's (PROTOCOL.md
 //! §14 item 8).
 
+use core::cmp::Ordering;
 use core::fmt;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -118,14 +119,10 @@ fn round_error(previous: Option<AuditRound>, round: AuditRound) -> Option<Kind> 
         return Some(Kind::ValueOutOfRange);
     }
     let p = previous?;
-    if round.sample_size == p.sample_size {
-        Some(Kind::Duplicate)
-    } else if round.sample_size < p.sample_size {
-        Some(Kind::NotSorted)
-    } else if round.threshold < p.threshold {
-        Some(Kind::InvariantViolation)
-    } else {
-        None
+    match round.sample_size.cmp(&p.sample_size) {
+        Ordering::Equal => Some(Kind::Duplicate),
+        Ordering::Less => Some(Kind::NotSorted),
+        Ordering::Greater => (round.threshold < p.threshold).then_some(Kind::InvariantViolation),
     }
 }
 
