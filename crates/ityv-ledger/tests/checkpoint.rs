@@ -978,5 +978,19 @@ fn a_witness_back_from_an_outage_adopts_the_checkpoints_it_missed() {
     let (r, fresh) = WitnessMemory::fresh().adopt(&published3, &empty, &GENESIS);
     assert!(r.is_ok(), "{r:?}");
     assert_eq!(fresh.last().unwrap().seq().get(), 3);
+    // The same tree and the same bucket as the last one are adopted: neither
+    // has to grow.
+    let (_, same) = quorum_signed(&ws, &ls, 2, 3, h1, 100);
+    let (_, m1) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    let (r, m2) = m1.adopt(&quorum(leak(same)), &empty, &GENESIS);
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(
+        (
+            m2.last().unwrap().seq().get(),
+            m2.last().unwrap().tree_size().get()
+        ),
+        (2, 3)
+    );
     assert_eq!(ityv_ledger::CLOCK_ERROR_BUCKETS, 1);
 }
