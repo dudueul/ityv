@@ -524,6 +524,44 @@ impl<'a> WitnessSet<'a> {
     }
 }
 
+/// Whether `signed` is published under `set` (its roster, profile and
+/// diversity, through [`evaluate`]), names its genesis and identifiers, and
+/// is not timed past what an honest quorum could attest by the clock `now`
+/// (`now + CLOCK_ERROR_BUCKETS`).
+fn published_under(
+    set: &WitnessSet<'_>,
+    signed: &SignedCheckpoint<'_>,
+    now: TimeBucket,
+) -> Result<(), Error> {
+    let _published = evaluate(&set.roster, &set.profile, &set.diversity, signed)?;
+    let parts = signed.body().parts();
+    if parts.genesis_hash != set.genesis_hash {
+        return Err(Error::GenesisMismatch);
+    }
+    if ids_hash(signed.body())? != set.ids_hash {
+        return Err(Error::LedgerMismatch);
+    }
+    if parts.time_bucket.get() > now.get().saturating_add(CLOCK_ERROR_BUCKETS) {
+        return Err(Error::TimeAhead);
+    }
+    Ok(())
+}
+
+/// The split-view evidence of [`WitnessMemory::adopt_past_split`]: at
+/// sequence number `seq` this witness signed the body `signed`, and a quorum
+/// published `published`. With the witness's signed body and the
+/// quorum-signed checkpoint it is the record of a `DisputeEvent` of kind 7
+/// (`SPLIT_VIEW`, VC-065).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SplitEvidence {
+    /// The sequence number of the two bodies.
+    pub seq: Seq,
+    /// The object hash of the body this witness signed there.
+    pub signed: Hash512,
+    /// The object hash of the body a quorum published there.
+    pub published: Hash512,
+}
+
 /// `WitnessMemory` (ENCODING.md §6, `0x0011`): the persisted form of a
 /// witness's memory is a complete object with the standard header.
 pub const SCHEMA_WITNESS_MEMORY: SchemaId = SchemaId::new(0x0011);
@@ -786,6 +824,12 @@ impl WitnessMemory {
     ///    [`Error::TimeAhead`] is the host's alarm;
     /// 6. the tree does not shrink and `consistency` proves the extension.
     ///
+    /// Only the target's tree is proved against the last one; the run's
+    /// intermediate trees are not. Two published chains whose intermediate
+    /// trees differ need more than `f` faulty witnesses, outside what the
+    /// quorum tolerates; the witness then only misses that evidence, never
+    /// signs a fork (it extends the target's proven tree).
+    ///
     /// The witness then signs only the checkpoint after the run. With its
     /// memory intact it signed nothing at the sequence numbers it skipped,
     /// so it never signs two bodies at one sequence number (VC-013). The
@@ -825,27 +869,23 @@ impl WitnessMemory {
         let (Some(first), Some(target)) = (run.first(), run.last()) else {
             return Err(Error::SequenceGap);
         };
-        let latest = now.get().saturating_add(CLOCK_ERROR_BUCKETS);
-        for signed in run {
-            let _published = evaluate(&set.roster, &set.profile, &set.diversity, signed)?;
-            let parts = signed.body().parts();
-            if parts.genesis_hash != set.genesis_hash {
-                return Err(Error::GenesisMismatch);
-            }
-            if ids_hash(signed.body())? != set.ids_hash {
-                return Err(Error::LedgerMismatch);
-            }
-            if parts.time_bucket.get() > latest {
-                return Err(Error::TimeAhead);
-            }
-        }
+        // The first checkpoint first: a split there is reported whatever
+        // the rest of the run holds (a late or short checkpoint after it
+        // must not hide it).
+        published_under(set, first, now)?;
         let parts = first.body().parts();
+        if parts.checkpoint_seq == last.seq && first.body_hash() != last.body_hash {
+            return Err(Error::SplitView { seq: last.seq });
+        }
         let expected = last.seq.get().checked_add(1).ok_or(Error::SequenceGap)?;
         if parts.checkpoint_seq.get() != expected {
             return Err(Error::SequenceGap);
         }
         if parts.previous_checkpoint_hash != last.body_hash {
             return Err(Error::SplitView { seq: last.seq });
+        }
+        for signed in run.iter().skip(1) {
+            published_under(set, signed, now)?;
         }
         if last.ids_hash != set.ids_hash {
             return Err(Error::LedgerMismatch);
@@ -882,6 +922,109 @@ impl WitnessMemory {
             ids_hash: set.ids_hash,
             time_bucket: parts.time_bucket,
         })
+    }
+
+    /// Adopts past a split view (PROTOCOL.md §5.4, ADR-0016 §4): this
+    /// witness signed a body at its last sequence number that did not reach
+    /// a quorum, and the operator re-proposed another there, which did. The
+    /// witness then stands outside the chain ([`WitnessMemory::adopt`]
+    /// reports [`Error::SplitView`]); this takes it back without ever
+    /// signing at that sequence number again. `run` starts with the
+    /// published body at the witness's last sequence number and goes up to
+    /// the target, every one published under `set`, chained and timed as
+    /// for [`WitnessMemory::adopt`]; `consistency` proves that the target's
+    /// tree extends the tree the witness last signed, so the ledger's
+    /// content did not fork, only the body did. A published body at the
+    /// same sequence number means, by quorum intersection, that the
+    /// witness's own body was not published (unless more than `f`
+    /// witnesses are faulty).
+    ///
+    /// On success it returns the split evidence for the host to file as a
+    /// `DisputeEvent` of kind 7 (`SPLIT_VIEW`, VC-065, ADR-0018) together
+    /// with the witness's own signed body and the run's first checkpoint.
+    /// If the trees are not consistent the content forked: the adoption is
+    /// refused ([`Error::ProofInvalid`]), the witness files the same
+    /// evidence and counts in `f` for the rest of the election.
+    ///
+    /// # Errors
+    /// [`Error::NoMemory`], [`Error::SequenceGap`] (an empty run, a run not
+    /// starting at the last sequence number, or the witness's own body
+    /// there: no split), the quorum and identity errors of
+    /// [`WitnessMemory::adopt`], [`Error::TimeAhead`],
+    /// [`Error::TimeWentBack`], [`Error::TreeShrank`],
+    /// [`Error::ProofInvalid`], and the errors of [`validate_successor`].
+    #[must_use = "the returned memory must be persisted; dropping it loses the state"]
+    pub fn adopt_past_split(
+        self,
+        set: &WitnessSet<'_>,
+        run: &[SignedCheckpoint<'_>],
+        consistency: &ConsistencyProof,
+        now: TimeBucket,
+    ) -> (Result<SplitEvidence, Error>, Self) {
+        match self.check_past_split(set, run, consistency, now) {
+            Ok((last, evidence)) => (Ok(evidence), Self { last: Some(last) }),
+            Err(err) => (Err(err), self),
+        }
+    }
+
+    fn check_past_split(
+        &self,
+        set: &WitnessSet<'_>,
+        run: &[SignedCheckpoint<'_>],
+        consistency: &ConsistencyProof,
+        now: TimeBucket,
+    ) -> Result<(LastSigned, SplitEvidence), Error> {
+        let last = self.last.as_ref().ok_or(Error::NoMemory)?;
+        let (Some(first), Some(target)) = (run.first(), run.last()) else {
+            return Err(Error::SequenceGap);
+        };
+        published_under(set, first, now)?;
+        let published = first.body_hash();
+        if first.body().parts().checkpoint_seq != last.seq || published == last.body_hash {
+            return Err(Error::SequenceGap);
+        }
+        for signed in run.iter().skip(1) {
+            published_under(set, signed, now)?;
+        }
+        for pair in run.windows(2) {
+            if let [before, after] = pair {
+                let before_hash = before.body_hash();
+                let _next = validate_successor(
+                    Some((before.body(), &before_hash)),
+                    after.body(),
+                    &set.genesis_hash,
+                )?;
+            }
+        }
+        let parts = target.body().parts();
+        if parts.time_bucket.get() < last.time_bucket.get() {
+            return Err(Error::TimeWentBack);
+        }
+        if parts.tree_size.get() < last.tree_size.get() {
+            return Err(Error::TreeShrank);
+        }
+        let _consistent = verify_consistency(
+            last.tree_size.get(),
+            &last.root_hash,
+            parts.tree_size.get(),
+            &parts.root_hash,
+            consistency,
+        )?;
+        Ok((
+            LastSigned {
+                seq: parts.checkpoint_seq,
+                tree_size: parts.tree_size,
+                root_hash: parts.root_hash,
+                body_hash: target.body_hash(),
+                ids_hash: set.ids_hash,
+                time_bucket: parts.time_bucket,
+            },
+            SplitEvidence {
+                seq: last.seq,
+                signed: last.body_hash,
+                published,
+            },
+        ))
     }
 
     fn check<'a>(

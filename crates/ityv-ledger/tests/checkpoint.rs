@@ -1101,3 +1101,211 @@ fn adoption_reports_a_split_view() {
         *memory.last().unwrap().body_hash()
     );
 }
+
+/// A split view where only the body differs (PROTOCOL §5.4): this witness
+/// signed X at seq 2, which did not reach a quorum; the operator re-proposed
+/// Y there, which did, and Z follows. adopt reports the split (also for a
+/// run starting at Y, or one whose later checkpoint would be refused);
+/// `adopt_past_split`, given the run from Y, returns the evidence and takes
+/// the witness back without signing at seq 2, and the witness signs after
+/// Z.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_witness_past_a_split_view_rejoins_with_the_evidence() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let p68 = consistency_proof(&ls.as_slice(), 6, 8).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let (_, memory) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    // X: signed by this witness only.
+    let (x, _) = checkpoint_by(&ws, &[0], &ls, 2, 6, h1, 101);
+    let (tx, memory) = memory.may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101));
+    assert!(tx.is_ok());
+    let hx = ityv_crypto::object_hash(&x);
+    // Y re-proposed at seq 2 and published, Z after it.
+    let (y, sy) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 103);
+    let hy = ityv_crypto::object_hash(&y);
+    let (z, sz) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, hy, 103);
+    let hz = ityv_crypto::object_hash(&z);
+    let now = TimeBucket::new(103);
+    let split = Err(Error::SplitView {
+        seq: Seq::new(2).unwrap(),
+    });
+    let (r, memory) = memory.adopt(&set, &[decode_signed(&sz)], &p68, now);
+    assert_eq!(r, split);
+    let (r, memory) = memory.adopt(&set, &[decode_signed(&sy), decode_signed(&sz)], &p68, now);
+    assert_eq!(r, split);
+    // A later checkpoint that would be refused does not hide the split.
+    let (_, ahead) = checkpoint_by(&ws, &QUORUM, &ls, 4, 8, hz, 110);
+    let (_, short) = checkpoint_by(&ws, &QUORUM[..8], &ls, 4, 8, hz, 103);
+    for later in [&ahead, &short] {
+        let run = [decode_signed(&sz), decode_signed(later)];
+        let (r, _) = WitnessMemory::from_last(memory.last().copied()).adopt(&set, &run, &p68, now);
+        assert_eq!(r, split);
+    }
+    assert_eq!(*memory.last().unwrap().body_hash(), hx);
+    // Past the split: the evidence, then the memory at Z.
+    let run = [decode_signed(&sy), decode_signed(&sz)];
+    let (r, memory) = memory.adopt_past_split(&set, &run, &p68, now);
+    assert_eq!(
+        r,
+        Ok(ityv_ledger::SplitEvidence {
+            seq: Seq::new(2).unwrap(),
+            signed: hx,
+            published: hy,
+        })
+    );
+    let last = memory.last().unwrap();
+    assert_eq!((last.seq().get(), *last.body_hash()), (3, hz));
+    assert_eq!(last.time_bucket().get(), 103);
+    // It never signs at seq 2 again; it signs after Z.
+    let memory = refuse(
+        memory,
+        &x,
+        &p36,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(103),
+        &Error::SequenceGap,
+    );
+    let (b4, _) = checkpoint_by(&ws, &QUORUM, &ls, 4, 8, hz, 103);
+    let (t4, memory) = memory.may_sign(&b4, &empty, &[], &[], &GENESIS, TimeBucket::new(103));
+    assert!(t4.is_ok());
+    assert_eq!(memory.last().unwrap().seq().get(), 4);
+    // The run may also end at Y itself.
+    let (_, at_x) = WitnessMemory::fresh()
+        .may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100))
+        .1
+        .may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101));
+    let (r, at_y) = at_x.adopt_past_split(&set, &[decode_signed(&sy)], &empty, now);
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(*at_y.last().unwrap().body_hash(), hy);
+}
+
+/// `adopt_past_split` refuses what is not a body-only split: a content fork
+/// (the trees are not consistent) stays refused, and the witness counts in
+/// f; so does a run not starting at the witness's sequence number, its own
+/// body, an empty memory or run, a time going back, a smaller tree, a
+/// broken run, a short quorum, a checkpoint ahead of the clock.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn adopting_past_a_split_refuses_a_content_fork_and_the_rest() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let other = common::random_leaves(9, 8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let (x, sx) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let at_x = || {
+        WitnessMemory::fresh()
+            .may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100))
+            .1
+            .may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101))
+            .1
+    };
+    let now = TimeBucket::new(103);
+    let check = |memory: WitnessMemory, run: &[SignedCheckpoint<'_>], proof: &ConsistencyProof| {
+        let before = WitnessMemory::from_last(memory.last().copied());
+        let (r, after) = memory.adopt_past_split(&set, run, proof, now);
+        if r.is_err() {
+            assert_eq!(after, before, "a refused adoption changes nothing");
+        }
+        r.map(|_| ())
+    };
+    // A content fork: Y at seq 2 over other leaves.
+    let root = root_of_leaves(&other.as_slice(), 6).unwrap();
+    let forked = body_object(&body_parts(
+        2, 6, root, h1, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 103,
+    ));
+    let forked = signed_checkpoint_object(&ws, &QUORUM, &forked);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&forked)], &empty),
+        Err(Error::ProofInvalid)
+    );
+    // Not a split, or not from the witness's sequence number.
+    assert_eq!(
+        check(at_x(), &[decode_signed(&sx)], &empty),
+        Err(Error::SequenceGap)
+    );
+    let (y, sy) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 103);
+    let (_, sz) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, ityv_crypto::object_hash(&y), 103);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&sz)], &empty),
+        Err(Error::SequenceGap)
+    );
+    assert_eq!(check(at_x(), &[], &empty), Err(Error::SequenceGap));
+    assert_eq!(
+        check(WitnessMemory::fresh(), &[decode_signed(&sy)], &empty),
+        Err(Error::NoMemory)
+    );
+    // Time going back, a smaller tree, a broken run, a short quorum, ahead
+    // of the clock.
+    let (_, back) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 100);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&back)], &empty),
+        Err(Error::TimeWentBack)
+    );
+    let (_, small) = checkpoint_by(&ws, &QUORUM, &ls, 2, 3, h1, 103);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&small)], &empty),
+        Err(Error::TreeShrank)
+    );
+    let (_, stray) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, h1, 103);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&sy), decode_signed(&stray)], &empty),
+        Err(Error::PreviousHashMismatch)
+    );
+    let (_, short) = checkpoint_by(&ws, &QUORUM[..8], &ls, 2, 6, h1, 103);
+    assert!(matches!(
+        check(at_x(), &[decode_signed(&short)], &empty),
+        Err(Error::QuorumShort { .. })
+    ));
+    let (_, short_later) = checkpoint_by(
+        &ws,
+        &QUORUM[..8],
+        &ls,
+        3,
+        8,
+        ityv_crypto::object_hash(&y),
+        103,
+    );
+    assert!(matches!(
+        check(
+            at_x(),
+            &[decode_signed(&sy), decode_signed(&short_later)],
+            &empty
+        ),
+        Err(Error::QuorumShort { .. })
+    ));
+    let (_, ahead) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 105);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&ahead)], &empty),
+        Err(Error::TimeAhead)
+    );
+    // Another body over the same tree in the same bucket (another dispute
+    // root): neither tree nor time has to grow.
+    let root6 = root_of_leaves(&ls.as_slice(), 6).unwrap();
+    let same = body_object(&body_parts(
+        2,
+        6,
+        root6,
+        h1,
+        EMPTY_ROOT,
+        Hash512([5; 64]),
+        GENESIS,
+        101,
+    ));
+    let same = signed_checkpoint_object(&ws, &QUORUM, &same);
+    assert!(check(at_x(), &[decode_signed(&same)], &empty).is_ok());
+}
