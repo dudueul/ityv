@@ -124,13 +124,17 @@ jobs:
     # whole workflow finishes in about an hour instead of over four. A
     # shard must stay well under the six-hour job limit: ityv-verify (whose
     # tests build real OR proofs) and ityv-state took close to three hours
-    # in one shard, so they are split too.
+    # in one shard, so they are split too. The audit stage (ADR-0036) added
+    # about 180 mutants each to ityv-verify and ityv-encoding, whose slowest
+    # shards had already reached four and three hours, so ityv-verify now has
+    # five shards and ityv-encoding three.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { crate: ityv-encoding, shard: 0/2 }
-          - { crate: ityv-encoding, shard: 1/2 }
+          - { crate: ityv-encoding, shard: 0/3 }
+          - { crate: ityv-encoding, shard: 1/3 }
+          - { crate: ityv-encoding, shard: 2/3 }
           - { crate: ityv-crypto, shard: 0/2 }
           - { crate: ityv-crypto, shard: 1/2 }
           - { crate: ityv-ledger, shard: 0/1 }
@@ -140,9 +144,11 @@ jobs:
           - { crate: ityv-cunit, shard: 3/4 }
           - { crate: ityv-state, shard: 0/2 }
           - { crate: ityv-state, shard: 1/2 }
-          - { crate: ityv-verify, shard: 0/3 }
-          - { crate: ityv-verify, shard: 1/3 }
-          - { crate: ityv-verify, shard: 2/3 }
+          - { crate: ityv-verify, shard: 0/5 }
+          - { crate: ityv-verify, shard: 1/5 }
+          - { crate: ityv-verify, shard: 2/5 }
+          - { crate: ityv-verify, shard: 3/5 }
+          - { crate: ityv-verify, shard: 4/5 }
           - { crate: ityv-tsa, shard: 0/1 }
     steps:
       - uses: actions/checkout@v4.2.2
