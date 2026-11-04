@@ -31,6 +31,64 @@ pub(crate) fn vector(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
+/// The base of the crafted tokens (`forged-*.tst`, forge.py): the manifest
+/// line of `rsa3072-sha384.tst`.
+pub(crate) fn forged_base() -> Expected {
+    manifest("manifest.txt")
+        .into_iter()
+        .find(|e| e.token == "rsa3072-sha384.tst")
+        .unwrap()
+}
+
+/// The DER elements of a value: `(tag, value, whole encoding)` each. Test
+/// tokens use one- and two-octet long lengths at most.
+pub(crate) fn elements(mut value: &[u8]) -> Vec<(u8, &[u8], &[u8])> {
+    let mut out = Vec::new();
+    while !value.is_empty() {
+        let (len, start) = match value[1] {
+            short @ 0x00..=0x7F => (usize::from(short), 2),
+            0x81 => (usize::from(value[2]), 3),
+            0x82 => (usize::from(u16::from_be_bytes([value[2], value[3]])), 4),
+            other => panic!("length form {other:02x}"),
+        };
+        out.push((value[0], &value[start..start + len], &value[..start + len]));
+        value = &value[start + len..];
+    }
+    out
+}
+
+/// The certificates embedded in `token` (`SignedData.certificates`), in
+/// token order.
+pub(crate) fn embedded_certificates(token: &[u8]) -> Vec<Vec<u8>> {
+    let content_info = elements(token)[0].1;
+    let signed_data = elements(elements(content_info)[1].1)[0].1;
+    elements(signed_data)
+        .into_iter()
+        .find(|(tag, _, _)| *tag == 0xA0)
+        .map(|(_, certificates, _)| {
+            elements(certificates)
+                .into_iter()
+                .map(|(_, _, raw)| raw.to_vec())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A pin for the authority of `cert` (a file under `tests/vectors`) that
+/// allows every digest, every signature algorithm and ESS v1: for tokens
+/// refused whatever the pin.
+pub(crate) fn permissive(cert: &str) -> Pin {
+    let certificate = vector(cert);
+    Pin {
+        certificate_sha256: sha256(&certificate),
+        digests: 0x07,
+        signatures: 0x3F,
+        ess_v1: true,
+        policies: std::vec!["1.2.3.4.1".into()],
+        certificate: Some(certificate),
+    }
+}
+
 /// The expected imprint of every vector: SHA-512 of `object-hash.bin`.
 pub(crate) fn imprint_of(algorithm: DigestAlgorithm) -> Imprint {
     Imprint::of(algorithm, &vector("object-hash.bin"))

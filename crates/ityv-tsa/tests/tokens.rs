@@ -17,7 +17,7 @@
 
 mod common;
 
-use common::{Expected, Pin, check_result, imprint_of, manifest, sha256, vector};
+use common::{Expected, Pin, check_result, imprint_of, manifest, permissive, sha256, vector};
 use ityv_tsa::{
     CertificateSource, DigestAlgorithm, Imprint, PinnedTsa, SignatureAlgorithm, TsaError,
     verify_token,
@@ -210,18 +210,6 @@ fn the_policy_must_be_pinned() {
         pin.verify(&token, &imprint),
         Err(TsaError::PolicyNotAllowed)
     );
-}
-
-fn permissive(cert: &str) -> Pin {
-    let certificate = vector(cert);
-    Pin {
-        certificate_sha256: sha256(&certificate),
-        digests: 0x07,
-        signatures: 0x3F,
-        ess_v1: true,
-        policies: std::vec!["1.2.3.4.1".into()],
-        certificate: Some(certificate),
-    }
 }
 
 #[test]

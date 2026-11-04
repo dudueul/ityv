@@ -17,7 +17,15 @@ Standard library only. Run with `python3 -I`.
         (`openssl dgst -sign`) after the message digest is recomputed, so
         the change under test is the only defect. Each NAME=OTHER_CERT (a
         DER certificate for the same key) gives forged-NAME.tst, which
-        embeds that certificate instead.
+        embeds that certificate instead; forged-cert-*.tst embed CERT with
+        one field of its DER changed (the crate does not check the issuer's
+        signature on a pinned certificate, so no re-signing is needed there).
+
+    forge.py ecdsa TOKEN ORDER OUTDIR NAME
+        Writes forged-NAME-*.tst into OUTDIR: the ECDSA TOKEN with its
+        signature value changed (unsigned, so no key is needed): s replaced
+        by ORDER - s (ORDER is the curve order in hex; that verifies too),
+        r = 0, and s = ORDER.
 """
 
 import calendar
@@ -104,9 +112,21 @@ def der_sorted(children):
     return sorted(children, key=lambda child: child.encode())
 
 
+def integer(value):
+    """A non-negative INTEGER in minimal two's complement form."""
+    out = value.to_bytes(value.bit_length() // 8 + 1, "big")
+    while len(out) > 1 and out[0] == 0 and out[1] < 0x80:
+        out = out[1:]
+    return Node(0x02, out)
+
+
 OID_CONTENT_TYPE = oid("1.2.840.113549.1.9.3").value
 OID_MESSAGE_DIGEST = oid("1.2.840.113549.1.9.4").value
 OID_SIGNING_CERT_V2 = oid("1.2.840.113549.1.9.16.2.47").value
+OID_DATA = "1.2.840.113549.1.7.1"
+OID_TST_INFO = "1.2.840.113549.1.9.16.1.4"
+OID_SHA256 = "2.16.840.1.101.3.4.2.1"
+OID_RSASSA_PSS = "1.2.840.113549.1.1.10"
 
 # --- describe ----------------------------------------------------------
 
@@ -268,6 +288,34 @@ def forge(key, digest, token_path, cert_path, outdir, *embeds):
         t.set_attributes(der_sorted(t.attributes() + [extra]))
     variant("forged-unknown-attr", unknown_attribute)
 
+    def without(attribute_oid):
+        return lambda t: t.set_attributes(
+            [a for a in t.attributes() if a.children[0].value != attribute_oid])
+    variant("forged-no-content-type", without(OID_CONTENT_TYPE))
+    variant("forged-no-message-digest", without(OID_MESSAGE_DIGEST))
+
+    def values_of(attribute_oid, values):
+        def edit(t):
+            t.attribute(attribute_oid).children[1].children = der_sorted(values())
+            t.set_attributes(der_sorted(t.attributes()))
+        return edit
+    variant("forged-attr-two-values",
+            values_of(OID_CONTENT_TYPE, lambda: [oid(OID_TST_INFO), oid(OID_DATA)]))
+    variant("forged-attr-no-value", values_of(OID_MESSAGE_DIGEST, lambda: []))
+
+    # ESS v1 (SHA-1) next to v2: refused unless the pin allows v1.
+    def ess_v1_too(t):
+        v1 = seq(oid("1.2.840.113549.1.9.16.2.12"), Node(0x31, children=[
+            seq(seq(seq(Node(0x04, hashlib.sha1(certificate).digest()))))]))
+        t.set_attributes(der_sorted(t.attributes() + [v1]))
+    variant("forged-ess-v1-and-v2", ess_v1_too)
+
+    # SHA-256 with NULL parameters is not the DEFAULT value {id-sha256}.
+    def sha256_null(t):
+        t.ess_cert_id().children.insert(0, seq(oid(OID_SHA256), Node(0x05)))
+        t.set_attributes(der_sorted(t.attributes()))
+    variant("forged-ess-sha256-null", sha256_null)
+
     # TSTInfo content (each re-signed after the message digest is redone).
     def tst_edit(name, edit):
         variant(name, lambda t: edit(t.tst), tst=True)
@@ -322,6 +370,18 @@ def forge(key, digest, token_path, cert_path, outdir, *embeds):
         return edit
     tst_edit("forged-nonce-32", nonce_value(b"\x00" + b"\xff" * 32))
     tst_edit("forged-nonce-33", nonce_value(b"\x01" + b"\x00" * 32))
+    tst_edit("forged-nonce-negative", nonce_value(b"\x80"))
+
+    # Accuracy: the base has seconds 1, millis 500, micros 100.
+    def accuracy_fields(fields):
+        def edit(tst):
+            assert tst.children[5].tag == 0x30
+            tst.children[5].children = fields(tst.children[5].children)
+        return edit
+    tst_edit("forged-accuracy-millis-zero", accuracy_fields(lambda f: [Node(0x80, b"\x00")]))
+    tst_edit("forged-accuracy-max", accuracy_fields(lambda f: [integer(3600)] + f[1:]))
+    tst_edit("forged-accuracy-over", accuracy_fields(lambda f: [integer(3601)] + f[1:]))
+    tst_edit("forged-tst-ext-empty", lambda tst: tst.children.append(Node(0xA1, children=[])))
 
     def gen_time(text):
         return lambda tst: tst.children.__setitem__(4, Node(0x18, text.encode()))
@@ -329,6 +389,9 @@ def forge(key, digest, token_path, cert_path, outdir, *embeds):
     base = original_time.split(".")[0].rstrip("Z")
     tst_edit("forged-time-trailing-zero", gen_time(base + ".50Z"))
     tst_edit("forged-outside-validity", gen_time("19990101000000Z"))
+    tst_edit("forged-time-offset", gen_time(base + "+0900"))
+    tst_edit("forged-time-utc", lambda tst: tst.children.__setitem__(
+        4, Node(0x17, (base[2:] + "Z").encode())))
 
     # The validity bounds of the certificate, which are inclusive.
     def moment(node):
@@ -365,11 +428,110 @@ def forge(key, digest, token_path, cert_path, outdir, *embeds):
             t.signer.children[1] = seq(node.children[0].children[3], node.children[0].children[1])
             t.ess_cert_id().children[0].value = hashlib.sha256(other).digest()
         return edit
+    others = []
     for spec in embeds:
         name, path = spec.split("=", 1)
-        variant(f"forged-{name}", embed(open(path, "rb").read()))
+        others.append(open(path, "rb").read())
+        variant(f"forged-{name}", embed(others[-1]))
+
+    # CERT with one field of its DER changed: the version, a repeated
+    # extension, and public keys this crate refuses.
+    def edited_certificate(edit):
+        node = decode(certificate)
+        edit(node.children[0])
+        return node.encode()
+
+    def cert_version(tbs):
+        tbs.children[0].children[0] = Node(0x02, b"\x01")
+
+    def repeated_key_usage(tbs):
+        extensions = tbs.children[7].children[0]
+        for extension in extensions.children:
+            if extension.children[0].value == oid("2.5.29.15").value:
+                extensions.children.append(decode(extension.encode()))
+                return
+        raise KeyError("keyUsage")
+
+    def rsa_key(change):
+        def edit(tbs):
+            bits = tbs.children[6].children[1]
+            key = decode(bits.value[1:])
+            change(key.children)
+            bits.value = b"\x00" + key.encode()
+        return edit
+
+    def even_modulus(parts):
+        parts[0].value = parts[0].value[:-1] + bytes([parts[0].value[-1] & 0xFE])
+
+    def pss_key(tbs):
+        tbs.children[6].children[0] = seq(oid(OID_RSASSA_PSS), Node(0x05))
+
+    def compressed_ec_point(tbs):
+        tbs.children[6].children[0] = seq(oid("1.2.840.10045.2.1"), oid("1.2.840.10045.3.1.7"))
+        tbs.children[6].children[1].value = b"\x00\x02" + b"\x11" * 32
+
+    for name, edit in [
+        ("version", cert_version),
+        ("duplicate-ext", repeated_key_usage),
+        ("modulus-even", rsa_key(even_modulus)),
+        ("exponent-3", rsa_key(lambda parts: parts.__setitem__(1, integer(3)))),
+        ("pss-key", pss_key),
+        ("ec-point", compressed_ec_point),
+    ]:
+        variant(f"forged-cert-{name}", embed(edited_certificate(edit)))
 
     # Unsigned parts: no re-signing needed.
+    variant("forged-not-signed-data",
+            lambda t: t.root.children.__setitem__(0, oid(OID_DATA)), resign=False)
+    variant("forged-signed-data-version",
+            lambda t: t.signed_data.children.__setitem__(0, Node(0x02, b"\x01")), resign=False)
+
+    def digest_set(algorithms):
+        def edit(t):
+            t.signed_data.children[1].children = der_sorted(algorithms(t))
+        return edit
+    sha256_algorithm = seq(oid(OID_SHA256), Node(0x05))
+    variant("forged-digest-set-empty", digest_set(lambda t: []), resign=False)
+    variant("forged-digest-set-two", digest_set(
+        lambda t: t.signed_data.children[1].children + [sha256_algorithm]), resign=False)
+    variant("forged-digest-set-other", digest_set(lambda t: [sha256_algorithm]), resign=False)
+    variant("forged-not-tst-info",
+            lambda t: t.encapsulated.children.__setitem__(0, oid(OID_DATA)), resign=False)
+    variant("forged-no-signed-attrs", lambda t: t.signer.children.pop(3), resign=False)
+
+    # The TSTInfo changed (the serial plus one) and the message digest not
+    # recomputed; and one signature octet flipped.
+    def stale_digest(t):
+        t.tst.children[3] = integer(int.from_bytes(t.tst.children[3].value, "big") + 1)
+        t.encapsulated.children[1].children[0].value = t.tst.encode()
+    variant("forged-stale-digest", stale_digest, resign=False)
+
+    def flip_signature(t):
+        value = t.signer.children[5].value
+        t.signer.children[5].value = value[:-1] + bytes([value[-1] ^ 1])
+    variant("forged-signature-flipped", flip_signature, resign=False)
+
+    # The certificate set and the unsigned attributes are unsigned: any
+    # order is accepted, but every element stays in the DER subset.
+    def certificates_descending(t):
+        both = der_sorted([decode(certificate), decode(others[0])])
+        assert both[0].encode() != both[1].encode()
+        t.certificates.children = list(reversed(both))
+    variant("forged-certs-unsorted", certificates_descending, resign=False)
+    variant("forged-chain-cert-not-der", lambda t: t.certificates.children.append(
+        seq(Node(0x01, b"\x01"))), resign=False)
+
+    def unsigned_attributes(attributes):
+        return lambda t: t.signer.children.append(Node(0xA1, children=attributes))
+
+    def utf8(text):
+        return Node(0x0C, text.encode())
+    variant("forged-unsigned-attrs-unsorted", unsigned_attributes([
+        seq(oid("1.2.3.4.8"), Node(0x31, children=[utf8("b")])),
+        seq(oid("1.2.3.4.7"), Node(0x31, children=[utf8("a")]))]), resign=False)
+    variant("forged-unsigned-attr-not-der", unsigned_attributes([
+        seq(oid("1.2.3.4.7"), Node(0x31, children=[utf8("b"), utf8("a")]))]), resign=False)
+
     def sid_serial(t):
         sid_serial_node = t.signer.children[1].children[1]
         sid_serial_node.value = wrong
@@ -417,6 +579,7 @@ def forge(key, digest, token_path, cert_path, outdir, *embeds):
         return edit
     variant("forged-named-rsa-alg", algorithm("1.2.840.113549.1.1.12"), resign=False)
     variant("forged-alg-mismatch", algorithm("1.2.840.113549.1.1.11"), resign=False)
+    variant("forged-pss-alg", algorithm(OID_RSASSA_PSS), resign=False)
 
     # RSA boundaries: the signature as long as the modulus but equal to it
     # (s >= n), and one octet short.
@@ -441,11 +604,30 @@ def forge(key, digest, token_path, cert_path, outdir, *embeds):
             out.write(data)
 
 
+def ecdsa(token_path, order_hex, outdir, name):
+    order = int(order_hex, 16)
+    original = open(token_path, "rb").read()
+
+    def variant(suffix, values):
+        token = Token(original)
+        signature = token.signer.children[5]
+        r, s = (int.from_bytes(part.value, "big") for part in decode(signature.value).children)
+        new_r, new_s = values(r, s)
+        signature.value = seq(integer(new_r), integer(new_s)).encode()
+        with open(f"{outdir}/forged-{name}-{suffix}.tst", "wb") as out:
+            out.write(token.encode())
+    variant("high-s", lambda r, s: (r, order - s))
+    variant("zero-r", lambda r, s: (0, s))
+    variant("s-order", lambda r, s: (r, order))
+
+
 def main(argv):
     if argv[1:2] == ["describe"] and len(argv) == 4:
         describe(argv[2], argv[3])
     elif argv[1:2] == ["forge"] and len(argv) >= 7:
         forge(*argv[2:])
+    elif argv[1:2] == ["ecdsa"] and len(argv) == 6:
+        ecdsa(*argv[2:])
     else:
         sys.exit(__doc__)
 

@@ -4,7 +4,8 @@
 //! tokens in `../tests/vectors` and `../tests/vectors/freetsa`.
 //!
 //! The property is that nothing panics; a token that verifies must report
-//! the pinned certificate and the expected imprint.
+//! the pinned certificate and the expected imprint, and an interval
+//! (`earliest` to `latest`) that contains `genTime`.
 #![no_main]
 
 use ityv_tsa::{DigestAlgorithm, Imprint, PinnedTsa, verify_token};
@@ -54,6 +55,11 @@ fuzz_target!(|data: &[u8]| {
             if let Ok(verified) = verify_token(data, &pin, &imprint) {
                 assert_eq!(verified.certificate_sha256(), pin.certificate_sha256());
                 assert_eq!(verified.imprint(), &imprint);
+                // genTime ± accuracy: the latest bound always exists, and
+                // the interval contains genTime.
+                let gen_time = verified.gen_time();
+                assert!(verified.latest().is_some_and(|latest| latest >= gen_time));
+                assert!(verified.earliest().is_none_or(|earliest| earliest <= gen_time));
             }
         }
     }

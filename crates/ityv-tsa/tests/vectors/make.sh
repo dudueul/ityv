@@ -22,9 +22,11 @@
 #                        digitalSignature+nonRepudiation, critical EKU
 #                        timeStamping
 #   rsa3072-<rule>.crt   the rsa3072 key in certificates that each break one
-#                        profile rule (embedded by forge.py)
+#                        profile rule, or (policies-critical) use a form the
+#                        profile accepts (embedded by forge.py)
 #   <tsa>-<digest>*.tst  tokens (TimeStampToken, a CMS ContentInfo)
-#   forged-*.tst         crafted variants of rsa3072-sha384.tst (forge.py)
+#   forged-*.tst         crafted variants of rsa3072-sha384.tst, and
+#                        forged-p256-*.tst of p256-sha256.tst (forge.py)
 #   manifest.txt         one line per valid token: how it was made and what
 #                        OpenSSL reads in it
 # The freetsa/ directory holds a real token and is not touched here (see
@@ -49,16 +51,18 @@ key() {
   openssl genpkey "$@" -out "$work/$name.key" 2>/dev/null
 }
 
-# certificate KEY NAME [BASIC [KEY-USAGE [EKU [EXTRA]]]]: a self-signed TSA
-# certificate for KEY, valid for ten years from now. An empty or missing
-# BASIC or KEY-USAGE is CA:FALSE and digitalSignature+nonRepudiation (both
-# critical); a missing EKU is critical timeStamping and an empty one leaves
-# the extension out; EXTRA is one more extension line.
+# certificate KEY NAME [BASIC [KEY-USAGE [EKU [EXTRA [SECTIONS]]]]]: a
+# self-signed TSA certificate for KEY, valid for ten years from now. An empty
+# or missing BASIC or KEY-USAGE is CA:FALSE and
+# digitalSignature+nonRepudiation (both critical); a missing EKU is critical
+# timeStamping and an empty one leaves the extension out; EXTRA is one more
+# extension line and SECTIONS more configuration sections it refers to.
 certificate() {
   basic=${3:-critical, CA:FALSE}
   usage=${4:-critical, digitalSignature, nonRepudiation}
   eku=${5-critical, timeStamping}
   extra=${6:-}
+  sections=${7:-}
   {
     printf '[ req ]\ndistinguished_name = dn\nprompt = no\nx509_extensions = ext\n'
     printf '[ dn ]\nC = KR\nO = ityv test\nCN = ityv test TSA %s\n' "$1"
@@ -69,6 +73,9 @@ certificate() {
     printf 'subjectKeyIdentifier = hash\n'
     if [ -n "$extra" ]; then
       printf '%s\n' "$extra"
+    fi
+    if [ -n "$sections" ]; then
+      printf '%s\n' "$sections"
     fi
   } > "$work/$2.req"
   openssl req -new -x509 -config "$work/$2.req" -key "$work/$1.key" -days 3650 \
@@ -101,7 +108,12 @@ certificate rsa3072 rsa3072-ca "critical, CA:TRUE"
 certificate rsa3072 rsa3072-key-usage-sign "" "critical, digitalSignature, keyCertSign"
 certificate rsa3072 rsa3072-cert-critical-ext "" "" "critical, timeStamping" \
   "1.2.3.4.5.6.7 = critical, ASN1:NULL"
-profiles="eku-noncritical eku-two no-eku ca key-usage-sign cert-critical-ext"
+# Accepted: a critical certificatePolicies with a CPS and a user notice in a
+# BMPString, as Korean accredited and government (GPKI) profiles have.
+certificate rsa3072 rsa3072-policies-critical "" "" "critical, timeStamping" \
+  "certificatePolicies = critical, @policy" \
+  "$(printf '[ policy ]\npolicyIdentifier = 1.2.3.4.10\nCPS.1 = "https://tsa.example/cps"\nuserNotice.1 = @notice\n[ notice ]\nexplicitText = "BMP:ityv test policy"')"
+profiles="eku-noncritical eku-two no-eku ca key-usage-sign cert-critical-ext policies-critical"
 
 # stamp OUT SIGNER DIGEST ESS-DIGEST QUERY-OPTIONS [CONFIG-LINES...]: one
 # token from SIGNER over object-hash.bin.
@@ -124,7 +136,8 @@ stamp() {
   openssl ts -query -data object-hash.bin $query -out "$work/query.tsq" 2>/dev/null
   openssl ts -reply -config "$work/ts.cnf" -queryfile "$work/query.tsq" \
     -token_out -out "$out" 2>/dev/null
-  openssl ts -verify -data object-hash.bin -in "$out" -token_in \
+  # Against the query: the imprint and, when the query has one, the nonce.
+  openssl ts -verify -queryfile "$work/query.tsq" -in "$out" -token_in \
     -CAfile "$work/$signer.pem" -untrusted "$work/$signer.pem" -partial_chain >/dev/null 2>&1
 }
 
@@ -172,3 +185,6 @@ for profile in $profiles; do
   cp -- "$work/rsa3072-$profile.der" "rsa3072-$profile.crt"
 done
 python3 -I forge.py forge "$work/rsa3072.key" sha384 rsa3072-sha384.tst rsa3072.crt . "$@"
+# The P-256 order n (FIPS 186-5, SEC 2).
+python3 -I forge.py ecdsa p256-sha256.tst \
+  FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551 . p256

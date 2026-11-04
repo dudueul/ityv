@@ -7,7 +7,8 @@
 #
 # Needs curl and openssl. The downloads are untrusted data: they go to a new
 # empty temporary directory, are only parsed by openssl (never executed),
-# and only the token and the TSA certificate (DER) are copied here:
+# and are verified against the query (imprint and nonce) and freetsa.org's
+# CA; only the token and the TSA certificate (DER) are copied here:
 #   token.tst  the TimeStampToken taken out of the TimeStampResp
 #   tsa.crt    https://freetsa.org/files/tsa.crt in DER, the pinned certificate
 #   cacert.pem https://freetsa.org/files/cacert.pem, to cross-check with openssl
@@ -27,7 +28,7 @@ curl -sS --fail --max-time 60 -o "$work/cacert.pem" https://freetsa.org/files/ca
 openssl ts -reply -in "$work/reply.tsr" -token_out -out "$work/token.tst"
 openssl x509 -in "$work/tsa.crt" -outform DER -out "$work/tsa.der"
 openssl x509 -in "$work/cacert.pem" -out "$work/cacert.checked.pem"
-openssl ts -verify -data "$here/../object-hash.bin" -in "$work/token.tst" -token_in \
+openssl ts -verify -queryfile "$work/query.tsq" -in "$work/token.tst" -token_in \
   -CAfile "$work/cacert.checked.pem" -untrusted "$work/tsa.crt"
 
 cp -- "$work/token.tst" "$here/token.tst"

@@ -55,6 +55,8 @@ fn cases() -> &'static [Case] {
 fn report(verified: &VerifiedTimestamp<'_>) -> impl PartialEq + core::fmt::Debug {
     (
         verified.gen_time(),
+        verified.earliest(),
+        verified.latest(),
         verified.accuracy(),
         verified.ordering(),
         verified.policy().content().to_vec(),

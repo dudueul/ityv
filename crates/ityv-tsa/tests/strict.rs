@@ -3,6 +3,8 @@
 //! signed bytes) is refused with its own error or accepted where the
 //! change is allowed; non-canonical DER around a valid token is refused; and
 //! every truncation of every token is an error, never a panic.
+//! `tests/rules.rs` holds the list of one token per `TsaError` variant; the
+//! lists here add the DER cases and further tokens per rule.
 // Integration-test crate: outside the TCB. Test code expresses "this must
 // hold" with unwrap/expect/panic/indexing and does small arithmetic on test
 // sizes, so those restriction lints are relaxed for this file only. No TCB
@@ -18,18 +20,14 @@
 
 mod common;
 
-use common::{Expected, Pin, check_result, imprint_of, manifest, sha256, vector};
-use ityv_tsa::{
-    CertificateSource, DerError, DigestAlgorithm, MAX_TOKEN_LEN, PinnedTsa, TsaError, verify_token,
+use common::{
+    Expected, Pin, check_result, embedded_certificates, forged_base as base, imprint_of, manifest,
+    sha256, vector,
 };
-
-/// The base of the forged tokens: rsa3072-sha384.tst.
-fn base() -> Expected {
-    manifest("manifest.txt")
-        .into_iter()
-        .find(|e| e.token == "rsa3072-sha384.tst")
-        .unwrap()
-}
+use ityv_tsa::{
+    CertificateSource, DerError, DigestAlgorithm, GenTime, MAX_ACCURACY_SECONDS, MAX_TOKEN_LEN,
+    PinnedTsa, TsaError, VerifiedTimestamp, verify_token,
+};
 
 #[test]
 fn forged_tokens_are_refused_each_for_its_rule() {
@@ -82,6 +80,15 @@ fn forged_tokens_are_refused_each_for_its_rule() {
         ("forged-sid-version3", TsaError::SignerInfoVersion),
         ("forged-nine-certs", TsaError::TooManyCertificates),
         ("forged-cert-choice", TsaError::UnsupportedCertificateChoice),
+        ("forged-digest-set-empty", TsaError::DigestAlgorithmSet),
+        ("forged-digest-set-two", TsaError::DigestAlgorithmSet),
+        ("forged-attr-no-value", TsaError::AttributeValueCount),
+        ("forged-nonce-negative", der(DerError::NegativeInteger)),
+        ("forged-time-offset", der(DerError::InvalidTime)),
+        ("forged-time-utc", der(DerError::UnexpectedTag)),
+        // Unsigned sets in any order, but every element in the subset.
+        ("forged-chain-cert-not-der", der(DerError::InvalidBoolean)),
+        ("forged-unsigned-attr-not-der", der(DerError::SetNotSorted)),
     ] {
         let token = vector(&std::format!("{name}.tst"));
         assert_eq!(pin.verify(&token, &imprint), Err(expected), "{name}");
@@ -146,6 +153,11 @@ fn forged_tokens_with_allowed_changes_verify() {
         "forged-ess-issuer-ok",
         // sha384WithRSAEncryption instead of rsaEncryption.
         "forged-named-rsa-alg",
+        // The unsigned certificate set and unsigned attributes, unsorted.
+        "forged-certs-unsorted",
+        "forged-unsigned-attrs-unsorted",
+        // ESS v2 hashAlgorithm SHA-256 with NULL parameters (not DEFAULT).
+        "forged-ess-sha256-null",
     ] {
         let token = vector(&std::format!("{name}.tst"));
         let verified = pin
@@ -153,6 +165,123 @@ fn forged_tokens_with_allowed_changes_verify() {
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         check_result(&base, &verified, CertificateSource::Embedded);
     }
+}
+
+#[test]
+fn an_ess_v1_binding_next_to_v2_verifies_when_the_pin_allows_it() {
+    let base = base();
+    let token = vector("forged-ess-v1-and-v2.tst");
+    let imprint = imprint_of(DigestAlgorithm::Sha512);
+    let pin = Pin {
+        ess_v1: true,
+        ..Pin::for_token(&base, true)
+    };
+    check_result(
+        &base,
+        &pin.verify(&token, &imprint).unwrap(),
+        CertificateSource::Embedded,
+    );
+    assert_eq!(
+        Pin::for_token(&base, true).verify(&token, &imprint),
+        Err(TsaError::SigningCertificateV1NotAllowed)
+    );
+}
+
+#[test]
+fn a_critical_certificate_policies_extension_is_accepted() {
+    // OpenSSL's certificate with a critical certificatePolicies (CPS and a
+    // BMPString user notice), embedded and bound by forge.py.
+    let token = vector("forged-policies-critical.tst");
+    let certificate = vector("rsa3072-policies-critical.crt");
+    assert_eq!(
+        embedded_certificates(&token),
+        core::slice::from_ref(&certificate)
+    );
+    let expected = Expected {
+        cert: "rsa3072-policies-critical.crt".into(),
+        ..base()
+    };
+    let pin = Pin::for_token(&expected, false);
+    let verified = pin
+        .verify(&token, &imprint_of(DigestAlgorithm::Sha512))
+        .unwrap();
+    check_result(&expected, &verified, CertificateSource::Embedded);
+    assert_eq!(verified.certificate_sha256(), &sha256(&certificate));
+}
+
+#[test]
+fn an_ecdsa_signature_with_high_s_verifies_too() {
+    // (r, n - s) is a second valid signature: token bytes are not unique,
+    // the result is the same. s = n is refused.
+    let expected = manifest("manifest.txt")
+        .into_iter()
+        .find(|e| e.token == "p256-sha256.tst")
+        .unwrap();
+    let pin = Pin::for_token(&expected, false);
+    let imprint = imprint_of(expected.imprint);
+    let original = vector("p256-sha256.tst");
+    let malleated = vector("forged-p256-high-s.tst");
+    assert_ne!(original, malleated);
+    let verified = pin.verify(&malleated, &imprint).unwrap();
+    check_result(&expected, &verified, CertificateSource::Embedded);
+    assert_eq!(Ok(verified), pin.verify(&original, &imprint));
+    assert_eq!(
+        pin.verify(&vector("forged-p256-s-order.tst"), &imprint),
+        Err(TsaError::EcdsaSignatureEncoding)
+    );
+}
+
+/// `(seconds, nanos)` of a time.
+fn parts(time: Option<GenTime>) -> Option<(u64, u32)> {
+    time.map(|time| (time.unix_seconds(), time.nanos()))
+}
+
+/// genTime moved by `offset` nanoseconds.
+fn moved(verified: &VerifiedTimestamp<'_>, offset: i128) -> Option<(u64, u32)> {
+    let time = verified.gen_time();
+    let whole = i128::from(time.unix_seconds()) * 1_000_000_000 + i128::from(time.nanos()) + offset;
+    Some((
+        u64::try_from(whole / 1_000_000_000).ok()?,
+        u32::try_from(whole % 1_000_000_000).ok()?,
+    ))
+}
+
+#[test]
+fn the_interval_is_gen_time_plus_or_minus_the_accuracy() {
+    let base = base();
+    let pin = Pin::for_token(&base, true);
+    let imprint = imprint_of(DigestAlgorithm::Sha512);
+    // The base states 1 s 500 ms 100 µs; forged-accuracy-max 3600 s and the same.
+    let token = vector(&base.token);
+    let verified = pin.verify(&token, &imprint).unwrap();
+    assert_eq!(base.accuracy, Some((1, 500, 100)));
+    let width = 1_500_100_000;
+    assert_eq!(parts(verified.earliest()), moved(&verified, -width));
+    assert_eq!(parts(verified.latest()), moved(&verified, width));
+
+    let token = vector("forged-accuracy-max.tst");
+    let verified = pin.verify(&token, &imprint).unwrap();
+    let accuracy = verified.accuracy().unwrap();
+    assert_eq!(
+        (accuracy.seconds(), accuracy.millis(), accuracy.micros()),
+        (MAX_ACCURACY_SECONDS, 500, 100)
+    );
+    let width = 3_600_500_100_000;
+    assert_eq!(parts(verified.earliest()), moved(&verified, -width));
+    assert_eq!(parts(verified.latest()), moved(&verified, width));
+
+    // No accuracy in the token: the interval is genTime alone.
+    let plain = manifest("manifest.txt")
+        .into_iter()
+        .find(|e| e.token == "rsa2048-sha256.tst")
+        .unwrap();
+    assert_eq!(plain.accuracy, None);
+    let token = vector(&plain.token);
+    let verified = Pin::for_token(&plain, true)
+        .verify(&token, &imprint_of(plain.imprint))
+        .unwrap();
+    assert_eq!(verified.earliest(), Some(verified.gen_time()));
+    assert_eq!(verified.latest(), Some(verified.gen_time()));
 }
 
 #[test]
