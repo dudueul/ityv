@@ -166,8 +166,6 @@ jobs:
         with:
           toolchain: 1.97.0
           targets: wasm32-unknown-unknown
-      - run: cargo build --locked -p ityv-wasm --target wasm32-unknown-unknown --release
-      - run: cargo run --locked --release -p ityv-sim -- --quick apps/ityv-console/public/bundles
       - uses: oven-sh/setup-bun@v2.0.2
         with:
           bun-version: 1.4.4
@@ -177,5 +175,7 @@ jobs:
         working-directory: apps/ityv-console
       - run: bun test
         working-directory: apps/ityv-console
+      # One path: builds the WASM verifier and the quick bundles
+      # (scripts/data.ts), then bundles the page into dist/ with its CSP.
       - run: bun run build
         working-directory: apps/ityv-console
