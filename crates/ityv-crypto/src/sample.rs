@@ -2,6 +2,7 @@
 //!
 //! | value | input |
 //! |---|---|
+//! | beacon value | `SHA3-512("ityv:beacon:v1" ‖ 0x00 ‖ u32_be(len(source)) ‖ source ‖ u64_be(round) ‖ output)` |
 //! | audit seed | `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice_hash ‖ beacon_value ‖ checkpoint_hash)` |
 //! | stream key of a ballot style | `SHA3-512("ityv:sample:v1" ‖ 0x00 ‖ seed ‖ u32_be(len(style)) ‖ style)` |
 //! | stream block `i` | `SHA3-512(key ‖ u64_be(i))`, `i = 0, 1, 2, …` |
@@ -14,10 +15,16 @@
 //! word is discarded and the next one read. No modulo bias is left: every
 //! index has exactly `(accept_limit(bound) + 1) / bound` accepted words.
 //!
+//! The beacon value maps a beacon's published output of any width to 64
+//! bytes, bound to the beacon (the hash of its designation document) and
+//! the round. `checkpoint_hash` is the binding checkpoint's: the first valid
+//! checkpoint that covers the audit commit (PROTOCOL.md §12.1).
+//!
 //! The stream is SHA3-512 in counter mode, the construction the commitment
-//! unit's generator already uses (ADR-0017 §12), so the audit adds no
-//! primitive and no dependency (ADR-0036). Everything here is public: the
-//! seed and the sample are recomputed by anyone (VC-045, VC-046).
+//! unit's generator already uses (`ityv-cunit` `rng`), so the audit keeps
+//! one hash primitive, already specified with independent vectors
+//! (ADR-0036). Everything here is public: the seed and the sample are
+//! recomputed by anyone (VC-045, VC-046).
 
 use ityv_encoding::{BallotStyleId, Hash512};
 
@@ -29,14 +36,36 @@ pub const SEED_LABEL: &[u8] = b"ityv:seed:v1";
 /// Label of a ballot style's sample stream (PROTOCOL.md §12.2).
 pub const SAMPLE_LABEL: &[u8] = b"ityv:sample:v1";
 
+/// Label of the beacon value (PROTOCOL.md §12.1).
+pub const BEACON_LABEL: &[u8] = b"ityv:beacon:v1";
+
 /// Words [`SampleStream::below`] reads for one draw before it gives up.
 /// For a bound of at most `2^26` one word is rejected with probability
 /// below `2^-38`, so 64 rejections in a row do not happen; the limit keeps
 /// the loop bounded.
 pub const MAX_TRIES: u32 = 64;
 
+/// `SHA3-512("ityv:beacon:v1" ‖ 0x00 ‖ u32_be(len(source)) ‖ source ‖
+/// u64_be(round) ‖ output)`: the 64-byte beacon value of round `round` of
+/// the beacon designated by the document hash `source`, whose published
+/// output is `output` (any width; PROTOCOL.md §12.1).
+#[must_use]
+pub fn beacon_value(source: &Hash512, round: u64, output: &[u8]) -> Hash512 {
+    let mut hasher = Hasher::new();
+    hasher.absorb(BEACON_LABEL);
+    hasher.absorb(&[0x00]);
+    // A document hash is 64 bytes; the length keeps the encoding the one
+    // of a variable source.
+    hasher.absorb(&64u32.to_be_bytes());
+    hasher.absorb(source.as_bytes());
+    hasher.absorb(&round.to_be_bytes());
+    hasher.absorb(output);
+    Hash512(hasher.finish())
+}
+
 /// `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice_hash ‖ beacon_value ‖
-/// checkpoint_hash)`: the audit seed (PROTOCOL.md §12.1, VC-045).
+/// checkpoint_hash)`: the audit seed (PROTOCOL.md §12.1, VC-045), over the
+/// binding checkpoint's body hash.
 #[must_use]
 pub fn audit_seed(
     dice_hash: &Hash512,
@@ -142,7 +171,7 @@ impl SampleStream {
 mod tests {
     use ityv_encoding::{BallotStyleId, Hash512};
 
-    use super::{MAX_TRIES, SampleStream, accept_limit, audit_seed};
+    use super::{MAX_TRIES, SampleStream, accept_limit, audit_seed, beacon_value};
 
     fn hex(text: &str) -> std::vec::Vec<u8> {
         text.as_bytes()
@@ -207,6 +236,26 @@ mod tests {
         assert_ne!(other.next_word(), WORDS_KAT[0]);
     }
 
+    /// The beacon value of an independently computed example (Python
+    /// `hashlib.sha3_512`): source `0xBE` × 64, round 777, a 32-byte output
+    /// `0x00..0x1F`; and an empty output.
+    #[test]
+    fn the_beacon_value_matches_an_independent_answer() {
+        let output: std::vec::Vec<u8> = (0u8..32).collect();
+        let value = beacon_value(&Hash512([0xBE; 64]), 777, &output);
+        assert_eq!(value.as_bytes().as_slice(), hex(BEACON_KAT).as_slice());
+        let empty = beacon_value(&Hash512([0xBE; 64]), 777, &[]);
+        assert_eq!(
+            empty.as_bytes().as_slice(),
+            hex(BEACON_EMPTY_KAT).as_slice()
+        );
+        // Another round or source is another value.
+        assert_ne!(beacon_value(&Hash512([0xBE; 64]), 778, &output), value);
+        assert_ne!(beacon_value(&Hash512([0xBF; 64]), 777, &output), value);
+    }
+
+    const BEACON_KAT: &str = "b0ba24c1f01693439d08ccc4754960ac3b94d885dff83890c2f0a0ee82b65d13e581e270a3d195649db74c6f77ed8516ca7005b389ddadcc552fc5ed8f184250";
+    const BEACON_EMPTY_KAT: &str = "7fc044bdbab6167dbdfff8deb2c99c57455df780b2a83da3843f4d2a60e8045a47aab3c0e1ebc57c2c936234e14eebd587a6049cdf89713eb2c5f1be7fa94802";
     const SEED_KAT: &str = "4111580a6c1b945c4172738db4978845806f6924ec6125e78bba7b56a4a7aee1cbe005cf05b3379076f4cc99710ebb9840efb4d6e02375a8ae3aeef8fe318f44";
     const WORDS_KAT: [u64; 10] = [
         16_702_368_632_261_191_237,

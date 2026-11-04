@@ -95,7 +95,7 @@ pub use otmac::{
     OneTimeKey, Tag as OneTimeTag, tag as one_time_tag, verify_tag as verify_one_time_tag,
 };
 pub use pad::xor_in_place;
-pub use sample::{SampleStream, accept_limit, audit_seed};
+pub use sample::{SampleStream, accept_limit, audit_seed, beacon_value};
 pub use scalar::Scalar;
 pub use shares::{
     AccessStructure, CHAMBER_COUNT, Chamber, MAX_MEMBERS, MAX_PARTIES, MIN_PARTIES, MemberId,
