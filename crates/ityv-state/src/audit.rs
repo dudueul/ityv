@@ -1,12 +1,16 @@
 //! Gates, signers and the escalation rule of the paper audit (PROTOCOL.md
 //! §12; ADR-0036).
 //!
-//! * The freeze and the seed need the `RLA` capability (VC-007) of the same
-//!   election ([`admit_audit_freeze`], [`admit_audit_seed`]); a sample
+//! * The freeze, the commit, the seed and a finding need the `RLA`
+//!   capability (VC-007) of the same election ([`admit_audit_freeze`],
+//!   [`admit_audit_commit`], [`admit_audit_seed`], [`admit_audit_finding`]);
+//!   the commit waits for every style's freeze and the seed for the commit
+//!   and its binding checkpoint (ADR-0036); a sample
 //!   opening reference needs `OBSERVER_ACCESS` for the seed's day, because
 //!   the restricted opening is shown to the auditors and observers under
 //!   that scope (§12.3, [`admit_sample_opening`]).
-//! * The freeze and the seed are signed by the committee and observers of
+//! * The freeze, the commit and the seed are signed by the committee and
+//!   observers of
 //!   two or more organisations; a comparison and a finding by auditors of
 //!   two or more organisations and observers of two or more organisations
 //!   ([`check_audit_signers`]); a hand count, like a paper count, by the
@@ -156,33 +160,64 @@ pub fn admit_audit_freeze(
     }
 }
 
-/// What an audit seed waits for (ADR-0036).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SeedReadiness {
-    /// Every ballot style audited has a freeze in an earlier frame.
-    pub styles_frozen: bool,
-    /// The checkpoint the seed takes is the last valid one before it and
-    /// covers every freeze.
-    pub freezes_checkpointed: bool,
-}
-
-/// Admits an `AuditSeed`: the `RLA` capability of the same election, every
-/// style frozen and checkpointed before the seed (PROTOCOL.md §12.1).
+/// Admits an `AuditCommit`: the `RLA` capability of the same election, and
+/// every ballot style audited frozen in an earlier frame (the commit fixes
+/// the dice record and the freezes before the beacon value can be known,
+/// PROTOCOL.md §12.1, ADR-0036).
 ///
 /// # Errors
 /// [`Error::Mismatch`] if the capability belongs to another election,
-/// [`Error::AuditOutOfOrder`] if a freeze is missing or not checkpointed.
+/// [`Error::AuditOutOfOrder`] if a style's freeze is still missing.
+pub fn admit_audit_commit(
+    cap: &Cap<'_, Rla>,
+    election_id: ElectionId<'_>,
+    styles_frozen: bool,
+) -> Result<(), Error> {
+    cap.check_election(election_id)?;
+    if styles_frozen {
+        Ok(())
+    } else {
+        Err(Error::AuditOutOfOrder)
+    }
+}
+
+/// What an audit seed waits for (ADR-0036).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SeedReadiness {
+    /// The election's audit commit is in an earlier frame.
+    pub committed: bool,
+    /// Its binding checkpoint (the first valid checkpoint that covers the
+    /// commit) is in an earlier frame.
+    pub bound: bool,
+}
+
+/// Admits an `AuditSeed`: the `RLA` capability of the same election, the
+/// audit commit and its binding checkpoint before the seed (PROTOCOL.md
+/// §12.1).
+///
+/// # Errors
+/// [`Error::Mismatch`] if the capability belongs to another election,
+/// [`Error::AuditOutOfOrder`] if the commit or its binding checkpoint is
+/// still missing.
 pub fn admit_audit_seed(
     cap: &Cap<'_, Rla>,
     election_id: ElectionId<'_>,
     readiness: SeedReadiness,
 ) -> Result<(), Error> {
     cap.check_election(election_id)?;
-    if readiness.styles_frozen && readiness.freezes_checkpointed {
+    if readiness.committed && readiness.bound {
         Ok(())
     } else {
         Err(Error::AuditOutOfOrder)
     }
+}
+
+/// Admits an `AuditFinding`: the `RLA` capability of the same election.
+///
+/// # Errors
+/// [`Error::Mismatch`] if the capability belongs to another election.
+pub fn admit_audit_finding(cap: &Cap<'_, Rla>, election_id: ElectionId<'_>) -> Result<(), Error> {
+    cap.check_election(election_id)
 }
 
 /// Admits a sample opening reference: `OBSERVER_ACCESS` of the same
@@ -301,8 +336,8 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        HandCount, SeedReadiness, admit_audit_freeze, admit_audit_seed, admit_sample_opening,
-        check_audit_signers,
+        HandCount, SeedReadiness, admit_audit_commit, admit_audit_finding, admit_audit_freeze,
+        admit_audit_seed, admit_sample_opening, check_audit_signers,
     };
     use crate::auth::{Authorization, ObserverAccess, Rla};
     use crate::close::RosterEntry;
@@ -334,18 +369,26 @@ mod tests {
             Err(Error::AuditOutOfOrder)
         );
         assert_eq!(admit_audit_freeze(&rla, e2, true), Err(Error::Mismatch));
+        assert_eq!(admit_audit_commit(&rla, e1, true), Ok(()));
+        assert_eq!(
+            admit_audit_commit(&rla, e1, false),
+            Err(Error::AuditOutOfOrder)
+        );
+        assert_eq!(admit_audit_commit(&rla, e2, true), Err(Error::Mismatch));
+        assert_eq!(admit_audit_finding(&rla, e1), Ok(()));
+        assert_eq!(admit_audit_finding(&rla, e2), Err(Error::Mismatch));
         let ready = SeedReadiness {
-            styles_frozen: true,
-            freezes_checkpointed: true,
+            committed: true,
+            bound: true,
         };
         assert_eq!(admit_audit_seed(&rla, e1, ready), Ok(()));
         for not_ready in [
             SeedReadiness {
-                styles_frozen: false,
+                committed: false,
                 ..ready
             },
             SeedReadiness {
-                freezes_checkpointed: false,
+                bound: false,
                 ..ready
             },
         ] {

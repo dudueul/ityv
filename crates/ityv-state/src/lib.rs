@@ -89,8 +89,9 @@ pub mod tally;
 mod proofs;
 
 pub use audit::{
-    AuditPhase, FollowUp, HandCount, RoundCount, SeedReadiness, admit_audit_freeze,
-    admit_audit_seed, admit_sample_opening, audit_phase, check_audit_signers, follow_up,
+    AuditPhase, FollowUp, HandCount, RoundCount, SeedReadiness, admit_audit_commit,
+    admit_audit_finding, admit_audit_freeze, admit_audit_seed, admit_sample_opening, audit_phase,
+    check_audit_signers, follow_up,
 };
 pub use auth::{
     Authorization, BallotMark, Cap, CryptoTallyAid, DeployAuth, ObserverAccess, PURPOSE_LEGAL_AUTH,

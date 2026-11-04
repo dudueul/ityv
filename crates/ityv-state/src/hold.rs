@@ -294,11 +294,21 @@ pub enum HoldReason {
     /// style's audit did not call for a full hand count before it, or the
     /// unit already has one (§12.4, ADR-0036).
     HandCountRefused = 69,
+    /// The audit commit cannot be taken: a signature does not verify, a
+    /// style's freeze is missing, it designates another beacon than a
+    /// freeze, its freezes root is not the root of the freezes taken, it is
+    /// dated at or after the observed beacon publication, or a second
+    /// commit (§12.1, ADR-0036).
+    AuditCommitRefused = 70,
+    /// The sample of a style could not be drawn from its seed (the stream
+    /// rejected every word of a draw, or a drawn position is outside the
+    /// frame): the audit cannot proceed (§12.2, ADR-0036).
+    AuditSampleFailed = 71,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 70] = [
+    pub const ALL: [Self; 72] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -369,6 +379,8 @@ impl HoldReason {
         Self::AuditCustody,
         Self::AuditFindingRefused,
         Self::HandCountRefused,
+        Self::AuditCommitRefused,
+        Self::AuditSampleFailed,
     ];
 
     /// The reason's code.
