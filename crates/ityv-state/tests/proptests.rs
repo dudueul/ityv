@@ -238,7 +238,6 @@ proptest! {
     #[test]
     fn status_rules(
         outcomes in proptest::collection::vec(0u8..3, 11),
-        audit_concluded in any::<bool>(),
         anchored in any::<bool>(),
         hold in proptest::option::of(0usize..HoldReason::ALL.len()),
         ballot_mark in any::<bool>(),
@@ -256,9 +255,6 @@ proptest! {
         };
         for (step, o) in Step::ALL.iter().zip(&outcomes) {
             e = e.with_step(*step, outcome(*o));
-        }
-        if audit_concluded {
-            e = e.with_audit_concluded();
         }
         if anchored {
             e = e.with_anchors(ityv_state::Publication::Satisfied);
@@ -285,7 +281,7 @@ proptest! {
                 prop_assert!(passed(Step::Participation) && passed(Step::Tally));
             }
             Status::PaperAudited => {
-                prop_assert!(anchored && audit_concluded);
+                prop_assert!(anchored);
                 for s in log.iter().chain(&[Step::BoxCompleteness, Step::Participation, Step::Tally, Step::Audit]) {
                     prop_assert!(passed(*s));
                 }

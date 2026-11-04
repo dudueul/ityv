@@ -94,6 +94,11 @@ pub enum Error {
     DisputeFiling,
     /// A tally event before its preconditions (VC-057, VC-063).
     TallyPremature,
+    /// An audit event out of the audit's order: a freeze before the tally
+    /// scopes of its style, a seed before every style's freeze or with a
+    /// checkpoint that does not cover them, an opening of a record the
+    /// audit has not called for (PROTOCOL.md §12, ADR-0036).
+    AuditOutOfOrder,
     /// A counter would overflow.
     Overflow,
     /// The genesis body's hash is not the pin given out of band (VC-005).
@@ -141,6 +146,7 @@ impl core::fmt::Display for Error {
             Self::BatchExceedsRecords => f.write_str("batch exceeds the records of the box"),
             Self::DisputeFiling => f.write_str("dispute not received by both bodies"),
             Self::TallyPremature => f.write_str("tally event before its preconditions"),
+            Self::AuditOutOfOrder => f.write_str("audit event out of the audit's order"),
             Self::Overflow => f.write_str("counter overflow"),
             Self::Pin => f.write_str("genesis does not match the pin"),
             Self::NotIncluded => f.write_str("entry not included in the genesis set"),
@@ -200,6 +206,7 @@ mod tests {
             Error::BatchExceedsRecords,
             Error::DisputeFiling,
             Error::TallyPremature,
+            Error::AuditOutOfOrder,
             Error::Overflow,
             Error::Pin,
             Error::NotIncluded,

@@ -139,10 +139,10 @@ fn scope_set(mask: u16) -> ScopeSet {
 /// Adding a reason never loses another; removing removes exactly one.
 #[kani::proof]
 fn hold_set_is_sticky() {
-    let mask: u64 = kani::any();
+    let mask: u128 = kani::any();
     let mut set = HoldSet::empty();
     for (i, reason) in HoldReason::ALL.iter().enumerate() {
-        if mask & (1u64 << i) != 0 {
+        if mask & (1u128 << i) != 0 {
             set = set.with(*reason);
         }
     }
@@ -482,10 +482,6 @@ fn status_is_exact() {
     if held {
         evidence = evidence.with_holds(HoldSet::empty().with(any_reason()));
     }
-    let concluded: bool = kani::any();
-    if concluded {
-        evidence = evidence.with_audit_concluded();
-    }
     let report = evaluate(&evidence);
     assert_eq!(report.status() == Status::HoldReview, failed || held);
     let passed = |s: Step| evidence.step(s) == Outcome::Passed;
@@ -497,7 +493,7 @@ fn status_is_exact() {
         && anchored;
     let complete = log && passed(Step::BoxCompleteness);
     let tally = complete && passed(Step::Participation) && passed(Step::Tally);
-    let audited = tally && passed(Step::Audit) && concluded;
+    let audited = tally && passed(Step::Audit);
     let expected = if failed || held {
         Status::HoldReview
     } else if audited {
@@ -740,4 +736,57 @@ fn progress_alarms_fire_once_per_run() {
         );
         before = now;
     }
+}
+
+/// The escalation rule of the paper audit (PROTOCOL.md §12.4, ADR-0036)
+/// over two rounds, every frame size and every count: the first round
+/// whose discrepancies are within its threshold is the one sampled or
+/// concluded (concluded once its whole sample, bounded by the frame, is
+/// compared); past both, the style is counted by hand. Also: the phase
+/// never names a round the rule does not have.
+#[kani::proof]
+#[kani::unwind(10)]
+fn audit_phase_is_exact() {
+    use crate::audit::{AuditPhase, RoundCount, audit_phase};
+    use ityv_encoding::{AuditRound, AuditRounds, MAX_AUDIT_ROUNDS};
+    let first = AuditRound {
+        sample_size: kani::any(),
+        threshold: kani::any(),
+    };
+    let second = AuditRound {
+        sample_size: kani::any(),
+        threshold: kani::any(),
+    };
+    let Some(rounds) = AuditRounds::new(&[first, second]) else {
+        return;
+    };
+    let frame: u64 = kani::any();
+    let mut counts = [RoundCount::default(); MAX_AUDIT_ROUNDS];
+    counts[0] = RoundCount {
+        compared: kani::any(),
+        nonzero: kani::any(),
+    };
+    counts[1] = RoundCount {
+        compared: kani::any(),
+        nonzero: kani::any(),
+    };
+    let decide = |r: AuditRound, c: RoundCount, index: u8| -> Option<AuditPhase> {
+        if (c.nonzero as u128) > (r.threshold as u128) {
+            return None;
+        }
+        let size = if r.sample_size < frame {
+            r.sample_size
+        } else {
+            frame
+        };
+        Some(if c.compared >= size {
+            AuditPhase::Concluded { round: index }
+        } else {
+            AuditPhase::Sampling { round: index }
+        })
+    };
+    let expected = decide(first, counts[0], 0)
+        .or_else(|| decide(second, counts[1], 1))
+        .unwrap_or(AuditPhase::HandCount);
+    assert_eq!(audit_phase(&rounds, frame, &counts), expected);
 }

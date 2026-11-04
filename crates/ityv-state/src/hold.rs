@@ -244,11 +244,61 @@ pub enum HoldReason {
     /// `UNATTESTED` and the closes it cites (§7.2.1, §10.2, §11.1, VC-057,
     /// VC-100).
     LateCloseAfterScope = 60,
+    /// An audit manifest freeze cannot be taken: a signature does not
+    /// verify under the committee's or a roster observer's key, it lacks
+    /// the `RLA` capability for its day, it names a ballot style no box of
+    /// the genesis has, it comes before a tally scope of the style or after
+    /// the seed, or the style already has another freeze (§12.1, §14 8).
+    AuditFreezeRefused = 61,
+    /// A ballot style's freeze is not what the ledger gives: the sample
+    /// frame's count or root differs from the style's included records
+    /// recomputed by the tally stage (§12.1, §14 8, ADR-0036).
+    AuditFrameMismatch = 62,
+    /// An audit seed cannot be taken: a signature does not verify, it lacks
+    /// the capability, a style has no freeze before it, its beacon round is
+    /// not the one every freeze designated, its checkpoint is not the last
+    /// valid checkpoint before it or does not cover every freeze, the seed
+    /// is not `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice ‖ beacon ‖ checkpoint)`
+    /// (VC-045), the beacon value differs from the one the caller observed,
+    /// or another seed was taken (§12.1, ADR-0036).
+    AuditSeedRefused = 63,
+    /// A sample opening reference cannot be taken: its trustees'
+    /// signatures do not verify or do not form a qualified quorum, the
+    /// authorization does not grant `OBSERVER_ACCESS` for the seed's day,
+    /// no seed precedes it, its record is neither in the sample drawn so
+    /// far nor of a device under full comparison, or the record was
+    /// already opened (§12.2, §12.3, §12.5, VC-046, VC-059).
+    SampleOpeningRefused = 64,
+    /// A restricted sample opening supplied to the verifier does not
+    /// reconstruct its record: it is not the body the trustees' reference
+    /// names, or its option, cast id and randomness do not open the
+    /// record's commitments (§12.3, VC-047).
+    SampleOpeningMismatch = 65,
+    /// A sample comparison cannot be taken: a signature does not verify
+    /// under a roster auditor's or observer's key, its record was not
+    /// opened by a reference in an earlier frame or the opening it names is
+    /// not that one, its device is not the record's box, or the record was
+    /// already compared (§12.3, §14 8).
+    SampleComparisonRefused = 66,
+    /// A comparison found the imprinted ballot missing (code 5) or the cast
+    /// id on two ballots or an imprint that differs from the record (code
+    /// 6): the box's custody is under investigation (§12.3).
+    AuditCustody = 67,
+    /// An audit finding cannot be taken: a signature does not verify, it
+    /// names a device that is no box of its ballot style, or the same
+    /// finding again (§12.4).
+    AuditFindingRefused = 68,
+    /// A hand count report cannot be taken: a signature does not verify
+    /// under the keys of the unit's commission chair and observers, it
+    /// names no unit of its style or another number of candidates, the
+    /// style's audit did not call for a full hand count before it, or the
+    /// unit already has one (§12.4, ADR-0036).
+    HandCountRefused = 69,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 61] = [
+    pub const ALL: [Self; 70] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -310,6 +360,15 @@ impl HoldReason {
         Self::TallyEffectRefused,
         Self::ReceiptResolutionRefused,
         Self::LateCloseAfterScope,
+        Self::AuditFreezeRefused,
+        Self::AuditFrameMismatch,
+        Self::AuditSeedRefused,
+        Self::SampleOpeningRefused,
+        Self::SampleOpeningMismatch,
+        Self::SampleComparisonRefused,
+        Self::AuditCustody,
+        Self::AuditFindingRefused,
+        Self::HandCountRefused,
     ];
 
     /// The reason's code.
@@ -318,16 +377,17 @@ impl HoldReason {
         self as u8
     }
 
-    const fn bit(self) -> u64 {
-        // Codes are below 64 (pinned by a test), so the shift cannot overflow.
-        1u64 << self.code()
+    const fn bit(self) -> u128 {
+        // Codes are below 128 (pinned by a test), so the shift cannot
+        // overflow.
+        1u128 << self.code()
     }
 }
 
 /// A set of hold reasons. Empty means not under review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct HoldSet {
-    mask: u64,
+    mask: u128,
 }
 
 impl HoldSet {
@@ -380,7 +440,7 @@ impl HoldSet {
     /// Number of reasons.
     #[must_use]
     pub const fn len(self) -> usize {
-        // At most 64 bits are set, which always fits in usize.
+        // At most 128 bits are set, which always fits in usize.
         self.mask.count_ones() as usize
     }
 
@@ -406,10 +466,10 @@ mod tests {
     use super::{HoldReason, HoldSet};
 
     #[test]
-    fn codes_are_dense_and_below_64() {
+    fn codes_are_dense_and_below_128() {
         for (index, reason) in HoldReason::ALL.iter().enumerate() {
             assert_eq!(usize::from(reason.code()), index);
-            assert!(reason.code() < 64);
+            assert!(reason.code() < 128);
         }
     }
 
