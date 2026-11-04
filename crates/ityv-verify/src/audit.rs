@@ -56,7 +56,7 @@
 //!   unit of the style, signed like a paper count, and only after the
 //!   style's sample escalated past its last round.
 //!
-//! A style's audit concludes ([`StyleAudit::concluded`]) when its freeze
+//! A style's audit concludes ([`AuditStage::concluded`]) when its freeze
 //! agrees with the ledger, the seed is taken with its beacon confirmed, a
 //! round concluded under its threshold or every unit of the style has its
 //! hand count, every device with a code 1 or 2 has every included record
@@ -417,8 +417,11 @@ impl<'a> AuditStage<'a> {
             .fold(styles, |h, r| h.with(refusal_hold(r.event)))
     }
 
-    /// Whether the style `style` concluded under its rule
-    /// ([`StyleAudit::concluded_with`] with this stage's seed).
+    /// Whether the style `style` concluded under its rule: the seed taken
+    /// with its beacon confirmed, the freeze agreeing with the ledger, a
+    /// round concluded or a hand count of every unit, every device with a
+    /// code 1 or 2 followed up ([`DeviceAudit::followed_up`]), and nothing
+    /// held.
     #[must_use]
     pub fn concluded(&self, style: &StyleAudit<'_>) -> bool {
         style.concluded_with(self.seed.is_some_and(|s| s.beacon_confirmed))
@@ -1070,12 +1073,10 @@ impl<'a> Work<'a> {
         if let Some(taken) = style.hand_counts.get(p.reporting_unit_id.as_bytes()) {
             return Err(again(*taken, event.body_bytes()));
         }
-        let called = style.audit.phase == Some(AuditPhase::HandCount)
-            && style
-                .audit
-                .hand_count_from
-                .is_some_and(|from| from.get() < seq.get());
-        if !called {
+        // Events are taken in frame order and the hand count phase is never
+        // left, so the phase is the hand count only after the comparison of
+        // an earlier frame that took it there (`hand_count_from`).
+        if style.audit.phase != Some(AuditPhase::HandCount) {
             return Err(AuditRefusal::Premature);
         }
         style.hand_counts.insert(

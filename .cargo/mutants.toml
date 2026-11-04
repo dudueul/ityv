@@ -34,6 +34,15 @@ exclude_re = [
     "replace < with <= in Work<'a>::apply_decision",
     "replace < with <= in Work<'a>::readiness",
     "replace > with >= in late_closes",
+    # Equivalent: each compares the frames of two different ledger events
+    # (a finding and the comparison that called for it; a checkpoint and
+    # the seed; a tally scope and the freeze), which never share a frame,
+    # so `>`/`>=` and `<`/`<=` agree (crates/ityv-verify/src/audit.rs:
+    # `DeviceAudit::followed_up`, `Ctx::last_checkpoint`,
+    # `Work::take_freeze`).
+    "replace > with >= in DeviceAudit<'_>::followed_up",
+    "replace < with <= in Ctx<'_, 'a>::last_checkpoint",
+    "replace < with <= in Work<'a>::take_freeze",
     # Equivalent: a paper count has one to 70 candidates (the constructor
     # and the decoder refuse none), so `PaperVotes::is_empty` is always
     # false; it exists because `len` needs it (clippy `len_without_is_empty`)

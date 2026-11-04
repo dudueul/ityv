@@ -1395,6 +1395,26 @@ fn codes_1_and_2_call_for_a_full_comparison_and_a_finding() {
 }
 
 #[test]
+fn a_full_comparison_counts_a_drawn_record_only_in_the_rounds_that_hold_it() {
+    // Round 0 is the first drawn record, round 1 the first two.
+    let (mut book, casts) = tallied(audit_world());
+    let (_, sample) = seeded(&mut book, &casts, &[(1, 1), (2, 1)]);
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::OtherCandidate));
+    // Under the full comparison the second drawn record disagrees too: it
+    // counts in round 1, not in round 0, which concluded within its
+    // threshold.
+    book.q(reference(&sample[1]));
+    book.w(compare(&sample[1], ComparisonCode::CandidateInvalid));
+    let r = report(&mut book, &observed());
+    let style = r.audit().style(STYLE1).unwrap();
+    assert_eq!((style.counts[0].compared, style.counts[0].nonzero), (1, 1));
+    assert_eq!((style.counts[1].compared, style.counts[1].nonzero), (2, 2));
+    assert_eq!(style.phase, Some(AuditPhase::Concluded { round: 0 }));
+    assert_eq!(style.hand_count_from, None);
+}
+
+#[test]
 fn codes_5_and_6_hold_the_box() {
     for code in [
         ComparisonCode::BallotMissing,
