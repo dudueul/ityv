@@ -15,6 +15,7 @@ ityv의 다른 모든 크레이트는 암호를 이 크레이트를 통해서만
 | `orproof` | 1-of-(m+2) OR 표현 증명(Σ-프로토콜, Fiat-Shamir). `prove_into`는 호출자의 `Proof`에 제자리로 써서 20 KB 임시값을 만들지 않고 `prove`는 그 얇은 포장이다(같은 난수 소비, 같은 바이트). `Proof::EMPTY`는 컴파일 시간 상수라 호출자 메모리(정적 영역, 작업 영역)에 둘 수 있다. 투표와 무관한 일은 한가한 시간에 미리 할 수 있다(P6): `ProofPrecomputation::precompute`가 `prove_into`와 같은 순서로 모든 난수를 뽑고 커밋먼트에 의존하지 않는 공표값 조각(`z_{b,x}·G_id + z_{b,j}·H`, `α·G_id + β_j·H`)을 압축해 두며(최대 약 37 KB), `prove_precomputed`는 공표값마다 압축 해제 한 번과 스칼라 곱 한 번만 하고 같은 생성기라면 `prove_into`와 바이트까지 같은 증명을 낸다. 미리 계산한 값은 한 번만 쓰이고 쓰자마자 지워진다 | PROTOCOL.md §7.5, ADR-0017 개정 15, ADR-0020 결정 8·11 |
 | `shares` | 챔버 접근구조 Γ의 선형 비밀분산, 정족수 판정, 복원 | PROTOCOL.md §9.2, ADR-0012 |
 | `otmac`, `pad` | Poly1305 일회성 MAC, 일회용 패드 XOR | PROTOCOL.md §9.3, §9.4 |
+| `sample` | 감사 시드, 투표양식별 공개 표본 흐름(SHA3-512 카운터), 거부 샘플링의 균등 추출 | PROTOCOL.md §12.1, §12.2, ADR-0036 |
 
 보장하는 것:
 - `no_std`, 힙 없음, `unsafe` 없음, 패닉 없음(워크스페이스 lint 집합, Kani 하네스).
@@ -42,6 +43,8 @@ ityv의 다른 모든 크레이트는 암호를 이 크레이트를 통해서만
 | 서명 다이제스트 | `SHA3-512("ityv:sig:v1:" ‖ purpose ‖ 0x00 ‖ u64_be(len) ‖ obj)`; 모든 서명 알고리즘은 이 64바이트를 서명한다. ML-DSA-87과 SLH-DSA에는 `purpose`를 FIPS 204/205 컨텍스트로도 넘긴다(`SigningPrefix`가 접두 바이트를 만들고 Kani가 그 배치를 검사한다) |
 | Fiat-Shamir | `SHA3-512("ityv:fs:v1:" ‖ proof_system ‖ 0x00 ‖ u64_be(len) ‖ transcript)`를 스칼라로 균등 축소 |
 | 해시-투-그룹 | `from_uniform_bytes(SHA3-512(label ‖ 0x00))`, 라벨은 `ityv:base:val:v1`, `ityv:base:id:v1`, `ityv:base:rand:v1` |
+| 감사 시드 | `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice ‖ beacon ‖ checkpoint)` |
+| 표본 흐름 | 열쇠 `SHA3-512("ityv:sample:v1" ‖ 0x00 ‖ seed ‖ u32_be(len(style)) ‖ style)`, 블록 `SHA3-512(열쇠 ‖ u64_be(i))`, big-endian `u64` 낱말, `x ≤ 2^64 − 1 − (2^64 mod n)`일 때만 `x mod n` |
 | KEM 키 유도 | `SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519 ‖ pk_x25519)[0..32]` (수신자 X25519 공개키까지 결속; X-Wing 결합기 논증) |
 
 OR 증명의 대본 바이트 배치는 `src/orproof.rs`의 모듈 문서에 있다: `election_id`, `box_id`, `ballot_style_id`(각 u32 길이 접두), `proof_system_id: u16`, `option_count: u16`, `chunk_count: u8`, 커밋먼트 배열(u32 개수 접두), 공표값 `a_{t,j}` 배열(u32 개수 접두, t 외측·j 내측). 모든 정수는 big-endian이다.
@@ -112,7 +115,7 @@ cargo build --locked -p ityv-crypto --target thumbv7em-none-eabihf   # no_std �
 
 알려진 답 벡터(독립 출처): SHA3-512는 NIST FIPS 202 벡터와 Python `hashlib`로 계산한 도메인 해시, Ed25519·X25519·Poly1305·`ChaCha20-Poly1305`는 Python `cryptography`로 계산했다(AEAD와 X25519 공유 비밀은 비공개 생성자가 필요해 크레이트 내부 단위 테스트에 있다). ML-DSA·ML-KEM·SLH-DSA는 백엔드 크레이트의 자체 FIPS 벡터 테스트에 의존한다. `vectors/crypto.txt`는 2차 구현(V5)을 위한 **상호운용 기준 벡터**이자 이 구현의 회귀 벡터다: 베이스 점 3개, 고정 시드의 ML-DSA·Ed25519·ML-KEM·X25519 공개키, 고정 입력의 커밋먼트, 시드 RNG로 만든 KEM 암호문·봉인 출력·태그, 작은 OR 진술의 대본 헤더와 그 헤더 바이트의 Fiat-Shamir 축소값, 완전한 OR 증명과 그 챌린지 합. 이 값들은 이 구현이 만들었음을 파일 머리에 적었다.
 
-Kani 하네스(`kani/proofs.rs`, 21개): 선택지·청크 인덱스 경계, `OptionCount`의 청크 수 올림 나눗셈과 포함 판정, 자릿수 지수(`26·(t−9j)`), 비트 설정·추출, 단위 자릿수와 임의 26비트 자릿수의 묶음·해제 왕복, 묶음 범위 검사, 임계치·구성원 경계, 구성원 평가점, 기호적 챔버의 인덱스·`s_rest` 평가점, 접근구조 Γ 판정, 패드 XOR, purpose 알파벳, 길이 접두, 서명 접두 바이트 배치. 하네스 파일은 `src/` 밖에 있고 파일 머리에 사유를 적은 lint 완화를 가진다(CONSTITUTION §1.1).
+Kani 하네스(`kani/proofs.rs`, 22개): 선택지·청크 인덱스 경계, `OptionCount`의 청크 수 올림 나눗셈과 포함 판정, 자릿수 지수(`26·(t−9j)`), 비트 설정·추출, 단위 자릿수와 임의 26비트 자릿수의 묶음·해제 왕복, 묶음 범위 검사, 임계치·구성원 경계, 구성원 평가점, 기호적 챔버의 인덱스·`s_rest` 평가점, 접근구조 Γ 판정, 패드 XOR, purpose 알파벳, 길이 접두, 서명 접두 바이트 배치, 표본 흐름의 거부 한계가 모든 `bound`에서 있고 빠듯함(한계가 `bound` 런의 배수라는 나머지 항등식은 SAT 백엔드가 10분 안에 끝내지 못해 `tests/proptests.rs`의 128비트 속성 테스트로 확인). 하네스 파일은 `src/` 밖에 있고 파일 머리에 사유를 적은 lint 완화를 가진다(CONSTITUTION §1.1).
 
 알려진 동치 변이(동작이 같아 어떤 테스트도 잡을 수 없는 것)는 둘이며 `.cargo/mutants.toml`에서 이름으로 제외한다: `Statement::proof_system_id`를 상수 1로 바꾸는 변이(값이 항상 1), `Sha3Backend::begin`을 `Default::default()`로 바꾸는 변이(기본 상태가 곧 새 상태). 고정 버퍼 용량 상수(`SIGNING_PREFIX_MAX_LEN`, `IDENT_FIELD_MAX_LEN`)는 단위 테스트가 정확한 값을 검사하므로 `+`를 `*`로 바꾸어 버퍼만 키우는 변이도 잡힌다. `impl Drop` 본문을 비우는 변이는 소거 후 관찰할 수 없으므로 `.cargo/mutants.toml`에서 제외하고, 소거는 `Zeroize` 테스트로 직접 검사한다. 워크스페이스의 `-D warnings`가 변이체를 빌드 실패로 만들지 않도록 변이 빌드에는 lint 상한(`cap_lints`)을 둔다.
 
