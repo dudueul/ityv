@@ -34,6 +34,7 @@ use ityv_encoding::{
 
 use crate::error::{Error, Root};
 use crate::merkle::{ConsistencyProof, sorted_set_root, verify_consistency};
+use crate::policy::Published;
 use crate::verified::Verified;
 
 /// `SignedCheckpoint` (ENCODING.md §6, `0x0010`).
@@ -355,6 +356,13 @@ impl<'a> Successor<'a> {
 /// `now` signs only `now − 1 ≤ time_bucket ≤ now`. The witnesses attest the
 /// time, so it is no longer the operator's proposal alone.
 pub const WITNESS_TIME_TOLERANCE: u64 = 1;
+
+/// How many bucket boundaries an honest witness's clock may stand on the
+/// wrong side of (PROTOCOL.md §5.4): its error is at most one minute,
+/// less than a 15-minute bucket, so its bucket is the true one or the one
+/// next to it. A rule that must hold for every honest witness, such as the
+/// audit's binding checkpoint preceding a publication, adds this margin.
+pub const CLOCK_ERROR_BUCKETS: u64 = 1;
 
 /// The current version of `WitnessMemory` (`0x0011`): version 2 also
 /// remembers the time bucket of the last signed checkpoint (VC-012).
@@ -687,6 +695,91 @@ impl WitnessMemory {
             }
             Err(err) => (Err(err), self),
         }
+    }
+
+    /// Advances the memory to `published`, a checkpoint a quorum of the
+    /// witness set signed while this witness was away, without signing
+    /// anything (the catch-up after an outage, PROTOCOL.md §5.4, ADR-0016
+    /// §4). `published` comes from [`crate::evaluate`] under the genesis
+    /// witness roster, profile and diversity policy; the checkpoint is
+    /// adopted only if
+    ///
+    /// 1. its `genesis_hash` is `genesis_hash`;
+    /// 2. its `checkpoint_seq` is above the last signed or adopted one;
+    /// 3. its election, ledger and key-set identifiers are unchanged;
+    /// 4. its `time_bucket` is not below the last one;
+    /// 5. its `tree_size` does not decrease and `consistency` proves that
+    ///    its tree extends the last one (from the empty tree if none).
+    ///
+    /// The witness then signs only the checkpoint after it. It never signs
+    /// two bodies at one sequence number (VC-013): it signed nothing at the
+    /// sequence numbers it skipped, and it adopts only above its last one.
+    /// The memory comes back as the second element: advanced on success,
+    /// unchanged on failure.
+    ///
+    /// # Errors
+    /// [`Error::Encoding`], [`Error::GenesisMismatch`],
+    /// [`Error::SequenceGap`], [`Error::LedgerMismatch`],
+    /// [`Error::TimeWentBack`], [`Error::TreeShrank`],
+    /// [`Error::ProofInvalid`].
+    #[must_use = "the returned memory must be persisted; dropping it loses the state"]
+    pub fn adopt(
+        self,
+        published: &Verified<Published<'_>>,
+        consistency: &ConsistencyProof,
+        genesis_hash: &Hash512,
+    ) -> (Result<(), Error>, Self) {
+        match self.check_adopt(published.get().signed(), consistency, genesis_hash) {
+            Ok(last) => (Ok(()), Self { last: Some(last) }),
+            Err(err) => (Err(err), self),
+        }
+    }
+
+    fn check_adopt(
+        &self,
+        signed: &SignedCheckpoint<'_>,
+        consistency: &ConsistencyProof,
+        genesis_hash: &Hash512,
+    ) -> Result<LastSigned, Error> {
+        let body = signed.body();
+        let parts = body.parts();
+        if parts.genesis_hash != *genesis_hash {
+            return Err(Error::GenesisMismatch);
+        }
+        let ids = ids_hash(body)?;
+        let (old_size, old_root) = match &self.last {
+            None => (0u64, crate::merkle::EMPTY_ROOT),
+            Some(last) => {
+                if parts.checkpoint_seq.get() <= last.seq.get() {
+                    return Err(Error::SequenceGap);
+                }
+                if last.ids_hash != ids {
+                    return Err(Error::LedgerMismatch);
+                }
+                if parts.time_bucket.get() < last.time_bucket.get() {
+                    return Err(Error::TimeWentBack);
+                }
+                (last.tree_size.get(), last.root_hash)
+            }
+        };
+        if parts.tree_size.get() < old_size {
+            return Err(Error::TreeShrank);
+        }
+        let _consistent = verify_consistency(
+            old_size,
+            &old_root,
+            parts.tree_size.get(),
+            &parts.root_hash,
+            consistency,
+        )?;
+        Ok(LastSigned {
+            seq: parts.checkpoint_seq,
+            tree_size: parts.tree_size,
+            root_hash: parts.root_hash,
+            body_hash: signed.body_hash(),
+            ids_hash: ids,
+            time_bucket: parts.time_bucket,
+        })
     }
 
     fn check<'a>(

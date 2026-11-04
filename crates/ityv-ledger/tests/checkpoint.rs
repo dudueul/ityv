@@ -840,3 +840,143 @@ fn witness_memory_signs_only_the_time_of_its_own_clock() {
     assert_eq!(ityv_ledger::WITNESS_TIME_TOLERANCE, 1);
     assert_eq!(ityv_ledger::SCHEMA_VERSION_WITNESS_MEMORY, 2);
 }
+
+/// A quorum-signed checkpoint over `ls[..size]` at `seq` after `previous`,
+/// time bucket `bucket`: the body and the signed object (witnesses 0..9).
+fn quorum_signed(
+    ws: &[common::Witness],
+    ls: &[Hash512],
+    seq: u64,
+    size: u64,
+    previous: Hash512,
+    bucket: u64,
+) -> (Vec<u8>, Vec<u8>) {
+    let root = root_of_leaves(&ls, size).unwrap();
+    let body = body_object(&body_parts(
+        seq, size, root, previous, EMPTY_ROOT, EMPTY_ROOT, GENESIS, bucket,
+    ));
+    let signed = signed_checkpoint_object(ws, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &body);
+    (body, signed)
+}
+
+/// Catch-up after an outage (PROTOCOL §5.4): a witness that missed a
+/// checkpoint can neither sign it later (its time is past) nor the next one
+/// (a sequence gap); it adopts the quorum-signed checkpoint without signing
+/// it, then signs the next. Adoption needs a quorum, a later sequence
+/// number, the same ledger, a time not going back, a consistent tree and
+/// the same genesis; a refused adoption leaves the memory unchanged.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_witness_back_from_an_outage_adopts_the_checkpoints_it_missed() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let roster = ityv_ledger::Roster::new(&entries).unwrap();
+    let profile = ityv_ledger::QuorumProfile::DEFAULT_13_9_4;
+    let diversity = ityv_ledger::DiversityPolicy::DEFAULT;
+    let quorum = |bytes: &'static [u8]| {
+        let signed: &'static SignedCheckpoint<'static> = Box::leak(Box::new(decode_signed(bytes)));
+        ityv_ledger::evaluate(Box::leak(Box::new(roster)), &profile, &diversity, signed).unwrap()
+    };
+    let leak = |v: Vec<u8>| -> &'static [u8] { Box::leak(v.into_boxed_slice()) };
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    // Checkpoint 1 over 3 leaves at bucket 100: signed.
+    let (b1, s1) = quorum_signed(&ws, &ls, 1, 3, Hash512::ZERO, 100);
+    let (t1, memory) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    assert!(t1.is_ok());
+    let h1 = ityv_crypto::object_hash(&b1);
+    // Checkpoint 2 over 6 leaves at bucket 101, while the witness is away.
+    let (b2, s2) = quorum_signed(&ws, &ls, 2, 6, h1, 101);
+    let h2 = ityv_crypto::object_hash(&b2);
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    // Back at bucket 103: too late for 2, a gap for 3.
+    let memory = refuse(
+        memory,
+        &b2,
+        &p36,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(103),
+        &Error::TimeOutOfWindow,
+    );
+    let (b3, s3) = quorum_signed(&ws, &ls, 3, 8, h2, 103);
+    let p68 = consistency_proof(&ls.as_slice(), 6, 8).unwrap();
+    let memory = refuse(
+        memory,
+        &b3,
+        &p68,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(103),
+        &Error::SequenceGap,
+    );
+    // Adoption's refusals leave the memory as it was.
+    let published2 = quorum(leak(s2));
+    let before = WitnessMemory::from_last(memory.last().copied());
+    let (r, memory) = memory.adopt(&published2, &empty, &GENESIS);
+    assert_eq!(r.unwrap_err(), Error::ProofInvalid);
+    let (r, memory) = memory.adopt(&published2, &p36, &Hash512([8; 64]));
+    assert_eq!(r.unwrap_err(), Error::GenesisMismatch);
+    // The checkpoint it signed, again: not above its last.
+    let (r, memory) = memory.adopt(&quorum(leak(s1)), &empty, &GENESIS);
+    assert_eq!(r.unwrap_err(), Error::SequenceGap);
+    // A later checkpoint dated before the last one, over a smaller tree, or
+    // of another ledger.
+    let (_, back) = quorum_signed(&ws, &ls, 2, 6, h1, 99);
+    let (r, memory) = memory.adopt(&quorum(leak(back)), &p36, &GENESIS);
+    assert_eq!(r.unwrap_err(), Error::TimeWentBack);
+    let (_, small) = quorum_signed(&ws, &ls, 2, 2, h1, 101);
+    let (r, memory) = memory.adopt(&quorum(leak(small)), &empty, &GENESIS);
+    assert_eq!(r.unwrap_err(), Error::TreeShrank);
+    let mut other = body_parts(
+        2,
+        6,
+        root_of_leaves(&ls.as_slice(), 6).unwrap(),
+        h1,
+        EMPTY_ROOT,
+        EMPTY_ROOT,
+        GENESIS,
+        101,
+    );
+    other.ledger_id = ityv_encoding::LedgerId::new(b"OTHER").unwrap();
+    let other = signed_checkpoint_object(&ws, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &body_object(&other));
+    let (r, memory) = memory.adopt(&quorum(leak(other)), &p36, &GENESIS);
+    assert_eq!(r.unwrap_err(), Error::LedgerMismatch);
+    assert_eq!(memory, before);
+    // Adopt 2, then sign 3 in time.
+    let (r, memory) = memory.adopt(&published2, &p36, &GENESIS);
+    assert!(r.is_ok());
+    let last = memory.last().unwrap();
+    assert_eq!(
+        (
+            last.seq().get(),
+            last.tree_size().get(),
+            last.time_bucket().get()
+        ),
+        (2, 6, 101)
+    );
+    assert_eq!(*last.body_hash(), h2);
+    assert_eq!(
+        *last.root_hash(),
+        root_of_leaves(&ls.as_slice(), 6).unwrap()
+    );
+    let (t3, memory) = memory.may_sign(&b3, &p68, &[], &[], &GENESIS, TimeBucket::new(103));
+    assert!(t3.is_ok());
+    assert_eq!(memory.last().unwrap().seq().get(), 3);
+    // Adoption may skip several checkpoints, and a fresh witness adopts
+    // from the empty tree.
+    let published3 = quorum(leak(s3));
+    let p38 = consistency_proof(&ls.as_slice(), 3, 8).unwrap();
+    let (_, m1) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    let (r, m3) = m1.adopt(&published3, &p38, &GENESIS);
+    assert!(r.is_ok());
+    assert_eq!(m3.last().unwrap().seq().get(), 3);
+    let (r, fresh) = WitnessMemory::fresh().adopt(&published3, &empty, &GENESIS);
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(fresh.last().unwrap().seq().get(), 3);
+    assert_eq!(ityv_ledger::CLOCK_ERROR_BUCKETS, 1);
+}
