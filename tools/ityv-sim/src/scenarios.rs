@@ -7,14 +7,16 @@
 
 use std::sync::OnceLock;
 
+use ityv_encoding::ComparisonCode;
 use ityv_encoding::{
     DisputeType, ProgressAlarm, ProgressBody, ProgressTick, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD,
     SCHEMA_PARTICIPATION_SET, SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1,
     SCHEMA_WITNESSED_EVENT, SchemaId, decode_object,
 };
-use ityv_state::{HoldReason, Status};
+use ityv_state::{AuditPhase, HoldReason, Status};
 use ityv_verify::AmendmentInput;
 
+use crate::audit::{Audit, Beacon, truthful};
 use crate::catalog;
 use crate::day::Mark;
 use crate::election::{CastInfo, Election, Person, QUORUM};
@@ -102,6 +104,12 @@ pub struct Scenario {
     pub expected: Expected,
     /// Tracking codes for the voter app demo.
     pub slips: Vec<Slip>,
+    /// The beacon publication the caller observed, for an audited ledger
+    /// (fixture data; in the bundle, and handed to the verifier).
+    pub beacon: Option<Beacon>,
+    /// The restricted sample openings a verifier with access would hold
+    /// (never on the ledger or in the bundle).
+    pub openings: Vec<&'static [u8]>,
 }
 
 fn quick_election() -> &'static Election {
@@ -115,6 +123,18 @@ fn quick_floor_election() -> &'static Election {
         leak(Election::build(catalog::quick(vec![DayEvent::Floor {
             at: 2,
             checked: false,
+        }])))
+    })
+}
+
+/// The quick election with a scanner at the election-day station that
+/// reads every third candidate mark as `UNREADABLE` (a faint mark).
+fn quick_faint_election() -> &'static Election {
+    static E: OnceLock<&'static Election> = OnceLock::new();
+    E.get_or_init(|| {
+        leak(Election::build(catalog::quick(vec![DayEvent::Faint {
+            index: 0,
+            every: 3,
         }])))
     })
 }
@@ -213,7 +233,321 @@ impl Builder {
             amendments: Vec::new(),
             expected,
             slips,
+            beacon: None,
+            openings: Vec::new(),
         }
+    }
+}
+
+/// The scenario of the audit `a` (quick set).
+fn audited(
+    a: Audit,
+    name: &'static str,
+    group: Group,
+    text: (&'static str, &'static str, &'static str),
+    expected: Expected,
+    slips: Vec<Slip>,
+) -> Scenario {
+    let bucket = last_checkpoint_bucket(&a.plan.steps);
+    let publications = timely(&a.plan, bucket);
+    Scenario {
+        name,
+        set: Set::Quick,
+        group,
+        title: text.0,
+        injected: text.1,
+        shows: text.2,
+        election: a.e,
+        publications,
+        steps: a.plan.steps,
+        amendments: Vec::new(),
+        expected,
+        slips,
+        beacon: a.beacon,
+        openings: a.openings,
+    }
+}
+
+/// An audit through its seed: freezes (`rules` where given), the commit,
+/// the binding checkpoint right after it, and the seed over the first
+/// fixture output for which `wanted` holds.
+fn seeded(
+    e: &'static Election,
+    rules: &[(&'static str, Vec<(u64, u32)>)],
+    wanted: impl Fn(&Audit, &ityv_encoding::Hash512) -> bool,
+) -> Audit {
+    let mut a = Audit::new(e);
+    a.freeze_all(rules);
+    a.commit();
+    a.checkpoint(a.t.binding);
+    a.seed(wanted);
+    a
+}
+
+/// Whether the first `n` records `seed` draws for `style` include a
+/// ballot the paper shows otherwise than the record.
+fn misread_among_first(a: &Audit, seed: &ityv_encoding::Hash512, style: &str, n: usize) -> bool {
+    a.drawn(style, seed)[..n]
+        .iter()
+        .any(|r| truthful(&r.cast) != ComparisonCode::Match)
+}
+
+/// The audit scenarios (quick set).
+fn audit_scenarios(out: &mut Vec<Scenario>, slips: &[Slip]) {
+    use HoldReason as H;
+    let e = quick_election();
+    let n = Group::Normal;
+    let a_ = Group::Attack;
+    let refused_seed = [
+        H::AuditSeedRefused,
+        H::SampleOpeningRefused,
+        H::SampleComparisonRefused,
+    ];
+
+    // --- 정상 선거 -------------------------------------------------------
+    {
+        let mut a = seeded(e, &[], |_, _| true);
+        for style in ["S-HB", "S-NR"] {
+            let phase = a.compare(style, |r| truthful(&r.cast));
+            assert_eq!(phase, AuditPhase::Concluded { round: 0 });
+        }
+        a.finish();
+        out.push(audited(
+            a,
+            "audit-clean",
+            n,
+            (
+                "빠른 시연: 감사까지 끝난 선거",
+                "깨끗한 선거의 집계 뒤에 투표양식마다 감사 동결(표본 프레임과 라운드 규칙), 감사 약정(주사위 기록·비콘 지정·동결을 고정), 약정 직후의 고정 체크포인트, 비콘 공표 뒤의 시드, 표본 기록마다 신뢰기관의 열기 흔적과 감사인의 종이 대조(모두 일치)가 실렸다. 비콘 관찰(회차·출력·공표 구간)은 시연용 고정 자료다.",
+                "PAPER_AUDITED. 보류 없음. 고정 체크포인트가 비콘 공표보다 7구간 앞서고(규칙은 3구간 이상), 두 투표양식 모두 첫 라운드에서 끝났다. 비콘 관찰 없이 검증하면 감사를 끝낼 수 없어 CRYPTO_TALLY_VERIFIED에 머문다.",
+            ),
+            expected(Status::PaperAudited, &[]),
+            slips.to_vec(),
+        ));
+    }
+    let faint = quick_faint_election();
+    {
+        let mut a = seeded(faint, &[("S-HB", vec![(3, 0), (8, 3)])], |a, seed| {
+            misread_among_first(a, seed, "S-HB", 3)
+        });
+        let phase = a.compare("S-HB", |r| truthful(&r.cast));
+        assert_eq!(phase, AuditPhase::Concluded { round: 1 });
+        a.compare("S-NR", |r| truthful(&r.cast));
+        a.finish();
+        out.push(audited(
+            a,
+            "audit-escalation",
+            n,
+            (
+                "감사 확대: 둘째 라운드",
+                "한빛초등학교 체육관 투표함의 스캐너가 후보 표시 세 장 가운데 한 장을 판독 불가(UNREADABLE)로 읽었다(희미한 표시). 한빛구청장 감사 규칙은 첫 라운드 3장·불일치 0장, 둘째 라운드 8장·불일치 3장이다. 첫 라운드 표본에 그런 투표지가 나와 감사인이 코드 3(기록은 판독 불가, 종이는 유효표)을 적었다.",
+                "첫 라운드의 불일치가 상한을 넘어 표본이 둘째 라운드로 늘고, 둘째 라운드가 상한 안에서 끝난다: PAPER_AUDITED. 판독 불가 기록은 종이 계수 보고와 어긋나지 않는다(종이 표가 기계 표보다 적지 않다).",
+            ),
+            expected(Status::PaperAudited, &[]),
+            slips.to_vec(),
+        ));
+    }
+    {
+        let mut a = seeded(faint, &[("S-HB", vec![(3, 0)])], |a, seed| {
+            misread_among_first(a, seed, "S-HB", 3)
+        });
+        let phase = a.compare("S-HB", |r| truthful(&r.cast));
+        assert_eq!(phase, AuditPhase::HandCount);
+        a.compare("S-NR", |r| truthful(&r.cast));
+        a.finish();
+        out.push(audited(
+            a,
+            "audit-hand-count",
+            n,
+            (
+                "감사 끝에 수검표",
+                "같은 희미한 표시의 스캐너. 이번 한빛구청장 감사 규칙은 한 라운드(3장·불일치 0장)뿐이고, 그 표본에 판독 불가로 읽힌 유효표가 나왔다.",
+                "마지막 라운드의 상한을 넘었으므로 그 투표양식 전체를 손으로 센다. 보고 단위의 수검표(HandCountReport)가 실려 감사가 끝난다: PAPER_AUDITED. 수검표가 법적 결과이며 검증기는 그것을 보일 뿐 기계 합계와 비교하지 않는다.",
+            ),
+            expected(Status::PaperAudited, &[]),
+            slips.to_vec(),
+        ));
+    }
+    {
+        let mut a = seeded(e, &[], |_, _| true);
+        let phase = a.compare("S-HB", |r| truthful(&r.cast));
+        assert_eq!(phase, AuditPhase::Concluded { round: 0 });
+        a.finish();
+        out.push(audited(
+            a,
+            "audit-one-style",
+            n,
+            (
+                "한 투표양식만 감사",
+                "두 투표양식 모두 동결·약정·시드까지 실렸지만 종이 대조는 한빛구청장만 했다. 누리구청장 표본은 열지도 대조하지도 않았다.",
+                "보류는 없지만 모든 투표양식의 감사가 끝나야 하므로 장부 전체는 CRYPTO_TALLY_VERIFIED에 머문다. 보고 단위별 표에서 한빛구는 PAPER_AUDITED, 누리구는 CRYPTO_TALLY_VERIFIED다.",
+            ),
+            expected(Status::CryptoTallyVerified, &[]),
+            slips.to_vec(),
+        ));
+    }
+
+    // --- 공격·장애 -------------------------------------------------------
+    {
+        let mut a = seeded(e, &[], |_, _| true);
+        let hb = e.box_index("BOX-HB-1");
+        let seed = a.seed.unwrap();
+        let first = *a.drawn("S-HB", &seed)[..4]
+            .iter()
+            .find(|r| r.b == hb)
+            .unwrap();
+        let Mark::Candidate(t) = first.cast.mark else {
+            panic!("a candidate record");
+        };
+        let other = e.casts[hb]
+            .iter()
+            .find(|c| matches!(c.mark, Mark::Candidate(u) if u != t))
+            .unwrap()
+            .code;
+        let swapped = [first.cast.code, other];
+        let phase = a.compare("S-HB", |r| {
+            if swapped.contains(&r.cast.code) {
+                ComparisonCode::OtherCandidate
+            } else {
+                truthful(&r.cast)
+            }
+        });
+        assert!(matches!(phase, AuditPhase::Concluded { .. }));
+        a.compare("S-NR", |r| truthful(&r.cast));
+        a.finish();
+        out.push(audited(
+            a,
+            "fault-swapped-readings",
+            a_,
+            (
+                "두 판독이 뒤바뀐 스캐너",
+                "한빛초등학교 체육관 투표함의 스캐너가 서로 다른 후보를 찍은 투표지 두 장의 판독을 바꿔 기록했다. 후보별 합은 그대로라 종이 계수 보고와는 맞는다. 표본에 그중 한 장이 나와 감사인이 코드 1(기록과 다른 후보)을 적었다.",
+                "코드 1은 그 장치의 기록 전수 대조와 감사 발견(AuditFinding)을 부른다. 전수 대조에서 나머지 한 장도 코드 1로 나오고 발견이 기록되어 감사가 끝난다: PAPER_AUDITED. 합계 대조로는 보이지 않는 장치 결함을 기록 단위의 대조가 찾은 경우다.",
+            ),
+            expected(Status::PaperAudited, &[]),
+            Vec::new(),
+        ));
+    }
+    {
+        let mut a = seeded(e, &[], |_, _| true);
+        let seed = a.seed.unwrap();
+        let missing = a.drawn("S-HB", &seed)[0].cast.code;
+        a.compare("S-HB", |r| {
+            if r.cast.code == missing {
+                ComparisonCode::BallotMissing
+            } else {
+                truthful(&r.cast)
+            }
+        });
+        a.compare("S-NR", |r| truthful(&r.cast));
+        a.finish();
+        out.push(audited(
+            a,
+            "fault-audit-ballot-missing",
+            a_,
+            (
+                "표본 투표지가 없음(코드 5)",
+                "감사인이 한빛구청장 표본의 첫 기록에 각인된 cast id를 가진 투표지를 투표함에서 찾지 못했다(코드 5).",
+                "그 투표함과 투표양식의 보관을 조사해야 하므로 HOLD_REVIEW(AuditCustody). 라운드 상한 안이어도 감사는 끝나지 않는다.",
+            ),
+            hold(&[H::AuditCustody]),
+            Vec::new(),
+        ));
+    }
+    {
+        // No checkpoint after the commit until the beacon is public; then
+        // one timed two buckets before the publication.
+        let mut a = Audit::new(e);
+        a.freeze_all(&[]);
+        a.commit();
+        a.checkpoint(a.t.published - 2);
+        a.seed(|_, _| true);
+        for style in ["S-HB", "S-NR"] {
+            a.compare(style, |r| truthful(&r.cast));
+        }
+        a.finish();
+        out.push(audited(
+            a,
+            "attack-seed-grinding",
+            a_,
+            (
+                "비콘을 본 뒤 고른 고정 체크포인트",
+                "감사 약정 뒤 체크포인트를 바로 자르지 않았다. 비콘 회차가 공표된 뒤, 공표 구간보다 2구간 앞선 시각을 적은 체크포인트에 증인 서명을 받았다. 시계가 1분 늦은 정직한 증인은 공표 직후에도 그 구간에 서명할 수 있으므로, 운영자는 비콘 값을 보고 원하는 표본이 나오는 체크포인트를 고를 수 있었다.",
+                "고정 체크포인트는 공표보다 3구간 이상 앞서야 한다(binding ≤ P − 3). 시드가 늦음(Late)으로 거부되고 그 뒤의 열기 흔적과 대조도 받지 않는다: HOLD_REVIEW.",
+            ),
+            hold(&refused_seed),
+            Vec::new(),
+        ));
+    }
+    {
+        let mut a = Audit::new(e);
+        a.freeze_all(&[]);
+        a.commit_with(a.dice, a.t.commit + 1);
+        a.checkpoint(a.t.commit);
+        a.seed(|_, _| true);
+        for style in ["S-HB", "S-NR"] {
+            a.compare(style, |r| truthful(&r.cast));
+        }
+        a.finish();
+        out.push(audited(
+            a,
+            "attack-binding-backdated",
+            a_,
+            (
+                "약정보다 이른 고정 체크포인트",
+                "감사 약정에 실제보다 늦은 시각을 적었다. 약정을 덮는 첫 체크포인트(증인이 시각을 증언한다)가 약정에 적힌 시각보다 한 구간 이르다.",
+                "증인이 증언한 시각은 줄지 않으므로 그런 약정의 시각은 증언된 것이 아니다. 시드가 Backdated로 거부되고 열기 흔적과 대조도 받지 않는다: HOLD_REVIEW.",
+            ),
+            hold(&refused_seed),
+            Vec::new(),
+        ));
+    }
+    {
+        let mut a = Audit::new(e);
+        a.freeze_all(&[]);
+        a.checkpoint(a.t.binding);
+        a.seed(|_, _| true);
+        for style in ["S-HB", "S-NR"] {
+            a.compare(style, |r| truthful(&r.cast));
+        }
+        a.finish();
+        out.push(audited(
+            a,
+            "fault-commit-missing",
+            a_,
+            (
+                "감사 약정 없는 시드",
+                "동결 뒤 감사 약정(AuditCommit)을 싣지 않고 체크포인트를 자른 뒤 시드를 실었다. 주사위 기록과 동결이 비콘 공표 전에 고정되지 않았다.",
+                "약정이 없으면 시드는 너무 이르다(Premature): 거부되고 열기 흔적과 대조도 받지 않는다. HOLD_REVIEW.",
+            ),
+            hold(&refused_seed),
+            Vec::new(),
+        ));
+    }
+    {
+        let mut a = Audit::new(e);
+        a.freeze_all(&[]);
+        a.commit();
+        let other = crate::util::hash_of("audit-dice-other", &[e.eid.as_bytes()]);
+        a.commit_with(other, a.t.commit);
+        a.checkpoint(a.t.binding);
+        a.seed(|_, _| true);
+        for style in ["S-HB", "S-NR"] {
+            a.compare(style, |r| truthful(&r.cast));
+        }
+        a.finish();
+        out.push(audited(
+            a,
+            "attack-commit-conflict",
+            a_,
+            (
+                "서로 다른 감사 약정 두 개",
+                "첫 감사 약정 바로 뒤에, 다른 주사위 기록을 적은 두 번째 약정이 위원회와 참관인의 서명으로 실렸다. 운영자가 고를 수 있는 시드 입력이 둘이 된다.",
+                "두 번째 약정은 충돌(Conflict)로 거부되어 HOLD_REVIEW(AuditCommitRefused). 감사는 첫 약정으로 끝까지 진행되지만 보류는 사람이 정리할 일이다.",
+            ),
+            hold(&[H::AuditCommitRefused]),
+            Vec::new(),
+        ));
     }
 }
 
@@ -264,7 +598,7 @@ fn quick_scenarios() -> Vec<Scenario> {
         (
             "빠른 시연: 깨끗한 선거",
             "두 구, 투표소 둘(사전투표소의 관외 투표함 포함), 한 시간 투표, 마감, 참여 장부, 수령 대조, 단위별 집계 범위·합계 열기·종이 보고까지 모두 실렸다.",
-            "지금 검증기가 줄 수 있는 가장 높은 상태 CRYPTO_TALLY_VERIFIED. 보류 없음. PAPER_AUDITED는 감사 단계가 아직 없어 닿지 않는다.",
+            "CRYPTO_TALLY_VERIFIED. 보류 없음. 감사 이벤트가 없으므로 PAPER_AUDITED에는 닿지 않는다(감사까지 실린 장부는 '감사까지 끝난 선거').",
         ),
         expected(Status::CryptoTallyVerified, &[]),
         slips.clone(),
@@ -914,6 +1248,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             Vec::new(),
         ));
     }
+    audit_scenarios(&mut out, &slips);
     out
 }
 

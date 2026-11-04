@@ -17,7 +17,7 @@ use ityv_crypto::{
 };
 use ityv_cunit::DeviceRng;
 use ityv_encoding::{
-    Encode, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, SchemaId, Writer, encode_object,
+    Encode, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, SchemaId, Writer, encode_object, schema_version,
 };
 
 /// The generator seed. Changing it changes every key and every signature.
@@ -43,10 +43,11 @@ pub fn leak_str(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
 }
 
-/// A complete object of `schema` (version `version`), leaked.
-pub fn object<T: Encode>(schema: SchemaId, version: u16, value: &T) -> &'static [u8] {
+/// A complete object of `schema` at the version `ityv-encoding` encodes
+/// it at (`schema_version`), leaked.
+pub fn object<T: Encode>(schema: SchemaId, value: &T) -> &'static [u8] {
     let mut buf = vec![0u8; 16 + value.encoded_len()];
-    let len = encode_object(schema, version, value, &mut buf).unwrap();
+    let len = encode_object(schema, schema_version(schema), value, &mut buf).unwrap();
     buf.truncate(len);
     leak_slice(buf)
 }

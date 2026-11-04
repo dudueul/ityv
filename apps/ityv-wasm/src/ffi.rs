@@ -5,8 +5,9 @@
 //!
 //! 1. `alloc(len)` returns a buffer of exactly `len` bytes (a boxed
 //!    slice); the caller copies its input there.
-//! 2. `verify_bundle(ptr, len)` (or `verify_bundle_pinned` with a 64-byte
-//!    pin, or `fingerprint(ptr, len)`) writes its UTF-8 JSON (or text)
+//! 2. `verify_bundle(ptr, len)` (or `verify_bundle_with` with a 64-byte
+//!    pin or none and the beacon flag, or `fingerprint(ptr, len)`) writes
+//!    its UTF-8 JSON (or text)
 //!    result into a buffer this module keeps and returns its pointer;
 //!    `result_len()` gives its length. The result stays valid until the
 //!    next call of any of these functions.
@@ -83,8 +84,9 @@ unsafe fn input<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     unsafe { core::slice::from_raw_parts(ptr, len) }
 }
 
-/// Verifies the bundle at `ptr` (`len` bytes) with its own pin; returns
-/// the JSON report (see the module protocol).
+/// Verifies the bundle at `ptr` (`len` bytes) with its own pin and its
+/// beacon observation, if it has one; returns the JSON report (see the
+/// module protocol).
 ///
 /// # Safety
 /// `ptr` must point to `len` initialised bytes.
@@ -93,28 +95,30 @@ unsafe fn input<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 pub unsafe extern "C" fn verify_bundle(ptr: *const u8, len: usize) -> *const u8 {
     // SAFETY: forwarded from this function's contract.
     let bytes = unsafe { input(ptr, len) };
-    set_result(verify(bytes, None).json.into_bytes())
+    set_result(verify(bytes, None, true).json.into_bytes())
 }
 
 /// As [`verify_bundle`], trusting the 64-byte pin at `pin` instead of the
-/// bundle's; a null `pin` uses the bundle's.
+/// bundle's (a null `pin` uses the bundle's), and handing the verifier the
+/// bundle's beacon observation only if bit 0 of `flags` is set.
 ///
 /// # Safety
 /// `ptr` must point to `len` initialised bytes and `pin`, unless null, to
 /// 64.
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn verify_bundle_pinned(
+pub unsafe extern "C" fn verify_bundle_with(
     ptr: *const u8,
     len: usize,
     pin: *const u8,
+    flags: u32,
 ) -> *const u8 {
     // SAFETY: forwarded from this function's contract.
     let bytes = unsafe { input(ptr, len) };
     // SAFETY: forwarded from this function's contract (64 bytes at `pin`).
     let pin_bytes = unsafe { input(pin, 64) };
     let pin = <[u8; 64]>::try_from(pin_bytes).ok().map(Hash512);
-    set_result(verify(bytes, pin).json.into_bytes())
+    set_result(verify(bytes, pin, flags & 1 == 1).json.into_bytes())
 }
 
 /// The 32-character fingerprint of the SHA3-512 hash of the `len` bytes

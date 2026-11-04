@@ -13,15 +13,18 @@ use ityv_crypto::{
 };
 use ityv_encoding::{
     AMENDABLE_SET_COUNT, ActorSig, AggregateOpeningBody, AggregateOpeningParts, AmendmentReason,
-    Attestation, BallotStyleEntry, BallotStyleId, BatchAttest, BatchAttestBody, BatchAttestParts,
-    BoxClose, BoxCloseBody, BoxCloseParts, BoxId, BoxOpenedBody, BoxOpenedParts, BoxProgressBody,
-    BoxProgressParts, BoxProgressState, CaptureProfile, CastRecord, CastRecordBody,
-    CastRecordParts, ChamberCode, ChamberThreshold, CheckinProgressBody, CheckinProgressParts,
-    CheckinProgressState, CheckinUnit, CloseCounts, Commitments, CustodyRoute, Day as EpochDay,
-    DisputeAction, DisputeEventBody, DisputeEventParts, DisputeType, ENTRY_SET_COUNT, Encode,
-    EnvelopeIssuance, EventRole, EventSig, ExclusionEntry, Exclusions, FallbackBody, FallbackKind,
-    FallbackParts, FallbackReason, GenesisAmendmentBody, GenesisAmendmentParts, GenesisBody,
-    GenesisBox, GenesisEntry, GenesisParts, GenesisWitnessSig, Hash512, Ident, IssuanceCountBody,
+    Attestation, AuditCommitBody, AuditCommitParts, AuditFindingBody, AuditFindingParts,
+    AuditFreezeParts, AuditManifestFreezeBody, AuditRound, AuditRounds, AuditSeedBody,
+    AuditSeedParts, BallotStyleEntry, BallotStyleId, BatchAttest, BatchAttestBody,
+    BatchAttestParts, BoxClose, BoxCloseBody, BoxCloseParts, BoxId, BoxOpenedBody, BoxOpenedParts,
+    BoxProgressBody, BoxProgressParts, BoxProgressState, CaptureProfile, CastRecord,
+    CastRecordBody, CastRecordParts, ChamberCode, ChamberThreshold, CheckinProgressBody,
+    CheckinProgressParts, CheckinProgressState, CheckinUnit, CloseCounts, Commitments,
+    ComparisonCode, CustodyRoute, Day as EpochDay, DisputeAction, DisputeEventBody,
+    DisputeEventParts, DisputeType, ENTRY_SET_COUNT, Encode, EnvelopeIssuance, EventRole, EventSig,
+    ExclusionEntry, Exclusions, FallbackBody, FallbackKind, FallbackParts, FallbackReason,
+    GenesisAmendmentBody, GenesisAmendmentParts, GenesisBody, GenesisBox, GenesisEntry,
+    GenesisParts, GenesisWitnessSig, HandCountReportBody, Hash512, Ident, IssuanceCountBody,
     IssuanceCountParts, KEM_EK_LEN, LateBatchCloseBody, LateBatchCloseParts, LateBatchReason,
     LegalAuthorizationBody, MAX_QUORUM_MESSAGE_LEN, ModuleBatchSig, ModuleCounter, ModuleCounters,
     ModuleEntry, ModuleId, ModuleIds, ModuleProvisioned, ModuleProvisionedMessage,
@@ -42,11 +45,18 @@ use ityv_encoding::{
     SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK,
     SCHEMA_QUORUM_SIGNED, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_SIGNED_GENESIS,
     SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1,
-    SCHEMA_VERSION_GENESIS, SCHEMA_WITNESSED_EVENT, Scalar32, Scope, ScopeSet, SetCommitment,
-    ShareHolder, SignedGenesis, SignedLegalAuthorization, SignerId, SignerRole, StationEntry,
-    StationId, StationKind, StationParts, StationProgressPolicy, TallyScopeBody, TallyScopeParts,
-    TimeBucket, Token192, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry,
-    WitnessedEvent, Writer, purpose_of, write_quorum_message,
+    SCHEMA_WITNESSED_EVENT, Scalar32, Scope, ScopeSet, SetCommitment, ShareHolder, SignedGenesis,
+    SignedLegalAuthorization, SignerId, SignerRole, StationEntry, StationId, StationKind,
+    StationParts, StationProgressPolicy, TallyScopeBody, TallyScopeParts, TimeBucket, Token192,
+    TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry, WitnessedEvent, Writer,
+    purpose_of, write_quorum_message,
+};
+use ityv_encoding::{
+    SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
+    SCHEMA_AUDIT_SEED_BODY, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY,
+    SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY, SampleComparisonBody,
+    SampleComparisonParts, SampleOpeningBody, SampleOpeningParts, SampleOpeningRefBody,
+    SampleOpeningRefParts, Scalars,
 };
 use ityv_ledger::{Accumulator, sorted_set_root};
 use ityv_verify::{AmendableSets, AmendmentInput, FixedSets, GenesisInput, VerifiedGenesis};
@@ -241,6 +251,9 @@ pub struct Election {
     pub observers: [Person; 2],
     /// Each unit's chair.
     pub chairs: Vec<(&'static str, Person)>,
+    /// The two auditors (of two organisations) who sign sample comparisons
+    /// and audit findings.
+    pub auditors: [Person; 2],
     /// The raw sets, kept to amend.
     pub(crate) raw: Raw,
 }
@@ -265,10 +278,7 @@ fn encode_set<'a, T: GenesisEntry<'a> + Encode + Clone>(items: &[T]) -> Vec<&'st
     let mut items = items.to_vec();
     items.sort_by(|a, b| a.key().cmp(b.key()));
     let schema = T::SET.schema().unwrap();
-    items
-        .iter()
-        .map(|t| object(schema, T::SET.version(), t))
-        .collect()
+    items.iter().map(|t| object(schema, t)).collect()
 }
 
 fn commit_objects(objects: &[&[u8]]) -> SetCommitment {
@@ -496,6 +506,20 @@ impl Election {
                 )
             })
             .collect();
+        let auditors = [
+            Person {
+                id: "aud-1",
+                role: EventRole::Auditor,
+                org: "AUDIT-A",
+                key: key("roster/aud-1"),
+            },
+            Person {
+                id: "aud-2",
+                role: EventRole::Auditor,
+                org: "AUDIT-B",
+                key: key("roster/aud-2"),
+            },
+        ];
         let days: Vec<Day> = spec.stations.iter().map(|s| simulate(&spec, s)).collect();
 
         let mut election = Self {
@@ -526,6 +550,7 @@ impl Election {
             casts: Vec::new(),
             observers,
             chairs,
+            auditors,
             raw: Raw {
                 boxes: Vec::new(),
                 stations: Vec::new(),
@@ -595,6 +620,9 @@ impl Election {
         for (_, p) in &self.chairs {
             add(p, RosterRole::Chair, None);
         }
+        for p in &self.auditors {
+            add(p, RosterRole::Auditor, None);
+        }
         let police = Person {
             id: "police-1",
             role: EventRole::Sender,
@@ -618,6 +646,8 @@ impl Election {
             Scope::TrusteeBody,
             Scope::BallotMark,
             Scope::CryptoTallyAid,
+            Scope::Rla,
+            Scope::ObserverAccess,
         ];
         let body = LegalAuthorizationBody::new(
             self.election_id(),
@@ -627,17 +657,14 @@ impl Election {
             EpochDay::new(EPOCH_DAY + 100),
         )
         .unwrap();
-        let body = object(SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_LEGAL_AUTHORIZATION, &body);
         let signed = SignedLegalAuthorization::new(
             body,
             sign(&self.commission(), b"legal-auth", body),
             sign(&self.committee(), b"legal-auth", body),
         )
         .unwrap();
-        (
-            body,
-            object(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1, &signed),
-        )
+        (body, object(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, &signed))
     }
 
     /// The provisioning record of module `m` (VC-093, VC-095).
@@ -683,7 +710,6 @@ impl Election {
             .collect();
         object(
             SCHEMA_MODULE_PROVISIONED,
-            SCHEMA_VERSION_1,
             &ModuleProvisioned::new(message, &sigs).unwrap(),
         )
     }
@@ -744,7 +770,6 @@ impl Election {
             .collect();
         object(
             SCHEMA_PARTY_KEY_CEREMONY,
-            SCHEMA_VERSION_1,
             &PartyKeyCeremony::new(message, &sigs).unwrap(),
         )
     }
@@ -937,7 +962,7 @@ impl Election {
             })
             .collect();
         let signed = SignedGenesis::new(body, c, k, &sigs).unwrap();
-        object(SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, &signed)
+        object(SCHEMA_SIGNED_GENESIS, &signed)
     }
 
     fn seal_genesis(&mut self) {
@@ -1009,7 +1034,7 @@ impl Election {
             sets: raw.commitments(),
         };
         let body = GenesisBody::new(&parts).unwrap();
-        let body = object(SCHEMA_GENESIS_BODY, SCHEMA_VERSION_GENESIS, &body);
+        let body = object(SCHEMA_GENESIS_BODY, &body);
         let signed = self.seal(body, b"genesis");
         let pin = object_hash(body);
         let sets = raw.amendable();
@@ -1071,7 +1096,7 @@ impl Election {
             sets,
         })
         .unwrap();
-        let body = object(SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_GENESIS_AMENDMENT_BODY, &body);
         AmendmentInput {
             signed: self.seal(body, b"genesis-amendment"),
             sets: self.raw.amendable(),
@@ -1101,7 +1126,6 @@ impl Election {
             .collect();
         object(
             SCHEMA_WITNESSED_EVENT,
-            ityv_encoding::SCHEMA_VERSION_WITNESSED,
             &WitnessedEvent::new(body, &sigs).unwrap(),
         )
     }
@@ -1131,7 +1155,7 @@ impl Election {
             initial_count: 0,
             time_bucket: TimeBucket::new(self.days[bx.station].open_bucket),
         });
-        let body = object(SCHEMA_BOX_OPENED_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_BOX_OPENED_BODY, &body);
         let mut who = self.people(bx.station);
         who.push(Person {
             id: bx.id,
@@ -1231,7 +1255,7 @@ impl Election {
             transport_flags: 0,
         })
         .unwrap();
-        let body = object(SCHEMA_CAST_RECORD_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_CAST_RECORD_BODY, &body);
         let body_hash = object_hash(body);
         let device_sig = record_sig(&bx.device, RecordPurpose::CastRecord, body);
         let module_sigs: Vec<ModuleRecordSig<'static>> = bx
@@ -1249,7 +1273,6 @@ impl Election {
         let module_sigs = leak_slice(module_sigs);
         let event = object(
             SCHEMA_CAST_RECORD,
-            SCHEMA_VERSION_1,
             &CastRecord::new(body, device_sig, module_sigs).unwrap(),
         );
         CastInfo {
@@ -1274,7 +1297,6 @@ impl Election {
     pub fn resigned_with(body_of: &CastInfo, sigs_of: &CastInfo) -> &'static [u8] {
         object(
             SCHEMA_CAST_RECORD,
-            SCHEMA_VERSION_1,
             &CastRecord::new(body_of.body, sigs_of.device_sig, sigs_of.module_sigs).unwrap(),
         )
     }
@@ -1312,7 +1334,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        let body = object(SCHEMA_BATCH_ATTEST_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_BATCH_ATTEST_BODY, &body);
         let sigs: Vec<ModuleBatchSig<'static>> = bx
             .mods
             .iter()
@@ -1323,7 +1345,6 @@ impl Election {
             .collect();
         object(
             SCHEMA_BATCH_ATTEST,
-            SCHEMA_VERSION_1,
             &BatchAttest::new(body, &sigs, sign(&bx.device, b"batch-attest", body)).unwrap(),
         )
     }
@@ -1348,10 +1369,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        self.station_witnessed(
-            bx.station,
-            object(SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_VERSION_1, &body),
-        )
+        self.station_witnessed(bx.station, object(SCHEMA_LATE_BATCH_CLOSE_BODY, &body))
     }
 
     /// The close counts of box `b` with `records` records, `attested` of
@@ -1408,7 +1426,7 @@ impl Election {
             open_batches: u8::from(counts.attested < counts.records),
             time_bucket: TimeBucket::new(self.days[bx.station].close_bucket),
         });
-        let body = object(SCHEMA_BOX_CLOSE_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_BOX_CLOSE_BODY, &body);
         let people = people.map_or_else(|| self.people(bx.station), <[Person]>::to_vec);
         let attestations: Vec<Attestation<'static>> = people
             .iter()
@@ -1425,7 +1443,6 @@ impl Election {
             .collect();
         object(
             SCHEMA_BOX_CLOSE,
-            SCHEMA_VERSION_1,
             &BoxClose::new(
                 body,
                 device.map(|p| sign(&bx.device, p, body)),
@@ -1447,7 +1464,6 @@ impl Election {
         let bx = &self.boxes[b];
         let body = object(
             SCHEMA_BOX_PROGRESS_BODY,
-            SCHEMA_VERSION_1,
             &BoxProgressBody::new(&BoxProgressParts {
                 election_id: self.election_id(),
                 box_id: BoxId::new(text(bx.id)).unwrap(),
@@ -1458,7 +1474,6 @@ impl Election {
         );
         object(
             SCHEMA_PROGRESS_TICK,
-            SCHEMA_VERSION_1,
             &ProgressTick::new(body, sign(&bx.device, b"box-progress", body)).unwrap(),
         )
     }
@@ -1475,7 +1490,6 @@ impl Election {
         let st = &self.stations[s];
         let body = object(
             SCHEMA_CHECKIN_PROGRESS_BODY,
-            SCHEMA_VERSION_1,
             &CheckinProgressBody::new(&CheckinProgressParts {
                 election_id: self.election_id(),
                 station_id: StationId::new(text(st.id)).unwrap(),
@@ -1492,7 +1506,6 @@ impl Election {
         let key = self.key(&format!("unit/{}", st.units[0]));
         object(
             SCHEMA_PROGRESS_TICK,
-            SCHEMA_VERSION_1,
             &ProgressTick::new(body, sign(&key, b"checkin-progress", body)).unwrap(),
         )
     }
@@ -1522,10 +1535,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        self.station_witnessed(
-            bx.station,
-            object(SCHEMA_FALLBACK_BODY, SCHEMA_VERSION_1, &body),
-        )
+        self.station_witnessed(bx.station, object(SCHEMA_FALLBACK_BODY, &body))
     }
 
     /// An on-site check at station `s`.
@@ -1555,10 +1565,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        self.station_witnessed(
-            s,
-            object(SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_VERSION_1, &body),
-        )
+        self.station_witnessed(s, object(SCHEMA_PROGRESS_CHECK_BODY, &body))
     }
 
     /// Station `s`'s issuance count at close, signed by `who`.
@@ -1597,11 +1604,7 @@ impl Election {
             envelopes,
             time_bucket: TimeBucket::new(day.close_bucket),
         });
-        self.witnessed(
-            object(SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_VERSION_1, &body),
-            who,
-            0,
-        )
+        self.witnessed(object(SCHEMA_ISSUANCE_COUNT_BODY, &body), who, 0)
     }
 
     /// Station `s`'s observers' final check-in count.
@@ -1624,7 +1627,7 @@ impl Election {
             .cloned()
             .collect();
         self.witnessed(
-            object(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, &body),
+            object(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, &body),
             &observers,
             0,
         )
@@ -1672,7 +1675,6 @@ impl Election {
         let unit_key = self.key(&format!("unit/{}", st.units[0]));
         object(
             SCHEMA_PARTICIPATION_SET,
-            SCHEMA_VERSION_1,
             &ParticipationSet::new(
                 message,
                 sign(&unit_key, b"participation-set", message),
@@ -1707,7 +1709,6 @@ impl Election {
             .collect();
         object(
             SCHEMA_QUORUM_SIGNED,
-            SCHEMA_VERSION_1,
             &QuorumSigned::new(body, &sigs).unwrap(),
         )
     }
@@ -1738,7 +1739,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         });
         self.quorum(
-            object(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &body),
+            object(SCHEMA_RECEIPT_RESOLUTION_BODY, &body),
             b"receipt-resolution",
             &QUORUM,
         )
@@ -1773,7 +1774,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        object(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &body)
+        object(SCHEMA_TALLY_SCOPE_BODY, &body)
     }
 
     /// The aggregate opening body of chunk `chunk` over `casts`.
@@ -1800,7 +1801,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        object(SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_VERSION_1, &body)
+        object(SCHEMA_AGGREGATE_OPENING_BODY, &body)
     }
 
     /// The paper count of `style` in `unit`, signed by the unit's chair
@@ -1831,11 +1832,7 @@ impl Election {
             .1
             .clone();
         let who = [chair, self.observers[0].clone(), self.observers[1].clone()];
-        self.witnessed(
-            object(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &body),
-            &who,
-            0,
-        )
+        self.witnessed(object(SCHEMA_PAPER_COUNT_REPORT_BODY, &body), &who, 0)
     }
 
     /// The paper of every ballot of `style` in `unit` (records and
@@ -1861,6 +1858,243 @@ impl Election {
             }
         }
         (votes, invalid)
+    }
+
+    // -----------------------------------------------------------------
+    // Audit events (PROTOCOL.md §12, ADR-0036).
+
+    /// The committee and the two roster observers: the signers of a
+    /// freeze, the commit and the seed.
+    fn committee_and_observers(&self) -> [Person; 3] {
+        [
+            Person {
+                id: "committee",
+                role: EventRole::Committee,
+                org: "IVC",
+                key: self.committee(),
+            },
+            self.observers[0].clone(),
+            self.observers[1].clone(),
+        ]
+    }
+
+    /// The two auditors and the two roster observers: the signers of a
+    /// comparison and a finding.
+    fn auditors_and_observers(&self) -> [Person; 4] {
+        [
+            self.auditors[0].clone(),
+            self.auditors[1].clone(),
+            self.observers[0].clone(),
+            self.observers[1].clone(),
+        ]
+    }
+
+    /// The freeze body of `style` over the records `frame` (any order) with
+    /// the rounds `rounds` (cumulative size, threshold) and the beacon
+    /// `beacon` (designation document hash, round).
+    #[must_use]
+    pub fn freeze_body(
+        &self,
+        style: &str,
+        frame: &[Hash512],
+        rounds: &[(u64, u32)],
+        beacon: (Hash512, u64),
+        bucket: u64,
+    ) -> &'static [u8] {
+        let list: Vec<AuditRound> = rounds
+            .iter()
+            .map(|&(sample_size, threshold)| AuditRound {
+                sample_size,
+                threshold,
+            })
+            .collect();
+        let body = AuditManifestFreezeBody::new(&AuditFreezeParts {
+            election_id: self.election_id(),
+            ballot_style_id: BallotStyleId::new(text(style)).unwrap(),
+            frame_count: frame.len() as u64,
+            frame_root: root(frame),
+            rule_hash: hash_of("audit-rule", &[self.eid.as_bytes(), style.as_bytes()]),
+            risk_limit_ppm: 50_000,
+            beacon_source: beacon.0,
+            beacon_round: beacon.1,
+            rounds: AuditRounds::new(&list).unwrap(),
+            time_bucket: TimeBucket::new(bucket),
+        })
+        .unwrap();
+        object(SCHEMA_AUDIT_FREEZE_BODY, &body)
+    }
+
+    /// The committee's and observers' event over an audit body (a freeze,
+    /// the commit or the seed), with signature variant `variant`.
+    #[must_use]
+    pub fn committee_event(&self, body: &'static [u8], variant: u64) -> &'static [u8] {
+        self.witnessed(body, &self.committee_and_observers(), variant)
+    }
+
+    /// The audit commit body: the dice record `dice`, the beacon and the
+    /// freeze bodies `freezes`.
+    #[must_use]
+    pub fn commit_body(
+        &self,
+        dice: Hash512,
+        beacon: (Hash512, u64),
+        freezes: &[&'static [u8]],
+        bucket: u64,
+    ) -> &'static [u8] {
+        let hashes: Vec<Hash512> = freezes.iter().map(|b| object_hash(b)).collect();
+        let body = AuditCommitBody::new(&AuditCommitParts {
+            election_id: self.election_id(),
+            dice_hash: dice,
+            beacon_source: beacon.0,
+            beacon_round: beacon.1,
+            freezes_root: root(&hashes),
+            time_bucket: TimeBucket::new(bucket),
+        })
+        .unwrap();
+        object(SCHEMA_AUDIT_COMMIT_BODY, &body)
+    }
+
+    /// The seed body: `seed` over the dice record, the beacon value and
+    /// the binding checkpoint's hash.
+    #[must_use]
+    pub fn seed_body(
+        &self,
+        dice: Hash512,
+        round: u64,
+        beacon_value: Hash512,
+        checkpoint: Hash512,
+        seed: Hash512,
+        bucket: u64,
+    ) -> &'static [u8] {
+        let body = AuditSeedBody::new(&AuditSeedParts {
+            election_id: self.election_id(),
+            dice_hash: dice,
+            beacon_round: round,
+            beacon_value,
+            checkpoint_hash: checkpoint,
+            seed,
+            time_bucket: TimeBucket::new(bucket),
+        })
+        .unwrap();
+        object(SCHEMA_AUDIT_SEED_BODY, &body)
+    }
+
+    /// The restricted opening of record `c` of `style` (never on the
+    /// ledger; a verifier with access is handed it).
+    #[must_use]
+    pub fn restricted_opening(&self, style: &str, c: &CastInfo) -> &'static [u8] {
+        let list: Vec<Scalar32> = c.rand[..usize::from(c.chunks)]
+            .iter()
+            .map(|s| Scalar32(s.to_bytes()))
+            .collect();
+        let rand = Scalars::new(&list).unwrap();
+        let body = SampleOpeningBody::new(&SampleOpeningParts {
+            election_id: self.election_id(),
+            ballot_style_id: BallotStyleId::new(text(style)).unwrap(),
+            record_hash: c.code,
+            option_index: c.option,
+            cast_id: c.cast_id.token(),
+            rand: &rand,
+        })
+        .unwrap();
+        object(SCHEMA_SAMPLE_OPENING_BODY, &body)
+    }
+
+    /// The trustees' public reference to the restricted opening `opening`
+    /// of record `record` of `style`.
+    #[must_use]
+    pub fn opening_reference(
+        &self,
+        style: &str,
+        record: Hash512,
+        opening: Hash512,
+    ) -> &'static [u8] {
+        let body = SampleOpeningRefBody::new(&SampleOpeningRefParts {
+            election_id: self.election_id(),
+            ballot_style_id: BallotStyleId::new(text(style)).unwrap(),
+            record_hash: record,
+            opening_hash: opening,
+        })
+        .unwrap();
+        self.quorum(
+            object(SCHEMA_SAMPLE_OPENING_REF_BODY, &body),
+            b"sample-opening",
+            &QUORUM,
+        )
+    }
+
+    /// The auditors' comparison of record `record` of box `b` (opened as
+    /// `opening`) with the paper: `code`.
+    #[must_use]
+    pub fn comparison(
+        &self,
+        b: usize,
+        record: Hash512,
+        opening: Hash512,
+        code: ComparisonCode,
+        transfer_mark: bool,
+    ) -> &'static [u8] {
+        let bx = &self.boxes[b];
+        let body = SampleComparisonBody::new(&SampleComparisonParts {
+            election_id: self.election_id(),
+            ballot_style_id: BallotStyleId::new(text(bx.style)).unwrap(),
+            record_hash: record,
+            opening_hash: opening,
+            device_id: BoxId::new(text(bx.id)).unwrap(),
+            code,
+            transfer_mark,
+        })
+        .unwrap();
+        self.witnessed(
+            object(SCHEMA_SAMPLE_COMPARISON_BODY, &body),
+            &self.auditors_and_observers(),
+            0,
+        )
+    }
+
+    /// The auditors' finding on box `b` (the device under full
+    /// comparison), in time bucket `bucket`.
+    #[must_use]
+    pub fn finding(&self, b: usize, bucket: u64) -> &'static [u8] {
+        let bx = &self.boxes[b];
+        let body = AuditFindingBody::new(&AuditFindingParts {
+            election_id: self.election_id(),
+            ballot_style_id: BallotStyleId::new(text(bx.style)).unwrap(),
+            device_id: BoxId::new(text(bx.id)).unwrap(),
+            finding_hash: hash_of("audit-finding", &[self.eid.as_bytes(), bx.id.as_bytes()]),
+            time_bucket: TimeBucket::new(bucket),
+        })
+        .unwrap();
+        self.witnessed(
+            object(SCHEMA_AUDIT_FINDING_BODY, &body),
+            &self.auditors_and_observers(),
+            0,
+        )
+    }
+
+    /// The hand count of `style` in `unit` (every ballot counted by hand:
+    /// the paper truth), signed as a paper count is.
+    #[must_use]
+    pub fn hand_count(&self, style: &str, unit: &str, bucket: u64) -> &'static [u8] {
+        let (votes, invalid) = self.paper_truth(style, unit);
+        let body = HandCountReportBody::new(&PaperCountParts {
+            election_id: self.election_id(),
+            reporting_unit_id: ReportingUnitId::new(text(unit)).unwrap(),
+            ballot_style_id: BallotStyleId::new(text(style)).unwrap(),
+            votes: PaperVotes::new(&votes).unwrap(),
+            invalid,
+            time_bucket: TimeBucket::new(bucket),
+        })
+        .unwrap();
+        let chair = self
+            .chairs
+            .iter()
+            .find(|(u, _)| *u == unit)
+            .unwrap()
+            .1
+            .clone();
+        let who = [chair, self.observers[0].clone(), self.observers[1].clone()];
+        self.witnessed(object(SCHEMA_HAND_COUNT_REPORT_BODY, &body), &who, 0)
     }
 
     /// A dispute filing by the two authorities naming record `record` of
@@ -1889,7 +2123,7 @@ impl Election {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        let body = object(SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_DISPUTE_EVENT_BODY, &body);
         let who = [
             Person {
                 id: "commission",

@@ -12,6 +12,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`spec`] | What an election is made of (fictional names) |
+//! | [`audit`] | The comparison audit after the tally, as plan steps |
 //! | [`catalog`] | The quick, 지방선거-shaped and 국회의원선거-shaped elections |
 //! | [`day`] | One station's day, slot by slot, with alarms and the emergency slot |
 //! | [`election`] | The signed genesis and every event builder |
@@ -31,6 +32,7 @@
 //! elections are fictional and small; its device behaviour is a model,
 //! not firmware.
 
+pub mod audit;
 pub mod bundle;
 pub mod catalog;
 pub mod day;
@@ -45,7 +47,10 @@ pub mod util;
 use ityv_encoding::TimeBucket;
 use ityv_ledger::{check_anchor, check_board};
 use ityv_state::{HoldReason, Publication, Status};
-use ityv_verify::{Publications, Report, VerifiedGenesis, verify_genesis, verify_ledger};
+use ityv_verify::{
+    AuditInput, BeaconObservation, Publications, Report, VerifiedGenesis, verify_genesis,
+    verify_ledger_with,
+};
 
 use crate::ledger::{Ledger, lay_down};
 use crate::scenarios::Scenario;
@@ -92,12 +97,48 @@ pub fn genesis(scenario: &Scenario) -> &'static VerifiedGenesis<'static> {
     )
 }
 
-/// Runs the verifier over `scenario` laid down as `ledger`.
+/// The beacon observation of `scenario` (fixture data), as the console
+/// passes it.
+#[must_use]
+pub fn observation(scenario: &Scenario) -> Option<BeaconObservation<'static>> {
+    scenario.beacon.map(|b| BeaconObservation {
+        round: b.round,
+        output: b.output,
+        published: TimeBucket::new(b.published),
+    })
+}
+
+/// Runs the verifier over `scenario` laid down as `ledger`, with the
+/// scenario's beacon observation (as the console does) and without any
+/// restricted opening (as the public verifier).
 #[must_use]
 pub fn verify(scenario: &Scenario, ledger: &'static Ledger) -> Report<'static> {
+    verify_with(
+        scenario,
+        ledger,
+        &AuditInput {
+            beacon: observation(scenario),
+            openings: &[],
+        },
+    )
+}
+
+/// Runs the verifier over `scenario` laid down as `ledger` with `input`.
+#[must_use]
+pub fn verify_with(
+    scenario: &Scenario,
+    ledger: &'static Ledger,
+    input: &AuditInput<'_>,
+) -> Report<'static> {
     let events: &'static [&'static [u8]] = leak_slice(ledger.events.clone());
     let frames: &'static [u8] = leak_slice(ledger.frames.clone());
-    verify_ledger(genesis(scenario), frames, events, publications(scenario))
+    verify_ledger_with(
+        genesis(scenario),
+        frames,
+        events,
+        publications(scenario),
+        input,
+    )
 }
 
 /// The status and hold reasons (in code order) the verifier gives.

@@ -81,7 +81,7 @@ fn wasm_agrees(
     holds: &[ityv_state::HoldReason],
 ) {
     let bytes = bundle::encode(s, l);
-    let v = ityv_wasm::verify(&bytes, None);
+    let v = ityv_wasm::verify(&bytes, None, true);
     assert!(
         v.json.contains(&format!("\"status\":\"{status}\"")),
         "{}: {}",
@@ -136,12 +136,12 @@ fn bundles_are_byte_identical_across_runs() {
 
 #[test]
 fn the_wasm_reader_refuses_what_is_not_a_bundle() {
-    let v = ityv_wasm::verify(b"not a bundle at all", None);
+    let v = ityv_wasm::verify(b"not a bundle at all", None, true);
     assert!(v.json.contains("\"error\":\"bundle: Magic\""));
     let s = &scenarios(Set::Quick)[0];
     let mut bytes = bundle::encode(s, ledger(s));
     bytes.truncate(bytes.len() - 1);
-    let v = ityv_wasm::verify(&bytes, None);
+    let v = ityv_wasm::verify(&bytes, None, true);
     assert!(
         v.json.contains("\"error\":\"bundle: Truncated\""),
         "{}",
@@ -149,7 +149,7 @@ fn the_wasm_reader_refuses_what_is_not_a_bundle() {
     );
     // Another pin: the genesis stage refuses and nothing above it runs.
     let bytes = bundle::encode(s, ledger(s));
-    let v = ityv_wasm::verify(&bytes, Some(ityv_encoding::Hash512([7; 64])));
+    let v = ityv_wasm::verify(&bytes, Some(ityv_encoding::Hash512([7; 64])), true);
     assert!(v.json.contains("\"ok\":false"), "{}", v.json);
     assert!(v.json.contains("\"status\":\"HOLD_REVIEW\""), "{}", v.json);
 }
@@ -159,7 +159,7 @@ fn a_clean_report_carries_checkpoints_units_records_and_inclusion() {
     let s = &scenarios(Set::Quick)[0];
     assert_eq!(s.name, "quick-clean");
     let bytes = bundle::encode(s, ledger(s));
-    let v = ityv_wasm::verify(&bytes, None);
+    let v = ityv_wasm::verify(&bytes, None, true);
     for key in [
         "\"checkpoints\":{",
         "\"units\":[",
@@ -185,7 +185,7 @@ fn a_clean_report_carries_checkpoints_units_records_and_inclusion() {
         .into_iter()
         .find(|s| s.name == "fault-missing-coverage")
         .unwrap();
-    let v = ityv_wasm::verify(&bundle::encode(&s, ledger(&s)), None);
+    let v = ityv_wasm::verify(&bundle::encode(&s, ledger(&s)), None, true);
     let records = &v.json[v.json.find("\"records\":[").unwrap()..];
     assert!(records.contains("\"checkpoint\":null,\"included\":false"));
     assert!(records.contains("\"included\":true"));
