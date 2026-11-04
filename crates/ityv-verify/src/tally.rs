@@ -683,9 +683,9 @@ impl<'a> Ctx<'_, 'a> {
     /// The witnesses' time at frame `at`: the time bucket of the last valid
     /// checkpoint recorded before it (0 if none), as PROTOCOL.md §11.1
     /// says. Trustees and clerks declare their own buckets; the late-close
-    /// window is measured in this one (VC-057). The chain does not require
-    /// buckets to grow, so an earlier checkpoint's later bucket does not
-    /// count.
+    /// window is measured in this one (VC-057). The witnesses attest it
+    /// within their clock tolerance and the chain's buckets never decrease
+    /// (VC-012), so the last checkpoint's bucket is also the latest.
     fn witness_time(&self, at: Seq) -> TimeBucket {
         self.checkpoints
             .iter()

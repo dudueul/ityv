@@ -9,8 +9,9 @@
 //!    (`ityv_ledger::evaluate`, VC-014);
 //! 2. follow the previous valid checkpoint: sequence one more (or 1 with a
 //!    zero previous hash), previous hash the previous body's object hash,
-//!    tree size not smaller, the same election, ledger and key set, and
-//!    the pinned genesis (`ityv_ledger::validate_successor`, VC-012);
+//!    tree size and time bucket not smaller (the witnesses attest the
+//!    time), the same election, ledger and key set, and the pinned genesis
+//!    (`ityv_ledger::validate_successor`, VC-012);
 //! 3. commit to frames strictly before its own: `tree_size` is less than
 //!    the sequence number of the frame that carries it;
 //! 4. carry the root of the ledger tree over the first `tree_size` frame

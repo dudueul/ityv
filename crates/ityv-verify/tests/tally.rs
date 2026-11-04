@@ -343,19 +343,6 @@ fn a_scope_before_its_time_is_refused() {
         [(before_close, TallyEvent::Scope, TallyRefusal::Premature)]
     );
 
-    // The last checkpoint before the scope is what counts, not the latest
-    // bucket: witnesses past the window, then a later checkpoint dated
-    // inside it (the chain does not order buckets).
-    let mut book = Book::new(world());
-    let casts = box1_closed(&mut book);
-    book.checkpoint_at(READY + 1);
-    book.checkpoint_at(CLOSE_BUCKET + 50);
-    let backdated = book.q(scope(scope_body(&spec(STYLE1, RU1, &codes(&casts)))));
-    assert_eq!(
-        refused(&book.run()),
-        [(backdated, TallyEvent::Scope, TallyRefusal::Premature)]
-    );
-
     // Within the late-close window by the witnesses' time, though the
     // trustees date the scope after it; then after it: the second is
     // taken.

@@ -106,7 +106,7 @@ use ityv_encoding::{
     SampleComparisonBody, SampleComparisonParts, SampleOpeningBody, SampleOpeningRefParts,
     SchemaId, Seq, StationId, TimeBucket, WitnessedEvent, decode_object, schema_version,
 };
-use ityv_ledger::sorted_set_root;
+use ityv_ledger::{WITNESS_TIME_TOLERANCE, sorted_set_root};
 use ityv_state::{
     AuditPhase, Cap, FollowUp, HandCount, HoldReason, HoldSet, ObserverAccess, Rla, RosterEntry,
     RoundCount, SeedReadiness, Signed, admit_audit_commit, admit_audit_finding, admit_audit_freeze,
@@ -133,8 +133,12 @@ pub struct BeaconObservation<'i> {
     pub round: u64,
     /// Its published output, of any width.
     pub output: &'i [u8],
-    /// The time bucket of its publication: the binding checkpoint must be
-    /// witnessed strictly earlier, and the commit dated strictly earlier.
+    /// The time bucket in which the round's value became knowable: the
+    /// earliest of its scheduled and its observed publication, as the
+    /// 15-minute index from 00:00 UTC of the genesis's `election_epoch_day`
+    /// (days since the Unix epoch), rounded down (PROTOCOL.md §12.1). The
+    /// commit must be dated strictly earlier and the binding checkpoint at
+    /// least `WITNESS_TIME_TOLERANCE + 1` buckets earlier.
     pub published: TimeBucket,
 }
 
@@ -207,12 +211,27 @@ pub enum AuditRefusal {
     Checkpoint,
     /// The commit names another beacon (designation or round) than a
     /// freeze, the seed another round than the commit, or the seed's value
-    /// is not the beacon value of the output the caller observed.
+    /// is not the beacon value of the output the caller observed (an empty
+    /// output is refused).
     Beacon,
     /// The commit is dated at or after the observed beacon publication, or
-    /// the seed's binding checkpoint was not witnessed strictly before it:
-    /// the beacon value could have been known when the inputs were fixed.
+    /// the seed's binding checkpoint is not timed at least
+    /// `WITNESS_TIME_TOLERANCE + 1` buckets before it (a witness signing
+    /// after the publication attests at least `published − 1`): the beacon
+    /// value could have been known when the inputs were fixed. An empty
+    /// observed output is no observation of a value.
     Late,
+    /// The seed's binding checkpoint is timed before the commit it covers:
+    /// the witnesses attest time and the chain's time never decreases, so
+    /// a commit dated later than the checkpoint that covers it is not what
+    /// was witnessed.
+    Backdated,
+    /// A freeze's round tolerates as many discrepancies as the sample it
+    /// can draw from the frame holds (`threshold ≥ min(sample_size,
+    /// frame)`): every sample passes, so the rule rules nothing.
+    Rule,
+    /// The event names another election than the authorization's.
+    Election,
     /// The seed's dice hash is not the one the commit fixed.
     Commit,
     /// The commit's freezes root is not the root of the freezes taken.
@@ -463,6 +482,8 @@ pub struct CommitTaken {
     pub beacon_source: Hash512,
     /// The beacon round every freeze named.
     pub beacon_round: u64,
+    /// The time bucket it declares.
+    pub time_bucket: TimeBucket,
     /// The frame of its binding checkpoint, the first valid checkpoint that
     /// covers it, if the ledger has one.
     pub binding: Option<Seq>,
@@ -518,12 +539,15 @@ impl<'a> AuditStage<'a> {
         self.seed.as_ref()
     }
 
-    /// Whether every record opened in every style was reconstructed from a
-    /// supplied restricted body (a verifier with access and a full supply);
-    /// always false for the public verifier once anything is opened.
+    /// Whether something was opened and every record opened in every style
+    /// was reconstructed from a supplied restricted body (a verifier with
+    /// access and a full supply). False when nothing was opened (nothing
+    /// was shown, so nothing is established) and always false for the
+    /// public verifier.
     #[must_use]
     pub fn all_reconstructed(&self) -> bool {
-        self.styles.iter().all(|s| s.reconstructions().complete())
+        let opened = self.styles.iter().any(|s| !s.records.is_empty());
+        opened && self.styles.iter().all(|s| s.reconstructions().complete())
     }
 
     /// The events refused, in frame order.
@@ -625,6 +649,16 @@ fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
     decode_object(schema, schema_version(schema), bytes).ok()
 }
 
+/// The refusal for a gate's error: [`AuditRefusal::Election`] for a
+/// capability of another election, `otherwise` for the gate's own rule.
+fn gate_refusal(error: ityv_state::Error, otherwise: AuditRefusal) -> AuditRefusal {
+    if error == ityv_state::Error::Mismatch {
+        AuditRefusal::Election
+    } else {
+        otherwise
+    }
+}
+
 /// The refusal of a second event for what `taken` (a body hash) already
 /// answers: the same body again, or a conflict.
 fn again(taken: Hash512, body: &[u8]) -> AuditRefusal {
@@ -653,6 +687,8 @@ struct Ctx<'g, 'a> {
     records: BTreeMap<[u8; 64], FrameRecord<'a>>,
     /// The roster of every genesis state, built once.
     rosters: Vec<Vec<RosterEntry<'a>>>,
+    /// Every roster entry of each signer, with its state, in state order.
+    by_signer: BTreeMap<&'a [u8], Vec<(usize, RosterEntry<'a>)>>,
 }
 
 impl<'a> Ctx<'_, 'a> {
@@ -688,11 +724,14 @@ impl<'a> Ctx<'_, 'a> {
                 pairs.push((s.sig, committee));
                 continue;
             }
-            let found = rosters
-                .iter()
-                .rev()
+            let found = self
+                .by_signer
+                .get(s.signer_id.as_bytes())
+                .into_iter()
                 .flatten()
-                .filter(|r| r.get().signer_id.as_bytes() == s.signer_id.as_bytes())
+                .rev()
+                .filter(|(k, _)| *k <= state)
+                .map(|(_, r)| r)
                 .find(|r| {
                     Material::new(core::iter::once((s.sig, r.get().key)))
                         .is_some_and(|m| m.verify(&purpose, event.body_bytes()).is_some())
@@ -951,7 +990,16 @@ impl<'a> Work<'a> {
             .iter()
             .all(|s| s.is_some_and(|s| s.get() < seq.get()));
         admit_audit_freeze(&cap, p.election_id, scopes_taken)
-            .map_err(|_| AuditRefusal::Premature)?;
+            .map_err(|e| gate_refusal(e, AuditRefusal::Premature))?;
+        let frame = style.audit.frame_count;
+        if frame > 0
+            && p.rounds
+                .as_slice()
+                .iter()
+                .any(|r| u64::from(r.threshold) >= r.sample_size.min(frame))
+        {
+            return Err(AuditRefusal::Rule);
+        }
         let a = &mut style.audit;
         a.freeze = Some(seq);
         a.rounds = Some(p.rounds);
@@ -997,7 +1045,7 @@ impl<'a> Work<'a> {
             .filter_map(|s| s.freeze.as_ref())
             .collect();
         admit_audit_commit(&cap, p.election_id, freezes.len() == self.styles.len())
-            .map_err(|_| AuditRefusal::Premature)?;
+            .map_err(|e| gate_refusal(e, AuditRefusal::Premature))?;
         if !freezes
             .iter()
             .all(|(_, f)| f.beacon_source == p.beacon_source && f.beacon_round == p.beacon_round)
@@ -1022,6 +1070,7 @@ impl<'a> Work<'a> {
                 dice_hash: p.dice_hash,
                 beacon_source: p.beacon_source,
                 beacon_round: p.beacon_round,
+                time_bucket: p.time_bucket,
                 binding: ctx.binding_checkpoint(seq).map(|c| c.frame),
             },
         ));
@@ -1059,7 +1108,7 @@ impl<'a> Work<'a> {
                 bound: binding.is_some(),
             },
         )
-        .map_err(|_| AuditRefusal::Premature)?;
+        .map_err(|e| gate_refusal(e, AuditRefusal::Premature))?;
         let (Some(commit), Some(binding)) = (commit, binding) else {
             return Err(AuditRefusal::Premature);
         };
@@ -1072,16 +1121,29 @@ impl<'a> Work<'a> {
         if p.checkpoint_hash != binding.body_hash {
             return Err(AuditRefusal::Checkpoint);
         }
+        if binding.time_bucket.get() < commit.time_bucket.get() {
+            return Err(AuditRefusal::Backdated);
+        }
         let seed = audit_seed(&p.dice_hash, &p.beacon_value, &p.checkpoint_hash);
         if seed != p.seed {
             return Err(AuditRefusal::Recompute);
         }
         let observed = input.beacon.filter(|b| b.round == p.beacon_round);
         if let Some(b) = observed {
-            if beacon_value(&commit.beacon_source, b.round, b.output) != p.beacon_value {
+            if b.output.is_empty()
+                || beacon_value(&commit.beacon_source, b.round, b.output) != p.beacon_value
+            {
                 return Err(AuditRefusal::Beacon);
             }
-            if binding.time_bucket.get() >= b.published.get() {
+            // A witness signing at or after the publication attests at
+            // least `published − WITNESS_TIME_TOLERANCE`, so a binding
+            // checkpoint below that was witnessed before the value was out.
+            if binding
+                .time_bucket
+                .get()
+                .saturating_add(WITNESS_TIME_TOLERANCE)
+                >= b.published.get()
+            {
                 return Err(AuditRefusal::Late);
             }
         }
@@ -1129,7 +1191,7 @@ impl<'a> Work<'a> {
         }
         let called = style.calls_for(&p.record_hash, record.box_id.as_bytes());
         admit_sample_opening(viewing, p.election_id, called)
-            .map_err(|_| AuditRefusal::NotCalled)?;
+            .map_err(|e| gate_refusal(e, AuditRefusal::NotCalled))?;
         style.openings.insert(
             p.record_hash.0,
             (object_hash(q.body_bytes()), p.opening_hash),
@@ -1234,7 +1296,8 @@ impl<'a> Work<'a> {
         let cap = ctx
             .cap::<Rla>(p.time_bucket)
             .ok_or(AuditRefusal::Capability)?;
-        admit_audit_finding(&cap, p.election_id).map_err(|_| AuditRefusal::Subject)?;
+        admit_audit_finding(&cap, p.election_id)
+            .map_err(|e| gate_refusal(e, AuditRefusal::Election))?;
         let style = self
             .styles
             .get_mut(p.ballot_style_id.as_bytes())
@@ -1537,10 +1600,21 @@ pub fn verify_audit<'a>(
         trustees: Trustees::of(genesis),
         checkpoints: checkpoints.checkpoints(),
         records: frame,
+        by_signer: BTreeMap::new(),
         rosters: (0..genesis.state_count())
             .map(|k| genesis.roster_at(k))
             .collect(),
     };
+    let mut ctx = ctx;
+    for (k, roster) in ctx.rosters.iter().enumerate() {
+        for entry in roster {
+            ctx.by_signer
+                .entry(entry.get().signer_id.as_bytes())
+                .or_default()
+                .push((k, *entry));
+        }
+    }
+    let ctx = ctx;
     let mut work = Work {
         styles,
         commit: None,

@@ -1007,6 +1007,9 @@ pub(crate) struct Book {
     /// The filings of the disputes still open.
     pub(crate) disputes: Vec<Hash512>,
     pub(crate) last: Option<(u64, Hash512)>,
+    /// The witnesses' time of the last checkpoint: the chain's buckets
+    /// never decrease (VC-012).
+    pub(crate) bucket: u64,
 }
 
 impl Book {
@@ -1018,6 +1021,7 @@ impl Book {
             closes: Vec::new(),
             disputes: Vec::new(),
             last: None,
+            bucket: 0,
         };
         book.push(SCHEMA_SIGNED_GENESIS, world.signed);
         book.push(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, world.authorization);
@@ -1052,12 +1056,33 @@ impl Book {
     /// A checkpoint over every frame so far, after the last one, in the
     /// first bucket after the late-close window.
     pub(crate) fn checkpoint(&mut self) -> u64 {
-        self.checkpoint_at(READY + 1)
+        self.checkpoint_at((READY + 1).max(self.bucket))
     }
 
     /// A checkpoint over every frame so far, the witnesses' time
     /// `bucket`.
     pub(crate) fn checkpoint_at(&mut self, bucket: u64) -> u64 {
+        let body = self.checkpoint_body_at(bucket);
+        let seq = self.last.map_or(1, |(seq, _)| seq + 1);
+        self.last = Some((seq, object_hash(body)));
+        self.bucket = bucket;
+        let entries: Vec<WitnessSignatureEntry<'static>> = SIGNERS
+            .iter()
+            .map(|&i| WitnessSignatureEntry {
+                witness_id: id(WITNESS_IDS[i]),
+                signature: hybrid_signature(witness_signing(i), b"checkpoint", body),
+            })
+            .collect();
+        let signed = SignedCheckpointParts::new(body, leak_slice(entries)).unwrap();
+        self.push(
+            SCHEMA_SIGNED_CHECKPOINT,
+            object(SCHEMA_SIGNED_CHECKPOINT, SCHEMA_VERSION_1, &signed),
+        )
+    }
+
+    /// The body the next checkpoint over every frame so far would carry at
+    /// the witnesses' time `bucket`, without signing or recording it.
+    pub(crate) fn checkpoint_body_at(&self, bucket: u64) -> &'static [u8] {
         let (seq, previous) = self
             .last
             .map_or((1, Hash512::ZERO), |(seq, hash)| (seq + 1, hash));
@@ -1080,20 +1105,7 @@ impl Book {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        let body = object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &body);
-        self.last = Some((seq, object_hash(body)));
-        let entries: Vec<WitnessSignatureEntry<'static>> = SIGNERS
-            .iter()
-            .map(|&i| WitnessSignatureEntry {
-                witness_id: id(WITNESS_IDS[i]),
-                signature: hybrid_signature(witness_signing(i), b"checkpoint", body),
-            })
-            .collect();
-        let signed = SignedCheckpointParts::new(body, leak_slice(entries)).unwrap();
-        self.push(
-            SCHEMA_SIGNED_CHECKPOINT,
-            object(SCHEMA_SIGNED_CHECKPOINT, SCHEMA_VERSION_1, &signed),
-        )
+        object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &body)
     }
 
     pub(crate) fn run(&self) -> TallyStage<'static> {

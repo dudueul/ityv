@@ -457,7 +457,7 @@ fn seeded(book: &mut Book, casts: &[Cast], list: &[(u64, u32)]) -> (Hash512, Vec
     let body = freeze_body(STYLE1, &codes(casts), list);
     book.w(freeze(body));
     book.w(commit(commit_body(&[body], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let checkpoint = book.last.unwrap().1;
     book.w(seed(seed_body(checkpoint, |_| {})));
     let s = audit_seed(&DICE, &beacon(), &checkpoint);
@@ -740,6 +740,7 @@ fn a_restricted_body_must_be_the_records_canonical_opening() {
             closes: book.closes.clone(),
             disputes: book.disputes.clone(),
             last: book.last,
+            bucket: book.bucket,
         };
         book.q(reference_of(STYLE1, c.code, object_hash(bad)));
         let bodies: &'static [&'static [u8]] = leak_slice(std::vec![bad]);
@@ -833,7 +834,7 @@ fn a_freeze_follows_the_scopes_and_must_be_the_ledgers_frame() {
     ));
     let other = book.w(freeze(freeze_body(STYLE1, &all, &[(3, 0)])));
     book.w(commit(commit_body(&[wrong_body], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let checkpoint = book.last.unwrap().1;
     book.w(seed(seed_body(checkpoint, |_| {})));
     let r = report(&mut book, &observed());
@@ -889,7 +890,7 @@ fn without_rla_nothing_of_the_audit_is_taken() {
     let body = freeze_body(STYLE1, &codes(&casts), &[(2, 0)]);
     let at = book.w(freeze(body));
     let commit_at = book.w(commit(commit_body(&[body], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let checkpoint = book.last.unwrap().1;
     let seed_at = book.w(seed(seed_body(checkpoint, |_| {})));
     let finding_at = book.w(finding(STYLE1, B1.id, 0x0F));
@@ -931,7 +932,7 @@ fn the_seed_is_recomputed_and_bound_to_the_commit_and_its_binding_checkpoint() {
         &COMMITTEE_AND_OBSERVERS,
         Some(13),
     ));
-    let binding_frame = book.checkpoint();
+    let binding_frame = book.checkpoint_at(COMMIT_BUCKET);
     let binding = book.last.unwrap().1;
     // A checkpoint cut later, while the seed is being signed, never matters.
     book.checkpoint();
@@ -1024,7 +1025,7 @@ fn freezes_must_designate_one_beacon() {
     book.w(freeze(f2));
     // No commit can name both: the seed has none to follow.
     let at = book.w(commit(commit_body(&[f1, f2], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let seed_at = book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
     let r = report(&mut book, &observed());
     assert_eq!(
@@ -1048,7 +1049,7 @@ fn an_opening_is_taken_only_for_a_record_the_audit_calls_for() {
     let body = freeze_body(STYLE1, &frame, &list);
     book.w(freeze(body));
     book.w(commit(commit_body(&[body], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let checkpoint = book.last.unwrap().1;
     let s = audit_seed(&DICE, &beacon(), &checkpoint);
     let sample = drawn(&s, STYLE1, &casts, &list);
@@ -1648,7 +1649,7 @@ fn two_style_seeded(
     book.w(freeze(f1));
     book.w(freeze(f2));
     book.w(commit(commit_body(&[f1, f2], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let checkpoint = book.last.unwrap().1;
     book.w(seed(seed_body(checkpoint, |_| {})));
     let s = audit_seed(&DICE, &beacon(), &checkpoint);
@@ -1667,7 +1668,7 @@ fn every_style_must_conclude_for_paper_audited() {
     let f1 = freeze_body(STYLE1, &codes(&c1), &[(1, 0)]);
     book.w(freeze(f1));
     let early_commit = book.w(commit(commit_body(&[f1], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let early = book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
     let r = report(&mut book, &observed());
     assert_eq!(
@@ -1772,7 +1773,7 @@ fn the_operator_cannot_grind_the_seed() {
     let body = freeze_body(STYLE1, &codes(&casts), &list);
     book.w(freeze(body));
     book.w(commit(commit_body(&[body], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let binding = book.last.unwrap().1;
     let honest = drawn(
         &audit_seed(&DICE, &beacon(), &binding),
@@ -1818,7 +1819,7 @@ fn the_operator_cannot_grind_the_seed() {
     let body = freeze_body(STYLE1, &codes(&casts), &list);
     book.w(freeze(body));
     book.w(commit(commit_body(&[body], |_| {})));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let binding = book.last.unwrap().1;
     book.checkpoint();
     book.checkpoint();
@@ -1870,7 +1871,7 @@ fn the_commit_fixes_the_dice_and_the_freezes_before_the_beacon() {
     let conflict = book.w(commit(commit_body(&[body], |p| {
         p.dice_hash = Hash512([0xD3; 64]);
     })));
-    book.checkpoint();
+    book.checkpoint_at(COMMIT_BUCKET);
     let binding = book.last.unwrap().1;
     book.w(seed(seed_body(binding, |_| {})));
     let r = report(&mut book, &observed());
@@ -1905,24 +1906,169 @@ fn the_commit_fixes_the_dice_and_the_freezes_before_the_beacon() {
     assert!(r.audit().commit().is_none());
     assert_eq!(r.status().status(), Status::HoldReview);
 
-    // A binding checkpoint witnessed when the beacon round was published
-    // refuses the seed, even if a later one would be earlier.
+    // A binding checkpoint witnessed within the witnesses' tolerance of the
+    // publication (`published − 1`) refuses the seed: a witness signing
+    // after the publication attests that much. Two buckets before is in
+    // time.
+    for (bucket, late) in [
+        (PUBLISHED, true),
+        (PUBLISHED - 1, true),
+        (PUBLISHED - 2, false),
+    ] {
+        let (mut book, casts) = tallied(audit_world());
+        let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
+        book.w(freeze(body));
+        book.w(commit(commit_body(&[body], |_| {})));
+        book.checkpoint_at(bucket);
+        let binding = book.last.unwrap().1;
+        let at = book.w(seed(seed_body(binding, |_| {})));
+        let r = report(&mut book, &observed());
+        if late {
+            assert_eq!(
+                audit_refused(&r),
+                [(at, AuditEvent::Seed, AuditRefusal::Late)],
+                "{bucket}"
+            );
+        } else {
+            assert!(audit_refused(&r).is_empty(), "{bucket}");
+            assert!(r.audit().seed().unwrap().beacon_confirmed);
+        }
+    }
+}
+
+/// P1 of the second review: once the beacon is public the operator would
+/// have one more checkpoint signed at whatever time bucket gives the sample
+/// it wants. An honest witness signs only its own clock's bucket or the one
+/// before (VC-012), so after the publication it attests at least
+/// `published − 1`; the verifier takes a binding checkpoint only below
+/// that, and only at or after the commit. No bucket is both.
+#[test]
+fn a_binding_checkpoint_cannot_be_backdated_after_the_beacon() {
+    let tolerance = ityv_ledger::WITNESS_TIME_TOLERANCE;
     let (mut book, casts) = tallied(audit_world());
     let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
     book.w(freeze(body));
     book.w(commit(commit_body(&[body], |_| {})));
-    book.checkpoint_at(PUBLISHED);
+    for bucket in (READY + 1)..PUBLISHED + 2 {
+        let accepted = bucket >= COMMIT_BUCKET && bucket + tolerance < PUBLISHED;
+        // An honest witness whose clock is at or after the publication.
+        for now in PUBLISHED..PUBLISHED + 3 {
+            let signs = ityv_ledger::witness_time_ok(now, bucket, None);
+            assert!(!(accepted && signs), "bucket {bucket} at {now}");
+        }
+    }
+    // The verifier's side, on the ledger: a binding checkpoint timed
+    // before the commit it covers is refused, whatever its sample.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_at(COMMIT_BUCKET - 1);
     let binding = book.last.unwrap().1;
     let at = book.w(seed(seed_body(binding, |_| {})));
+    let sample = drawn(
+        &audit_seed(&DICE, &beacon(), &binding),
+        STYLE1,
+        &casts,
+        &[(1, 0)],
+    );
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r)[0],
+        (at, AuditEvent::Seed, AuditRefusal::Backdated)
+    );
+    assert_ne!(r.status().status(), Status::PaperAudited);
+    // Without an observation the rule still holds (it needs no beacon).
+    let r = report(&mut book, &AuditInput::default());
+    assert_eq!(
+        audit_refused(&r)[0],
+        (at, AuditEvent::Seed, AuditRefusal::Backdated)
+    );
+    // The commit's own bucket is fine.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_at(COMMIT_BUCKET);
+    book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
+    let r = report(&mut book, &observed());
+    assert!(audit_refused(&r).is_empty());
+}
+
+/// P1b of the second review: a checkpoint chain whose time goes back is
+/// invalid (VC-012): the chain ends there and the ledger is held.
+#[test]
+fn a_checkpoint_chain_whose_time_goes_back_is_invalid() {
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_at(PUBLISHED - 2);
+    let binding = book.last.unwrap().1;
+    book.checkpoint_at(READY + 2);
+    book.w(seed(seed_body(binding, |_| {})));
+    let r = verify_ledger_with(
+        book.world.genesis,
+        book.ledger.bytes(),
+        &book.ledger.events,
+        anchored(),
+        &observed(),
+    );
+    let findings = r.checkpoints().findings();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(
+        findings[0].kind,
+        ityv_verify::CheckpointFindingKind::Successor(ityv_ledger::Error::TimeWentBack)
+    );
+    assert_eq!(r.status().status(), Status::HoldReview);
+}
+
+#[test]
+fn a_rule_must_bind_within_the_frame() {
+    // One round of 10 tolerating 5 is a valid encoding, but the frame has
+    // three records: every sample of the frame passes.
+    let (mut book, casts) = tallied(audit_world());
+    let at = book.w(freeze(freeze_body(STYLE1, &codes(&casts), &[(10, 5)])));
     let r = report(&mut book, &observed());
     assert_eq!(
         audit_refused(&r),
-        [(at, AuditEvent::Seed, AuditRefusal::Late)]
+        [(at, AuditEvent::Freeze, AuditRefusal::Rule)]
     );
-    // Published one bucket later, the same ledger is in time.
-    let r = report(&mut book, &observed_at(BEACON_OUTPUT, PUBLISHED + 1));
+    assert!(r.audit().style(STYLE1).unwrap().freeze.is_none());
+    assert!(r.status().holds().contains(HoldReason::AuditFreezeRefused));
+    // A later round may be clipped by the frame as long as it still rules:
+    // two discrepancies of three.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0), (10, 2)]);
+    book.w(freeze(body));
+    let r = report(&mut book, &observed());
     assert!(audit_refused(&r).is_empty());
-    assert!(r.audit().seed().unwrap().beacon_confirmed);
+    // Three of three does not.
+    let (mut book, casts) = tallied(audit_world());
+    let at = book.w(freeze(freeze_body(
+        STYLE1,
+        &codes(&casts),
+        &[(1, 0), (10, 3)],
+    )));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r),
+        [(at, AuditEvent::Freeze, AuditRefusal::Rule)]
+    );
+}
+
+#[test]
+fn an_empty_beacon_output_observes_nothing() {
+    let (mut book, casts) = tallied(audit_world());
+    let (_, sample) = seeded(&mut book, &casts, &[(1, 0)]);
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed_at(b"", PUBLISHED));
+    assert!(r.audit().seed().is_none());
+    assert_eq!(audit_refused(&r)[0].2, AuditRefusal::Beacon);
+    assert_eq!(r.status().status(), Status::HoldReview);
 }
 
 #[test]
@@ -1967,6 +2113,11 @@ fn the_stage_shows_the_declared_rule_and_how_the_openings_were_supplied() {
             beacon_round: BEACON_ROUND,
         })
     );
+    // Before anything is opened nothing is established.
+    let (mut nothing, c) = tallied(audit_world());
+    seeded(&mut nothing, &c, &[(2, 0)]);
+    let empty = report(&mut nothing, &observed());
+    assert!(!empty.audit().all_reconstructed());
     // The public verifier: nothing supplied.
     let n = style.reconstructions();
     assert_eq!((n.opened, n.not_supplied, n.reconstructed), (2, 2, 0));
