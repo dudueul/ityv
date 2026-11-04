@@ -42,7 +42,7 @@ use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
     ENTRY_SET_COUNT, ElectionId, GenesisBody, GenesisEntry, Hash512, MAX_GENESIS_WITNESSES,
-    SCHEMA_VERSION_1, SetCommitment, SignedGenesis, WitnessRosterEntry, decode_object,
+    SetCommitment, SignedGenesis, WitnessRosterEntry, decode_object,
 };
 use ityv_ledger::{InclusionProof, verify_inclusion};
 
@@ -103,6 +103,12 @@ impl<T> Entry<T> {
             index: 0,
             head: TEST_HEAD,
         }
+    }
+
+    /// The same entry recorded under another head, for unit tests only.
+    #[cfg(test)]
+    pub(crate) fn with_head(self, head: Hash512) -> Self {
+        Self { head, ..self }
     }
 }
 
@@ -180,7 +186,7 @@ fn prove<'a, T: GenesisEntry<'a>>(
     proof: &InclusionProof,
 ) -> Result<Entry<T>, Error> {
     let schema = T::SET.schema().ok_or(Error::Decode)?;
-    let value: T = decode_object(schema, SCHEMA_VERSION_1, bytes).map_err(|_| Error::Decode)?;
+    let value: T = decode_object(schema, T::SET.version(), bytes).map_err(|_| Error::Decode)?;
     let set = sets.get(T::SET.index()).ok_or(Error::Decode)?;
     let hash = object_hash(bytes);
     let included = verify_inclusion(&set.root, set.count, index, &hash, proof)

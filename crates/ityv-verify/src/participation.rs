@@ -75,13 +75,14 @@ use core::cmp::Reverse;
 
 use ityv_crypto::Purpose;
 use ityv_crypto::hash::object_hash;
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     ActorSigs, COMMITTEE_ACTOR, ChamberCode, CheckinUnit, Decode, HYBRID_SIG_LEN, HYBRID_VK_LEN,
     Hash512, ModuleId, ModuleProvisioned, ObserverCountKind, OrgId, PURPOSE_MODULE_PROVISIONED,
     PURPOSE_PARTICIPATION_SET, PURPOSE_PARTY_KEY, ParticipationSet, PartyKeyCeremony, RosterRole,
     SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT,
-    SchemaId, Seq, StationId, WitnessedEvent, decode_object, is_party_chamber, keys_share_half,
+    SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
+    StationId, WitnessedEvent, decode_object, is_party_chamber, keys_share_half,
 };
 use ityv_state::{
     HoldReason, HoldSet, IssuanceCount, IssuanceTotals, ObserverCount, Primary, RosterEntry,
@@ -357,7 +358,7 @@ fn verifies(
 }
 
 fn decode<'a, T: Decode<'a>>(e: &IndexedEvent<'a>) -> Option<T> {
-    decode_object(e.schema, SCHEMA_VERSION_1, e.bytes?).ok()
+    decode_object(e.schema, schema_version(e.schema), e.bytes?).ok()
 }
 
 /// Who signed a provisioning or ceremony record.

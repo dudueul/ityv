@@ -451,6 +451,7 @@ use crate::schema::events::{
 };
 use crate::schema::genesis::{CaptureProfile, RosterRole, StationKind};
 use crate::schema::genesis_body::AmendmentReason;
+use crate::schema::tally::{ExclusionReason, ReceiptOutcome};
 use crate::schema::witnessed::EventRole;
 
 static E1: ElectionId<'static> = match ElectionId::new(b"E") {
@@ -480,7 +481,7 @@ static ORG_B: OrgId<'static> = match OrgId::new(b"B") {
 fn event_codes_are_exact() {
     let code: u8 = kani::any();
     let role = EventRole::from_code(code);
-    assert_eq!(role.is_some(), (1..=8).contains(&code));
+    assert_eq!(role.is_some(), (1..=9).contains(&code));
     if let Some(r) = role {
         assert_eq!(r.code(), code);
     }
@@ -509,7 +510,7 @@ fn event_codes_are_exact() {
             CaptureProfile::from_code(code).map(CaptureProfile::code),
             1..=3,
         ),
-        (RosterRole::from_code(code).map(RosterRole::code), 1..=4),
+        (RosterRole::from_code(code).map(RosterRole::code), 1..=5),
         (StationKind::from_code(code).map(StationKind::code), 1..=3),
         (
             AmendmentReason::from_code(code).map(AmendmentReason::code),
@@ -518,6 +519,14 @@ fn event_codes_are_exact() {
         (
             ObserverCountKind::from_code(code).map(ObserverCountKind::code),
             1..=2,
+        ),
+        (
+            ExclusionReason::from_code(code).map(ExclusionReason::code),
+            1..=8,
+        ),
+        (
+            ReceiptOutcome::from_code(code).map(ReceiptOutcome::code),
+            1..=5,
         ),
     ];
     for (decoded, range) in checks {

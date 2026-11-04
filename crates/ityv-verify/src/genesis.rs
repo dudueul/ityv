@@ -530,6 +530,17 @@ impl<'a> VerifiedGenesis<'a> {
         prove_in(g, &sets.routes, key)
     }
 
+    /// The reporting unit `key`, proved against state `state`.
+    #[must_use]
+    pub fn reporting_unit_entry_at(
+        &self,
+        state: usize,
+        key: &[u8],
+    ) -> Option<Entry<ReportingUnitEntry<'a>>> {
+        let (g, sets) = self.state(state)?;
+        prove_in(g, &sets.units, key)
+    }
+
     /// The station `station_id` of state `state`, if any.
     #[must_use]
     pub fn station_at(&self, state: usize, station_id: &[u8]) -> Option<&StationEntry<'a>> {

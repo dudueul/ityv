@@ -101,6 +101,10 @@ pub enum RosterRole {
     /// own status (a court or another body the law empowers, PROTOCOL.md
     /// §13).
     Authority = 4,
+    /// The chair of a district election commission (구·시·군 선관위
+    /// 위원장), who signs the paper count of a reporting unit
+    /// (PROTOCOL.md §11.5).
+    Chair = 5,
 }
 
 impl RosterRole {
@@ -118,6 +122,7 @@ impl RosterRole {
             2 => Some(Self::Observer),
             3 => Some(Self::Custodian),
             4 => Some(Self::Authority),
+            5 => Some(Self::Chair),
             _ => None,
         }
     }
@@ -221,6 +226,16 @@ impl EntrySet {
     #[must_use]
     pub const fn amendable(self) -> bool {
         self.index() < AMENDABLE_SET_COUNT
+    }
+
+    /// The schema version of the set's entries
+    /// ([`crate::schema_version`] of [`Self::schema`]).
+    #[must_use]
+    pub const fn version(self) -> u16 {
+        match self.schema() {
+            Some(schema) => crate::schema::schema_version(schema),
+            None => crate::schema::SCHEMA_VERSION_1,
+        }
     }
 
     /// The schema of the set's entries, or `None` for the appointment
@@ -724,17 +739,20 @@ impl<'a> GenesisEntry<'a> for StationProgressPolicy<'a> {
     }
 }
 
-/// One reporting unit (`reporting_units[]`, schema `0x0038`): the unit in
-/// which paper results are published by law. Each box names its unit
-/// ([`GenesisBox::reporting_unit_id`]); the unit states how many boxes
-/// name it, so a verifier holding the box set sees a box moved between
-/// units.
+/// One reporting unit (`reporting_units[]`, schema `0x0038`, version 2):
+/// the unit in which paper results are published by law. Each box names
+/// its unit ([`GenesisBox::reporting_unit_id`]); the unit states how many
+/// boxes name it, so a verifier holding the box set sees a box moved
+/// between units, and the district election commission whose chair
+/// reports its paper count (PROTOCOL.md §11.5): a chair of another
+/// commission cannot report the unit. Version 1 had no commission.
 ///
 /// Rule: `box_count ≥ 1` (`ValueOutOfRange`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReportingUnitEntry<'a> {
     unit_id: ReportingUnitId<'a>,
     box_count: u32,
+    commission_org: OrgId<'a>,
 }
 
 impl<'a> ReportingUnitEntry<'a> {
@@ -742,11 +760,26 @@ impl<'a> ReportingUnitEntry<'a> {
     ///
     /// # Errors
     /// `ValueOutOfRange` at 0 for no boxes.
-    pub const fn new(unit_id: ReportingUnitId<'a>, box_count: u32) -> Result<Self, Error> {
+    pub const fn new(
+        unit_id: ReportingUnitId<'a>,
+        box_count: u32,
+        commission_org: OrgId<'a>,
+    ) -> Result<Self, Error> {
         if box_count == 0 {
             return Err(Error::new(Kind::ValueOutOfRange, 0));
         }
-        Ok(Self { unit_id, box_count })
+        Ok(Self {
+            unit_id,
+            box_count,
+            commission_org,
+        })
+    }
+
+    /// The district election commission whose chair reports the unit's
+    /// paper count.
+    #[must_use]
+    pub const fn commission_org(&self) -> OrgId<'a> {
+        self.commission_org
     }
 
     /// The unit.
@@ -764,12 +797,16 @@ impl<'a> ReportingUnitEntry<'a> {
 
 impl Encode for ReportingUnitEntry<'_> {
     fn encoded_len(&self) -> usize {
-        self.unit_id.encoded_len().saturating_add(4)
+        self.unit_id
+            .encoded_len()
+            .saturating_add(4)
+            .saturating_add(self.commission_org.encoded_len())
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
         self.unit_id.encode(w)?;
-        w.write_u32(self.box_count)
+        w.write_u32(self.box_count)?;
+        self.commission_org.encode(w)
     }
 }
 
@@ -781,7 +818,11 @@ impl<'a> Decode<'a> for ReportingUnitEntry<'a> {
         if box_count == 0 {
             return Err(Error::new(Kind::ValueOutOfRange, at));
         }
-        Ok(Self { unit_id, box_count })
+        Ok(Self {
+            unit_id,
+            box_count,
+            commission_org: OrgId::decode(r)?,
+        })
     }
 }
 

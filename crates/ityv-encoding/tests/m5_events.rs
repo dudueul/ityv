@@ -95,8 +95,12 @@ macro_rules! check {
         let content = render($title, $schema, $vectors);
         check_file($name, &content);
         self_check(&content, |b| {
-            let v: $ty = decode_object($schema, SCHEMA_VERSION_1, b)?;
-            Ok(encode_to_vec($schema, SCHEMA_VERSION_1, &v))
+            let v: $ty = decode_object($schema, ityv_encoding::schema_version($schema), b)?;
+            Ok(encode_to_vec(
+                $schema,
+                ityv_encoding::schema_version($schema),
+                &v,
+            ))
         });
     }};
 }
@@ -105,7 +109,7 @@ fn kind<'a, T: Decode<'a> + core::fmt::Debug>(
     schema: SchemaId,
     bytes: &'a [u8],
 ) -> (ErrorKind, usize) {
-    let err = decode_object::<T>(schema, SCHEMA_VERSION_1, bytes).unwrap_err();
+    let err = decode_object::<T>(schema, ityv_encoding::schema_version(schema), bytes).unwrap_err();
     (err.kind(), err.offset())
 }
 
@@ -649,7 +653,11 @@ fn witnesses() -> [EventSig<'static>; 4] {
 
 fn event_bytes(body: &[u8], sigs: &[EventSig<'_>]) -> Vec<u8> {
     let event = WitnessedEvent::new(body, sigs).unwrap();
-    encode_to_vec(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event)
+    encode_to_vec(
+        SCHEMA_WITNESSED_EVENT,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
+        &event,
+    )
 }
 
 #[test]
@@ -672,8 +680,8 @@ fn witnessed_event_vectors() {
     b[c1_role_at] = EventRole::Observer.code();
     v.push(invalid("one clerk", b, "InvariantViolation", sigs_at));
     let mut b = bytes.clone();
-    b[c1_role_at] = 9;
-    v.push(invalid("role 9", b, "ValueOutOfRange", c1_role_at));
+    b[c1_role_at] = 10;
+    v.push(invalid("role 10", b, "ValueOutOfRange", c1_role_at));
     let mut b = bytes.clone();
     b[c1_role_at] = EventRole::Commission.code();
     v.push(invalid(
@@ -711,9 +719,17 @@ fn witnessed_role_rules() {
     ] {
         let event = WitnessedEvent::new(&body, &w).unwrap();
         assert_eq!(event.sig_count(), 4);
-        let bytes = encode_to_vec(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &event);
-        let back: WitnessedEvent<'_> =
-            decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, &bytes).unwrap();
+        let bytes = encode_to_vec(
+            SCHEMA_WITNESSED_EVENT,
+            ityv_encoding::SCHEMA_VERSION_WITNESSED,
+            &event,
+        );
+        let back: WitnessedEvent<'_> = decode_object(
+            SCHEMA_WITNESSED_EVENT,
+            ityv_encoding::SCHEMA_VERSION_WITNESSED,
+            &bytes,
+        )
+        .unwrap();
         assert_eq!(back, event);
         assert!(WitnessedEvent::new(&body, &with_device).is_err());
         assert!(WitnessedEvent::new(&body, &w[..3]).is_err());
@@ -803,7 +819,7 @@ fn witnessed_role_rules() {
     let mut obj = std::vec![0u8; HEADER_LEN];
     obj[..4].copy_from_slice(b"ITYV");
     obj[4..8].copy_from_slice(&0x0028u32.to_be_bytes());
-    obj[8..10].copy_from_slice(&1u16.to_be_bytes());
+    obj[8..10].copy_from_slice(&ityv_encoding::SCHEMA_VERSION_WITNESSED.to_be_bytes());
     obj.extend_from_slice(&env);
     fix_len(&mut obj);
     let (k, at) = kind::<WitnessedEvent<'_>>(SCHEMA_WITNESSED_EVENT, &obj);
@@ -929,12 +945,13 @@ fn genesis_entries() {
         (2, RosterRole::Observer),
         (3, RosterRole::Custodian),
         (4, RosterRole::Authority),
+        (5, RosterRole::Chair),
     ] {
         assert_eq!(RosterRole::from_code(code), Some(role));
         assert_eq!(role.code(), code);
     }
     assert_eq!(RosterRole::from_code(0), None);
-    assert_eq!(RosterRole::from_code(5), None);
+    assert_eq!(RosterRole::from_code(6), None);
     let _ = patterned::<1>(0);
 }
 
@@ -954,7 +971,7 @@ fn every_role_code() {
     for code in 0u8..=255 {
         match EventRole::from_code(code) {
             Some(role) => assert_eq!(role.code(), code),
-            None => assert!(code == 0 || code > 8),
+            None => assert!(code == 0 || code > 9),
         }
     }
 }

@@ -34,11 +34,12 @@ use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Purpose, Verified};
+use ityv_encoding::SCHEMA_VERSION_WITNESSED;
 use ityv_encoding::{
     BoxId, Day, DisputeAction, DisputeEventBody, DisputeType, EventRole, HYBRID_SIG_LEN,
     HYBRID_VK_LEN, Hash512, LegalOutcome, OrgId, RosterRole, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Seq, TallyEffect,
-    WitnessedEvent, decode_object,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_WITNESSED_EVENT, Seq, TallyEffect, WitnessedEvent,
+    decode_object,
 };
 use ityv_state::status::LegalReference;
 use ityv_state::{
@@ -66,6 +67,8 @@ pub(crate) struct DisputeStep {
 /// tokens need.
 struct Prepared<'a> {
     seq: Seq,
+    /// The event's object hash, as its frame names it.
+    hash: Hash512,
     event: WitnessedEvent<'a>,
     purpose: Purpose<'static>,
     material: Option<Material>,
@@ -87,7 +90,8 @@ fn material(event: &WitnessedEvent<'_>, genesis: &VerifiedGenesis<'_>) -> Option
             | EventRole::Sender
             | EventRole::Receiver
             | EventRole::Authority
-            | EventRole::Device => None,
+            | EventRole::Device
+            | EventRole::Chair => None,
         })
         .collect();
     Material::new(pairs?.into_iter())
@@ -140,7 +144,7 @@ fn prepare<'a>(
         .filter(|e| e.schema == SCHEMA_WITNESSED_EVENT)
         .filter_map(|e| {
             let event: WitnessedEvent<'a> =
-                decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_1, e.bytes?).ok()?;
+                decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_WITNESSED, e.bytes?).ok()?;
             let schema = event.body_schema();
             let (material, authority) = if schema == SCHEMA_DISPUTE_EVENT_BODY {
                 (material(&event, genesis), None)
@@ -156,6 +160,7 @@ fn prepare<'a>(
             };
             Some(Prepared {
                 seq: e.seq,
+                hash: e.hash,
                 purpose: Purpose::new(event.purpose())?,
                 material,
                 authority,
@@ -193,6 +198,9 @@ fn file<'r>(
 pub struct Decision<'a> {
     /// The frame that carries the decision.
     pub seq: Seq,
+    /// The decision event's object hash, as its frame names it: the basis
+    /// a tally scope cites for `LEGAL_EXCLUDED` (PROTOCOL.md §10.6 item 6).
+    pub event_hash: Hash512,
     /// The deciding authority, as the decision and the roster name it.
     pub authority_id: OrgId<'a>,
     /// Hash of the decision document.
@@ -299,6 +307,7 @@ fn decide<'a>(
         key,
         Decision {
             seq: p.seq,
+            event_hash: p.hash,
             authority_id: authority.get().org_id,
             document_hash: body.decision_doc_hash,
             outcome: body.outcome,

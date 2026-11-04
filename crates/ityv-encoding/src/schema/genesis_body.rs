@@ -259,8 +259,9 @@ pub struct GenesisParts<'a> {
 }
 
 /// The expected chamber at position `index` of a genesis with `parties`
-/// party chambers: `P1`…`Pn`, then `J`, `A`, `C`, `N`.
-fn expected_chamber(index: usize, parties: usize) -> Option<ChamberCode> {
+/// party chambers: `P1`…`Pn`, then `J`, `A`, `C`, `N` (`None` past `N`).
+#[must_use]
+pub fn expected_chamber(index: usize, parties: usize) -> Option<ChamberCode> {
     let code = if index < parties {
         index.checked_add(1)?
     } else {

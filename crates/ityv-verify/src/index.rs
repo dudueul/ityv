@@ -43,20 +43,22 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use ityv_crypto::hash::object_hash;
+use ityv_encoding::schema_version;
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
     CheckinUnitSwapBody, CustodyHandoffBody, Decode, DeviceAttestation, DisputeEventBody,
     ElectionId, FallbackBody, Hash512, ImprintAuditBody, IssuanceCountBody, LateBatchCloseBody,
-    LegalDecisionRefBody, ModuleProvisioned, ObserverCountAttestBody, ParticipationSet,
-    PartyKeyCeremony, ProgressBody, ProgressCheckBody, ProgressTick, SCHEMA_BATCH_ATTEST,
-    SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD,
-    SCHEMA_CHALLENGE_OPENING, SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY,
-    SCHEMA_DEVICE_ATTESTATION, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
-    SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    LegalDecisionRefBody, ModuleProvisioned, ObserverCountAttestBody, PaperCountReportBody,
+    ParticipationSet, PartyKeyCeremony, ProgressBody, ProgressCheckBody, ProgressTick,
+    QuorumSigned, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY,
+    SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
+    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DEVICE_ATTESTATION,
+    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
+    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
+    SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY,
     SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_CHECK_BODY,
-    SCHEMA_PROGRESS_TICK, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE,
-    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
+    SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY,
+    SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION,
     SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody, Seq, SignedGenesis,
     SignedLegalAuthorization, StationId, WitnessedEvent, decode_object,
 };
@@ -344,7 +346,7 @@ impl<'a> LedgerIndex<'a> {
 }
 
 fn decode<'a, T: Decode<'a>>(schema: SchemaId, bytes: &'a [u8]) -> Option<T> {
-    decode_object(schema, SCHEMA_VERSION_1, bytes).ok()
+    decode_object(schema, schema_version(schema), bytes).ok()
 }
 
 /// Whom a witnessed event concerns, and its election, from its body.
@@ -391,6 +393,11 @@ fn witnessed<'a>(event: &WitnessedEvent<'a>) -> Option<(Scope<'a>, ElectionId<'a
     } else if s == SCHEMA_BOX_UNIT_SWAP_BODY {
         let b = event.body::<BoxUnitSwapBody<'a>>(s).ok()?;
         (Scope::Box(b.parts().box_id), b.parts().election_id)
+    } else if s == SCHEMA_PAPER_COUNT_REPORT_BODY {
+        // A reporting unit's report: the tally stage reads it with the
+        // unit's scopes and openings.
+        let b = event.body::<PaperCountReportBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
     } else {
         return None;
     };
@@ -506,6 +513,22 @@ fn classify<'a>(
     } else if schema == SCHEMA_SIGNED_CHECKPOINT {
         let c = decode::<SignedCheckpoint<'a>>(schema, bytes)?;
         Classified::new(Scope::Election, Role::Other, c.body().parts().election_id)
+    } else if schema == SCHEMA_QUORUM_SIGNED {
+        // A tally scope or aggregate opening of a ballot style and
+        // reporting unit, or the receipt resolution of an out-of-district
+        // box: the tally stage reads every one.
+        let q = decode::<QuorumSigned<'a>>(schema, bytes)?;
+        let election = match (
+            q.tally_scope(),
+            q.aggregate_opening(),
+            q.receipt_resolution(),
+        ) {
+            (Some(t), _, _) => t.parts().election_id,
+            (None, Some(o), _) => o.parts().election_id,
+            (None, None, Some(r)) => r.parts().election_id,
+            (None, None, None) => return None,
+        };
+        Classified::new(Scope::Election, Role::Other, election)
     } else if schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION {
         let a = decode::<SignedLegalAuthorization<'a>>(schema, bytes)?;
         Classified::new(

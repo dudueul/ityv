@@ -895,3 +895,475 @@ mod participation {
         assert_eq!(decoded.message().share_count(), 3);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The tally (ENCODING.md §8.61–§8.64): `TallyScopeBody` 0x0043,
+// `AggregateOpeningBody` 0x0044, `QuorumSigned` 0x0045,
+// `PaperCountReportBody` 0x0046.
+// ---------------------------------------------------------------------------
+
+mod tally {
+    use super::common::{Vector, check_file, encode_to_vec, render, self_check};
+    use ityv_encoding::{
+        AggregateOpeningBody, AggregateOpeningParts, BallotStyleId, BoxId, ElectionId, Encode,
+        ExclusionEntry, ExclusionReason, Exclusions, HEADER_LEN, HYBRID_SIG_LEN, Hash512,
+        MAX_TALLY_COUNT, PaperCountParts, PaperCountReportBody, PaperVotes, QuorumSig,
+        QuorumSigned, RECEIPT_ENTRY_LEN, ReceiptEntries, ReceiptEntry, ReceiptOutcome,
+        ReceiptResolutionBody, ReceiptResolutionParts, ReportingUnitId,
+        SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
+        SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, Scalar32,
+        TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId, Writer, decode_object,
+    };
+    use std::vec::Vec;
+
+    static SIG_A: [u8; HYBRID_SIG_LEN] = [0xA1; HYBRID_SIG_LEN];
+    static SIG_B: [u8; HYBRID_SIG_LEN] = [0xB2; HYBRID_SIG_LEN];
+
+    fn e() -> ElectionId<'static> {
+        ElectionId::new(b"KR-2030-PRES").unwrap()
+    }
+
+    fn style() -> BallotStyleId<'static> {
+        BallotStyleId::new(b"S-11-0001").unwrap()
+    }
+
+    fn unit() -> ReportingUnitId<'static> {
+        ReportingUnitId::new(b"RU-11-01").unwrap()
+    }
+
+    fn valid(label: &'static str, bytes: Vec<u8>) -> Vector {
+        Vector {
+            label,
+            bytes,
+            expected: None,
+        }
+    }
+
+    fn invalid(label: &'static str, bytes: Vec<u8>, kind: &'static str, offset: usize) -> Vector {
+        Vector {
+            label,
+            bytes,
+            expected: Some((kind, offset)),
+        }
+    }
+
+    fn leak(v: Vec<u8>) -> &'static [u8] {
+        Vec::leak(v)
+    }
+
+    fn fix_len(v: &mut [u8]) {
+        let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+        v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    }
+
+    /// The encoding of `entries`, one after another.
+    fn entries(entries: &[ExclusionEntry]) -> &'static [u8] {
+        let mut out = std::vec![0u8; entries.len() * 129];
+        let mut w = Writer::new(&mut out);
+        for entry in entries {
+            entry.encode(&mut w).unwrap();
+        }
+        leak(out)
+    }
+
+    fn scope(exclusions: &'static [u8], included: u64) -> Vec<u8> {
+        let body = TallyScopeBody::new(&TallyScopeParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            reporting_unit_id: unit(),
+            included_count: included,
+            included_root: super::patterned(0x30),
+            no_record_count: 1,
+            exclusions: Exclusions::new(exclusions).unwrap(),
+            time_bucket: TimeBucket::new(2_000),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    fn two_exclusions() -> &'static [u8] {
+        entries(&[
+            ExclusionEntry {
+                record_hash: Hash512([0x10; 64]),
+                reason: ExclusionReason::TestBallot,
+                basis: super::patterned(0x40),
+            },
+            ExclusionEntry {
+                record_hash: Hash512([0x20; 64]),
+                reason: ExclusionReason::Unattested,
+                basis: super::patterned(0x41),
+            },
+        ])
+    }
+
+    // Offsets: header 16, election 4 + 12, style 4 + 9, unit 4 + 8.
+    const INCLUDED_AT: usize = HEADER_LEN + 16 + 13 + 12;
+    const NO_RECORD_AT: usize = INCLUDED_AT + 8 + 64;
+    const EXCLUSIONS_AT: usize = NO_RECORD_AT + 8;
+    const FIRST_AT: usize = EXCLUSIONS_AT + 4;
+    const SECOND_AT: usize = FIRST_AT + 129;
+
+    fn scope_vectors() -> Vec<Vector> {
+        let ok = scope(two_exclusions(), 3);
+        let mut v = std::vec![
+            valid("three_included_two_excluded", ok.clone()),
+            valid("nothing_excluded", scope(leak(Vec::new()), 0)),
+        ];
+        let mut b = ok.clone();
+        b[INCLUDED_AT..INCLUDED_AT + 8].copy_from_slice(&(MAX_TALLY_COUNT + 1).to_be_bytes());
+        v.push(invalid(
+            "included_count_above_2^26_-_1",
+            b,
+            "ValueOutOfRange",
+            INCLUDED_AT,
+        ));
+        let mut b = ok.clone();
+        b[NO_RECORD_AT..NO_RECORD_AT + 8].copy_from_slice(&(MAX_TALLY_COUNT + 1).to_be_bytes());
+        v.push(invalid(
+            "no_record_count_above_2^26_-_1",
+            b,
+            "ValueOutOfRange",
+            NO_RECORD_AT,
+        ));
+        let mut b = ok.clone();
+        b[EXCLUSIONS_AT..EXCLUSIONS_AT + 4].copy_from_slice(&65_537u32.to_be_bytes());
+        v.push(invalid(
+            "too_many_exclusions",
+            b,
+            "CountExceedsMax",
+            EXCLUSIONS_AT,
+        ));
+        for (label, code) in [("reason_0", 0u8), ("reason_9", 9)] {
+            let mut b = ok.clone();
+            b[FIRST_AT + 64] = code;
+            v.push(invalid(label, b, "ValueOutOfRange", FIRST_AT + 64));
+        }
+        let mut b = ok.clone();
+        b[FIRST_AT + 65..FIRST_AT + 129].fill(0);
+        v.push(invalid("no_basis", b, "InvalidPreviousHash", FIRST_AT + 65));
+        let mut b = ok.clone();
+        b[SECOND_AT..SECOND_AT + 64].fill(0x10);
+        v.push(invalid("record_listed_twice", b, "Duplicate", SECOND_AT));
+        let mut b = ok;
+        b[SECOND_AT..SECOND_AT + 64].fill(0x05);
+        v.push(invalid("records_not_ascending", b, "NotSorted", SECOND_AT));
+        v
+    }
+
+    fn opening(chunk: u8) -> Vec<u8> {
+        let body = AggregateOpeningBody::new(&AggregateOpeningParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            reporting_unit_id: unit(),
+            scope_hash: super::patterned(0x50),
+            chunk,
+            packed_sum: Scalar32([0x01; 32]),
+            rand_sum: Scalar32([0x02; 32]),
+            id_sum: Scalar32([0x03; 32]),
+            time_bucket: TimeBucket::new(2_100),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    const SCOPE_AT: usize = HEADER_LEN + 16 + 13 + 12;
+    const CHUNK_AT: usize = SCOPE_AT + 64;
+
+    fn opening_vectors() -> Vec<Vector> {
+        let ok = opening(0);
+        let mut v = std::vec![
+            valid("first_chunk", ok.clone()),
+            valid("last_chunk", opening(7))
+        ];
+        let mut b = ok.clone();
+        b[SCOPE_AT..SCOPE_AT + 64].fill(0);
+        v.push(invalid("no_scope", b, "InvalidPreviousHash", SCOPE_AT));
+        let mut b = ok;
+        b[CHUNK_AT] = 8;
+        v.push(invalid("chunk_8", b, "ValueOutOfRange", CHUNK_AT));
+        v
+    }
+
+    fn receipt(list: &[(u8, ReceiptOutcome)]) -> Vec<u8> {
+        let mut out = std::vec![0u8; list.len() * RECEIPT_ENTRY_LEN];
+        let mut w = Writer::new(&mut out);
+        for (fill, outcome) in list {
+            ReceiptEntry {
+                record_hash: Hash512([*fill; 64]),
+                outcome: *outcome,
+            }
+            .encode(&mut w)
+            .unwrap();
+        }
+        let body = ReceiptResolutionBody::new(&ReceiptResolutionParts {
+            election_id: e(),
+            box_id: BoxId::new(b"BOX-OUT-1").unwrap(),
+            entries: ReceiptEntries::new(leak(out)).unwrap(),
+            time_bucket: TimeBucket::new(1_900),
+        });
+        encode_to_vec(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    // Offsets: header 16, election 4 + 12, box 4 + 9, count 4.
+    const RECEIPT_FIRST_AT: usize = HEADER_LEN + 16 + 13 + 4;
+    const RECEIPT_SECOND_AT: usize = RECEIPT_FIRST_AT + RECEIPT_ENTRY_LEN;
+
+    fn receipt_vectors() -> Vec<Vector> {
+        let ok = receipt(&[
+            (0x10, ReceiptOutcome::Received),
+            (0x20, ReceiptOutcome::Damaged),
+            (0x30, ReceiptOutcome::Late),
+            (0x40, ReceiptOutcome::WrongDistrict),
+            (0x50, ReceiptOutcome::NotReceived),
+        ]);
+        let mut v = std::vec![
+            valid("every_outcome", ok.clone()),
+            valid("empty_box", receipt(&[]))
+        ];
+        for (label, code) in [("outcome_0", 0u8), ("outcome_6", 6)] {
+            let mut b = ok.clone();
+            b[RECEIPT_FIRST_AT + 64] = code;
+            v.push(invalid(label, b, "ValueOutOfRange", RECEIPT_FIRST_AT + 64));
+        }
+        let mut b = ok.clone();
+        b[RECEIPT_SECOND_AT..RECEIPT_SECOND_AT + 64].fill(0x10);
+        v.push(invalid(
+            "record_listed_twice",
+            b,
+            "Duplicate",
+            RECEIPT_SECOND_AT,
+        ));
+        let mut b = ok.clone();
+        b[RECEIPT_SECOND_AT..RECEIPT_SECOND_AT + 64].fill(0x05);
+        v.push(invalid(
+            "records_not_ascending",
+            b,
+            "NotSorted",
+            RECEIPT_SECOND_AT,
+        ));
+        let mut b = ok;
+        b[RECEIPT_FIRST_AT - 4..RECEIPT_FIRST_AT].copy_from_slice(&65_537u32.to_be_bytes());
+        v.push(invalid(
+            "too_many_entries",
+            b,
+            "CountExceedsMax",
+            RECEIPT_FIRST_AT - 4,
+        ));
+        v
+    }
+
+    fn sig(id: &'static [u8], sig: &'static [u8; HYBRID_SIG_LEN]) -> QuorumSig<'static> {
+        QuorumSig {
+            trustee_id: TrusteeId::new(id).unwrap(),
+            sig,
+        }
+    }
+
+    fn quorum(body: Vec<u8>) -> Vec<u8> {
+        let body = leak(body);
+        let sigs = [sig(b"T-A", &SIG_A), sig(b"T-J", &SIG_B)];
+        let event = QuorumSigned::new(body, &sigs).unwrap();
+        encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event)
+    }
+
+    fn paper(votes: &[u64]) -> Vec<u8> {
+        let body = PaperCountReportBody::new(&PaperCountParts {
+            election_id: e(),
+            reporting_unit_id: unit(),
+            ballot_style_id: style(),
+            votes: PaperVotes::new(votes).unwrap(),
+            invalid: 4,
+            time_bucket: TimeBucket::new(2_200),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    /// The object header of a `QuorumSigned`, body length still zero.
+    fn quorum_header() -> Vec<u8> {
+        let mut h = std::vec![0u8; HEADER_LEN];
+        h[0..4].copy_from_slice(b"ITYV");
+        h[4..8].copy_from_slice(&SCHEMA_QUORUM_SIGNED.get().to_be_bytes());
+        h[8..10].copy_from_slice(&SCHEMA_VERSION_1.to_be_bytes());
+        h
+    }
+
+    fn quorum_vectors() -> Vec<Vector> {
+        let body_len = opening(0).len();
+        let ok = quorum(opening(0));
+        let count_at = HEADER_LEN + 4 + body_len;
+        let second_at = count_at + 4 + 4 + 3 + HYBRID_SIG_LEN;
+        let mut v = std::vec![
+            valid("opening_two_trustees", ok.clone()),
+            valid("scope_two_trustees", quorum(scope(two_exclusions(), 3))),
+            valid(
+                "receipt_resolution_two_trustees",
+                quorum(receipt(&[(0x10, ReceiptOutcome::Received)]))
+            ),
+        ];
+        let mut b = ok[..count_at].to_vec();
+        b.extend_from_slice(&0u32.to_be_bytes());
+        fix_len(&mut b);
+        v.push(invalid("no_signature", b, "InvariantViolation", count_at));
+        let mut b = ok.clone();
+        b[count_at..count_at + 4].copy_from_slice(&65u32.to_be_bytes());
+        v.push(invalid(
+            "sixty_five_signatures",
+            b,
+            "CountExceedsMax",
+            count_at,
+        ));
+        let mut b = ok.clone();
+        b[second_at + 4 + 2] = b'A';
+        v.push(invalid("trustee_twice", b, "Duplicate", second_at));
+        let mut b = ok.clone();
+        b[second_at + 4 + 2] = b'0';
+        v.push(invalid("trustees_not_ascending", b, "NotSorted", second_at));
+        let mut b = ok;
+        b[HEADER_LEN + 4 + CHUNK_AT] = 8;
+        v.push(invalid(
+            "opening_of_chunk_8",
+            b,
+            "ValueOutOfRange",
+            HEADER_LEN + 4 + CHUNK_AT,
+        ));
+        // A paper count report is not a body a quorum signs.
+        let other = paper(&[1, 2]);
+        let mut wrapped = quorum_header();
+        wrapped.extend_from_slice(&u32::try_from(other.len()).unwrap().to_be_bytes());
+        wrapped.extend_from_slice(&other);
+        wrapped.extend_from_slice(&1u32.to_be_bytes());
+        wrapped.extend_from_slice(&3u32.to_be_bytes());
+        wrapped.extend_from_slice(b"T-A");
+        wrapped.extend_from_slice(&SIG_A);
+        fix_len(&mut wrapped);
+        v.push(invalid(
+            "paper_count_body",
+            wrapped,
+            "SchemaMismatch",
+            HEADER_LEN + 4 + 4,
+        ));
+        v
+    }
+
+    // Offsets: header 16, election 4 + 12, unit 4 + 8, style 4 + 9.
+    const VOTES_AT: usize = HEADER_LEN + 16 + 12 + 13;
+    const FIRST_VOTE_AT: usize = VOTES_AT + 4;
+
+    fn paper_vectors() -> Vec<Vector> {
+        let ok = paper(&[120, 75, 3]);
+        let invalid_at = FIRST_VOTE_AT + 3 * 8;
+        let mut v = std::vec![
+            valid("three_candidates", ok.clone()),
+            valid("one_candidate", paper(&[0]))
+        ];
+        let mut b = ok[..VOTES_AT].to_vec();
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&ok[invalid_at..]);
+        fix_len(&mut b);
+        v.push(invalid("no_candidate", b, "InvariantViolation", VOTES_AT));
+        let mut b = ok.clone();
+        b[VOTES_AT..VOTES_AT + 4].copy_from_slice(&71u32.to_be_bytes());
+        v.push(invalid(
+            "seventy_one_candidates",
+            b,
+            "CountExceedsMax",
+            VOTES_AT,
+        ));
+        let mut b = ok.clone();
+        b[FIRST_VOTE_AT..FIRST_VOTE_AT + 8].copy_from_slice(&(MAX_TALLY_COUNT + 1).to_be_bytes());
+        v.push(invalid(
+            "votes_above_2^26_-_1",
+            b,
+            "ValueOutOfRange",
+            FIRST_VOTE_AT,
+        ));
+        let mut b = ok;
+        b[invalid_at..invalid_at + 8].copy_from_slice(&(MAX_TALLY_COUNT + 1).to_be_bytes());
+        v.push(invalid(
+            "invalid_above_2^26_-_1",
+            b,
+            "ValueOutOfRange",
+            invalid_at,
+        ));
+        v
+    }
+
+    #[test]
+    fn tally_scope_vectors_are_current_and_self_consistent() {
+        let content = render("TallyScopeBody", SCHEMA_TALLY_SCOPE_BODY, &scope_vectors());
+        check_file("tally_scope_body.txt", &content);
+        self_check(&content, |b| {
+            let v: TallyScopeBody<'_> =
+                decode_object(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, &v))
+        });
+    }
+
+    #[test]
+    fn aggregate_opening_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "AggregateOpeningBody",
+            SCHEMA_AGGREGATE_OPENING_BODY,
+            &opening_vectors(),
+        );
+        check_file("aggregate_opening_body.txt", &content);
+        self_check(&content, |b| {
+            let v: AggregateOpeningBody<'_> =
+                decode_object(SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_AGGREGATE_OPENING_BODY,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
+        });
+    }
+
+    #[test]
+    fn quorum_signed_vectors_are_current_and_self_consistent() {
+        let content = render("QuorumSigned", SCHEMA_QUORUM_SIGNED, &quorum_vectors());
+        check_file("quorum_signed.txt", &content);
+        self_check(&content, |b| {
+            let v: QuorumSigned<'_> = decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &v))
+        });
+    }
+
+    #[test]
+    fn receipt_resolution_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "ReceiptResolutionBody",
+            SCHEMA_RECEIPT_RESOLUTION_BODY,
+            &receipt_vectors(),
+        );
+        check_file("receipt_resolution_body.txt", &content);
+        self_check(&content, |b| {
+            let v: ReceiptResolutionBody<'_> =
+                decode_object(SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_RECEIPT_RESOLUTION_BODY,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
+        });
+    }
+
+    #[test]
+    fn paper_count_report_vectors_are_current_and_self_consistent() {
+        let content = render(
+            "PaperCountReportBody",
+            SCHEMA_PAPER_COUNT_REPORT_BODY,
+            &paper_vectors(),
+        );
+        check_file("paper_count_report_body.txt", &content);
+        self_check(&content, |b| {
+            let v: PaperCountReportBody<'_> =
+                decode_object(SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_VERSION_1, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_PAPER_COUNT_REPORT_BODY,
+                SCHEMA_VERSION_1,
+                &v,
+            ))
+        });
+    }
+}

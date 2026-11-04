@@ -505,7 +505,7 @@ fn witnessed_keyed(
         .collect();
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }
@@ -1709,6 +1709,7 @@ fn add_box(d: &mut Draft) {
     d.units[1] = ityv_encoding::ReportingUnitEntry::new(
         ityv_encoding::ReportingUnitId::new(b"RU-2").unwrap(),
         2,
+        ityv_encoding::OrgId::new(b"NEC-D").unwrap(),
     )
     .unwrap();
 }

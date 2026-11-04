@@ -65,7 +65,7 @@ fn kind_of<'a, T: Decode<'a> + core::fmt::Debug>(
     schema: ityv_encoding::SchemaId,
     bytes: &'a [u8],
 ) -> (ErrorKind, usize) {
-    let err = decode_object::<T>(schema, SCHEMA_VERSION_1, bytes).unwrap_err();
+    let err = decode_object::<T>(schema, ityv_encoding::schema_version(schema), bytes).unwrap_err();
     (err.kind(), err.offset())
 }
 

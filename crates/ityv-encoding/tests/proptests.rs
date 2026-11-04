@@ -35,12 +35,14 @@ const MASKS: [u8; 3] = [0x01, 0x80, 0xff];
 macro_rules! check_canonical {
     ($ty:ty, $schema:expr, $bytes:expr) => {{
         let bytes: &[u8] = $bytes;
-        let original: $ty = decode_object($schema, SCHEMA_VERSION_1, bytes).unwrap();
+        let original: $ty =
+            decode_object($schema, ityv_encoding::schema_version($schema), bytes).unwrap();
         for i in 0..bytes.len() {
             for mask in MASKS {
                 let mut mutated = bytes.to_vec();
                 mutated[i] ^= mask;
-                let outcome: Result<$ty, _> = decode_object($schema, SCHEMA_VERSION_1, &mutated);
+                let outcome: Result<$ty, _> =
+                    decode_object($schema, ityv_encoding::schema_version($schema), &mutated);
                 if let Ok(other) = outcome {
                     prop_assert_ne!(
                         other,
@@ -48,13 +50,14 @@ macro_rules! check_canonical {
                         "mutation at {} decoded to the same value",
                         i
                     );
-                    let re = encode_to_vec($schema, SCHEMA_VERSION_1, &other);
+                    let re = encode_to_vec($schema, ityv_encoding::schema_version($schema), &other);
                     prop_assert_eq!(re, mutated, "re-encoding differs after mutation at {}", i);
                 }
             }
         }
         for k in 0..bytes.len() {
-            let prefix: Result<$ty, _> = decode_object($schema, SCHEMA_VERSION_1, &bytes[..k]);
+            let prefix: Result<$ty, _> =
+                decode_object($schema, ityv_encoding::schema_version($schema), &bytes[..k]);
             prop_assert!(prefix.is_err(), "proper prefix of length {} decoded", k);
         }
     }};

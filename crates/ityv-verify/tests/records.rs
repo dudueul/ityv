@@ -170,7 +170,7 @@ fn witnessed(schema: SchemaId, body: &'static [u8], device: bool) -> &'static [u
         .collect();
     object(
         SCHEMA_WITNESSED_EVENT,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_WITNESSED,
         &WitnessedEvent::new(body, &sigs).unwrap(),
     )
 }
@@ -690,6 +690,12 @@ fn a_record_whose_proof_or_style_fails_is_rejected() {
         style: b"STYLE-9",
         ..rec(5)
     });
+    // A style of the genesis, but another box's, with a valid proof: the
+    // tally could not count it in this box's scope (§11.1).
+    let foreign_style = record(&Rec {
+        style: b"STYLE-2",
+        ..rec(6)
+    });
     let run = go(&[
         w(opened()),
         r(recs[0]),
@@ -697,17 +703,51 @@ fn a_record_whose_proof_or_style_fails_is_rejected() {
         r(recs[2]),
         r(other_box),
         r(unknown_style),
+        r(foreign_style),
         b(batch(&bat(0, 1, 3, &codes))),
     ]);
     assert_eq!(
         rejected(&run),
-        [(7, RecordRefusal::Proof), (8, RecordRefusal::Style)]
+        [
+            (7, RecordRefusal::Proof),
+            (8, RecordRefusal::Style),
+            (9, RecordRefusal::Style)
+        ]
     );
     let rep = report(&run);
     assert_eq!(rep.rejected[0].tracking_code, code(other_box));
     assert!(rep.holds.contains(HoldReason::RecordRejected));
     assert_eq!(rep.records.len(), 3);
     assert!(run.records.holds().contains(HoldReason::RecordRejected));
+}
+
+#[test]
+fn a_record_of_the_style_an_amendment_took_from_its_box_is_rejected() {
+    // BOX-1 is STYLE-1 in the genesis and STYLE-2 after the amendment: the
+    // tally files the box under STYLE-2, so a STYLE-1 record cast before
+    // the amendment would be counted as STYLE-2 votes. It is rejected.
+    fn to_style_2(d: &mut Draft) {
+        for b in &mut d.boxes {
+            if b.box_id.as_bytes() == BOX {
+                b.ballot_style_id = BallotStyleId::new(b"STYLE-2").unwrap();
+            }
+        }
+    }
+    let world = world_with(Some(to_style_2));
+    let before = record(&rec(1));
+    let run = run_in(
+        &world,
+        &[
+            w(opened()),
+            r(before),
+            (SCHEMA_SIGNED_GENESIS, world.amendment.unwrap()),
+        ],
+    );
+    assert_eq!(rejected(&run), [(4, RecordRefusal::Style)]);
+    assert!(report(&run).holds.contains(HoldReason::RecordRejected));
+    // Without the amendment the same record is taken.
+    let run = go(&[w(opened()), r(before)]);
+    assert!(rejected(&run).is_empty());
 }
 
 #[test]

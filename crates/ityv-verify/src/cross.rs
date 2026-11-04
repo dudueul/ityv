@@ -23,7 +23,8 @@
 //!   every check-in unit carries exactly one module of each party chamber;
 //!   no module is listed by two devices; no module belongs to a party
 //!   chamber the genesis does not have; and each chamber has exactly
-//!   `n_c` trustees (VC-067, VC-017);
+//!   `n_c` trustees, at most eight (the threshold sharing's capacity, so
+//!   that a trustee quorum can be checked at all) (VC-067, VC-017);
 //! * no two devices share an identifier (boxes, check-in units and
 //!   modules), so a device attestation names exactly one device;
 //! * every registered key is a valid key, and no two keys of the state
@@ -39,6 +40,7 @@
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
+use ityv_crypto::MAX_MEMBERS;
 use ityv_encoding::{
     ChamberCode, EntrySet, GenesisBody, HYBRID_VK_LEN, MLDSA87_VK_HALF, ModuleIds, RosterRole,
     RosterSigner,
@@ -319,6 +321,9 @@ pub(crate) fn check<'a>(
     }
     let mut listed: ChamberTally = [0; CHAMBER_CODES];
     for c in body.chambers() {
+        if usize::from(c.members) > MAX_MEMBERS {
+            return Err(Error::set(state, EntrySet::Trustees, Rule::ChamberSize));
+        }
         if let Some(slot) = usize::from(c.chamber.code())
             .checked_sub(1)
             .and_then(|i| listed.get_mut(i))

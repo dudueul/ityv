@@ -59,7 +59,13 @@ pub(crate) fn decode_exact<'a, T: Decode<'a>>(bytes: &'a [u8]) -> Result<T, Enco
 /// Encodes a complete object (header plus body).
 pub(crate) fn object_to_vec<T: Encode>(schema: SchemaId, value: &T) -> Vec<u8> {
     let mut out = std::vec![0u8; value.encoded_len() + 16];
-    let n = encode_object(schema, SCHEMA_VERSION_1, value, &mut out).unwrap();
+    let n = encode_object(
+        schema,
+        ityv_encoding::schema_version(schema),
+        value,
+        &mut out,
+    )
+    .unwrap();
     out.truncate(n);
     out
 }

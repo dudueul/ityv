@@ -118,7 +118,7 @@ offset  size  field
 | 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
 | 0x0026 | `ModuleProvisioned` | 1 | 모듈 발급 기록: 본체·패드 카드 ID, KEM 공개키, 챔버 엔트로피 약속, 보안 칩 여부, 정당 PRF 키 확인값(§8.31, ADR-0024) |
 | 0x0027 | `PartyKeyCeremony` | 1 | 정당 열쇠 생성 절차 기록. 키 자료 없음(§8.32, ADR-0024) |
-| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025) |
+| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다 |
 | 0x0029 | `BoxOpenedBody` | 1 | 투표함 개시 본문(§8.36) |
 | 0x002A | `FallbackBody` | 1 | `FallbackDeclared`·`FallbackEnded` 본문(§8.37) |
 | 0x002B | `IssuanceCountBody` | 1 | 투표소 교부 회계 본문(§8.38) |
@@ -134,9 +134,9 @@ offset  size  field
 | 0x0035 | `GenesisBox` | 1 | genesis 항목: 예정 투표함(§8.43) |
 | 0x0036 | `StationEntry` | 1 | genesis 항목: 투표소(§8.49) |
 | 0x0037 | `StationProgressPolicy` | 1 | genesis 항목: 투표소 진행 경보 기준(§8.48) |
-| 0x0038 | `ReportingUnitEntry` | 1 | genesis 항목: 보고 단위(§8.50) |
+| 0x0038 | `ReportingUnitEntry` | 1 | genesis 항목: 보고 단위(§8.50). 버전 2(ADR-0035): 종이 개표를 보고하는 구·시·군 선관위 `commission_org`를 더한다 |
 | 0x0039 | `CustodyRoute` | 1 | genesis 항목: 보관 경로(§8.43) |
-| 0x003A | `RosterSigner` | 1 | genesis 항목: 서명자 명부(§8.43) |
+| 0x003A | `RosterSigner` | 1 | genesis 항목: 서명자 명부(§8.43). 버전 2(ADR-0035): 역할 5(구·시·군 선관위 위원장)를 받는다 |
 | 0x003B | `ModuleEntry` | 1 | genesis 항목: 챔버 모듈(§8.51) |
 | 0x003C | `BallotStyleEntry` | 1 | genesis 항목: 투표양식(§8.52) |
 | 0x003D | `TrusteeEntry` | 1 | genesis 항목: 신뢰기관 구성원(§8.53) |
@@ -145,6 +145,11 @@ offset  size  field
 | 0x0040 | `CheckinUnitSwapBody` | 1 | 카운터·가명 유닛 교체 본문(§8.58). 서명은 `WitnessedEvent` |
 | 0x0041 | `BoxUnitSwapBody` | 1 | 커밋먼트 유닛 교체 본문(§8.59). 서명은 `WitnessedEvent` |
 | 0x0042 | `SignedLegalAuthorization` | 1 | 법적 승인 본문 바이트 + 선관위·위원회 하이브리드 서명(§8.60, ADR-0030) |
+| 0x0043 | `TallyScopeBody` | 1 | 집계 범위: 투표양식·보고 단위별 포함 기록 수와 root, 비상 투입 수, 제외 목록(기록 해시·사유·근거)(§8.61, ADR-0035). 서명은 `QuorumSigned` |
+| 0x0044 | `AggregateOpeningBody` | 1 | 합계 열기: 범위 본문 해시, 청크, `T_j`·`R_j`·`S`(§8.62). 서명은 `QuorumSigned` |
+| 0x0045 | `QuorumSigned` | 1 | 신뢰기관 정족수의 봉투: 본문 객체 바이트 + 참여 구성원 서명(§8.63). 서명 메시지는 본문 해시와 참여 구성원 목록 |
+| 0x0046 | `PaperCountReportBody` | 1 | 보고 단위별 종이 개표 결과: 후보별 득표, 무효 수(§8.64). 서명은 `WitnessedEvent` |
+| 0x0047 | `ReceiptResolutionBody` | 1 | 관외 투표함 기록별 수령 대조 결과(§8.65, PROTOCOL §10.6). 서명은 `QuorumSigned` |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -592,6 +597,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 0x003F | `ObserverCountAttestBody` | `observer-count` | 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음 |
 | 0x0040 | `CheckinUnitSwapBody` | `checkin-swap` | 사무원 2 이상, 서로 다른 조직 참관인 2 이상 |
 | 0x0041 | `BoxUnitSwapBody` | `box-swap` | 같음 |
+| 0x0046 | `PaperCountReportBody` | `paper-count` | 구·시·군 선관위 위원장 1(그 보고 단위의 `commission_org`, `ityv-state`가 확인), 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음 |
 
 #### 8.33 `CustodyHandoffBody` (0x0008)
 
@@ -715,9 +721,9 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
 | 1 | `body` | `Bytes<2048>` | 위 표의 본문 객체 전체. 다른 스키마는 `SchemaMismatch` |
-| 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
+| 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치, 9 구·시·군 선관위 위원장(버전 2부터). 그 밖의 코드는 `ValueOutOfRange`. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
 
-본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
+`WitnessedEvent`는 버전 2다(ADR-0035). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028). 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
 
 #### 8.43 genesis 항목 `GenesisBox`(0x0035), `CustodyRoute`(0x0039), `RosterSigner`(0x003A)
 
@@ -727,7 +733,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 `CustodyRoute`(`custody_routes[]`, 열쇠 `route_id`): `route_id: Ident<64>` ‖ `count_at_origin: bool` ‖ `stops: Array<Ident<64>, 8>`(조직 순서, 2개 이상, 이웃한 두 조직이 같으면 `InvariantViolation`).
 
-`RosterSigner`(서명자 명부, 열쇠 `signer_id`): `signer_id: Ident<64>` ‖ `role: u8`(1 사무원, 2 참관인, 3 보관 담당자, 4 법정 권한 기관) ‖ `org_id: Ident<64>` ‖ `station_id: Option<Ident<64>>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님, VC-009).
+`RosterSigner`(서명자 명부, 열쇠 `signer_id`, 버전 2): `signer_id: Ident<64>` ‖ `role: u8`(1 사무원, 2 참관인, 3 보관 담당자, 4 법정 권한 기관, 5 구·시·군 선관위 위원장. 버전 1에는 5가 없었다) ‖ `org_id: Ident<64>` ‖ `station_id: Option<Ident<64>>` ‖ `key: [u8; 2624]` ‖ `appointment_hash: Hash512`(0이 아님, VC-009).
 
 시험 벡터는 `crates/ityv-encoding/vectors/`의 `custody_handoff_body.txt`, `dispute_event_body.txt`, `legal_decision_ref_body.txt`, `box_opened_body.txt`, `fallback_body.txt`, `issuance_count_body.txt`, `imprint_audit_body.txt`, `seal_change_body.txt`, `late_batch_close_body.txt`, `witnessed_event.txt`다.
 
@@ -810,7 +816,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 #### 8.50 `ReportingUnitEntry` (0x0038, 열쇠 `unit_id`)
 
-`unit_id: Ident<64>` ‖ `box_count: u32`(1 이상, 0이면 `ValueOutOfRange`). 투표함은 `GenesisBox.reporting_unit_id`로 자기 단위를 가리키고, 단위는 그런 투표함의 수를 적는다.
+버전 2(ADR-0035): `unit_id: Ident<64>` ‖ `box_count: u32`(1 이상, 0이면 `ValueOutOfRange`) ‖ `commission_org: Ident<64>`(그 단위의 종이 개표를 보고하는 구·시·군 선관위. 그 조직의 명부 위원장만 단위의 `PaperCountReport`에 서명한다, PROTOCOL §11.5). 투표함은 `GenesisBox.reporting_unit_id`로 자기 단위를 가리키고, 단위는 그런 투표함의 수를 적는다. 버전 1에는 `commission_org`가 없었다.
 
 #### 8.51 `ModuleEntry` (0x003B, 열쇠 `module_id`)
 
@@ -841,7 +847,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 | 9 | `committee_key` | `[u8; 2624]` | 위원회 하이브리드 공개키. 선관위 키와 반쪽 하나라도 같으면 `InvariantViolation` |
 | 10 | `quorum` | `u8` × 6 | `n`, `q`, `f`, 조직·공급자·지역 하한. `13 ≤ n ≤ 64`, `9 ≤ q ≤ n`, `2q − n > f`, 하한은 7·4·3 이상 `q` 이하(아니면 `ValueOutOfRange`) |
 | 11 | `parties` | `Array<{chamber: u8, name: Bytes<128>, seats: u16, evidence_hash: Hash512}, 4>` | 2–4개(1개 이하 `InvariantViolation`), i번째의 `chamber`는 `P(i+1)`, 이름은 비지 않은 UTF-8(아니면 `ValueOutOfRange`), 의석 내림차순(어기면 `InvariantViolation`, VC-067), `evidence_hash` 0이 아님 |
-| 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`) |
+| 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`). `members`가 8을 넘는 genesis는 검증기가 받지 않는다(임계 분산의 용량, `Rule::ChamberSize`, ADR-0035) |
 | 13 | `sets` | `{count: u64, root: Hash512}` × 11 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
 
 집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`). 1–8은 변경할 수 있고 9–11은 선거 동안 고정이다.
@@ -908,3 +914,73 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 | 3 | `committee_sig` | `[u8; 4691]` | 독립검증위원회 하이브리드 서명 |
 
 두 서명의 메시지는 `body` 바이트이고 purpose는 `legal-auth`다. 서명 바이트의 유효성, genesis의 두 기관 키와의 결속, 본문이 genesis가 고정한 것인지, 범위 전제 규칙(PROTOCOL §4.4)은 `ityv-verify`의 `authorize_ledger`가 검증 토큰을 만들어 `ityv-state`의 `authorize`로 확인한다.
+
+### 8.61–8.65 집계 (ADR-0035)
+
+> English summary: the tally's ledger objects. `TallyScopeBody` (0x0043) fixes, per ballot style and reporting unit, the included records' count and sorted-set root, the ballots cast without a record, and every excluded record with the first reason of PROTOCOL §11.1 and the object hash of the event that gives it. `AggregateOpeningBody` (0x0044) opens one chunk of a scope's sum (`T_j`, `R_j`, `S`). `ReceiptResolutionBody` (0x0047) gives each cast record of one out-of-district box its receipt outcome. `QuorumSigned` (0x0045) carries any of the three with the participating trustees' hybrid signatures over the quorum message `body_hash ‖ trustees`, so the list of participants is signed. `PaperCountReportBody` (0x0046) is a `WitnessedEvent` body: the paper votes per candidate and the invalid ballots of one unit, signed by the chair of the unit's district commission and observers of two organisations. Counts are at most `2^26 − 1`. The encoding checks form only; `ityv-state` and `ityv-verify` check the quorum, the chair's unit, the scope against the ledger, the opening against the commitments and the paper against the opened counts (PROTOCOL §14 7).
+
+수량(`included_count`, `no_record_count`, 득표, 무효 수)은 `2^26 − 1` 이하다(넘으면 `ValueOutOfRange`). 26비트 자릿수에서 자리올림이 없게 하는 상한이다(PROTOCOL §7.4).
+
+#### 8.61 `TallyScopeBody` (0x0043)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `ballot_style_id` | `Ident<64>` | |
+| 3 | `reporting_unit_id` | `Ident<64>` | genesis `reporting_units[]` |
+| 4 | `included_count` | `u64` | 포함 기록 수 |
+| 5 | `included_root` | `Hash512` | 포함 기록 추적코드의 정렬 집합 root(마감의 `record_set_root`와 같은 계산) |
+| 6 | `no_record_count` | `u64` | 그 단위 투표함 마감의 `no_record_count` 합 |
+| 7 | `exclusions` | `Array<{record_hash: Hash512, reason: u8, basis: Hash512}, 65536>` | `record_hash` 엄격 오름차순(`NotSorted`, `Duplicate`). `reason` 1 `TEST_BALLOT`, 2 `CHALLENGED_SPOILED`, 3 `QUARANTINED`, 4 `CAST_NOT_RECEIVED`, 5 `RECEIVED_LATE`, 6 `LEGAL_EXCLUDED`, 7 `SHARE_MISSING`, 8 `UNATTESTED`(§11.1 순서, 그 밖은 `ValueOutOfRange`). `basis`는 사유를 주는 장부 이벤트의 객체 해시, 0이 아님(`InvalidPreviousHash`) |
+| 8 | `time_bucket` | `u64` | 정족수가 적은 시각. 늦은 마감 기한은 이것이 아니라 증인 체크포인트의 시각으로 잰다(PROTOCOL §11.1) |
+
+#### 8.62 `AggregateOpeningBody` (0x0044)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `ballot_style_id` | `Ident<64>` | |
+| 3 | `reporting_unit_id` | `Ident<64>` | |
+| 4 | `scope_hash` | `Hash512` | 여는 `TallyScopeBody` 객체의 해시. 0이 아님(`InvalidPreviousHash`) |
+| 5 | `chunk` | `u8` | 8 미만(`ValueOutOfRange`) |
+| 6 | `packed_sum` | `Scalar` | `T_j` |
+| 7 | `rand_sum` | `Scalar` | `R_j` |
+| 8 | `id_sum` | `Scalar` | `S` |
+| 9 | `time_bucket` | `u64` | |
+
+스칼라의 canonical 여부는 `ityv-crypto`가 확인한다(§2).
+
+#### 8.63 `QuorumSigned` (0x0045)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `body` | `Bytes<8454456>` | `TallyScopeBody`, `AggregateOpeningBody`, `ReceiptResolutionBody` 객체 전체. 다른 스키마는 `SchemaMismatch`, 본문 오류는 봉투 위치로 옮긴다 |
+| 2 | `sigs` | `Array<{trustee_id: Ident<64>, sig: [u8; 4691]}, 64>` | 1개 이상(0이면 `InvariantViolation`), `trustee_id` 엄격 오름차순 |
+
+purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolution`이다. 서명 메시지는 본문 바이트가 아니라 **정족수 메시지**다: `body_hash: Hash512`(본문 객체의 §4 해시) ‖ `trustees: Array<Ident<64>, 64>`(봉투의 `trustee_id`를 같은 순서로). 메시지 길이는 최대 4,420바이트다. 참여 구성원 목록이 서명 안에 있으므로 누구도 본문을 다른 참여자 목록으로 다시 싸지 못한다. 서명자가 genesis 신뢰기관이고 등록된 키로 서명했으며 접근구조 Γ의 자격 집합인지는 `ityv-state`의 `check_quorum`이 확인한다.
+
+#### 8.64 `PaperCountReportBody` (0x0046)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `reporting_unit_id` | `Ident<64>` | |
+| 3 | `ballot_style_id` | `Ident<64>` | |
+| 4 | `votes` | `Array<u64, 70>` | 후보 1부터의 종이 득표. 1개 이상(0이면 `InvariantViolation`) |
+| 5 | `invalid` | `u64` | 무효 수 |
+| 6 | `time_bucket` | `u64` | |
+
+`WitnessedEvent`(버전 2)의 본문이며 purpose는 `paper-count`, 서명자는 위원장 1과 서로 다른 조직 참관인 2 이상이다(§8.33 표). 위원장이 그 단위 `commission_org`의 명부 위원장인지와 후보 수가 투표양식의 것인지는 검증기가 확인한다.
+
+#### 8.65 `ReceiptResolutionBody` (0x0047)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `box_id` | `Ident<64>` | 관외·재외 투표함 |
+| 3 | `entries` | `Array<{record_hash: Hash512, outcome: u8}, 65536>` | `record_hash` 엄격 오름차순. `outcome` 1 `RECEIVED`, 2 `RECEIVED_DAMAGED`, 3 `RECEIVED_LATE`, 4 `WRONG_DISTRICT`, 5 `CAST_NOT_RECEIVED`(그 밖은 `ValueOutOfRange`) |
+| 4 | `time_bucket` | `u64` | |
+
+어떤 기록과도 맞지 않는 라벨과 중복 라벨의 수(VC-060)는 투표함이 아니라 수령 선관위의 것이므로 이 본문에 없다. 목록이 그 투표함의 투함 기록 전부와 같은지는 검증기가 확인한다.
+
+시험 벡터는 `tally_scope_body.txt`, `aggregate_opening_body.txt`, `quorum_signed.txt`, `paper_count_report_body.txt`, `receipt_resolution_body.txt`이고, 버전을 올린 `witnessed_event.txt`, `roster_signer.txt`, `reporting_unit_entry.txt`도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_tally.rs`에 있다.

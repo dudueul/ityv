@@ -82,8 +82,12 @@ macro_rules! check {
         let content = render($title, $schema, $vectors);
         check_file($name, &content);
         self_check(&content, |b| {
-            let v: $ty = decode_object($schema, SCHEMA_VERSION_1, b)?;
-            Ok(encode_to_vec($schema, SCHEMA_VERSION_1, &v))
+            let v: $ty = decode_object($schema, ityv_encoding::schema_version($schema), b)?;
+            Ok(encode_to_vec(
+                $schema,
+                ityv_encoding::schema_version($schema),
+                &v,
+            ))
         });
     }};
 }
