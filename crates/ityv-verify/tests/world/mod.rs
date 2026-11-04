@@ -1424,11 +1424,11 @@ pub(crate) fn station_record_of(boxes: &[(Bx, u64)]) -> Vec<(SchemaId, &'static 
             &IssuanceCountBody::new(&IssuanceCountParts {
                 election_id: common::election(),
                 station_id: station,
-                stock_received: 50,
+                stock_received: n.max(50),
                 issued: n,
                 voter_spoiled: 0,
                 returned: 0,
-                unused: 50 - n,
+                unused: n.max(50) - n,
                 printer_waste: 0,
                 envelopes: None,
                 time_bucket: TimeBucket::new(CLOSE_BUCKET),

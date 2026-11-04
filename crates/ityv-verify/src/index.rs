@@ -45,9 +45,10 @@ use alloc::vec::Vec;
 use ityv_crypto::hash::object_hash;
 use ityv_encoding::schema_version;
 use ityv_encoding::{
-    AuditFindingBody, AuditManifestFreezeBody, AuditSeedBody, HandCountReportBody,
-    SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
-    SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY, SampleComparisonBody,
+    AuditCommitBody, AuditFindingBody, AuditManifestFreezeBody, AuditSeedBody, HandCountReportBody,
+    SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
+    SCHEMA_AUDIT_SEED_BODY, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY,
+    SampleComparisonBody,
 };
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
@@ -416,6 +417,9 @@ fn witnessed<'a>(event: &WitnessedEvent<'a>) -> Option<(Scope<'a>, ElectionId<'a
         (Scope::Election, b.parts().election_id)
     } else if s == SCHEMA_AUDIT_SEED_BODY {
         let b = event.body::<AuditSeedBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_AUDIT_COMMIT_BODY {
+        let b = event.body::<AuditCommitBody<'a>>(s).ok()?;
         (Scope::Election, b.parts().election_id)
     } else if s == SCHEMA_SAMPLE_COMPARISON_BODY {
         // The paper of the device's box was compared.

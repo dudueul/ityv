@@ -8,20 +8,30 @@
 //! * **Freezes** (`AuditManifestFreezeBody` in a `WitnessedEvent`, §12.1),
 //!   one per style, signed by the committee and observers of two or more
 //!   organisations under `RLA` for its day, after every tally scope of the
-//!   style and before the seed. The freeze's sample frame (count and
+//!   style and before the commit. The freeze's sample frame (count and
 //!   sorted-set root) is compared with the style's included records
 //!   recomputed by the tally stage over every reporting unit; a frame that
 //!   differs holds the style ([`HoldReason::AuditFrameMismatch`]) and its
 //!   audit cannot conclude. The freeze declares the rounds: cumulative
 //!   sample sizes and the most discrepancies each round tolerates.
+//! * **The commit** (`AuditCommitBody`, §12.1, ADR-0036), one per
+//!   election, signed like a freeze, under `RLA`, after every style's
+//!   freeze: it fixes the dice record, the beacon every freeze designated
+//!   and the sorted-set root of the freeze bodies before the beacon round
+//!   is published, so that no input of the seed is left to choose once the
+//!   beacon value can be known.
 //! * **The seed** (`AuditSeedBody`, §12.1), one per election, signed like a
-//!   freeze, under `RLA`, after every style's freeze. Its checkpoint must be
-//!   the last valid checkpoint recorded before it, covering every freeze;
-//!   its beacon round the one every freeze designated; its seed
+//!   freeze, under `RLA`, after the commit and its binding checkpoint (the
+//!   first valid checkpoint that covers the commit; later checkpoints never
+//!   matter). Its dice record and round are the commit's, its checkpoint
+//!   the binding one, its seed
 //!   `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice ‖ beacon ‖ checkpoint)`
 //!   (VC-045). The verifier cannot fetch the beacon: the caller supplies the
-//!   value it observed for the round ([`AuditInput::beacon`]); a value that
-//!   differs refuses the seed, and no value leaves the stage incomplete.
+//!   publication it observed ([`AuditInput::beacon`]: round, raw output,
+//!   time bucket); the seed's value must be `ityv_crypto::beacon_value` of
+//!   that output, and the binding checkpoint and the commit must be timed
+//!   strictly before the publication. A mismatch refuses the seed (or the
+//!   commit); no observation leaves the stage incomplete.
 //! * **The sample** (§12.2, VC-046): for each style, a partial Fisher–Yates
 //!   shuffle of the sorted frame driven by the style's sample stream
 //!   ([`draw_sample`], `ityv_crypto::SampleStream`), as long as the last
@@ -83,24 +93,24 @@ use alloc::vec::Vec;
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{
     Bases, CastId, Opening, OptionCount, OptionIndex, Purpose, SampleStream, audit_seed,
-    verify_opening,
+    beacon_value, verify_opening,
 };
 use ityv_encoding::{
-    AuditFindingBody, AuditFindingParts, AuditFreezeParts, AuditManifestFreezeBody, AuditRounds,
-    AuditSeedBody, AuditSeedParts, BallotStyleId, BoxId, CastRecord, ComparisonCode, Decode,
-    EventRole, HandCountReportBody, Hash512, MAX_AUDIT_ROUNDS, PaperCountParts, QuorumKind,
-    QuorumSigned, ReportingUnitId, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
-    SCHEMA_AUDIT_SEED_BODY, SCHEMA_CAST_RECORD, SCHEMA_HAND_COUNT_REPORT_BODY,
-    SCHEMA_QUORUM_SIGNED, SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY,
-    SCHEMA_WITNESSED_EVENT, SampleComparisonBody, SampleComparisonParts, SampleOpeningBody,
-    SampleOpeningRefParts, SchemaId, Seq, StationId, TimeBucket, WitnessedEvent, decode_object,
-    schema_version,
+    AuditCommitBody, AuditCommitParts, AuditFindingBody, AuditFindingParts, AuditFreezeParts,
+    AuditManifestFreezeBody, AuditRounds, AuditSeedBody, AuditSeedParts, BallotStyleId, BoxId,
+    CastRecord, ComparisonCode, Decode, EventRole, HandCountReportBody, Hash512, MAX_AUDIT_ROUNDS,
+    PaperCountParts, QuorumKind, QuorumSigned, ReportingUnitId, SCHEMA_AUDIT_COMMIT_BODY,
+    SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
+    SCHEMA_CAST_RECORD, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
+    SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_WITNESSED_EVENT,
+    SampleComparisonBody, SampleComparisonParts, SampleOpeningBody, SampleOpeningRefParts,
+    SchemaId, Seq, StationId, TimeBucket, WitnessedEvent, decode_object, schema_version,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{
     AuditPhase, Cap, FollowUp, HandCount, HoldReason, HoldSet, ObserverAccess, Rla, RosterEntry,
-    RoundCount, SeedReadiness, Signed, admit_audit_freeze, admit_audit_seed, admit_sample_opening,
-    audit_phase, check_audit_signers, follow_up,
+    RoundCount, SeedReadiness, Signed, admit_audit_commit, admit_audit_finding, admit_audit_freeze,
+    admit_audit_seed, admit_sample_opening, audit_phase, check_audit_signers, follow_up,
 };
 
 use crate::authority::{AuthorityStage, day_of};
@@ -111,27 +121,43 @@ use crate::records::{RecordStage, commitments_of, scalars};
 use crate::sigs::Material;
 use crate::tally::{TallyStage, Trustees, event_at};
 
-/// The beacon value the caller observed (PROTOCOL.md §12.1): the published
-/// value of round `round` of the beacon the freezes designate. The
-/// verifier cannot fetch it; like the genesis pin, it comes from outside
-/// the data it verifies.
+/// The beacon publication the caller observed (PROTOCOL.md §12.1): the
+/// raw output of round `round` of the beacon the freezes and the commit
+/// designate, and the time bucket in which it was published. The verifier
+/// cannot fetch it; like the genesis pin, it comes from outside the data it
+/// verifies. The 64-byte beacon value is `ityv_crypto::beacon_value` of the
+/// designated beacon, the round and this output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BeaconValue {
+pub struct BeaconObservation<'i> {
     /// The beacon round.
     pub round: u64,
-    /// Its published value.
-    pub value: Hash512,
+    /// Its published output, of any width.
+    pub output: &'i [u8],
+    /// The time bucket of its publication: the binding checkpoint must be
+    /// witnessed strictly earlier, and the commit dated strictly earlier.
+    pub published: TimeBucket,
 }
 
 /// What the caller brings to the audit beyond the ledger.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct AuditInput<'i> {
-    /// The beacon value observed for the seed's round, if the caller has
-    /// it. Without it the audit cannot conclude.
-    pub beacon: Option<BeaconValue>,
+    /// The beacon publication observed for the commit's round, if the
+    /// caller has it. Without it the audit cannot conclude.
+    pub beacon: Option<BeaconObservation<'i>>,
     /// Restricted `SampleOpeningBody` objects (schema `0x0049`) a caller
     /// with access holds, in any order; empty for the public verifier.
     pub openings: &'i [&'i [u8]],
+}
+
+/// Shows the beacon observation and only the number of restricted bodies:
+/// their bytes reveal choices (§12.3).
+impl core::fmt::Debug for AuditInput<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuditInput")
+            .field("beacon", &self.beacon)
+            .field("openings", &self.openings.len())
+            .finish()
+    }
 }
 
 /// Which kind of audit event a refusal concerns.
@@ -139,6 +165,8 @@ pub struct AuditInput<'i> {
 pub enum AuditEvent {
     /// An audit manifest freeze.
     Freeze,
+    /// The audit commit.
+    Commit,
     /// The audit seed.
     Seed,
     /// A sample opening reference.
@@ -160,27 +188,35 @@ pub enum AuditRefusal {
     /// role and organisation it names, two signers share a key half, or the
     /// trustees are not a qualified quorum.
     Signature,
-    /// No legal authorization grants `RLA` (freeze, seed, finding) for the
-    /// day of its time bucket, or `OBSERVER_ACCESS` (opening) for the day of
-    /// the seed.
+    /// No legal authorization grants `RLA` (freeze, commit, seed, finding)
+    /// for the day of its time bucket, or `OBSERVER_ACCESS` (opening) for
+    /// the day of the seed.
     Capability,
     /// It names a ballot style, reporting unit, record or device the audit
     /// does not have, a record of another style or device, or another
     /// number of candidates.
     Subject,
-    /// Too early: a freeze before every tally scope of its style; a seed
-    /// before every style's freeze or whose checkpoint does not cover them;
-    /// an opening before the seed; a comparison before its record's
-    /// opening; a hand count before the style's sample escalated past its
-    /// last round.
+    /// Too early: a freeze before every tally scope of its style; a commit
+    /// before every style's freeze; a seed before the commit or before the
+    /// commit's binding checkpoint; an opening before the seed; a
+    /// comparison before its record's opening; a hand count before the
+    /// style's sample escalated past its last round.
     Premature,
-    /// The seed's checkpoint is not the last valid checkpoint recorded
-    /// before it.
+    /// The seed's checkpoint is not the binding checkpoint: the first valid
+    /// checkpoint that covers the audit commit.
     Checkpoint,
-    /// The seed's beacon round is not the one every freeze designated, the
-    /// freezes designate different beacons, or its value differs from the
-    /// one the caller observed.
+    /// The commit names another beacon (designation or round) than a
+    /// freeze, the seed another round than the commit, or the seed's value
+    /// is not the beacon value of the output the caller observed.
     Beacon,
+    /// The commit is dated at or after the observed beacon publication, or
+    /// the seed's binding checkpoint was not witnessed strictly before it:
+    /// the beacon value could have been known when the inputs were fixed.
+    Late,
+    /// The seed's dice hash is not the one the commit fixed.
+    Commit,
+    /// The commit's freezes root is not the root of the freezes taken.
+    Freezes,
     /// The seed is not the hash of its inputs (VC-045).
     Recompute,
     /// An opening of a record that is neither in the sample of the round
@@ -192,7 +228,8 @@ pub enum AuditRefusal {
     /// The body already taken for its subject (style, election, record,
     /// finding or unit), again under other signature bytes.
     Repeated,
-    /// A second freeze of a style, seed, opening or comparison of a record,
+    /// A second freeze of a style, commit, seed, opening or comparison of a
+    /// record,
     /// finding or hand count of a unit, with another body than the one
     /// taken: two signed answers to one question.
     Conflict,
@@ -291,9 +328,49 @@ impl DeviceAudit<'_> {
     /// recorded after the first such code.
     #[must_use]
     pub fn followed_up(&self) -> bool {
+        // A finding and the comparison that called for it are two events,
+        // so never in one frame: `>` and `>=` agree (an excluded
+        // equivalent mutant).
         self.full_comparison_from.is_none_or(|from| {
             self.compared == self.records && self.findings.iter().any(|f| f.get() > from.get())
         })
+    }
+}
+
+/// What a freeze declared beside its rounds (ADR-0036): shown, not
+/// computed. That the rounds follow from the rule document, the risk limit
+/// and the margins is checked by people, not by the verifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeclaredRule {
+    /// The hash of the sample size and escalation rule document.
+    pub rule_hash: Hash512,
+    /// The risk limit, in parts per million.
+    pub risk_limit_ppm: u32,
+    /// The hash of the beacon designation document.
+    pub beacon_source: Hash512,
+    /// The designated beacon round.
+    pub beacon_round: u64,
+}
+
+/// How the restricted openings of a style's opened records were supplied
+/// (VC-047): a verifier with access tells a partial supply from a full one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Reconstructions {
+    /// Records opened.
+    pub opened: u64,
+    /// Of those, with a supplied body that opens the record.
+    pub reconstructed: u64,
+    /// With a supplied body that does not.
+    pub mismatched: u64,
+    /// Without a supplied body.
+    pub not_supplied: u64,
+}
+
+impl Reconstructions {
+    /// Whether every opened record was reconstructed.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.reconstructed == self.opened
     }
 }
 
@@ -315,6 +392,8 @@ pub struct StyleAudit<'a> {
     pub frame_problems: Vec<FrameProblem>,
     /// The rounds the freeze declared.
     pub rounds: Option<AuditRounds>,
+    /// The rest of the rule the freeze declared.
+    pub rule: Option<DeclaredRule>,
     /// The records drawn, in draw order, as many as the last round holds
     /// (public: anyone recomputes them, VC-046).
     pub sample: Vec<Hash512>,
@@ -336,6 +415,23 @@ pub struct StyleAudit<'a> {
 }
 
 impl StyleAudit<'_> {
+    /// How the restricted openings of the opened records were supplied.
+    #[must_use]
+    pub fn reconstructions(&self) -> Reconstructions {
+        self.records
+            .iter()
+            .fold(Reconstructions::default(), |mut n, r| {
+                n.opened = n.opened.saturating_add(1);
+                let slot = match r.reconstruction {
+                    Reconstruction::Reconstructed => &mut n.reconstructed,
+                    Reconstruction::Mismatch => &mut n.mismatched,
+                    Reconstruction::NotSupplied => &mut n.not_supplied,
+                };
+                *slot = slot.saturating_add(1);
+                n
+            })
+    }
+
     /// Whether the style's audit concluded under its rule, given whether
     /// the seed was taken with its beacon confirmed.
     fn concluded_with(&self, seeded: bool) -> bool {
@@ -356,6 +452,22 @@ impl StyleAudit<'_> {
     }
 }
 
+/// The audit commit the stage took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CommitTaken {
+    /// The frame that carries it.
+    pub seq: Seq,
+    /// The dice record hash it fixed.
+    pub dice_hash: Hash512,
+    /// The beacon designation document every freeze named.
+    pub beacon_source: Hash512,
+    /// The beacon round every freeze named.
+    pub beacon_round: u64,
+    /// The frame of its binding checkpoint, the first valid checkpoint that
+    /// covers it, if the ledger has one.
+    pub binding: Option<Seq>,
+}
+
 /// The seed the stage took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SeedTaken {
@@ -373,6 +485,7 @@ pub struct SeedTaken {
 #[derive(Debug, Clone, Default)]
 pub struct AuditStage<'a> {
     styles: Vec<StyleAudit<'a>>,
+    commit: Option<CommitTaken>,
     seed: Option<SeedTaken>,
     refused: Vec<AuditRefused>,
 }
@@ -393,10 +506,24 @@ impl<'a> AuditStage<'a> {
             .find(|s| s.ballot_style_id.as_bytes() == style)
     }
 
+    /// The audit commit taken.
+    #[must_use]
+    pub const fn commit(&self) -> Option<&CommitTaken> {
+        self.commit.as_ref()
+    }
+
     /// The seed taken.
     #[must_use]
     pub const fn seed(&self) -> Option<&SeedTaken> {
         self.seed.as_ref()
+    }
+
+    /// Whether every record opened in every style was reconstructed from a
+    /// supplied restricted body (a verifier with access and a full supply);
+    /// always false for the public verifier once anything is opened.
+    #[must_use]
+    pub fn all_reconstructed(&self) -> bool {
+        self.styles.iter().all(|s| s.reconstructions().complete())
     }
 
     /// The events refused, in frame order.
@@ -455,6 +582,7 @@ impl<'a> AuditStage<'a> {
 const fn refusal_hold(event: AuditEvent) -> HoldReason {
     match event {
         AuditEvent::Freeze => HoldReason::AuditFreezeRefused,
+        AuditEvent::Commit => HoldReason::AuditCommitRefused,
         AuditEvent::Seed => HoldReason::AuditSeedRefused,
         AuditEvent::Opening => HoldReason::SampleOpeningRefused,
         AuditEvent::Comparison => HoldReason::SampleComparisonRefused,
@@ -507,11 +635,12 @@ fn again(taken: Hash512, body: &[u8]) -> AuditRefusal {
     }
 }
 
-/// An accepted record of a style's frame: its box and its cast record.
+/// An accepted record of a style's frame: its box and the frame of its
+/// cast record, decoded only if the record is opened.
 struct FrameRecord<'a> {
     style: BallotStyleId<'a>,
     box_id: BoxId<'a>,
-    record: Option<CastRecord<'a>>,
+    seq: Seq,
 }
 
 /// What the stage needs throughout.
@@ -522,6 +651,8 @@ struct Ctx<'g, 'a> {
     trustees: Trustees<'a>,
     checkpoints: &'g [VerifiedCheckpoint],
     records: BTreeMap<[u8; 64], FrameRecord<'a>>,
+    /// The roster of every genesis state, built once.
+    rosters: Vec<Vec<RosterEntry<'a>>>,
 }
 
 impl<'a> Ctx<'_, 'a> {
@@ -546,8 +677,9 @@ impl<'a> Ctx<'_, 'a> {
             return false;
         };
         let state = self.index.state_at(seq);
-        let rosters: Vec<Vec<RosterEntry<'a>>> =
-            (0..=state).map(|k| self.genesis.roster_at(k)).collect();
+        let Some(rosters) = self.rosters.get(..=state) else {
+            return false;
+        };
         let committee = self.genesis.genesis().committee_key();
         let mut keys: Vec<RosterEntry<'a>> = Vec::new();
         let mut pairs = Vec::new();
@@ -597,12 +729,15 @@ impl<'a> Ctx<'_, 'a> {
         })
     }
 
-    /// The last valid checkpoint recorded before frame `at`.
-    fn last_checkpoint(&self, at: Seq) -> Option<&VerifiedCheckpoint> {
+    /// The binding checkpoint of an audit commit at frame `commit`: the
+    /// first valid checkpoint that covers it (frames are numbered from 1,
+    /// so a checkpoint over `tree_size` frames covers `1..=tree_size`).
+    /// Later checkpoints never matter, so nobody can choose among them.
+    fn binding_checkpoint(&self, commit: Seq) -> Option<&VerifiedCheckpoint> {
         self.checkpoints
             .iter()
-            .filter(|c| c.frame.get() < at.get())
-            .max_by_key(|c| c.frame.get())
+            .filter(|c| c.tree_size >= commit.get())
+            .min_by_key(|c| c.frame.get())
     }
 }
 
@@ -626,9 +761,19 @@ struct StyleWork<'a> {
     findings: BTreeMap<(&'a [u8], [u8; 64]), Hash512>,
     /// The hand counts taken, by unit: body hash.
     hand_counts: BTreeMap<&'a [u8], Hash512>,
+    /// The place of each opened record in `audit.records`.
+    record_at: BTreeMap<[u8; 64], usize>,
+    /// The place of each box in `audit.devices`.
+    device_at: BTreeMap<&'a [u8], usize>,
 }
 
-impl StyleWork<'_> {
+impl<'a> StyleWork<'a> {
+    /// The device audit of box `box_id`.
+    fn device_mut(&mut self, box_id: &[u8]) -> Option<&mut DeviceAudit<'a>> {
+        let at = *self.device_at.get(box_id)?;
+        self.audit.devices.get_mut(at)
+    }
+
     /// The rounds' sample sizes bounded by the frame.
     fn round_sizes(&self) -> Vec<u64> {
         let frame = self.audit.frame_count;
@@ -655,10 +800,10 @@ impl StyleWork<'_> {
             _ => false,
         };
         let full = self
-            .audit
-            .devices
-            .iter()
-            .any(|d| d.box_id.as_bytes() == box_id && d.full_comparison_from.is_some());
+            .device_at
+            .get(box_id)
+            .and_then(|at| self.audit.devices.get(*at))
+            .is_some_and(|d| d.full_comparison_from.is_some());
         sampled || full
     }
 
@@ -691,6 +836,7 @@ impl StyleWork<'_> {
 /// The audit events of the ledger, decoded, in frame order.
 enum Item<'a> {
     Freeze(Box<(WitnessedEvent<'a>, AuditFreezeParts<'a>)>),
+    Commit(Box<(WitnessedEvent<'a>, AuditCommitParts<'a>)>),
     Seed(Box<(WitnessedEvent<'a>, AuditSeedParts<'a>)>),
     Opening(Box<(QuorumSigned<'a>, SampleOpeningRefParts<'a>)>),
     Comparison(Box<(WitnessedEvent<'a>, SampleComparisonParts<'a>)>),
@@ -711,6 +857,10 @@ fn items<'a>(index: &LedgerIndex<'a>) -> Vec<(Seq, Item<'a>)> {
                 w.body::<AuditManifestFreezeBody<'a>>(s)
                     .ok()
                     .map(|b| Item::Freeze(Box::new((w, *b.parts()))))
+            } else if s == SCHEMA_AUDIT_COMMIT_BODY {
+                w.body::<AuditCommitBody<'a>>(s)
+                    .ok()
+                    .map(|b| Item::Commit(Box::new((w, *b.parts()))))
             } else if s == SCHEMA_AUDIT_SEED_BODY {
                 w.body::<AuditSeedBody<'a>>(s)
                     .ok()
@@ -750,6 +900,7 @@ fn items<'a>(index: &LedgerIndex<'a>) -> Vec<(Seq, Item<'a>)> {
 /// The stage's working state.
 struct Work<'a> {
     styles: BTreeMap<&'a [u8], StyleWork<'a>>,
+    commit: Option<(Hash512, CommitTaken)>,
     seed: Option<(Hash512, SeedTaken)>,
     /// `OBSERVER_ACCESS` for the seed's day.
     viewing: Option<Cap<'a, ObserverAccess>>,
@@ -787,11 +938,14 @@ impl<'a> Work<'a> {
             .styles
             .get_mut(p.ballot_style_id.as_bytes())
             .ok_or(AuditRefusal::Subject)?;
-        // The seed waits for every style's freeze, so after the seed every
-        // freeze is a second one: repeated or conflicting, never taken.
+        // The commit waits for every style's freeze, so after the commit
+        // every freeze is a second one: repeated or conflicting, never
+        // taken.
         if let Some((taken, _)) = style.freeze {
             return Err(again(taken, event.body_bytes()));
         }
+        // A scope and this freeze are two events, so never in one frame:
+        // `<` and `<=` agree (an excluded equivalent mutant).
         let scopes_taken = style
             .scopes
             .iter()
@@ -801,6 +955,12 @@ impl<'a> Work<'a> {
         let a = &mut style.audit;
         a.freeze = Some(seq);
         a.rounds = Some(p.rounds);
+        a.rule = Some(DeclaredRule {
+            rule_hash: p.rule_hash,
+            risk_limit_ppm: p.risk_limit_ppm,
+            beacon_source: p.beacon_source,
+            beacon_round: p.beacon_round,
+        });
         if p.frame_count != a.frame_count {
             a.frame_problems.push(FrameProblem::Count);
         }
@@ -811,6 +971,60 @@ impl<'a> Work<'a> {
             .holds
             .with_if(!a.frame_problems.is_empty(), HoldReason::AuditFrameMismatch);
         style.freeze = Some((object_hash(event.body_bytes()), *p));
+        Ok(())
+    }
+
+    fn take_commit(
+        &mut self,
+        ctx: &Ctx<'_, 'a>,
+        input: &AuditInput<'_>,
+        seq: Seq,
+        event: &WitnessedEvent<'_>,
+        p: &AuditCommitParts<'_>,
+    ) -> Result<(), AuditRefusal> {
+        if !ctx.audit_signed(seq, event) {
+            return Err(AuditRefusal::Signature);
+        }
+        let cap = ctx
+            .cap::<Rla>(p.time_bucket)
+            .ok_or(AuditRefusal::Capability)?;
+        if let Some((taken, _)) = self.commit {
+            return Err(again(taken, event.body_bytes()));
+        }
+        let freezes: Vec<&(Hash512, AuditFreezeParts<'a>)> = self
+            .styles
+            .values()
+            .filter_map(|s| s.freeze.as_ref())
+            .collect();
+        admit_audit_commit(&cap, p.election_id, freezes.len() == self.styles.len())
+            .map_err(|_| AuditRefusal::Premature)?;
+        if !freezes
+            .iter()
+            .all(|(_, f)| f.beacon_source == p.beacon_source && f.beacon_round == p.beacon_round)
+        {
+            return Err(AuditRefusal::Beacon);
+        }
+        let mut hashes: Vec<Hash512> = freezes.iter().map(|(h, _)| *h).collect();
+        hashes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        if sorted_set_root(&hashes).ok() != Some(p.freezes_root) {
+            return Err(AuditRefusal::Freezes);
+        }
+        if input
+            .beacon
+            .is_some_and(|b| b.round == p.beacon_round && p.time_bucket.get() >= b.published.get())
+        {
+            return Err(AuditRefusal::Late);
+        }
+        self.commit = Some((
+            object_hash(event.body_bytes()),
+            CommitTaken {
+                seq,
+                dice_hash: p.dice_hash,
+                beacon_source: p.beacon_source,
+                beacon_round: p.beacon_round,
+                binding: ctx.binding_checkpoint(seq).map(|c| c.frame),
+            },
+        ));
         Ok(())
     }
 
@@ -831,44 +1045,45 @@ impl<'a> Work<'a> {
         if let Some((taken, _)) = self.seed {
             return Err(again(taken, event.body_bytes()));
         }
-        let freezes: Vec<(Seq, &AuditFreezeParts<'a>)> = self
-            .styles
-            .values()
-            .filter_map(|s| s.audit.freeze.zip(s.freeze.as_ref().map(|(_, p)| p)))
-            .collect();
-        let styles_frozen = freezes.len() == self.styles.len();
-        let one_beacon = freezes.iter().all(|(_, f)| {
-            f.beacon_round == p.beacon_round
-                && freezes
-                    .first()
-                    .is_some_and(|(_, first)| first.beacon_source == f.beacon_source)
-        });
-        if !one_beacon {
-            return Err(AuditRefusal::Beacon);
-        }
-        let checkpoint = ctx
-            .last_checkpoint(seq)
-            .filter(|c| c.body_hash == p.checkpoint_hash)
-            .ok_or(AuditRefusal::Checkpoint)?;
-        let freezes_checkpointed = freezes
-            .iter()
-            .all(|(frame, _)| frame.get() <= checkpoint.tree_size);
+        let commit = self.commit.map(|(_, c)| c);
+        // The checkpoint and the seed are two events, so never in one
+        // frame: `<` and `<=` agree (an excluded equivalent mutant).
+        let binding = commit
+            .and_then(|c| ctx.binding_checkpoint(c.seq))
+            .filter(|b| b.frame.get() < seq.get());
         admit_audit_seed(
             &cap,
             p.election_id,
             SeedReadiness {
-                styles_frozen,
-                freezes_checkpointed,
+                committed: commit.is_some(),
+                bound: binding.is_some(),
             },
         )
         .map_err(|_| AuditRefusal::Premature)?;
+        let (Some(commit), Some(binding)) = (commit, binding) else {
+            return Err(AuditRefusal::Premature);
+        };
+        if p.dice_hash != commit.dice_hash {
+            return Err(AuditRefusal::Commit);
+        }
+        if p.beacon_round != commit.beacon_round {
+            return Err(AuditRefusal::Beacon);
+        }
+        if p.checkpoint_hash != binding.body_hash {
+            return Err(AuditRefusal::Checkpoint);
+        }
         let seed = audit_seed(&p.dice_hash, &p.beacon_value, &p.checkpoint_hash);
         if seed != p.seed {
             return Err(AuditRefusal::Recompute);
         }
         let observed = input.beacon.filter(|b| b.round == p.beacon_round);
-        if observed.is_some_and(|b| b.value != p.beacon_value) {
-            return Err(AuditRefusal::Beacon);
+        if let Some(b) = observed {
+            if beacon_value(&commit.beacon_source, b.round, b.output) != p.beacon_value {
+                return Err(AuditRefusal::Beacon);
+            }
+            if binding.time_bucket.get() >= b.published.get() {
+                return Err(AuditRefusal::Late);
+            }
         }
         self.seed = Some((
             object_hash(event.body_bytes()),
@@ -919,6 +1134,9 @@ impl<'a> Work<'a> {
             p.record_hash.0,
             (object_hash(q.body_bytes()), p.opening_hash),
         );
+        style
+            .record_at
+            .insert(p.record_hash.0, style.audit.records.len());
         style.audit.records.push(AuditedRecord {
             record_hash: p.record_hash,
             box_id: record.box_id,
@@ -972,21 +1190,15 @@ impl<'a> Work<'a> {
         };
         let mut position = None;
         if let Some(r) = style
-            .audit
-            .records
-            .iter_mut()
-            .find(|r| r.record_hash == p.record_hash)
+            .record_at
+            .get(&p.record_hash.0)
+            .and_then(|at| style.audit.records.get_mut(*at))
         {
             r.comparison = Some(comparison);
             position = r.position;
         }
         let follow = follow_up(p.code);
-        if let Some(d) = style
-            .audit
-            .devices
-            .iter_mut()
-            .find(|d| d.box_id.as_bytes() == p.device_id.as_bytes())
-        {
+        if let Some(d) = style.device_mut(p.device_id.as_bytes()) {
             d.compared = d.compared.saturating_add(1);
             if let Some(n) = d.codes.get_mut(usize::from(p.code.code())) {
                 *n = n.saturating_add(1);
@@ -1019,23 +1231,21 @@ impl<'a> Work<'a> {
         if !ctx.audit_signed(seq, event) {
             return Err(AuditRefusal::Signature);
         }
-        let _cap = ctx
+        let cap = ctx
             .cap::<Rla>(p.time_bucket)
             .ok_or(AuditRefusal::Capability)?;
+        admit_audit_finding(&cap, p.election_id).map_err(|_| AuditRefusal::Subject)?;
         let style = self
             .styles
             .get_mut(p.ballot_style_id.as_bytes())
-            .ok_or(AuditRefusal::Subject)?;
-        let device = style
-            .audit
-            .devices
-            .iter_mut()
-            .find(|d| d.box_id.as_bytes() == p.device_id.as_bytes())
             .ok_or(AuditRefusal::Subject)?;
         let key = (p.device_id.as_bytes(), p.finding_hash.0);
         if let Some(taken) = style.findings.get(&key) {
             return Err(again(*taken, event.body_bytes()));
         }
+        let device = style
+            .device_mut(p.device_id.as_bytes())
+            .ok_or(AuditRefusal::Subject)?;
         device.findings.push(seq);
         style.findings.insert(key, object_hash(event.body_bytes()));
         Ok(())
@@ -1097,6 +1307,7 @@ fn draw(style: &mut StyleWork<'_>, seed: &Hash512) {
     };
     let last = rounds.as_slice().last().map_or(0, |r| r.sample_size);
     let Some(positions) = draw_sample(seed, a.ballot_style_id, a.frame_count, last) else {
+        a.holds = a.holds.with(HoldReason::AuditSampleFailed);
         return;
     };
     for (draw_index, position) in positions.iter().enumerate() {
@@ -1104,6 +1315,7 @@ fn draw(style: &mut StyleWork<'_>, seed: &Hash512) {
             .ok()
             .and_then(|p| style.frame.get(p));
         let (Some(code), Ok(draw_index)) = (code, u64::try_from(draw_index)) else {
+            a.holds = a.holds.with(HoldReason::AuditSampleFailed);
             return;
         };
         a.sample.push(*code);
@@ -1171,14 +1383,17 @@ fn opening_opens(
         .ballot_style(record.style.as_bytes())
         .and_then(|s| s.choices().checked_add(2))
         .and_then(OptionCount::new);
-    let (true, Some(options), Some(cast)) = (same, options, record.record.as_ref()) else {
+    let cast = event_at(ctx.index, record.seq)
+        .and_then(|e| e.bytes)
+        .and_then(|b| decode::<CastRecord<'_>>(SCHEMA_CAST_RECORD, b));
+    let (true, Some(options), Some(cast)) = (same, options, cast) else {
         return false;
     };
     let chunks = usize::from(options.chunk_count());
     let (Some(rand), Some(option), Some(commitments)) = (
         scalars(body.rand().as_slice(), chunks),
         OptionIndex::new(body.option_index()),
-        commitments_of(cast),
+        commitments_of(&cast),
     ) else {
         return false;
     };
@@ -1204,6 +1419,7 @@ fn styles<'a>(
                     freeze: None,
                     frame_problems: Vec::new(),
                     rounds: None,
+                    rule: None,
                     sample: Vec::new(),
                     counts: [RoundCount::default(); MAX_AUDIT_ROUNDS],
                     phase: None,
@@ -1221,6 +1437,8 @@ fn styles<'a>(
                 comparisons: BTreeMap::new(),
                 findings: BTreeMap::new(),
                 hand_counts: BTreeMap::new(),
+                record_at: BTreeMap::new(),
+                device_at: BTreeMap::new(),
             });
         style.audit.units.push(u.reporting_unit_id);
         style.scopes.push(u.scope);
@@ -1251,6 +1469,13 @@ fn styles<'a>(
             .audit
             .devices
             .sort_by(|a, b| a.box_id.as_bytes().cmp(b.box_id.as_bytes()));
+        style.device_at = style
+            .audit
+            .devices
+            .iter()
+            .enumerate()
+            .map(|(at, d)| (d.box_id.as_bytes(), at))
+            .collect();
     }
     out
 }
@@ -1258,7 +1483,6 @@ fn styles<'a>(
 /// The included records of every style's frame, with their boxes and cast
 /// records.
 fn frame_records<'a>(
-    index: &LedgerIndex<'a>,
     records: &RecordStage<'a>,
     styles: &mut BTreeMap<&'a [u8], StyleWork<'a>>,
 ) -> BTreeMap<[u8; 64], FrameRecord<'a>> {
@@ -1272,23 +1496,18 @@ fn frame_records<'a>(
             let Some(style) = included.get(&r.tracking_code.0) else {
                 continue;
             };
-            let record = event_at(index, r.seq)
-                .and_then(|e| e.bytes)
-                .and_then(|b| decode::<CastRecord<'a>>(SCHEMA_CAST_RECORD, b));
             out.insert(
                 r.tracking_code.0,
                 FrameRecord {
                     style: *style,
                     box_id: report.box_id,
-                    record,
+                    seq: r.seq,
                 },
             );
-            if let Some(d) = styles.get_mut(style.as_bytes()).and_then(|s| {
-                s.audit
-                    .devices
-                    .iter_mut()
-                    .find(|d| d.box_id.as_bytes() == report.box_id.as_bytes())
-            }) {
+            if let Some(d) = styles
+                .get_mut(style.as_bytes())
+                .and_then(|s| s.device_mut(report.box_id.as_bytes()))
+            {
                 d.records = d.records.saturating_add(1);
             }
         }
@@ -1310,7 +1529,7 @@ pub fn verify_audit<'a>(
     input: &AuditInput<'_>,
 ) -> AuditStage<'a> {
     let mut styles = styles(genesis, tally);
-    let frame = frame_records(index, records, &mut styles);
+    let frame = frame_records(records, &mut styles);
     let ctx = Ctx {
         genesis,
         index,
@@ -1318,9 +1537,13 @@ pub fn verify_audit<'a>(
         trustees: Trustees::of(genesis),
         checkpoints: checkpoints.checkpoints(),
         records: frame,
+        rosters: (0..genesis.state_count())
+            .map(|k| genesis.roster_at(k))
+            .collect(),
     };
     let mut work = Work {
         styles,
+        commit: None,
         seed: None,
         viewing: None,
         refused: Vec::new(),
@@ -1328,6 +1551,10 @@ pub fn verify_audit<'a>(
     for (seq, item) in items(index) {
         let (event, taken) = match &item {
             Item::Freeze(b) => (AuditEvent::Freeze, work.take_freeze(&ctx, seq, &b.0, &b.1)),
+            Item::Commit(b) => (
+                AuditEvent::Commit,
+                work.take_commit(&ctx, input, seq, &b.0, &b.1),
+            ),
             Item::Seed(b) => (
                 AuditEvent::Seed,
                 work.take_seed(&ctx, input, seq, &b.0, &b.1),
@@ -1363,6 +1590,7 @@ pub fn verify_audit<'a>(
     }
     AuditStage {
         styles,
+        commit: work.commit.map(|(_, c)| c),
         seed: work.seed.map(|(_, s)| s),
         refused: work.refused,
     }

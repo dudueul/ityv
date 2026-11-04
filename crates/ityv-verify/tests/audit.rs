@@ -29,24 +29,25 @@ use std::sync::OnceLock;
 use std::vec::Vec;
 
 use common::{BOX_DEVICE_BASE, COMMISSION, COMMITTEE, Draft, ROSTER_BASE, leak, object};
-use ityv_crypto::{audit_seed, object_hash};
+use ityv_crypto::{audit_seed, beacon_value, object_hash};
 use ityv_encoding::{
-    AuditFindingBody, AuditFindingParts, AuditFreezeParts, AuditManifestFreezeBody, AuditRound,
-    AuditRounds, AuditSeedBody, AuditSeedParts, BallotStyleId, BoxId, ComparisonCode, EventRole,
-    HandCountReportBody, Hash512, OrgId, PaperCountParts, PaperVotes, ReportingUnitEntry,
-    ReportingUnitId, RosterRole, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
-    SCHEMA_AUDIT_SEED_BODY, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD,
-    SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_PARTICIPATION_SET,
-    SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY,
-    SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1, SampleComparisonBody, SampleComparisonParts,
-    SampleOpeningBody, SampleOpeningParts, SampleOpeningRefBody, SampleOpeningRefParts, Scalar32,
-    Scalars, Scope, TimeBucket,
+    AuditCommitBody, AuditCommitParts, AuditFindingBody, AuditFindingParts, AuditFreezeParts,
+    AuditManifestFreezeBody, AuditRound, AuditRounds, AuditSeedBody, AuditSeedParts, BallotStyleId,
+    BoxId, ComparisonCode, EventRole, HandCountReportBody, Hash512, OrgId, PaperCountParts,
+    PaperVotes, ReportingUnitEntry, ReportingUnitId, RosterRole, SCHEMA_AUDIT_COMMIT_BODY,
+    SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
+    SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_HAND_COUNT_REPORT_BODY,
+    SCHEMA_MODULE_PROVISIONED, SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY,
+    SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY,
+    SCHEMA_VERSION_1, SampleComparisonBody, SampleComparisonParts, SampleOpeningBody,
+    SampleOpeningParts, SampleOpeningRefBody, SampleOpeningRefParts, Scalar32, Scalars, Scope,
+    TimeBucket,
 };
 use ityv_ledger::sorted_set_root;
 use ityv_state::{AuditPhase, HoldReason, HoldSet, Publication, Status};
 use ityv_verify::{
-    AuditEvent, AuditInput, AuditRefusal, BeaconValue, FrameProblem, Publications, Reconstruction,
-    Report, draw_sample, verify_ledger, verify_ledger_with,
+    AuditEvent, AuditInput, AuditRefusal, BeaconObservation, DeclaredRule, FrameProblem,
+    Publications, Reconstruction, Report, draw_sample, verify_ledger, verify_ledger_with,
 };
 
 use world::*;
@@ -65,11 +66,21 @@ const AUDIT_SCOPES: [Scope; 6] = [
 const AUD_1: u16 = ROSTER_BASE + 32;
 const AUD_2: u16 = ROSTER_BASE + 33;
 const BEACON_ROUND: u64 = 777;
-const BEACON: Hash512 = Hash512([0xBB; 64]);
+/// The beacon round's published output (any width).
+const BEACON_OUTPUT: &[u8] = b"round 777: 0123456789abcdef";
 const DICE: Hash512 = Hash512([0xD1; 64]);
 const BEACON_SOURCE: Hash512 = Hash512([0xBE; 64]);
 const FREEZE_BUCKET: u64 = READY + 10;
 const SEED_BUCKET: u64 = READY + 20;
+const COMMIT_BUCKET: u64 = READY + 15;
+/// When the beacon round was published: after the commit (READY + 15) and
+/// its binding checkpoint (READY + 1), before the seed.
+const PUBLISHED: u64 = READY + 18;
+
+/// The 64-byte beacon value of the round's output.
+fn beacon() -> Hash512 {
+    beacon_value(&BEACON_SOURCE, BEACON_ROUND, BEACON_OUTPUT)
+}
 
 fn with_auditors(d: &mut Draft) {
     d.roster.push(common::roster_signer(
@@ -204,7 +215,7 @@ fn seed_body(
         election_id: common::election(),
         dice_hash: DICE,
         beacon_round: BEACON_ROUND,
-        beacon_value: BEACON,
+        beacon_value: beacon(),
         checkpoint_hash: checkpoint,
         seed: Hash512::ZERO,
         time_bucket: TimeBucket::new(SEED_BUCKET),
@@ -223,6 +234,33 @@ fn seed_body(
 }
 
 fn seed(body: &'static [u8]) -> &'static [u8] {
+    witnessed(body, &COMMITTEE_AND_OBSERVERS)
+}
+
+/// The commit body over the freeze bodies `freezes`, unless `tweak`
+/// changes it.
+fn commit_body(
+    freezes: &[&'static [u8]],
+    tweak: impl FnOnce(&mut AuditCommitParts<'static>),
+) -> &'static [u8] {
+    let hashes: Vec<Hash512> = freezes.iter().map(|b| object_hash(b)).collect();
+    let mut parts = AuditCommitParts {
+        election_id: common::election(),
+        dice_hash: DICE,
+        beacon_source: BEACON_SOURCE,
+        beacon_round: BEACON_ROUND,
+        freezes_root: sorted_set_root(&sorted(&hashes)).unwrap(),
+        time_bucket: TimeBucket::new(COMMIT_BUCKET),
+    };
+    tweak(&mut parts);
+    object(
+        SCHEMA_AUDIT_COMMIT_BODY,
+        SCHEMA_VERSION_1,
+        &AuditCommitBody::new(&parts).unwrap(),
+    )
+}
+
+fn commit(body: &'static [u8]) -> &'static [u8] {
     witnessed(body, &COMMITTEE_AND_OBSERVERS)
 }
 
@@ -413,14 +451,16 @@ fn through_records(world: &'static World) -> Book {
     book
 }
 
-/// Freezes STYLE-1 with `list`, checkpoints and seeds: the seed and the
-/// records drawn, in draw order.
+/// Freezes STYLE-1 with `list`, commits, checkpoints (the binding
+/// checkpoint) and seeds: the seed and the records drawn, in draw order.
 fn seeded(book: &mut Book, casts: &[Cast], list: &[(u64, u32)]) -> (Hash512, Vec<Cast>) {
-    book.w(freeze(freeze_body(STYLE1, &codes(casts), list)));
+    let body = freeze_body(STYLE1, &codes(casts), list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
     book.checkpoint();
     let checkpoint = book.last.unwrap().1;
     book.w(seed(seed_body(checkpoint, |_| {})));
-    let s = audit_seed(&DICE, &BEACON, &checkpoint);
+    let s = audit_seed(&DICE, &beacon(), &checkpoint);
     (s, drawn(&s, STYLE1, casts, list))
 }
 
@@ -449,10 +489,17 @@ fn anchored() -> Publications {
 }
 
 fn observed() -> AuditInput<'static> {
+    observed_at(BEACON_OUTPUT, PUBLISHED)
+}
+
+/// The observation of the beacon round's output `output`, published in
+/// bucket `published`.
+fn observed_at(output: &'static [u8], published: u64) -> AuditInput<'static> {
     AuditInput {
-        beacon: Some(BeaconValue {
+        beacon: Some(BeaconObservation {
             round: BEACON_ROUND,
-            value: BEACON,
+            output,
+            published: TimeBucket::new(published),
         }),
         openings: &[],
     }
@@ -551,9 +598,10 @@ fn a_clean_audit_reaches_paper_audited() {
     assert!(!public.audit().passed());
     // A value for another round is no observation of this one.
     let other_round = AuditInput {
-        beacon: Some(BeaconValue {
+        beacon: Some(BeaconObservation {
             round: BEACON_ROUND + 1,
-            value: BEACON,
+            output: BEACON_OUTPUT,
+            published: TimeBucket::new(PUBLISHED),
         }),
         openings: &[],
     };
@@ -784,6 +832,7 @@ fn a_freeze_follows_the_scopes_and_must_be_the_ledgers_frame() {
         Some(5),
     ));
     let other = book.w(freeze(freeze_body(STYLE1, &all, &[(3, 0)])));
+    book.w(commit(commit_body(&[wrong_body], |_| {})));
     book.checkpoint();
     let checkpoint = book.last.unwrap().1;
     book.w(seed(seed_body(checkpoint, |_| {})));
@@ -837,7 +886,9 @@ fn a_freeze_follows_the_scopes_and_must_be_the_ledgers_frame() {
 #[test]
 fn without_rla_nothing_of_the_audit_is_taken() {
     let (mut book, casts) = tallied(world_without_rla());
-    let at = book.w(freeze(freeze_body(STYLE1, &codes(&casts), &[(2, 0)])));
+    let body = freeze_body(STYLE1, &codes(&casts), &[(2, 0)]);
+    let at = book.w(freeze(body));
+    let commit_at = book.w(commit(commit_body(&[body], |_| {})));
     book.checkpoint();
     let checkpoint = book.last.unwrap().1;
     let seed_at = book.w(seed(seed_body(checkpoint, |_| {})));
@@ -847,6 +898,7 @@ fn without_rla_nothing_of_the_audit_is_taken() {
         audit_refused(&r),
         [
             (at, AuditEvent::Freeze, AuditRefusal::Capability),
+            (commit_at, AuditEvent::Commit, AuditRefusal::Capability),
             (seed_at, AuditEvent::Seed, AuditRefusal::Capability),
             (finding_at, AuditEvent::Finding, AuditRefusal::Capability),
         ]
@@ -858,46 +910,64 @@ fn without_rla_nothing_of_the_audit_is_taken() {
 // The seed.
 
 #[test]
-fn the_seed_is_recomputed_and_bound_to_the_last_checkpoint_and_the_beacon() {
+fn the_seed_is_recomputed_and_bound_to_the_commit_and_its_binding_checkpoint() {
     let (mut book, casts) = tallied(audit_world());
     let first = book.last.unwrap().1;
-    // Before any freeze: too early.
-    let no_freeze = book.w(seed(seed_body(first, |_| {})));
-    book.w(freeze(freeze_body(STYLE1, &codes(&casts), &[(2, 0)])));
-    // Its checkpoint does not cover the freeze (other signature bytes:
-    // the same event twice would be a replay).
-    let uncovered = book.w(witnessed_seeded(
+    // Before any freeze or commit: too early.
+    let no_commit = book.w(seed(seed_body(first, |_| {})));
+    let body = freeze_body(STYLE1, &codes(&casts), &[(2, 0)]);
+    book.w(freeze(body));
+    // A freeze but no commit yet (other signature bytes: the same event
+    // twice would be a replay).
+    let uncommitted = book.w(witnessed_seeded(
+        seed_body(first, |_| {}),
+        &COMMITTEE_AND_OBSERVERS,
+        Some(12),
+    ));
+    let commit_at = book.w(commit(commit_body(&[body], |_| {})));
+    // No checkpoint covers the commit yet.
+    let unbound = book.w(witnessed_seeded(
         seed_body(first, |_| {}),
         &COMMITTEE_AND_OBSERVERS,
         Some(13),
     ));
+    let binding_frame = book.checkpoint();
+    let binding = book.last.unwrap().1;
+    // A checkpoint cut later, while the seed is being signed, never matters.
     book.checkpoint();
-    let older = book.last.unwrap().1;
-    book.checkpoint();
-    let last = book.last.unwrap().1;
-    let not_last = book.w(seed(seed_body(older, |_| {})));
-    let wrong_seed = book.w(seed(seed_body(last, |p| p.seed = Hash512([0x5A; 64]))));
-    let other_round = book.w(seed(seed_body(last, |p| p.beacon_round = BEACON_ROUND + 1)));
-    let mut forged_who = COMMITTEE_AND_OBSERVERS;
-    forged_who[0].3 = COMMISSION;
-    let forged = book.w(witnessed(seed_body(last, |_| {}), &forged_who));
-    let late = book.w(seed(seed_body(last, |p| {
-        p.time_bucket = TimeBucket::new(96 * 200);
-    })));
-    let good = seed_body(last, |_| {});
-    let taken = book.w(seed(good));
-    let repeated = book.w(witnessed_seeded(good, &COMMITTEE_AND_OBSERVERS, Some(9)));
-    let conflict = book.w(seed(seed_body(last, |p| {
+    let later = book.last.unwrap().1;
+    let not_binding = book.w(seed(seed_body(later, |_| {})));
+    let other_dice = book.w(seed(seed_body(binding, |p| {
         p.dice_hash = Hash512([0xD2; 64]);
         p.seed = audit_seed(&p.dice_hash, &p.beacon_value, &p.checkpoint_hash);
+    })));
+    let wrong_seed = book.w(seed(seed_body(binding, |p| {
+        p.seed = Hash512([0x5A; 64]);
+    })));
+    let other_round = book.w(seed(seed_body(binding, |p| {
+        p.beacon_round = BEACON_ROUND + 1;
+    })));
+    let mut forged_who = COMMITTEE_AND_OBSERVERS;
+    forged_who[0].3 = COMMISSION;
+    let forged = book.w(witnessed(seed_body(binding, |_| {}), &forged_who));
+    let late = book.w(seed(seed_body(binding, |p| {
+        p.time_bucket = TimeBucket::new(96 * 200);
+    })));
+    let good = seed_body(binding, |_| {});
+    let taken = book.w(seed(good));
+    let repeated = book.w(witnessed_seeded(good, &COMMITTEE_AND_OBSERVERS, Some(9)));
+    let conflict = book.w(seed(seed_body(binding, |p| {
+        p.time_bucket = TimeBucket::new(SEED_BUCKET + 1);
     })));
     let r = report(&mut book, &observed());
     assert_eq!(
         audit_refused(&r),
         [
-            (no_freeze, AuditEvent::Seed, AuditRefusal::Premature),
-            (uncovered, AuditEvent::Seed, AuditRefusal::Premature),
-            (not_last, AuditEvent::Seed, AuditRefusal::Checkpoint),
+            (no_commit, AuditEvent::Seed, AuditRefusal::Premature),
+            (uncommitted, AuditEvent::Seed, AuditRefusal::Premature),
+            (unbound, AuditEvent::Seed, AuditRefusal::Premature),
+            (not_binding, AuditEvent::Seed, AuditRefusal::Checkpoint),
+            (other_dice, AuditEvent::Seed, AuditRefusal::Commit),
             (wrong_seed, AuditEvent::Seed, AuditRefusal::Recompute),
             (other_round, AuditEvent::Seed, AuditRefusal::Beacon),
             (forged, AuditEvent::Seed, AuditRefusal::Signature),
@@ -906,9 +976,13 @@ fn the_seed_is_recomputed_and_bound_to_the_last_checkpoint_and_the_beacon() {
             (conflict, AuditEvent::Seed, AuditRefusal::Conflict),
         ]
     );
+    let c = r.audit().commit().unwrap();
+    assert_eq!(c.seq.get(), commit_at);
+    assert_eq!(c.binding.unwrap().get(), binding_frame);
+    assert_eq!((c.dice_hash, c.beacon_round), (DICE, BEACON_ROUND));
     let s = r.audit().seed().unwrap();
     assert_eq!(s.seq.get(), taken);
-    assert_eq!(s.seed, audit_seed(&DICE, &BEACON, &last));
+    assert_eq!(s.seed, audit_seed(&DICE, &beacon(), &binding));
     assert_eq!(r.status().status(), Status::HoldReview);
     assert!(r.status().holds().contains(HoldReason::AuditSeedRefused));
 
@@ -918,14 +992,7 @@ fn the_seed_is_recomputed_and_bound_to_the_last_checkpoint_and_the_beacon() {
     let (_, sample) = seeded(&mut book, &casts, &[(1, 0)]);
     book.q(reference(&sample[0]));
     book.w(compare(&sample[0], ComparisonCode::Match));
-    let differs = AuditInput {
-        beacon: Some(BeaconValue {
-            round: BEACON_ROUND,
-            value: Hash512([0xBC; 64]),
-        }),
-        openings: &[],
-    };
-    let r = report(&mut book, &differs);
+    let r = report(&mut book, &observed_at(b"another output", PUBLISHED));
     assert!(r.audit().seed().is_none());
     assert!(
         audit_refused(&r)
@@ -949,22 +1016,25 @@ fn freezes_must_designate_one_beacon() {
     // Two styles: the freezes disagree on the beacon's source.
     let world = two_style_world();
     let (mut book, c1, c2) = two_style_tallied(world);
-    book.w(freeze(freeze_body(STYLE1, &codes(&c1), &[(1, 0)])));
-    book.w(freeze(freeze_body_with(
-        STYLE2,
-        &codes(&c2),
-        &[(1, 0)],
-        |p| {
-            p.beacon_source = Hash512([0xBF; 64]);
-        },
-    )));
+    let f1 = freeze_body(STYLE1, &codes(&c1), &[(1, 0)]);
+    let f2 = freeze_body_with(STYLE2, &codes(&c2), &[(1, 0)], |p| {
+        p.beacon_source = Hash512([0xBF; 64]);
+    });
+    book.w(freeze(f1));
+    book.w(freeze(f2));
+    // No commit can name both: the seed has none to follow.
+    let at = book.w(commit(commit_body(&[f1, f2], |_| {})));
     book.checkpoint();
-    let at = book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
+    let seed_at = book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
     let r = report(&mut book, &observed());
     assert_eq!(
         audit_refused(&r),
-        [(at, AuditEvent::Seed, AuditRefusal::Beacon)]
+        [
+            (at, AuditEvent::Commit, AuditRefusal::Beacon),
+            (seed_at, AuditEvent::Seed, AuditRefusal::Premature),
+        ]
     );
+    assert!(r.status().holds().contains(HoldReason::AuditCommitRefused));
 }
 
 // ---------------------------------------------------------------------
@@ -975,10 +1045,12 @@ fn an_opening_is_taken_only_for_a_record_the_audit_calls_for() {
     let (mut book, casts) = tallied(audit_world());
     let list = [(1, 0), (3, 0)];
     let frame = codes(&casts);
-    book.w(freeze(freeze_body(STYLE1, &frame, &list)));
+    let body = freeze_body(STYLE1, &frame, &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
     book.checkpoint();
     let checkpoint = book.last.unwrap().1;
-    let s = audit_seed(&DICE, &BEACON, &checkpoint);
+    let s = audit_seed(&DICE, &beacon(), &checkpoint);
     let sample = drawn(&s, STYLE1, &casts, &list);
     // Before the seed (under other signature bytes than the one taken
     // later: the same bytes again would be a replay of the frame).
@@ -1305,13 +1377,16 @@ fn a_round_concludes_within_its_threshold_and_calls_for_no_more() {
 #[test]
 fn codes_1_and_2_call_for_a_full_comparison_and_a_finding() {
     let (mut book, casts) = tallied(audit_world());
-    let (_, sample) = seeded(&mut book, &casts, &[(1, 1), (2, 1)]);
-    // Before any discrepancy the other records are not called for.
-    let not_yet = book.q(reference_seeded(&sample[1], 12));
+    let (_, sample) = seeded(&mut book, &casts, &[(2, 1), (3, 1)]);
+    // Before any discrepancy the records past the first round are not
+    // called for.
+    let not_yet = book.q(reference_seeded(&sample[2], 12));
     // A finding recorded before the discrepancy does not answer it.
     book.w(finding(STYLE1, B1.id, 0x0E));
     book.q(reference(&sample[0]));
     book.w(compare(&sample[0], ComparisonCode::OtherCandidate));
+    book.q(reference(&sample[1]));
+    book.w(compare(&sample[1], ComparisonCode::Match));
     let r = report(&mut book, &observed());
     let style = r.audit().style(STYLE1).unwrap();
     // The first round concluded within its threshold, but the device is
@@ -1322,10 +1397,8 @@ fn codes_1_and_2_call_for_a_full_comparison_and_a_finding() {
     assert!(!device.followed_up());
     assert!(!r.audit().concluded(style));
     // Now every record of the device is called for (VC-074).
-    for c in casts.iter().filter(|c| c.code != sample[0].code) {
-        book.q(reference(c));
-        book.w(compare(c, ComparisonCode::Match));
-    }
+    book.q(reference(&sample[2]));
+    book.w(compare(&sample[2], ComparisonCode::Match));
     let r = report(&mut book, &observed());
     let style = r.audit().style(STYLE1).unwrap();
     assert_eq!(style.devices[0].compared, 3);
@@ -1379,7 +1452,7 @@ fn codes_1_and_2_call_for_a_full_comparison_and_a_finding() {
 
     // Cleanly: the full comparison and the finding reach `PAPER_AUDITED`.
     let (mut book, casts) = tallied(audit_world());
-    let (_, sample) = seeded(&mut book, &casts, &[(1, 1), (2, 1)]);
+    let (_, sample) = seeded(&mut book, &casts, &[(2, 1), (3, 1)]);
     book.q(reference(&sample[0]));
     book.w(compare(&sample[0], ComparisonCode::CandidateInvalid));
     for c in casts.iter().filter(|c| c.code != sample[0].code) {
@@ -1396,21 +1469,20 @@ fn codes_1_and_2_call_for_a_full_comparison_and_a_finding() {
 
 #[test]
 fn a_full_comparison_counts_a_drawn_record_only_in_the_rounds_that_hold_it() {
-    // Round 0 is the first drawn record, round 1 the first two.
+    // Round 0 is the first two drawn records, round 1 all three.
     let (mut book, casts) = tallied(audit_world());
-    let (_, sample) = seeded(&mut book, &casts, &[(1, 1), (2, 1)]);
+    let (_, sample) = seeded(&mut book, &casts, &[(2, 1), (3, 2)]);
     book.q(reference(&sample[0]));
     book.w(compare(&sample[0], ComparisonCode::OtherCandidate));
-    // Under the full comparison the second drawn record disagrees too: it
-    // counts in round 1, not in round 0, which concluded within its
-    // threshold.
-    book.q(reference(&sample[1]));
-    book.w(compare(&sample[1], ComparisonCode::CandidateInvalid));
+    // Under the full comparison the third drawn record disagrees too: it
+    // counts in round 1, not in round 0, which stays within its threshold.
+    book.q(reference(&sample[2]));
+    book.w(compare(&sample[2], ComparisonCode::CandidateInvalid));
     let r = report(&mut book, &observed());
     let style = r.audit().style(STYLE1).unwrap();
     assert_eq!((style.counts[0].compared, style.counts[0].nonzero), (1, 1));
     assert_eq!((style.counts[1].compared, style.counts[1].nonzero), (2, 2));
-    assert_eq!(style.phase, Some(AuditPhase::Concluded { round: 0 }));
+    assert_eq!(style.phase, Some(AuditPhase::Sampling { round: 0 }));
     assert_eq!(style.hand_count_from, None);
 }
 
@@ -1421,9 +1493,11 @@ fn codes_5_and_6_hold_the_box() {
         ComparisonCode::ImprintMismatch,
     ] {
         let (mut book, casts) = tallied(audit_world());
-        let (_, sample) = seeded(&mut book, &casts, &[(1, 1)]);
+        let (_, sample) = seeded(&mut book, &casts, &[(2, 1)]);
         book.q(reference(&sample[0]));
         book.w(compare(&sample[0], code));
+        book.q(reference(&sample[1]));
+        book.w(compare(&sample[1], ComparisonCode::Match));
         let r = report(&mut book, &observed());
         let style = r.audit().style(STYLE1).unwrap();
         assert_eq!(style.phase, Some(AuditPhase::Concluded { round: 0 }));
@@ -1451,7 +1525,13 @@ const B2S: Bx = Bx {
 /// ST-1 with BOX-1 (STYLE-1, RU-1) and BOX-2 (STYLE-2, RU-2).
 fn two_style_world() -> &'static World {
     static WORLD: OnceLock<&'static World> = OnceLock::new();
-    WORLD.get_or_init(|| {
+    WORLD.get_or_init(|| leak(two_box_world(STYLE2)))
+}
+
+/// ST-1 with BOX-1 (STYLE-1, RU-1) and BOX-2 (`style2`, RU-2), with the
+/// district chair and the auditors.
+fn two_box_world(style2: &'static [u8]) -> World {
+    {
         let mut d = Draft::standard();
         let mut box2 = common::genesis_box(
             1,
@@ -1460,7 +1540,7 @@ fn two_style_world() -> &'static World {
             RU2,
             &[b"M-B2-P1", b"M-B2-P2", b"M-B2-J"],
         );
-        box2.ballot_style_id = BallotStyleId::new(STYLE2).unwrap();
+        box2.ballot_style_id = BallotStyleId::new(style2).unwrap();
         d.boxes = std::vec![
             common::genesis_box(0, b"BOX-1", b"ST-1", RU1, &[b"M-B1-P1", b"M-B1-P2"]),
             box2,
@@ -1501,8 +1581,8 @@ fn two_style_world() -> &'static World {
             None,
         ));
         with_auditors(&mut d);
-        leak(build(&d, &AUDIT_SCOPES))
-    })
+        build(&d, &AUDIT_SCOPES)
+    }
 }
 
 /// The two-style ledger through the tally of both units.
@@ -1563,12 +1643,15 @@ fn two_style_seeded(
     c2: &[Cast],
     list: &[(u64, u32)],
 ) -> (Hash512, Vec<Cast>, Vec<Cast>) {
-    book.w(freeze(freeze_body(STYLE1, &codes(c1), list)));
-    book.w(freeze(freeze_body(STYLE2, &codes(c2), list)));
+    let f1 = freeze_body(STYLE1, &codes(c1), list);
+    let f2 = freeze_body(STYLE2, &codes(c2), list);
+    book.w(freeze(f1));
+    book.w(freeze(f2));
+    book.w(commit(commit_body(&[f1, f2], |_| {})));
     book.checkpoint();
     let checkpoint = book.last.unwrap().1;
     book.w(seed(seed_body(checkpoint, |_| {})));
-    let s = audit_seed(&DICE, &BEACON, &checkpoint);
+    let s = audit_seed(&DICE, &beacon(), &checkpoint);
     (s, drawn(&s, STYLE1, c1, list), drawn(&s, STYLE2, c2, list))
 }
 
@@ -1580,14 +1663,19 @@ fn every_style_must_conclude_for_paper_audited() {
     assert_eq!(r.status().holds(), HoldSet::empty(), "{:?}", r.tally());
     assert_eq!(r.status().status(), Status::CryptoTallyVerified);
     assert_eq!(r.audit().styles().len(), 2);
-    // A seed before STYLE-2's freeze is too early.
-    book.w(freeze(freeze_body(STYLE1, &codes(&c1), &[(1, 0)])));
+    // A commit before STYLE-2's freeze is too early, and so the seed.
+    let f1 = freeze_body(STYLE1, &codes(&c1), &[(1, 0)]);
+    book.w(freeze(f1));
+    let early_commit = book.w(commit(commit_body(&[f1], |_| {})));
     book.checkpoint();
     let early = book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
     let r = report(&mut book, &observed());
     assert_eq!(
         audit_refused(&r),
-        [(early, AuditEvent::Seed, AuditRefusal::Premature)]
+        [
+            (early_commit, AuditEvent::Commit, AuditRefusal::Premature),
+            (early, AuditEvent::Seed, AuditRefusal::Premature),
+        ]
     );
 
     let (mut book, c1, c2) = two_style_tallied(world);
@@ -1665,4 +1753,505 @@ fn the_index_scopes_the_audit_events_and_keeps_restricted_bodies_off_the_ledger(
         ityv_verify::FindingKind::EventMissing
     );
     assert!(!index.ledger_holds().is_empty());
+}
+
+// ---------------------------------------------------------------------
+// The commit: no input of the seed is left to choose once the beacon is
+// public (ADR-0036).
+
+/// After the beacon value is public the operator cuts checkpoints until
+/// the seed over the latest one draws a sample that avoids a record of its
+/// choosing, or tries other dice records. The seed must name the binding
+/// checkpoint (the first that covers the commit) and the commit's dice, so
+/// neither is taken; the honest seed is, whatever checkpoints are cut while
+/// it is signed.
+#[test]
+fn the_operator_cannot_grind_the_seed() {
+    let list = [(1u64, 0u32)];
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint();
+    let binding = book.last.unwrap().1;
+    let honest = drawn(
+        &audit_seed(&DICE, &beacon(), &binding),
+        STYLE1,
+        &casts,
+        &list,
+    );
+    let target = honest[0].code;
+    let mut tries = 0;
+    let (ground, sample) = loop {
+        book.checkpoint();
+        tries += 1;
+        let cp = book.last.unwrap().1;
+        let sample = drawn(&audit_seed(&DICE, &beacon(), &cp), STYLE1, &casts, &list);
+        if sample[0].code != target {
+            break (cp, sample);
+        }
+        assert!(tries < 50);
+    };
+    let by_checkpoint = book.w(seed(seed_body(ground, |_| {})));
+    let other_dice = Hash512([0xD7; 64]);
+    let by_dice = book.w(seed(seed_body(binding, |p| {
+        p.dice_hash = other_dice;
+        p.seed = audit_seed(&p.dice_hash, &p.beacon_value, &p.checkpoint_hash);
+    })));
+    // What the operator wanted compared instead: refused, never called.
+    book.q(reference(&sample[0]));
+    let r = report(&mut book, &observed());
+    assert!(r.audit().seed().is_none());
+    assert_eq!(
+        audit_refused(&r)[..2],
+        [
+            (by_checkpoint, AuditEvent::Seed, AuditRefusal::Checkpoint),
+            (by_dice, AuditEvent::Seed, AuditRefusal::Commit),
+        ]
+    );
+    assert_ne!(r.status().status(), Status::PaperAudited);
+    assert!(r.status().holds().contains(HoldReason::AuditSeedRefused));
+
+    // The honest seed: checkpoints cut after the binding one, while the
+    // seed is signed, do not break it.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint();
+    let binding = book.last.unwrap().1;
+    book.checkpoint();
+    book.checkpoint();
+    book.w(seed(seed_body(binding, |_| {})));
+    let sample = drawn(
+        &audit_seed(&DICE, &beacon(), &binding),
+        STYLE1,
+        &casts,
+        &list,
+    );
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed());
+    assert_eq!(r.status().holds(), HoldSet::empty(), "{:?}", r.audit());
+    assert_eq!(r.status().status(), Status::PaperAudited);
+}
+
+#[test]
+fn the_commit_fixes_the_dice_and_the_freezes_before_the_beacon() {
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
+    // Before the freeze: too early (other signature bytes than the one
+    // taken later).
+    let early = book.w(witnessed_seeded(
+        commit_body(&[body], |_| {}),
+        &COMMITTEE_AND_OBSERVERS,
+        Some(20),
+    ));
+    book.w(freeze(body));
+    let other_round = book.w(commit(commit_body(&[body], |p| {
+        p.beacon_round = BEACON_ROUND + 1;
+    })));
+    let other_source = book.w(commit(commit_body(&[body], |p| {
+        p.beacon_source = Hash512([0xBF; 64]);
+    })));
+    let other_freezes = book.w(commit(commit_body(&[body], |p| {
+        p.freezes_root = Hash512([0x44; 64]);
+    })));
+    // Dated when the beacon round was published: the value could be known.
+    let after_beacon = book.w(commit(commit_body(&[body], |p| {
+        p.time_bucket = TimeBucket::new(PUBLISHED);
+    })));
+    let mut forged_who = COMMITTEE_AND_OBSERVERS;
+    forged_who[0].3 = COMMISSION;
+    let forged = book.w(witnessed(commit_body(&[body], |_| {}), &forged_who));
+    let good = commit_body(&[body], |_| {});
+    let taken = book.w(commit(good));
+    let repeated = book.w(witnessed_seeded(good, &COMMITTEE_AND_OBSERVERS, Some(21)));
+    let conflict = book.w(commit(commit_body(&[body], |p| {
+        p.dice_hash = Hash512([0xD3; 64]);
+    })));
+    book.checkpoint();
+    let binding = book.last.unwrap().1;
+    book.w(seed(seed_body(binding, |_| {})));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r),
+        [
+            (early, AuditEvent::Commit, AuditRefusal::Premature),
+            (other_round, AuditEvent::Commit, AuditRefusal::Beacon),
+            (other_source, AuditEvent::Commit, AuditRefusal::Beacon),
+            (other_freezes, AuditEvent::Commit, AuditRefusal::Freezes),
+            (after_beacon, AuditEvent::Commit, AuditRefusal::Late),
+            (forged, AuditEvent::Commit, AuditRefusal::Signature),
+            (repeated, AuditEvent::Commit, AuditRefusal::Repeated),
+            (conflict, AuditEvent::Commit, AuditRefusal::Conflict),
+        ]
+    );
+    assert_eq!(r.audit().commit().unwrap().seq.get(), taken);
+    assert!(r.audit().seed().is_some());
+    assert_eq!(r.status().status(), Status::HoldReview);
+    assert!(r.status().holds().contains(HoldReason::AuditCommitRefused));
+
+    // Without a commit no seed is taken.
+    let (mut book, casts) = tallied(audit_world());
+    book.w(freeze(freeze_body(STYLE1, &codes(&casts), &[(1, 0)])));
+    book.checkpoint();
+    let at = book.w(seed(seed_body(book.last.unwrap().1, |_| {})));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r),
+        [(at, AuditEvent::Seed, AuditRefusal::Premature)]
+    );
+    assert!(r.audit().commit().is_none());
+    assert_eq!(r.status().status(), Status::HoldReview);
+
+    // A binding checkpoint witnessed when the beacon round was published
+    // refuses the seed, even if a later one would be earlier.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_at(PUBLISHED);
+    let binding = book.last.unwrap().1;
+    let at = book.w(seed(seed_body(binding, |_| {})));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r),
+        [(at, AuditEvent::Seed, AuditRefusal::Late)]
+    );
+    // Published one bucket later, the same ledger is in time.
+    let r = report(&mut book, &observed_at(BEACON_OUTPUT, PUBLISHED + 1));
+    assert!(audit_refused(&r).is_empty());
+    assert!(r.audit().seed().unwrap().beacon_confirmed);
+}
+
+#[test]
+fn debug_output_never_shows_a_restricted_opening() {
+    let (mut book, casts) = tallied(audit_world());
+    let (_, sample) = seeded(&mut book, &casts, &[(1, 0)]);
+    let body = restricted(&sample[0], sample[0].option);
+    let input = AuditInput {
+        openings: leak_slice(std::vec![body]),
+        ..observed()
+    };
+    let text = std::format!("{input:?}");
+    // The body's bytes (its cast id among them) never appear, only their
+    // number.
+    let tail = std::format!("{:?}", &body[body.len() - 64..]);
+    assert!(!text.contains(&tail[1..tail.len() - 1]), "{text}");
+    assert!(text.contains("openings: 1"), "{text}");
+    // Two inputs that differ only in the opened option print alike.
+    let other = AuditInput {
+        openings: leak_slice(std::vec![restricted(&sample[0], sample[0].option + 1)]),
+        ..observed()
+    };
+    assert_eq!(text, std::format!("{other:?}"));
+}
+
+#[test]
+fn the_stage_shows_the_declared_rule_and_how_the_openings_were_supplied() {
+    let (mut book, casts) = tallied(audit_world());
+    let (_, sample) = seeded(&mut book, &casts, &[(2, 0)]);
+    for c in &sample[..2] {
+        book.q(reference(c));
+        book.w(compare(c, ComparisonCode::Match));
+    }
+    let r = report(&mut book, &observed());
+    let style = r.audit().style(STYLE1).unwrap();
+    assert_eq!(
+        style.rule,
+        Some(DeclaredRule {
+            rule_hash: Hash512([0x77; 64]),
+            risk_limit_ppm: 10_000,
+            beacon_source: BEACON_SOURCE,
+            beacon_round: BEACON_ROUND,
+        })
+    );
+    // The public verifier: nothing supplied.
+    let n = style.reconstructions();
+    assert_eq!((n.opened, n.not_supplied, n.reconstructed), (2, 2, 0));
+    assert!(!n.complete());
+    assert!(!r.audit().all_reconstructed());
+    assert_eq!(r.status().status(), Status::PaperAudited);
+    // A partial supply is told from a full one.
+    let one = AuditInput {
+        openings: leak_slice(std::vec![restricted(&sample[0], sample[0].option)]),
+        ..observed()
+    };
+    let r = report(&mut book, &one);
+    let n = r.audit().style(STYLE1).unwrap().reconstructions();
+    assert_eq!((n.reconstructed, n.not_supplied, n.mismatched), (1, 1, 0));
+    assert!(!r.audit().all_reconstructed());
+    let both = AuditInput {
+        openings: leak_slice(
+            sample[..2]
+                .iter()
+                .map(|c| restricted(c, c.option))
+                .collect(),
+        ),
+        ..observed()
+    };
+    let r = report(&mut book, &both);
+    assert!(
+        r.audit()
+            .style(STYLE1)
+            .unwrap()
+            .reconstructions()
+            .complete()
+    );
+    assert!(r.audit().all_reconstructed());
+    // A body the reference names that does not open the record is a
+    // mismatch.
+    let (mut book, casts) = tallied(audit_world());
+    let (_, sample) = seeded(&mut book, &casts, &[(2, 0)]);
+    let wrong = restricted(&sample[0], sample[0].option + 1);
+    book.q(reference_of(STYLE1, sample[0].code, object_hash(wrong)));
+    let input = AuditInput {
+        openings: leak_slice(std::vec![wrong]),
+        ..observed()
+    };
+    let r = report(&mut book, &input);
+    let n = r.audit().style(STYLE1).unwrap().reconstructions();
+    assert_eq!((n.opened, n.mismatched, n.reconstructed), (1, 1, 0));
+    assert!(!r.audit().all_reconstructed());
+}
+
+#[test]
+fn a_restricted_body_on_the_ledger_is_an_invalid_event() {
+    let (mut book, casts) = tallied(audit_world());
+    let (_, sample) = seeded(&mut book, &casts, &[(1, 0)]);
+    // A canonical restricted body with its bytes, put on the ledger.
+    let mut ledger = clone_ledger(&book);
+    ledger.push(
+        SCHEMA_SAMPLE_OPENING_BODY,
+        restricted(&sample[0], sample[0].option),
+    );
+    let index = ityv_verify::build_index(book.world.genesis, ledger.bytes(), &ledger.events);
+    assert_eq!(
+        index.findings().last().unwrap().kind,
+        ityv_verify::FindingKind::EventInvalid
+    );
+    assert!(!index.ledger_holds().is_empty());
+}
+
+// ---------------------------------------------------------------------
+// One ballot style over two reporting units.
+
+/// ST-1 with BOX-1 (RU-1) and BOX-2 (RU-2), both STYLE-1.
+fn two_unit_audit_world() -> &'static World {
+    static WORLD: OnceLock<&'static World> = OnceLock::new();
+    WORLD.get_or_init(|| leak(two_box_world(STYLE1)))
+}
+
+/// The two-unit ledger through the tally of both units: BOX-1's three
+/// records and BOX-2's two (options 1 and 4).
+fn two_unit_tallied(world: &'static World) -> (Book, Vec<Cast>) {
+    let mut book = Book::new(world);
+    for chamber in [
+        ityv_encoding::ChamberCode::P1,
+        ityv_encoding::ChamberCode::P2,
+    ] {
+        book.push(SCHEMA_PARTY_KEY_CEREMONY, ceremony(chamber));
+    }
+    for m in TWO_UNIT_MODULES {
+        book.push(SCHEMA_MODULE_PROVISIONED, provisioning(m));
+    }
+    let c1 = box1_closed(&mut book);
+    let c2 = std::vec![cast(B2, 1, 1), cast(B2, 2, 4)];
+    book.w(opened(B2));
+    for c in &c2 {
+        book.push(SCHEMA_CAST_RECORD, c.event);
+    }
+    book.push(SCHEMA_BATCH_ATTEST, batch(B2, 0, 1, 2, &codes(&c2)));
+    book.push(SCHEMA_BOX_CLOSE, close(B2, 2, 2, 0, &codes(&c2)));
+    for (schema, event) in station_record_of(&[(B1, 3), (B2, 2)]) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(5));
+    book.checkpoint();
+    tally1(
+        &mut book,
+        &c1,
+        &spec(STYLE1, RU1, &codes(&c1)),
+        &[1, 1, 1, 0, 0],
+        0,
+    );
+    let body = scope_body(&spec(STYLE1, RU2, &codes(&c2)));
+    book.q(scope(body));
+    book.checkpoint();
+    book.q(opening(opening_body(STYLE1, RU2, body, 0, sums(&c2, 0))));
+    book.w(paper(STYLE1, RU2, &[1, 0, 0, 1, 0], 0));
+    book.checkpoint();
+    let mut all = c1;
+    all.extend(c2);
+    (book, all)
+}
+
+/// The box of `c` among the two-unit boxes.
+fn box_of(c: &Cast, box2: &[Cast]) -> Bx {
+    if box2.iter().any(|b| b.code == c.code) {
+        B2
+    } else {
+        B1
+    }
+}
+
+#[test]
+fn a_style_of_two_units_is_one_frame_counted_by_hand_in_every_unit() {
+    let world = two_unit_audit_world();
+    let (mut book, all) = two_unit_tallied(world);
+    let box2 = &all[3..];
+    let (_, sample) = seeded(&mut book, &all, &[(1, 0)]);
+    // An unreadable record that is a valid vote: a discrepancy past the
+    // last round, so the whole style is counted by hand.
+    book.q(reference(&sample[0]));
+    book.w(compare_in(
+        box_of(&sample[0], box2),
+        &sample[0],
+        ComparisonCode::UnreadableValid,
+        false,
+    ));
+    let r = report(&mut book, &observed());
+    let style = r.audit().style(STYLE1).unwrap();
+    assert_eq!(style.units.len(), 2);
+    assert_eq!(style.frame_count, 5);
+    assert_eq!(style.frame_root, Some(root(&codes(&all))));
+    assert_eq!(style.devices.len(), 2);
+    assert_eq!(
+        style.devices.iter().map(|d| d.records).collect::<Vec<_>>(),
+        [3, 2]
+    );
+    assert_eq!(style.phase, Some(AuditPhase::HandCount));
+    // One unit's hand count is not the style's.
+    book.w(hand_count(STYLE1, RU1, &[1, 1, 1, 0, 0]));
+    let r = report(&mut book, &observed());
+    assert!(!r.audit().passed());
+    assert_eq!(r.status().status(), Status::CryptoTallyVerified);
+    book.w(hand_count(STYLE1, RU2, &[1, 0, 0, 1, 0]));
+    let r = report(&mut book, &observed());
+    assert_eq!(r.audit().style(STYLE1).unwrap().hand_counts.len(), 2);
+    assert_eq!(r.status().holds(), HoldSet::empty(), "{:?}", r.audit());
+    assert_eq!(r.status().status(), Status::PaperAudited);
+}
+
+#[test]
+fn every_device_with_a_code_1_or_2_is_compared_in_full() {
+    let world = two_unit_audit_world();
+    let (mut book, all) = two_unit_tallied(world);
+    let box2 = &all[3..];
+    let (_, sample) = seeded(&mut book, &all, &[(5, 4)]);
+    // The first drawn record of each box disagrees; the rest agree.
+    let mut seen: Vec<&[u8]> = Vec::new();
+    for c in &sample {
+        let bx = box_of(c, box2);
+        let code = if seen.contains(&bx.id) {
+            ComparisonCode::Match
+        } else {
+            seen.push(bx.id);
+            if bx.id == B1.id {
+                ComparisonCode::OtherCandidate
+            } else {
+                ComparisonCode::CandidateInvalid
+            }
+        };
+        book.q(reference(c));
+        book.w(compare_in(bx, c, code, false));
+    }
+    let r = report(&mut book, &observed());
+    let style = r.audit().style(STYLE1).unwrap();
+    assert_eq!(style.phase, Some(AuditPhase::Concluded { round: 0 }));
+    assert!(
+        style
+            .devices
+            .iter()
+            .all(|d| d.full_comparison_from.is_some() && d.compared == d.records)
+    );
+    // Compared in full, but a finding is still missing for each.
+    assert!(!r.audit().passed());
+    book.w(finding(STYLE1, B1.id, 0x0F));
+    let r = report(&mut book, &observed());
+    assert!(!r.audit().passed());
+    book.w(finding(STYLE1, B2.id, 0x0F));
+    let r = report(&mut book, &observed());
+    let style = r.audit().style(STYLE1).unwrap();
+    assert!(
+        style
+            .devices
+            .iter()
+            .all(ityv_verify::DeviceAudit::followed_up)
+    );
+    assert_eq!(r.status().holds(), HoldSet::empty(), "{:?}", r.audit());
+    assert_eq!(r.status().status(), Status::PaperAudited);
+}
+
+// ---------------------------------------------------------------------
+// A large frame.
+
+/// BOX-1 with `n` records (options 1 to 3 in turn), through the tally.
+fn large_tallied(world: &'static World, n: u64) -> (Book, Vec<Cast>) {
+    let mut book = Book::new(world);
+    for chamber in [
+        ityv_encoding::ChamberCode::P1,
+        ityv_encoding::ChamberCode::P2,
+    ] {
+        book.push(SCHEMA_PARTY_KEY_CEREMONY, ceremony(chamber));
+    }
+    for m in ELECTION_MODULES {
+        book.push(SCHEMA_MODULE_PROVISIONED, provisioning(m));
+    }
+    let casts: Vec<Cast> = (1..=n).map(|i| cast(B1, i, (i % 3 + 1) as u16)).collect();
+    book.w(opened(B1));
+    for c in &casts {
+        book.push(SCHEMA_CAST_RECORD, c.event);
+    }
+    for (index, chunk) in casts.chunks(64).enumerate() {
+        let first = index as u64 * 64 + 1;
+        let last = first + chunk.len() as u64 - 1;
+        book.push(
+            SCHEMA_BATCH_ATTEST,
+            batch(B1, index as u32, first, last, &codes(chunk)),
+        );
+    }
+    book.push(SCHEMA_BOX_CLOSE, close(B1, n, n, 0, &codes(&casts)));
+    for (schema, event) in station_record(n) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(n as u8));
+    book.checkpoint();
+    let mut votes = [0u64; 5];
+    for c in &casts {
+        votes[usize::from(c.option) - 1] += 1;
+    }
+    tally1(
+        &mut book,
+        &casts,
+        &spec(STYLE1, RU1, &codes(&casts)),
+        &votes,
+        0,
+    );
+    book.checkpoint();
+    (book, casts)
+}
+
+/// A frame of 200 records: the stage indexes records and devices and
+/// decodes only what it opens, so its cost follows the events, not the
+/// frame times the events.
+#[test]
+fn a_large_frame_is_audited() {
+    let n = 200;
+    let (mut book, casts) = large_tallied(audit_world(), n);
+    let (_, sample) = seeded(&mut book, &casts, &[(20, 0)]);
+    for c in &sample {
+        book.q(reference(c));
+        book.w(compare(c, ComparisonCode::Match));
+    }
+    let start = std::time::Instant::now();
+    let r = report(&mut book, &observed());
+    std::println!("{n} records, 20 compared: {:?}", start.elapsed());
+    let style = r.audit().style(STYLE1).unwrap();
+    assert_eq!(style.frame_count, n);
+    assert_eq!(style.sample.len(), 20);
+    assert_eq!(style.records.len(), 20);
+    assert_eq!(r.status().holds(), HoldSet::empty(), "{:?}", r.audit());
+    assert_eq!(r.status().status(), Status::PaperAudited);
 }

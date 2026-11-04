@@ -19,7 +19,7 @@
 //! | [`progress`] | Voting progress record: device streams in slot order, device swaps, station alarms and on-site checks, close comparisons | §7.10, ADR-0027, VC-102, VC-103, VC-106 |
 //! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
 //! | [`tally`] | 7. Tally: receipt resolutions, legal tally effects, tally scopes recomputed, aggregate openings against the commitments, paper counts per reporting unit | §10.6, §11, §14 7, VC-024, VC-042..044, VC-057, VC-063, VC-075, VC-099 |
-//! | [`audit`] | 8. Audit: freezes against the recomputed frames, the seed recomputed, the sample redrawn, opening references and comparisons, restricted openings reconstructed, escalation, full comparisons, findings, hand counts | §12, §14 8, VC-045..047, VC-059, VC-074 |
+//! | [`audit`] | 8. Audit: freezes against the recomputed frames, the commit, the seed recomputed against the binding checkpoint and the observed beacon, the sample redrawn, opening references and comparisons, restricted openings reconstructed, escalation, full comparisons, findings, hand counts | §12, §14 8, VC-045..047, VC-059, VC-074 |
 //! | [`report`] | Every stage over one ledger and the status ladder | §14 (end), VC-049, VC-050 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -74,9 +74,9 @@ pub mod tally;
 mod proofs;
 
 pub use audit::{
-    AuditEvent, AuditInput, AuditRefusal, AuditRefused, AuditStage, AuditedRecord, BeaconValue,
-    Comparison, DeviceAudit, FrameProblem, Reconstruction, SeedTaken, StyleAudit, draw_sample,
-    verify_audit,
+    AuditEvent, AuditInput, AuditRefusal, AuditRefused, AuditStage, AuditedRecord,
+    BeaconObservation, CommitTaken, Comparison, DeclaredRule, DeviceAudit, FrameProblem,
+    Reconstruction, Reconstructions, SeedTaken, StyleAudit, draw_sample, verify_audit,
 };
 pub use authority::{AuthorityStage, authorize_ledger};
 pub use boxes::{BoxRefusal, BoxReport, BoxStage, Phase, Refusal, verify_boxes};
