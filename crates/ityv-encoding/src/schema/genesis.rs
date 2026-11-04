@@ -105,6 +105,10 @@ pub enum RosterRole {
     /// 위원장), who signs the paper count of a reporting unit
     /// (PROTOCOL.md §11.5).
     Chair = 5,
+    /// An auditor who compares sampled records with their paper and signs
+    /// the comparisons and findings (PROTOCOL.md §12.3; version 3,
+    /// ADR-0036).
+    Auditor = 6,
 }
 
 impl RosterRole {
@@ -123,6 +127,7 @@ impl RosterRole {
             3 => Some(Self::Custodian),
             4 => Some(Self::Authority),
             5 => Some(Self::Chair),
+            6 => Some(Self::Auditor),
             _ => None,
         }
     }
@@ -978,9 +983,11 @@ impl<'a> GenesisEntry<'a> for CustodyRoute<'a> {
     }
 }
 
-/// One person on the roster (schema `0x003A`): who may sign box events,
-/// custody handoffs or legal decisions, in which role, for which
-/// organisation, with which key.
+/// One person on the roster (schema `0x003A`, version 3): who may sign
+/// box events, custody handoffs, legal decisions, paper counts or audit
+/// events, in which role, for which organisation, with which key. Version
+/// 3 admits the auditor (role 6, ADR-0036), version 2 the district
+/// commission chair (role 5, ADR-0035).
 ///
 /// Rule: `appointment_hash` is nonzero (`InvalidPreviousHash`, VC-009).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

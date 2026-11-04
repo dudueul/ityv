@@ -318,7 +318,8 @@ impl<'a> PaperCount<'a> {
                 | EventRole::Sender
                 | EventRole::Receiver
                 | EventRole::Authority
-                | EventRole::Device => return Err(Error::NotRegistered),
+                | EventRole::Device
+                | EventRole::Auditor => return Err(Error::NotRegistered),
             };
             roster_key(roster, s.signer_id, role, s.org_id)?;
             keys.iter()

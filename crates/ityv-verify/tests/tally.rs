@@ -732,7 +732,7 @@ fn quorum_seeded(
         .collect();
     object(
         SCHEMA_QUORUM_SIGNED,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
         &QuorumSigned::new(body, &sigs).unwrap(),
     )
 }
@@ -2303,7 +2303,7 @@ fn a_receipt_resolution_must_resolve_exactly_a_closed_out_of_district_box() {
     let taken = book.q(taken_event);
     let taken_body = ityv_encoding::decode_object::<QuorumSigned<'_>>(
         SCHEMA_QUORUM_SIGNED,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
         taken_event,
     )
     .unwrap()
@@ -2337,7 +2337,7 @@ fn a_receipt_resolution_must_resolve_exactly_a_closed_out_of_district_box() {
     book.push(SCHEMA_BOX_CLOSE, close(B3, 1, 1, 0, &[c1.code]));
     let body = ityv_encoding::decode_object::<QuorumSigned<'_>>(
         SCHEMA_QUORUM_SIGNED,
-        SCHEMA_VERSION_1,
+        ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
         resolution(B3, &both[..1], READY),
     )
     .unwrap()

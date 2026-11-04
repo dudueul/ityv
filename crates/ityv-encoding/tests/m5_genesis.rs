@@ -576,10 +576,25 @@ fn small_entry_vectors() {
                 }
             )
         ),
+        valid(
+            "auditor (version 3)",
+            encode_to_vec(
+                SCHEMA_ROSTER_SIGNER,
+                ityv_encoding::SCHEMA_VERSION_ROSTER_SIGNER,
+                &RosterSigner {
+                    signer_id: signer(b"aud-1"),
+                    role: RosterRole::Auditor,
+                    org_id: org(b"AUDIT-A"),
+                    station_id: None,
+                    key: &VK_B,
+                    appointment_hash: patterned64(0x7A),
+                }
+            )
+        ),
     ];
     let mut b = bytes.clone();
-    b[role_at] = 6;
-    v.push(invalid("role 6", b, "ValueOutOfRange", role_at));
+    b[role_at] = 7;
+    v.push(invalid("role 7", b, "ValueOutOfRange", role_at));
     let mut b = bytes.clone();
     let n = b.len();
     b[n - 64..].fill(0);

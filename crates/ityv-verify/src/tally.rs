@@ -720,6 +720,8 @@ fn events<'a>(index: &LedgerIndex<'a>) -> Events<'a> {
                         out.openings.push((e.seq, q, *b.parts()));
                     }
                 }
+                // The audit stage reads the sample opening references.
+                QuorumKind::SampleOpening => {}
             }
         } else if e.schema == SCHEMA_WITNESSED_EVENT
             && let Some(w) = decode::<WitnessedEvent<'a>>(e.schema, bytes)

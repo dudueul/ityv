@@ -361,10 +361,18 @@ fn a_quorum_event_carries_either_body_with_ascending_trustees() {
             event.receipt_resolution().is_some(),
             kind == QuorumKind::ReceiptResolution
         );
-        let bytes = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
+        let bytes = encode_to_vec(
+            SCHEMA_QUORUM_SIGNED,
+            ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
+            &event,
+        );
         assert_eq!(bytes.len(), HEADER_LEN + event.encoded_len());
-        let back: QuorumSigned<'_> =
-            decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &bytes).unwrap();
+        let back: QuorumSigned<'_> = decode_object(
+            SCHEMA_QUORUM_SIGNED,
+            ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
+            &bytes,
+        )
+        .unwrap();
         assert_eq!(back, event);
     }
     let scope = QuorumSigned::new(scope_bytes(), &sigs).unwrap();
@@ -397,7 +405,11 @@ fn a_quorum_event_carries_either_body_with_ascending_trustees() {
     assert_eq!((err.kind(), err.offset()), (ErrorKind::SchemaMismatch, 4));
     // The decoder reports a short body at its place in the envelope.
     let event = QuorumSigned::new(opening_bytes(), &sigs[..1]).unwrap();
-    let mut bytes = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
+    let mut bytes = encode_to_vec(
+        SCHEMA_QUORUM_SIGNED,
+        ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
+        &event,
+    );
     let end = bytes.len();
     bytes.truncate(end - 1);
     let n = u32::try_from(bytes.len() - HEADER_LEN).unwrap();
@@ -477,9 +489,12 @@ fn a_paper_count_report_is_signed_by_the_chair_and_two_observer_orgs() {
     assert!(!ok(&[chair, chair2, obs_a, obs_b]), "two chairs");
     assert!(!ok(&[chair, obs_a, obs_a2]), "one organisation");
     assert!(!ok(&[chair, clerk, obs_a, obs_b]), "a clerk");
-    // The chair takes part in no other event.
+    // The chair takes part in no other event but the hand count, which
+    // has the paper count's signers (ADR-0036).
     for schema in WITNESSED_BODY_SCHEMAS {
-        if schema != SCHEMA_PAPER_COUNT_REPORT_BODY {
+        if schema != SCHEMA_PAPER_COUNT_REPORT_BODY
+            && schema != ityv_encoding::SCHEMA_HAND_COUNT_REPORT_BODY
+        {
             assert!(!roles_satisfied(schema, || [chair, obs_a, obs_b].into_iter()));
         }
     }
@@ -670,7 +685,11 @@ fn a_receipt_resolution_decoder_reports_each_rule_where_it_breaks() {
     // Inside a quorum envelope the error is rebased to the envelope.
     let sigs = [sig(b"T-A", &SIG_A)];
     let event = QuorumSigned::new(bytes, &sigs).unwrap();
-    let mut wrapped = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
+    let mut wrapped = encode_to_vec(
+        SCHEMA_QUORUM_SIGNED,
+        ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED,
+        &event,
+    );
     wrapped[HEADER_LEN + 4 + first + 64] = 9;
     assert_eq!(
         kind_of::<QuorumSigned<'_>>(SCHEMA_QUORUM_SIGNED, &wrapped),
@@ -814,9 +833,9 @@ proptest! {
             .collect();
         let sigs: Vec<QuorumSig<'static>> = names.iter().map(|n| sig(n, &SIG_A)).collect();
         let event = QuorumSigned::new(body, &sigs).unwrap();
-        let bytes = encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event);
+        let bytes = encode_to_vec(SCHEMA_QUORUM_SIGNED, ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED, &event);
         let back: QuorumSigned<'_> =
-            decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &bytes).unwrap();
+            decode_object(SCHEMA_QUORUM_SIGNED, ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED, &bytes).unwrap();
         prop_assert_eq!(back, event);
         let hash = Hash512([0x5A; 64]);
         let mut from_event = std::vec![0u8; MAX_QUORUM_MESSAGE_LEN];
@@ -880,7 +899,7 @@ fn every_schema_has_its_current_version() {
         schema_version(SCHEMA_WITNESSED_EVENT),
         SCHEMA_VERSION_WITNESSED
     );
-    assert_eq!(SCHEMA_VERSION_WITNESSED, 2);
+    assert_eq!(SCHEMA_VERSION_WITNESSED, 3);
     assert_eq!(
         schema_version(SCHEMA_REPORTING_UNIT_ENTRY),
         SCHEMA_VERSION_REPORTING_UNIT
@@ -890,18 +909,22 @@ fn every_schema_has_its_current_version() {
         schema_version(SCHEMA_ROSTER_SIGNER),
         SCHEMA_VERSION_ROSTER_SIGNER
     );
-    assert_eq!(SCHEMA_VERSION_ROSTER_SIGNER, 2);
+    assert_eq!(SCHEMA_VERSION_ROSTER_SIGNER, 3);
+    assert_eq!(
+        schema_version(SCHEMA_QUORUM_SIGNED),
+        ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED
+    );
+    assert_eq!(ityv_encoding::SCHEMA_VERSION_QUORUM_SIGNED, 2);
     for schema in [
         SCHEMA_TALLY_SCOPE_BODY,
         SCHEMA_AGGREGATE_OPENING_BODY,
-        SCHEMA_QUORUM_SIGNED,
         SCHEMA_PAPER_COUNT_REPORT_BODY,
         SCHEMA_RECEIPT_RESOLUTION_BODY,
     ] {
         assert_eq!(schema_version(schema), SCHEMA_VERSION_1);
     }
     assert_eq!(EntrySet::ReportingUnits.version(), 2);
-    assert_eq!(EntrySet::Roster.version(), 2);
+    assert_eq!(EntrySet::Roster.version(), 3);
     assert_eq!(EntrySet::Boxes.version(), SCHEMA_VERSION_1);
     // The appointment hashes are not objects.
     assert_eq!(EntrySet::Appointments.version(), SCHEMA_VERSION_1);
