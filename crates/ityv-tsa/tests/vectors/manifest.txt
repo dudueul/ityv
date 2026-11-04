@@ -1,0 +1,9 @@
+rsa2048-sha256.tst cert=rsa2048.crt signature=RsaPkcs1Sha256 imprint=sha512 ess=sha256 time=1793799320 nanos=0 serial=02 policy=1.2.3.4.1 nonce=- accuracy=- ordering=no
+rsa3072-sha384.tst cert=rsa3072.crt signature=RsaPkcs1Sha384 imprint=sha512 ess=sha256 time=1793799320 nanos=549000000 serial=03 policy=1.2.3.4.1 nonce=f7dc06176e841f04 accuracy=1,500,100 ordering=yes
+rsa4096-sha512.tst cert=rsa4096.crt signature=RsaPkcs1Sha512 imprint=sha512 ess=sha512 time=1793799320 nanos=594469000 serial=04 policy=1.2.3.4.1 nonce=4f6cea974701452d accuracy=- ordering=no
+p256-sha256.tst cert=p256.crt signature=EcdsaP256Sha256 imprint=sha512 ess=sha256 time=1793799320 nanos=0 serial=05 policy=1.2.3.4.1 nonce=a4eb48ea668c4d69 accuracy=0,20,0 ordering=no
+p384-sha384.tst cert=p384.crt signature=EcdsaP384Sha384 imprint=sha512 ess=sha384 time=1793799320 nanos=0 serial=06 policy=1.2.3.4.1 nonce=- accuracy=- ordering=no
+p384-sha512-essv1.tst cert=p384.crt signature=EcdsaP384Sha512 imprint=sha512 ess=sha1 time=1793799320 nanos=0 serial=07 policy=1.2.3.4.1 nonce=72685669600e0f06 accuracy=- ordering=yes
+rsa2048-nocert.tst cert=rsa2048.crt signature=RsaPkcs1Sha256 imprint=sha512 ess=sha256 time=1793799320 nanos=0 serial=08 policy=1.2.3.4.1 nonce=- accuracy=- ordering=no
+rsa2048-policy2.tst cert=rsa2048.crt signature=RsaPkcs1Sha256 imprint=sha512 ess=sha256 time=1793799320 nanos=0 serial=09 policy=1.2.3.4.2 nonce=37ba8917d46279d9 accuracy=- ordering=no
+rsa2048-imprint256.tst cert=rsa2048.crt signature=RsaPkcs1Sha256 imprint=sha256 ess=sha256 time=1793799320 nanos=0 serial=0a policy=1.2.3.4.1 nonce=8415b2c941f24aeb accuracy=- ordering=no
