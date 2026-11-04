@@ -83,7 +83,25 @@ HonestSign(w, b) ==
   /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
   /\ sigs' = sigs \cup { <<w, b>> }
 
-Next == \E w \in Honest, b \in Bodies : HonestSign(w, b)
+(* Catch-up after an outage (WitnessMemory::adopt, PROTOCOL.md §5.4): an
+   honest witness that has signed or adopted something takes a published
+   later body extending its own into its memory, without signing. The
+   guard lastSigned[w] # None is load-bearing: a witness whose memory was
+   lost (reset to None) and then adopted could sign a second body at a
+   sequence number it had already signed, breaking Agreement; such a
+   witness is outside this model and counts in Byzantine (see README). The
+   code also requires the run of bodies after its own to chain by hash,
+   which the prefix relation abstracts. *)
+HonestAdopt(w, b) ==
+  /\ w \in Honest
+  /\ lastSigned[w] # None
+  /\ b \in Published
+  /\ b.seq > lastSigned[w].seq
+  /\ IsPrefix(lastSigned[w].prefix, b.prefix)
+  /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
+  /\ UNCHANGED sigs
+
+Next == \E w \in Honest, b \in Bodies : HonestSign(w, b) \/ HonestAdopt(w, b)
 
 Spec == Init /\ [][Next]_vars
 
