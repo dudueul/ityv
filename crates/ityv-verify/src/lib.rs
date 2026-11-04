@@ -82,7 +82,7 @@ pub use authority::{AuthorityStage, authorize_ledger};
 pub use boxes::{BoxRefusal, BoxReport, BoxStage, Phase, Refusal, verify_boxes};
 pub use checkpoint::{
     CheckpointChain, CheckpointFinding, CheckpointFindingKind, VerifiedCheckpoint,
-    verify_checkpoints,
+    verify_checkpoints, witness_entries, witness_set,
 };
 pub use disputes::{Decision, DisputeEntry, DisputeStage, verify_disputes};
 pub use error::{Error, Reference, Rule};

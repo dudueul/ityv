@@ -44,12 +44,13 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use ityv_encoding::{
-    CheckpointBody, Hash512, SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, Seq, TimeBucket, decode_object,
+    CheckpointBody, Hash512, KeysetId, LedgerId, SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, Seq,
+    TimeBucket, decode_object,
 };
 use ityv_ledger::{
     Accumulator, DiversityPolicy, Error as LedgerError, QuorumProfile, Roster,
-    SCHEMA_SIGNED_CHECKPOINT, SignedCheckpoint, WitnessEntry, evaluate, sorted_set_root,
-    validate_successor,
+    SCHEMA_SIGNED_CHECKPOINT, SignedCheckpoint, WitnessEntry, WitnessSet, evaluate,
+    sorted_set_root, validate_successor,
 };
 use ityv_state::{HoldReason, HoldSet};
 
@@ -234,6 +235,40 @@ impl<'i, 'a> Prefix<'i, 'a> {
             .collect();
         sorted_set_root(&hashes).ok()
     }
+}
+
+/// The pinned genesis's witness roster as `ityv-ledger` entries, for
+/// [`witness_set`]. `None` if a witness key does not decode.
+#[must_use]
+pub fn witness_entries<'a>(genesis: &VerifiedGenesis<'a>) -> Option<Vec<WitnessEntry<'a>>> {
+    roster_entries(genesis)
+}
+
+/// The witness set a witness tool adopts published checkpoints under
+/// (`ityv_ledger::WitnessMemory::adopt`, PROTOCOL.md §5.4): the pinned
+/// genesis's hash, election, witness roster (`entries`, from
+/// [`witness_entries`]), quorum profile and diversity policy, with the
+/// ledger and key-set identifiers the deployment uses (the genesis does not
+/// fix them; they are those of the first checkpoint the witness signed).
+/// This is how a witness tool should build its set: `WitnessSet::new`
+/// trusts whatever roster it is handed. `None` if the genesis's profile or
+/// roster is not valid.
+#[must_use]
+pub fn witness_set<'e>(
+    genesis: &VerifiedGenesis<'_>,
+    entries: &'e [WitnessEntry<'e>],
+    ledger_id: LedgerId<'_>,
+    keyset_id: KeysetId<'_>,
+) -> Option<WitnessSet<'e>> {
+    let q = genesis.genesis().body().quorum();
+    WitnessSet::new(
+        *genesis.genesis().hash(),
+        (genesis.election_id(), ledger_id, keyset_id),
+        Roster::new(entries).ok()?,
+        QuorumProfile::new(q.witnesses, q.quorum, q.byzantine_max)?,
+        DiversityPolicy::new(q.min_orgs, q.min_providers, q.min_regions),
+    )
+    .ok()
 }
 
 /// The genesis witness set as `ityv-ledger`'s roster entries.

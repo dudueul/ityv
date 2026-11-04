@@ -2560,3 +2560,63 @@ fn lagging_honest_witnesses_after_the_beacon_cannot_fix_the_seed() {
     assert!(audit_refused(&r).is_empty());
     assert_eq!(r.status().status(), Status::PaperAudited);
 }
+
+/// The signed checkpoint at the end of `book`'s ledger.
+fn last_checkpoint(book: &Book) -> ityv_ledger::SignedCheckpoint<'static> {
+    let bytes: &'static [u8] = book.ledger.events.last().copied().unwrap();
+    ityv_encoding::decode_object(
+        ityv_ledger::SCHEMA_SIGNED_CHECKPOINT,
+        SCHEMA_VERSION_1,
+        bytes,
+    )
+    .unwrap()
+}
+
+/// A witness tool builds its witness set from the verified genesis
+/// (`witness_set`, PROTOCOL §5.4): it adopts the world's real checkpoints,
+/// signed by the genesis witnesses, and refuses a set for another ledger.
+#[test]
+fn a_witness_set_from_the_verified_genesis_adopts_the_published_checkpoints() {
+    let world = audit_world();
+    let mut book = Book::new(world);
+    let first_size = book.frames.len() as u64;
+    book.checkpoint_at(READY + 1);
+    let first = last_checkpoint(&book);
+    book.checkpoint_at(READY + 1);
+    let second = last_checkpoint(&book);
+    let entries = ityv_verify::witness_entries(world.genesis).unwrap();
+    let set = ityv_verify::witness_set(
+        world.genesis,
+        &entries,
+        ityv_encoding::LedgerId::new(b"L-1").unwrap(),
+        ityv_encoding::KeysetId::new(b"K-1").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(*set.genesis_hash(), world.pin);
+    let now = TimeBucket::new(READY + 1);
+    let (token, memory) = ityv_ledger::WitnessMemory::fresh().may_sign(
+        first.body_bytes(),
+        &ityv_ledger::ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &world.pin,
+        now,
+    );
+    assert!(token.is_ok());
+    let proof = ityv_ledger::consistency_proof(&book.frames.as_slice(), first_size, first_size + 1)
+        .unwrap();
+    let before = ityv_ledger::WitnessMemory::from_last(memory.last().copied());
+    let (r, memory) = memory.adopt(&set, &[second], &proof, now);
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(memory.last().unwrap().seq().get(), 2);
+    // A set for another ledger takes nothing of this one.
+    let other = ityv_verify::witness_set(
+        world.genesis,
+        &entries,
+        ityv_encoding::LedgerId::new(b"L-2").unwrap(),
+        ityv_encoding::KeysetId::new(b"K-1").unwrap(),
+    )
+    .unwrap();
+    let (r, _) = before.adopt(&other, &[last_checkpoint(&book)], &proof, now);
+    assert_eq!(r, Err(ityv_ledger::Error::LedgerMismatch));
+}
