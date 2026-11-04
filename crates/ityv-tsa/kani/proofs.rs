@@ -256,6 +256,40 @@ fn reference_days(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+/// `genTime` ± accuracy (`VerifiedTimestamp::earliest` and `latest`): for
+/// every time up to the year 9999 and every accuracy up to
+/// `MAX_ACCURACY_SECONDS`, moving later never fails and is exact (checked
+/// against division and remainder), and moving earlier is its inverse and
+/// fails exactly when the offset is larger than the time.
+#[kani::proof]
+fn time_offsets_are_exact() {
+    let seconds: u64 = kani::any();
+    let nanos: u32 = kani::any();
+    let by_seconds: u64 = kani::any();
+    let by_nanos: u32 = kani::any();
+    kani::assume(seconds <= 253_402_300_799 && nanos < 1_000_000_000);
+    kani::assume(by_seconds <= crate::MAX_ACCURACY_SECONDS && by_nanos < 1_000_000_000);
+    let time = (seconds, nanos);
+    let offset = (by_seconds, by_nanos);
+
+    let total = u64::from(nanos) + u64::from(by_nanos);
+    let exact = (
+        seconds + by_seconds + total / 1_000_000_000,
+        (total % 1_000_000_000) as u32,
+    );
+    let later = time::add_parts(time, offset);
+    assert!(later == Some(exact));
+    assert!(time::sub_parts(exact, offset) == Some(time));
+
+    let earlier = time::sub_parts(time, offset);
+    let larger = by_seconds > seconds || (by_seconds == seconds && by_nanos > nanos);
+    assert!(earlier.is_none() == larger);
+    if let Some(earlier) = earlier {
+        assert!(earlier.1 < 1_000_000_000);
+        assert!(time::add_parts(earlier, offset) == Some(time));
+    }
+}
+
 // Every instant of a year, written as `GeneralizedTime`, parses to the
 // reference Unix time, and an invalid day of the month is refused.
 //

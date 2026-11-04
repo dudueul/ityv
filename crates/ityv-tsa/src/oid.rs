@@ -96,6 +96,8 @@ pub(crate) const SUBJECT_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1D, 0x0E];
 pub(crate) const KEY_USAGE: &[u8] = &[0x55, 0x1D, 0x0F];
 /// `id-ce-basicConstraints`, 2.5.29.19.
 pub(crate) const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1D, 0x13];
+/// `id-ce-certificatePolicies`, 2.5.29.32.
+pub(crate) const CERTIFICATE_POLICIES: &[u8] = &[0x55, 0x1D, 0x20];
 /// `id-ce-extKeyUsage`, 2.5.29.37.
 pub(crate) const EXT_KEY_USAGE: &[u8] = &[0x55, 0x1D, 0x25];
 /// `id-kp-timeStamping`, 1.3.6.1.5.5.7.3.8.
@@ -131,6 +133,7 @@ mod tests {
             SUBJECT_KEY_IDENTIFIER,
             KEY_USAGE,
             BASIC_CONSTRAINTS,
+            CERTIFICATE_POLICIES,
             EXT_KEY_USAGE,
             TIME_STAMPING,
         ] {

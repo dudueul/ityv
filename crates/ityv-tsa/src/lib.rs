@@ -11,21 +11,37 @@
 //! * `#![no_std]`, no heap allocation, no `unsafe`, no panics (the workspace
 //!   lint set; Kani harnesses under `cfg(kani)` for the reader and the time
 //!   parser; the proptests and the fuzz target for the whole token).
-//! * One strict DER subset for the whole token, including the parts not
-//!   interpreted: definite minimal lengths, at most [`MAX_DEPTH`] levels and
-//!   [`MAX_TOKEN_LEN`] octets, minimal `INTEGER`s, `BOOLEAN` `0x00`/`0xFF`,
-//!   valid object identifiers, sorted `SET`s, no `DEFAULT` written out, every
-//!   `SEQUENCE` consumed. Unknown critical extensions are refused.
+//! * One strict DER subset for the whole token: definite minimal lengths,
+//!   one-octet tags, at most [`MAX_DEPTH`] levels and [`MAX_TOKEN_LEN`]
+//!   octets, minimal `INTEGER`s, `BOOLEAN` `0x00`/`0xFF`, `NULL` empty, valid
+//!   object identifiers, zero `BIT STRING` padding, primitive strings and
+//!   times, and `SET OF` elements in DER order. The structures this crate
+//!   interprets are also read whole (every `SEQUENCE` consumed, no `DEFAULT`
+//!   value written out). The parts it does not interpret (names, chain
+//!   certificates, unknown attributes and extension values) get the DER
+//!   checks only, so a `DEFAULT` written out there is not noticed. Two
+//!   unsigned sets, the embedded certificates and the unsigned attributes,
+//!   may be in any order. Unknown critical extensions are refused, except a
+//!   critical certificate policies extension, which is DER-checked and not
+//!   interpreted.
 //! * The signer's certificate is pinned by its SHA-256, not path-validated;
 //!   its extended key usage must be critical and exactly timestamping.
 //! * Signatures: RSASSA-PKCS1-v1_5 with SHA-256/384/512 over a 2048- to
 //!   4096-bit modulus, verified by encoding and comparing the whole block;
 //!   ECDSA P-256/SHA-256, P-384/SHA-384 and P-384/SHA-512. Only what the pin
 //!   allows.
+//! * The time is an interval: [`VerifiedTimestamp::earliest`] and
+//!   [`VerifiedTimestamp::latest`] are `genTime` ∓ the accuracy, computed
+//!   without overflow (the accuracy is at most [`MAX_ACCURACY_SECONDS`]).
 //!
 //! What this crate does **not** prove: that the asserted time is true (an
 //! authority could sign any time; ADR-0034 requires two operators), that the
 //! certificate is unrevoked, or anything about the data beyond its digest.
+//! Nor does it make token bytes unique: the unsigned parts (certificates,
+//! unsigned attributes, the signer identifier's form) and an ECDSA
+//! signature's `s` (`n − s` verifies too) can change without changing the
+//! result, so a ledger counts tokens per authority, never per token bytes.
+//! It takes no expected nonce; the requester checks the nonce of the reply.
 //!
 //! ```
 //! use ityv_tsa::{
@@ -95,5 +111,5 @@ pub use oid::ObjectId;
 pub use pin::{MAX_POLICIES, PIN_FORMAT_VERSION, PinnedTsa, Policies};
 pub use rsa::{MAX_RSA_BITS, MIN_RSA_BITS};
 pub use time::GenTime;
-pub use tst::{Accuracy, MAX_NONCE_LEN, MAX_SERIAL_LEN};
+pub use tst::{Accuracy, MAX_ACCURACY_SECONDS, MAX_NONCE_LEN, MAX_SERIAL_LEN};
 pub use verify::{CertificateSource, VerifiedTimestamp, verify_token};

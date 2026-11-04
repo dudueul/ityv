@@ -14,6 +14,11 @@ use crate::time::GenTime;
 use crate::tst::{self, Accuracy};
 
 /// Where the signer's certificate came from.
+///
+/// This reflects the token's `certificates` field, which is not signed:
+/// anyone can add or remove certificates without breaking the signature, so
+/// the same signed timestamp can verify with either source. It is a
+/// diagnostic, never evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CertificateSource {
     /// Embedded in the token (requested with `certReq`) and matched to the pin by hash.
@@ -53,6 +58,50 @@ impl<'t> VerifiedTimestamp<'t> {
         self.accuracy
     }
 
+    /// The earliest instant the authority's assertion allows: `genTime`
+    /// minus the accuracy (RFC 3161 §2.4.2: the true time is within
+    /// `genTime` ± accuracy), or `genTime` itself if the token states no
+    /// accuracy. `None` if that is before the Unix epoch.
+    ///
+    /// The checkpoint stage judges with this interval, `earliest()` to
+    /// [`latest`](Self::latest), not with `genTime` alone (ADR-0034 VC-115,
+    /// VC-116; ADR-0037 9): a conclusion that the object existed by some
+    /// instant (the anchor window, the backdating check) uses `latest()`; a
+    /// conclusion that the token was made after some instant uses
+    /// `earliest()`.
+    ///
+    /// A token without accuracy gives the interval `genTime` to `genTime`.
+    /// RFC 3161 lets an authority's policy state the accuracy instead; such
+    /// an accuracy is not in the token, so the genesis would have to carry it.
+    #[must_use]
+    pub fn earliest(&self) -> Option<GenTime> {
+        match self.accuracy {
+            Some(accuracy) => self
+                .gen_time
+                .checked_sub(accuracy.seconds(), accuracy.sub_second_nanos()),
+            None => Some(self.gen_time),
+        }
+    }
+
+    /// The latest instant the authority's assertion allows: `genTime` plus
+    /// the accuracy, or `genTime` itself if the token states no accuracy
+    /// (see [`earliest`](Self::earliest)).
+    ///
+    /// Never `None` for a verified token (`genTime` is before the year 10000
+    /// and the accuracy at most [`MAX_ACCURACY_SECONDS`] and 999 999 µs);
+    /// the result is checked all the same.
+    ///
+    /// [`MAX_ACCURACY_SECONDS`]: crate::MAX_ACCURACY_SECONDS
+    #[must_use]
+    pub fn latest(&self) -> Option<GenTime> {
+        match self.accuracy {
+            Some(accuracy) => self
+                .gen_time
+                .checked_add(accuracy.seconds(), accuracy.sub_second_nanos()),
+            None => Some(self.gen_time),
+        }
+    }
+
     /// The `ordering` flag.
     #[must_use]
     pub const fn ordering(&self) -> bool {
@@ -89,7 +138,9 @@ impl<'t> VerifiedTimestamp<'t> {
         &self.certificate_sha256
     }
 
-    /// Where that certificate came from.
+    /// Where that certificate came from: from the token's unsigned
+    /// `certificates` field or from the pin. Not signed (see
+    /// [`CertificateSource`]).
     #[must_use]
     pub const fn certificate_source(&self) -> CertificateSource {
         self.certificate_source

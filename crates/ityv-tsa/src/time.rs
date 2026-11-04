@@ -31,6 +31,52 @@ impl GenTime {
     pub const fn nanos(&self) -> u32 {
         self.nanos
     }
+
+    /// This instant moved earlier by `seconds` and `nanos`; `None` if that
+    /// is before the Unix epoch or `nanos` is not below one second.
+    pub(crate) fn checked_sub(self, seconds: u64, nanos: u32) -> Option<Self> {
+        let (seconds, nanos) = sub_parts((self.seconds, self.nanos), (seconds, nanos))?;
+        Some(Self { seconds, nanos })
+    }
+
+    /// This instant moved later by `seconds` and `nanos`; `None` if the
+    /// seconds overflow or `nanos` is not below one second.
+    pub(crate) fn checked_add(self, seconds: u64, nanos: u32) -> Option<Self> {
+        let (seconds, nanos) = add_parts((self.seconds, self.nanos), (seconds, nanos))?;
+        Some(Self { seconds, nanos })
+    }
+}
+
+/// Nanoseconds in a second.
+const NANOS_PER_SECOND: u32 = 1_000_000_000;
+
+/// `a - b` for times or durations written as `(seconds, nanos)` with
+/// `nanos` below one second; `None` if `b > a` or a `nanos` is out of range.
+pub(crate) fn sub_parts(a: (u64, u32), b: (u64, u32)) -> Option<(u64, u32)> {
+    if a.1 >= NANOS_PER_SECOND || b.1 >= NANOS_PER_SECOND {
+        return None;
+    }
+    let (nanos, borrow) = match a.1.checked_sub(b.1) {
+        Some(nanos) => (nanos, 0),
+        // a.1 + 10^9 is below 2·10^9, inside u32, and above b.1.
+        None => (a.1.checked_add(NANOS_PER_SECOND)?.checked_sub(b.1)?, 1),
+    };
+    Some((a.0.checked_sub(b.0)?.checked_sub(borrow)?, nanos))
+}
+
+/// `a + b` for `(seconds, nanos)` pairs as in [`sub_parts`]; `None` if the
+/// seconds overflow or a `nanos` is out of range.
+pub(crate) fn add_parts(a: (u64, u32), b: (u64, u32)) -> Option<(u64, u32)> {
+    if a.1 >= NANOS_PER_SECOND || b.1 >= NANOS_PER_SECOND {
+        return None;
+    }
+    // Below 2·10^9, inside u32.
+    let sum = a.1.checked_add(b.1)?;
+    let (nanos, carry) = match sum.checked_sub(NANOS_PER_SECOND) {
+        Some(nanos) => (nanos, 1),
+        None => (sum, 0),
+    };
+    Some((a.0.checked_add(b.0)?.checked_add(carry)?, nanos))
 }
 
 /// Days before the first of each month in a common year.
@@ -247,11 +293,79 @@ mod tests {
         }
 
         #[test]
+        fn offsets_match_whole_nanoseconds(
+            seconds in 0u64..=253_402_300_799,
+            nanos in 0u32..1_000_000_000,
+            by_seconds in 0u64..=4000,
+            by_nanos in 0u32..1_000_000_000,
+        ) {
+            // The reference: whole nanoseconds in a u128.
+            let whole = |s: u64, n: u32| {
+                u128::from(s)
+                    .checked_mul(1_000_000_000)
+                    .and_then(|total| total.checked_add(u128::from(n)))
+                    .unwrap()
+            };
+            let split = |total: u128| {
+                (
+                    u64::try_from(total / 1_000_000_000).unwrap(),
+                    u32::try_from(total % 1_000_000_000).unwrap(),
+                )
+            };
+            let a = whole(seconds, nanos);
+            let b = whole(by_seconds, by_nanos);
+            let time = (seconds, nanos);
+            let offset = (by_seconds, by_nanos);
+            prop_assert_eq!(add_parts(time, offset), Some(split(a.checked_add(b).unwrap())));
+            prop_assert_eq!(sub_parts(time, offset), a.checked_sub(b).map(split));
+        }
+
+        #[test]
         fn time_parsers_are_total(bytes in prop::collection::vec(any::<u8>(), 0..32)) {
             let _ = generalized_time(&bytes, true);
             let _ = generalized_time(&bytes, false);
             let _ = utc_time(&bytes);
         }
+    }
+
+    #[test]
+    fn offsets_at_the_edges() {
+        let second = NANOS_PER_SECOND;
+        // Borrow and carry exactly at one second.
+        assert_eq!(sub_parts((5, 0), (0, 1)), Some((4, second - 1)));
+        assert_eq!(sub_parts((5, 1), (0, 1)), Some((5, 0)));
+        assert_eq!(add_parts((5, second - 1), (0, 1)), Some((6, 0)));
+        assert_eq!(add_parts((5, second - 2), (0, 1)), Some((5, second - 1)));
+        // Before the epoch, and seconds overflow.
+        assert_eq!(sub_parts((0, 0), (0, 1)), None);
+        assert_eq!(sub_parts((1, 0), (1, 1)), None);
+        assert_eq!(sub_parts((1, 5), (1, 5)), Some((0, 0)));
+        assert_eq!(add_parts((u64::MAX, 0), (0, 0)), Some((u64::MAX, 0)));
+        assert_eq!(add_parts((u64::MAX, second - 1), (0, 1)), None);
+        assert_eq!(add_parts((u64::MAX, 0), (1, 0)), None);
+        // Nanoseconds of one second or more, on either side.
+        for bad in [(0, second), (0, u32::MAX)] {
+            assert_eq!(sub_parts((9, 0), bad), None);
+            assert_eq!(sub_parts(bad, (0, 0)), None);
+            assert_eq!(add_parts((9, 0), bad), None);
+            assert_eq!(add_parts(bad, (0, 0)), None);
+        }
+        let time = GenTime {
+            seconds: 10,
+            nanos: 250,
+        };
+        assert_eq!(
+            time.checked_sub(1, 500)
+                .map(|t| (t.unix_seconds(), t.nanos())),
+            Some((8, second - 250))
+        );
+        assert_eq!(
+            time.checked_add(1, second - 250)
+                .map(|t| (t.unix_seconds(), t.nanos())),
+            Some((12, 0))
+        );
+        assert_eq!(time.checked_sub(10, 251), None);
+        assert_eq!(time.checked_add(u64::MAX, 0), None);
     }
 
     #[test]

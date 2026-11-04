@@ -6,9 +6,11 @@
 //! be critical and exactly `id-kp-timeStamping` (RFC 3161 §2.3); key usage,
 //! if present, digital signature and/or non-repudiation only; basic
 //! constraints, if present, not a CA; subject key identifier, kept for a
-//! signer identified by key. Any other critical extension is refused, a
-//! processed extension may not repeat, and everything else must still be in
-//! the DER subset.
+//! signer identified by key; certificate policies, critical or not, checked
+//! to be in the DER subset and otherwise ignored (the pin, not a policy, is
+//! what the certificate is trusted by; ADR-0037 4). Any other critical
+//! extension is refused, a processed extension may not repeat, and
+//! everything else must still be in the DER subset.
 
 use crate::der::{
     self, BIT_STRING, BOOLEAN, CONTEXT_0, CONTEXT_3, GENERALIZED_TIME, INTEGER, NULL, OCTET_STRING,
@@ -180,6 +182,7 @@ fn read_extensions(mut list: Reader<'_>) -> Result<Option<&[u8]>, TsaError> {
     let mut eku = false;
     let mut key_usage = false;
     let mut basic_constraints = false;
+    let mut policies = false;
     let mut key_id_seen = false;
     let mut key_id = None;
     while !list.is_empty() {
@@ -199,6 +202,10 @@ fn read_extensions(mut list: Reader<'_>) -> Result<Option<&[u8]>, TsaError> {
             oid::BASIC_CONSTRAINTS => {
                 first_time(&mut basic_constraints)?;
                 check_basic_constraints(extension.value)?;
+            }
+            oid::CERTIFICATE_POLICIES => {
+                first_time(&mut policies)?;
+                check_certificate_policies(extension.value)?;
             }
             oid::SUBJECT_KEY_IDENTIFIER => {
                 first_time(&mut key_id_seen)?;
@@ -240,6 +247,32 @@ fn check_key_usage(value: &[u8]) -> Result<(), TsaError> {
         [0x03, 0x02, 0x07, 0x80] | [0x03, 0x02, 0x06, 0x40 | 0xC0] => Ok(()),
         _ => Err(TsaError::InvalidKeyUsage),
     }
+}
+
+/// `certificatePolicies ::= SEQUENCE SIZE (1..MAX) OF PolicyInformation`,
+/// `PolicyInformation ::= SEQUENCE { policyIdentifier, policyQualifiers
+/// OPTIONAL }`: the structure is checked, every element is in the DER subset,
+/// and nothing is interpreted.
+///
+/// A critical certificate policies extension is accepted although RFC 5280
+/// §4.2.1.4 asks path validation to process it: this crate does no path
+/// validation, and the certificate is trusted because the genesis pins its
+/// hash, under whatever policy the people who pinned it examined. Korean
+/// accredited and government (GPKI) profiles mark the extension critical.
+fn check_certificate_policies(value: &[u8]) -> Result<(), TsaError> {
+    let mut list = der::single(value, SEQUENCE)?;
+    if list.is_empty() {
+        return Err(TsaError::Der(DerError::MissingField));
+    }
+    while !list.is_empty() {
+        let mut information = list.nested(SEQUENCE)?;
+        information.oid()?;
+        if !information.is_empty() {
+            information.checked(SEQUENCE)?;
+        }
+        information.finish()?;
+    }
+    Ok(())
 }
 
 /// `BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLen … }`:
@@ -365,6 +398,49 @@ mod tests {
         assert_eq!(
             check_extended_key_usage(&[0x30, 0x02, 0x04, 0x00]),
             Err(TsaError::Der(DerError::UnexpectedTag))
+        );
+    }
+
+    #[test]
+    fn certificate_policies() {
+        // { 1.2.3.4 }, and { 1.2.3.4 with a CPS qualifier }.
+        let plain = [0x30, 0x07, 0x30, 0x05, 0x06, 0x03, 0x2A, 0x03, 0x04];
+        assert_eq!(check_certificate_policies(&plain), Ok(()));
+        let qualified = [
+            0x30, 0x17, 0x30, 0x15, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x30, 0x0E, 0x30, 0x0C, 0x06,
+            0x08, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x02, 0x01, 0x16, 0x00,
+        ];
+        assert_eq!(check_certificate_policies(&qualified), Ok(()));
+        // The qualifiers stay in the subset: a BOOLEAN 0x01 inside.
+        let mut bad_qualifier = qualified;
+        bad_qualifier[13..].copy_from_slice(&[
+            0x01, 0x01, 0x01, 0x06, 0x05, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x04, 0x00,
+        ]);
+        assert_eq!(
+            check_certificate_policies(&bad_qualifier),
+            Err(TsaError::Der(DerError::InvalidBoolean))
+        );
+        assert_eq!(
+            check_certificate_policies(&[0x30, 0x00]),
+            Err(TsaError::Der(DerError::MissingField))
+        );
+        // No policy identifier, a qualifier list that is not a SEQUENCE,
+        // and bytes after the list.
+        assert_eq!(
+            check_certificate_policies(&[0x30, 0x02, 0x30, 0x00]),
+            Err(TsaError::Der(DerError::MissingField))
+        );
+        assert_eq!(
+            check_certificate_policies(&[
+                0x30, 0x09, 0x30, 0x07, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x05, 0x00
+            ]),
+            Err(TsaError::Der(DerError::UnexpectedTag))
+        );
+        assert_eq!(
+            check_certificate_policies(&[
+                0x30, 0x07, 0x30, 0x05, 0x06, 0x03, 0x2A, 0x03, 0x04, 0x05, 0x00
+            ]),
+            Err(TsaError::Der(DerError::TrailingData))
         );
     }
 

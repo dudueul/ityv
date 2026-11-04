@@ -9,8 +9,14 @@
 //! - Primitive values follow the DER rules for their type: `BOOLEAN` is
 //!   `0x00` or `0xFF`, `INTEGER` is minimal, `NULL` is empty, `OBJECT
 //!   IDENTIFIER` arcs are minimal and complete, `BIT STRING` padding is zero.
-//!   `SET` and `SET OF` elements are in ascending order of their encodings
-//!   (for distinct tags this is also the canonical tag order of a `SET`).
+//!   The elements of a universal `SET` are in ascending order of their
+//!   encodings: the DER order of a `SET OF` (X.690 §11.6). A `SET` type
+//!   (not `SET OF`) is ordered by tag instead (X.690 §10.3, X.680 §8.6),
+//!   which differs from the octet order when one component is primitive and
+//!   another constructed; every `SET` in the structures a token carries is a
+//!   `SET OF`. An implicitly tagged set is checked where the structure reads
+//!   it as one; the two unsigned sets of `SignedData` (certificates,
+//!   unsigned attributes) are not.
 //! - Callers finish every reader, so every `SEQUENCE` is consumed exactly.
 //!
 //! [`check_contents`] applies the same rules to a value the structure does
@@ -249,7 +255,8 @@ pub(crate) fn single(input: &[u8], tag: u8) -> Result<Reader<'_>, DerError> {
     Ok(inner)
 }
 
-/// Checks that the elements of a `SET` value are in ascending DER order.
+/// Checks that the elements of a `SET` value are in ascending order of their
+/// encodings, the DER order of a `SET OF`.
 ///
 /// Two complete encodings are never a proper prefix of each other, so plain
 /// lexicographic order is the X.690 §11.6 order. Equal neighbours are

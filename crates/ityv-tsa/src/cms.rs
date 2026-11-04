@@ -96,7 +96,7 @@ pub(crate) fn parse(token: &[u8]) -> Result<SignedToken<'_>, TsaError> {
     encapsulated.finish()?;
 
     let certificates = if signed_data.peek_tag() == Some(CONTEXT_0) {
-        read_certificates(signed_data.set(CONTEXT_0)?)?
+        read_certificates(signed_data.nested(CONTEXT_0)?)?
     } else {
         Reader::new(&[])
     };
@@ -121,6 +121,11 @@ pub(crate) fn parse(token: &[u8]) -> Result<SignedToken<'_>, TsaError> {
 
 /// Checks the `CertificateSet`: X.509 certificates only, at most
 /// [`MAX_CERTIFICATES`], each in the subset. Returns a reader over them.
+///
+/// The order of the certificates is not checked. DER sorts a `SET OF`, but
+/// this set is not signed (anyone can reorder, add or remove certificates
+/// without breaking the signature) and is only searched for the pinned
+/// hash; an authority may well write it in chain order.
 fn read_certificates(set: Reader<'_>) -> Result<Reader<'_>, TsaError> {
     let mut scan = set;
     let mut count = 0usize;
@@ -173,8 +178,10 @@ fn read_signer<'a>(
     let family = alg::read_signature_algorithm(&mut signer, digest)?;
     let signature = signer.octets()?;
     if let Some(unsigned) = signer.optional(CONTEXT_1)? {
-        // Unsigned attributes are not used, but stay in the subset.
-        der::check_contents(signer.enter_set(&unsigned)?)?;
+        // Unsigned attributes are not used, but each stays in the subset.
+        // Like the certificate set, they are not signed, so their order is
+        // not checked.
+        der::check_contents(signer.enter(&unsigned)?)?;
     }
     signer.finish()?;
     Ok(SignedToken {

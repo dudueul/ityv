@@ -277,17 +277,21 @@ pub(crate) fn read_digest_algorithm(reader: &mut Reader<'_>) -> Result<DigestAlg
 }
 
 /// Reads the `AlgorithmIdentifier` of an ESS v2 `hashAlgorithm` field, if
-/// present. Absent means SHA-256 (RFC 5035 §5.4.1.1); SHA-256 written out is
-/// a `DEFAULT` value DER omits.
+/// present. Absent means SHA-256: the field is `DEFAULT {algorithm
+/// id-sha256}` (RFC 5035 §5.4.1.1), so that value written out, SHA-256 with
+/// absent parameters, is a `DEFAULT` value DER omits. SHA-256 with `NULL`
+/// parameters is a different value and is accepted.
 pub(crate) fn read_ess_hash_algorithm(
     reader: &mut Reader<'_>,
 ) -> Result<DigestAlgorithm, TsaError> {
     if reader.peek_tag() != Some(der::SEQUENCE) {
         return Ok(DigestAlgorithm::Sha256);
     }
-    match read_digest_algorithm(reader)? {
-        DigestAlgorithm::Sha256 => Err(TsaError::Der(DerError::DefaultEncoded)),
-        other @ (DigestAlgorithm::Sha384 | DigestAlgorithm::Sha512) => Ok(other),
+    let (algorithm, parameters) = algorithm_identifier(reader)?;
+    match (DigestAlgorithm::from_oid(algorithm), parameters) {
+        (Some(DigestAlgorithm::Sha256), None) => Err(TsaError::Der(DerError::DefaultEncoded)),
+        (Some(digest), parameters) if absent_or_null(parameters) => Ok(digest),
+        (Some(_) | None, _) => Err(TsaError::UnknownDigestAlgorithm),
     }
 }
 
@@ -499,11 +503,28 @@ mod tests {
             Err(TsaError::UnknownDigestAlgorithm)
         );
         assert_eq!(digest_of(&sha1), Err(TsaError::UnknownDigestAlgorithm));
-        let mut reader = Reader::new(&sha256_null);
+        // ESS v2: the DEFAULT value is SHA-256 with absent parameters; with
+        // NULL parameters it is another value, written out by DER.
+        let sha256_absent = [
+            0x30, 0x0B, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        ];
+        let mut reader = Reader::new(&sha256_absent);
         assert_eq!(
             read_ess_hash_algorithm(&mut reader),
             Err(TsaError::Der(DerError::DefaultEncoded))
         );
+        let mut reader = Reader::new(&sha256_null);
+        assert_eq!(
+            read_ess_hash_algorithm(&mut reader),
+            Ok(DigestAlgorithm::Sha256)
+        );
+        assert!(reader.is_empty());
+        for refused in [&sha384_int[..], &sha1] {
+            assert_eq!(
+                read_ess_hash_algorithm(&mut Reader::new(refused)),
+                Err(TsaError::UnknownDigestAlgorithm)
+            );
+        }
         let mut reader = Reader::new(&sha512_absent);
         assert_eq!(
             read_ess_hash_algorithm(&mut reader),

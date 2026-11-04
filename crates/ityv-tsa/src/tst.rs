@@ -29,6 +29,18 @@ pub const MAX_SERIAL_LEN: usize = 20;
 /// The longest nonce magnitude, in octets (256 bits).
 pub const MAX_NONCE_LEN: usize = 32;
 
+/// The largest accuracy `seconds` accepted: one hour.
+///
+/// RFC 3161 sets no bound. Real authorities state a second or less, and a
+/// token whose own uncertainty is an hour cannot place a checkpoint in
+/// ADR-0034's anchor window (four 15-minute buckets, one hour). The bound
+/// also keeps `genTime ± accuracy` ([`VerifiedTimestamp::earliest`],
+/// [`VerifiedTimestamp::latest`]) far from any overflow.
+///
+/// [`VerifiedTimestamp::earliest`]: crate::VerifiedTimestamp::earliest
+/// [`VerifiedTimestamp::latest`]: crate::VerifiedTimestamp::latest
+pub const MAX_ACCURACY_SECONDS: u64 = 3600;
+
 /// The accuracy of `genTime` (RFC 3161 §2.4.2). A missing field is zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Accuracy {
@@ -38,7 +50,7 @@ pub struct Accuracy {
 }
 
 impl Accuracy {
-    /// Whole seconds.
+    /// Whole seconds, at most [`MAX_ACCURACY_SECONDS`].
     #[must_use]
     pub const fn seconds(&self) -> u64 {
         self.seconds
@@ -54,6 +66,15 @@ impl Accuracy {
     #[must_use]
     pub const fn micros(&self) -> u16 {
         self.micros
+    }
+
+    /// The milliseconds and microseconds together, in nanoseconds
+    /// (`0..=999_999_000`).
+    pub(crate) fn sub_second_nanos(&self) -> u32 {
+        // Both fields are at most 999, so neither operation saturates.
+        u32::from(self.millis)
+            .saturating_mul(1_000_000)
+            .saturating_add(u32::from(self.micros).saturating_mul(1_000))
     }
 }
 
@@ -138,10 +159,15 @@ pub(crate) fn parse(content: &[u8]) -> Result<TstInfo<'_>, TsaError> {
 }
 
 /// `Accuracy ::= SEQUENCE { seconds INTEGER OPTIONAL,
-/// millis [0] INTEGER (1..999) OPTIONAL, micros [1] INTEGER (1..999) OPTIONAL }`.
+/// millis [0] INTEGER (1..999) OPTIONAL, micros [1] INTEGER (1..999) OPTIONAL }`,
+/// with `seconds` at most [`MAX_ACCURACY_SECONDS`].
 fn read_accuracy(mut accuracy: Reader<'_>) -> Result<Accuracy, TsaError> {
     let seconds = match accuracy.optional(INTEGER)? {
-        Some(seconds) => der::small_unsigned(seconds.value)?,
+        Some(seconds) => match der::small_unsigned(seconds.value) {
+            Ok(value) if value <= MAX_ACCURACY_SECONDS => value,
+            Ok(_) | Err(DerError::IntegerTooLarge) => return Err(TsaError::AccuracyTooLarge),
+            Err(other) => return Err(other.into()),
+        },
         None => 0,
     };
     let millis = sub_second(accuracy.optional(PRIMITIVE_0)?)?;
@@ -224,6 +250,46 @@ mod tests {
             Err(TsaError::InvalidAccuracy)
         );
         assert_eq!(read(&[0x02, 0x01, 0x07]).map(|a| a.seconds()), Ok(7));
+    }
+
+    #[test]
+    fn accuracy_seconds_are_bounded() {
+        let read = |bytes: &[u8]| read_accuracy(Reader::new(bytes));
+        // 3600 = 0x0E10 is accepted, 3601 and anything longer refused.
+        assert_eq!(
+            read(&[0x02, 0x02, 0x0E, 0x10]).map(|a| a.seconds()),
+            Ok(MAX_ACCURACY_SECONDS)
+        );
+        assert_eq!(
+            read(&[0x02, 0x02, 0x0E, 0x11]),
+            Err(TsaError::AccuracyTooLarge)
+        );
+        assert_eq!(
+            read(&[0x02, 0x09, 0x01, 0, 0, 0, 0, 0, 0, 0, 0]),
+            Err(TsaError::AccuracyTooLarge)
+        );
+        assert_eq!(
+            read(&[0x02, 0x01, 0xFF]),
+            Err(TsaError::Der(DerError::NegativeInteger))
+        );
+        assert_eq!(
+            read(&[0x02, 0x02, 0x00, 0x01]),
+            Err(TsaError::Der(DerError::NonMinimalInteger))
+        );
+    }
+
+    #[test]
+    fn sub_second_nanos() {
+        let accuracy = |millis, micros| Accuracy {
+            seconds: 0,
+            millis,
+            micros,
+        };
+        assert_eq!(accuracy(0, 0).sub_second_nanos(), 0);
+        assert_eq!(accuracy(1, 0).sub_second_nanos(), 1_000_000);
+        assert_eq!(accuracy(0, 1).sub_second_nanos(), 1_000);
+        assert_eq!(accuracy(999, 999).sub_second_nanos(), 999_999_000);
+        assert_eq!(accuracy(500, 100).sub_second_nanos(), 500_100_000);
     }
 
     #[test]

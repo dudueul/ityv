@@ -164,8 +164,10 @@ pub enum TsaError {
     UnknownSignatureAlgorithm,
     /// The signature algorithm names a digest other than the signer's digest algorithm.
     SignatureDigestMismatch,
-    /// The key and digest do not form a supported signature algorithm (an RSA
-    /// algorithm with an EC key, ECDSA with a digest shorter than the curve).
+    /// The key and digest do not form a supported signature algorithm: an RSA
+    /// algorithm with an EC key or the reverse, or ECDSA with a digest other
+    /// than the curve's (P-256 takes SHA-256 only; P-384 takes SHA-384 or
+    /// SHA-512).
     UnsupportedSignatureAlgorithm,
     /// A signature algorithm the pin does not allow.
     SignatureNotAllowed,
@@ -188,6 +190,8 @@ pub enum TsaError {
     NonceTooLarge,
     /// An accuracy `millis` or `micros` outside `1..=999`.
     InvalidAccuracy,
+    /// An accuracy `seconds` above [`MAX_ACCURACY_SECONDS`](crate::MAX_ACCURACY_SECONDS).
+    AccuracyTooLarge,
     /// A critical `TSTInfo` extension (none is understood, so every one is refused).
     CriticalExtension,
     /// The token's imprint uses another digest algorithm than the expected one.
