@@ -430,3 +430,23 @@ fn signing_prefix_layout() {
     assert_eq!(out[12 + purpose_len], 0x00);
     assert_eq!(&out[13 + purpose_len..], &(len as u64).to_be_bytes());
 }
+
+/// The rejection limit of the sample stream (PROTOCOL.md §12.2,
+/// ADR-0036): for every bound, the accepted words `0..=limit` are a whole
+/// number of runs of `bound` (`limit mod bound = bound − 1`, so `limit + 1`
+/// is a multiple: no modulo bias) and one more run would not fit in 64 bits
+/// (`2^64 − 1 − limit < bound`: no word is rejected needlessly); a bound of
+/// 0 has no limit. Stated in 64-bit arithmetic: a 128-bit division makes
+/// the solver too slow.
+#[kani::proof]
+fn sample_accept_limit_is_exact() {
+    let bound: u64 = kani::any();
+    let limit = crate::sample::accept_limit(bound);
+    if bound == 0 {
+        assert!(limit.is_none());
+        return;
+    }
+    let limit = limit.unwrap();
+    assert_eq!(limit % bound, bound - 1);
+    assert!(u64::MAX - limit < bound);
+}
