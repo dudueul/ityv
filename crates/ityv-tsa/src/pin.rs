@@ -389,7 +389,10 @@ mod tests {
             Err(TsaError::PinPolicies)
         );
         assert!(PinnedTsa::from_bytes(&encoded(&nine[..32])).is_ok());
+    }
 
+    #[test]
+    fn certificate_refusals() {
         let (digests, signatures) = sets();
         let certificate = [0x30, 0x00];
         let hash = alg::sha256(&certificate);

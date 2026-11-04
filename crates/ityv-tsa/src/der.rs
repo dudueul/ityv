@@ -592,6 +592,8 @@ mod tests {
             Err(DerError::InvalidOid)
         );
         assert_eq!(check_oid(&[0x2A, 0x81, 0x80, 0x01]), Ok(()));
+        // 0x80 inside an arc continues it, so the arc is incomplete.
+        assert_eq!(check_oid(&[0x2A, 0x81, 0x80]), Err(DerError::InvalidOid));
         assert_eq!(check_oid(&[0x01; MAX_OID_LEN]), Ok(()));
         assert_eq!(
             check_oid(&[0x01; MAX_OID_LEN + 1]),
@@ -708,6 +710,33 @@ mod tests {
             Reader::new(&[0x31, 0x02, 0x02, 0x81]).set(SET).err(),
             Some(DerError::Truncated)
         );
+    }
+
+    #[test]
+    fn element_checks() {
+        let check = |bytes: &[u8]| {
+            let mut reader = Reader::new(bytes);
+            let tlv = reader.read_any()?;
+            check_element(&reader, &tlv)
+        };
+        assert_eq!(check(&[0x30, 0x03, 0x01, 0x01, 0xFF]), Ok(()));
+        assert_eq!(
+            check(&[0x30, 0x03, 0x01, 0x01, 0x01]),
+            Err(DerError::InvalidBoolean)
+        );
+        assert_eq!(check(&[0x01, 0x01, 0x01]), Err(DerError::InvalidBoolean));
+        assert_eq!(check(&[0x24, 0x00]), Err(DerError::InvalidTagForm));
+        let mut reader = Reader::new(&[0x30, 0x03, 0x02, 0x02, 0x00]);
+        assert_eq!(reader.checked(SEQUENCE).err(), Some(DerError::Truncated));
+        let mut reader = Reader::new(&[0x30, 0x04, 0x02, 0x02, 0x00, 0x01]);
+        assert_eq!(
+            reader.checked(SEQUENCE).err(),
+            Some(DerError::NonMinimalInteger)
+        );
+        let mut reader = Reader::new(&[0x30, 0x03, 0x02, 0x01, 0x05]);
+        assert_eq!(reader.checked(SEQUENCE).map(|tlv| tlv.raw.len()), Ok(5));
+        let mut reader = Reader::new(&[0x05, 0x01, 0x00]);
+        assert_eq!(reader.checked_any().err(), Some(DerError::InvalidNull));
     }
 
     #[test]

@@ -10,17 +10,18 @@ Standard library only. Run with `python3 -I`.
         (seconds,millis,micros or -), ordering (yes/no). OpenSSL is the
         reference here, independent of the crate under test.
 
-    forge.py forge KEY DIGEST TOKEN CERT EKU_CERT OUTDIR
+    forge.py forge KEY DIGEST TOKEN CERT OUTDIR [NAME=OTHER_CERT ...]
         Writes forged-*.tst into OUTDIR: TOKEN (made by `openssl ts` with
         KEY, DIGEST and the certificate CERT) with one change each. Every
         variant whose change touches signed bytes is re-signed with KEY
         (`openssl dgst -sign`) after the message digest is recomputed, so
-        the change under test is the only defect. EKU_CERT is a DER
-        certificate for the same key whose extended key usage is not
-        critical.
+        the change under test is the only defect. Each NAME=OTHER_CERT (a
+        DER certificate for the same key) gives forged-NAME.tst, which
+        embeds that certificate instead.
 """
 
 import calendar
+import datetime
 import hashlib
 import subprocess
 import sys
@@ -204,10 +205,9 @@ class Token:
         return self.root.encode()
 
 
-def forge(key, digest, token_path, cert_path, eku_cert_path, outdir):
+def forge(key, digest, token_path, cert_path, outdir, *embeds):
     original = open(token_path, "rb").read()
     certificate = open(cert_path, "rb").read()
-    eku_certificate = open(eku_cert_path, "rb").read()
     cert_node = decode(certificate)
     tbs = cert_node.children[0]
     issuer, serial = tbs.children[3], tbs.children[1]
@@ -236,15 +236,24 @@ def forge(key, digest, token_path, cert_path, eku_cert_path, outdir):
         t.set_attributes(der_sorted(t.attributes()))
     variant("forged-ess-default", explicit_sha256)
 
-    def issuer_serial(serial_bytes):
+    def issuer_serial(names, serial_bytes):
         def edit(t):
-            names = seq(Node(0xA4, children=[issuer]))
-            t.ess_cert_id().children.append(seq(names, Node(0x02, serial_bytes)))
+            t.ess_cert_id().children.append(seq(seq(*names), Node(0x02, serial_bytes)))
             t.set_attributes(der_sorted(t.attributes()))
         return edit
-    variant("forged-ess-issuer-ok", issuer_serial(serial.value))
+    directory = Node(0xA4, children=[issuer])
+    variant("forged-ess-issuer-ok", issuer_serial([directory], serial.value))
     wrong = (int.from_bytes(serial.value, "big") ^ 1).to_bytes(len(serial.value), "big")
-    variant("forged-ess-issuer-bad", issuer_serial(wrong))
+    variant("forged-ess-issuer-bad", issuer_serial([directory], wrong))
+    # Names that are not exactly one directoryName name no certificate.
+    variant("forged-ess-issuer-dns",
+            issuer_serial([Node(0x82, b"tsa.example")], serial.value))
+    variant("forged-ess-issuer-two", issuer_serial([directory, directory], serial.value))
+
+    def duplicate_content_type(t):
+        again = decode(t.attribute(OID_CONTENT_TYPE).encode())
+        t.set_attributes(der_sorted(t.attributes() + [again]))
+    variant("forged-duplicate-attr", duplicate_content_type)
 
     def content_type_data(t):
         t.attribute(OID_CONTENT_TYPE).children[1].children[0] = oid("1.2.840.113549.1.7.1")
@@ -297,12 +306,46 @@ def forge(key, digest, token_path, cert_path, eku_cert_path, outdir):
 
     tst_edit("forged-tst-version", lambda tst: tst.children.__setitem__(0, Node(0x02, b"\x02")))
 
+    # Size limits: a 160-bit serial and a 256-bit nonce, and one octet more.
+    def serial_value(value):
+        return lambda tst: tst.children.__setitem__(3, Node(0x02, value))
+    tst_edit("forged-serial-20", serial_value(b"\x00" + b"\xff" * 20))
+    tst_edit("forged-serial-21", serial_value(b"\x01" + b"\x00" * 20))
+
+    def nonce_value(value):
+        def edit(tst):
+            for i, child in enumerate(tst.children):
+                if i > 4 and child.tag == 0x02:
+                    tst.children[i] = Node(0x02, value)
+                    return
+            raise KeyError("nonce")
+        return edit
+    tst_edit("forged-nonce-32", nonce_value(b"\x00" + b"\xff" * 32))
+    tst_edit("forged-nonce-33", nonce_value(b"\x01" + b"\x00" * 32))
+
     def gen_time(text):
         return lambda tst: tst.children.__setitem__(4, Node(0x18, text.encode()))
     original_time = Token(original).tst.children[4].value.decode()
     base = original_time.split(".")[0].rstrip("Z")
     tst_edit("forged-time-trailing-zero", gen_time(base + ".50Z"))
     tst_edit("forged-outside-validity", gen_time("19990101000000Z"))
+
+    # The validity bounds of the certificate, which are inclusive.
+    def moment(node):
+        text = node.value.decode()
+        if node.tag == 0x17:
+            text = ("19" if int(text[:2]) >= 50 else "20") + text
+        return datetime.datetime.strptime(text, "%Y%m%d%H%M%SZ")
+
+    def generalized(when, fraction=""):
+        return when.strftime("%Y%m%d%H%M%S") + fraction + "Z"
+    not_before = moment(tbs.children[4].children[0])
+    not_after = moment(tbs.children[4].children[1])
+    second = datetime.timedelta(seconds=1)
+    tst_edit("forged-time-not-before", gen_time(generalized(not_before)))
+    tst_edit("forged-time-before-not-before", gen_time(generalized(not_before - second)))
+    tst_edit("forged-time-not-after", gen_time(generalized(not_after)))
+    tst_edit("forged-time-after-not-after", gen_time(generalized(not_after, ".5")))
 
     def other_tsa_name(tst):
         name = seq(Node(0x31, children=[seq(oid("2.5.4.3"), Node(0x0C, b"another TSA"))]))
@@ -313,20 +356,60 @@ def forge(key, digest, token_path, cert_path, eku_cert_path, outdir):
         raise KeyError("tsa")
     tst_edit("forged-tsa-name", other_tsa_name)
 
-    # The signer's certificate: the same key and name, extended key usage
-    # not critical.
-    def eku_noncritical(t):
-        t.certificates.children = [decode(eku_certificate)]
-        eku_tbs = decode(eku_certificate).children[0]
-        t.signer.children[1] = seq(eku_tbs.children[3], eku_tbs.children[1])
-        t.ess_cert_id().children[0].value = hashlib.sha256(eku_certificate).digest()
-    variant("forged-eku-noncritical", eku_noncritical)
+    # Other certificates for the same key and name (make.sh varies the
+    # extensions): embedded, named by the signer identifier and ESS.
+    def embed(other):
+        def edit(t):
+            node = decode(other)
+            t.certificates.children = [node]
+            t.signer.children[1] = seq(node.children[0].children[3], node.children[0].children[1])
+            t.ess_cert_id().children[0].value = hashlib.sha256(other).digest()
+        return edit
+    for spec in embeds:
+        name, path = spec.split("=", 1)
+        variant(f"forged-{name}", embed(open(path, "rb").read()))
 
     # Unsigned parts: no re-signing needed.
     def sid_serial(t):
         sid_serial_node = t.signer.children[1].children[1]
         sid_serial_node.value = wrong
     variant("forged-sid-serial", sid_serial, resign=False)
+
+    def sid_issuer_not_der(t):
+        name = decode(t.signer.children[1].children[0].encode())
+        name.children.append(Node(0x31, children=[seq(Node(0x01, raw=b"\x01\x01\x01"))]))
+        t.signer.children[1].children[0] = name
+    variant("forged-sid-issuer-der", sid_issuer_not_der, resign=False)
+
+    # The signer named by subject key identifier (SignerInfo version 3).
+    key_id = None
+    for extension in tbs.children[7].children[0].children:
+        if extension.children[0].value == oid("2.5.29.14").value:
+            key_id = decode(extension.children[-1].value).value
+
+    def signer_id(version, sid):
+        def edit(t):
+            t.signer.children[0] = Node(0x02, bytes([version]))
+            if sid is not None:
+                t.signer.children[1] = sid
+        return edit
+    variant("forged-sid-keyid", signer_id(3, Node(0x80, key_id)), resign=False)
+    variant("forged-sid-keyid-bad",
+            signer_id(3, Node(0x80, bytes([key_id[0] ^ 1]) + key_id[1:])), resign=False)
+    variant("forged-sid-keyid-v1", signer_id(1, Node(0x80, key_id)), resign=False)
+    variant("forged-sid-version3", signer_id(3, None), resign=False)
+
+    # The certificate set: the limit of eight, and a choice that is not a
+    # certificate (an empty [1] attribute certificate).
+    def certificate_set(count, extra=None):
+        def edit(t):
+            t.certificates.children = [decode(certificate) for _ in range(count)]
+            if extra is not None:
+                t.certificates.children.append(extra)
+        return edit
+    variant("forged-eight-certs", certificate_set(8), resign=False)
+    variant("forged-nine-certs", certificate_set(9), resign=False)
+    variant("forged-cert-choice", certificate_set(1, Node(0xA1, children=[])), resign=False)
 
     def algorithm(dotted):
         def edit(t):
@@ -361,8 +444,8 @@ def forge(key, digest, token_path, cert_path, eku_cert_path, outdir):
 def main(argv):
     if argv[1:2] == ["describe"] and len(argv) == 4:
         describe(argv[2], argv[3])
-    elif argv[1:2] == ["forge"] and len(argv) == 8:
-        forge(*argv[2:8])
+    elif argv[1:2] == ["forge"] and len(argv) >= 7:
+        forge(*argv[2:])
     else:
         sys.exit(__doc__)
 

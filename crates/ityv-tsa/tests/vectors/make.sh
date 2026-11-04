@@ -21,6 +21,8 @@
 #   <tsa>.crt            self-signed TSA certificates: CA:FALSE, key usage
 #                        digitalSignature+nonRepudiation, critical EKU
 #                        timeStamping
+#   rsa3072-<rule>.crt   the rsa3072 key in certificates that each break one
+#                        profile rule (embedded by forge.py)
 #   <tsa>-<digest>*.tst  tokens (TimeStampToken, a CMS ContentInfo)
 #   forged-*.tst         crafted variants of rsa3072-sha384.tst (forge.py)
 #   manifest.txt         one line per valid token: how it was made and what
@@ -47,24 +49,28 @@ key() {
   openssl genpkey "$@" -out "$work/$name.key" 2>/dev/null
 }
 
-# certificate KEY NAME EKU: a self-signed TSA certificate for KEY, valid for
-# ten years from now, with the extended key usage line EKU.
+# certificate KEY NAME [BASIC [KEY-USAGE [EKU [EXTRA]]]]: a self-signed TSA
+# certificate for KEY, valid for ten years from now. An empty or missing
+# BASIC or KEY-USAGE is CA:FALSE and digitalSignature+nonRepudiation (both
+# critical); a missing EKU is critical timeStamping and an empty one leaves
+# the extension out; EXTRA is one more extension line.
 certificate() {
-  cat > "$work/$2.req" <<EOF
-[ req ]
-distinguished_name = dn
-prompt = no
-x509_extensions = ext
-[ dn ]
-C = KR
-O = ityv test
-CN = ityv test TSA $1
-[ ext ]
-basicConstraints = critical, CA:FALSE
-keyUsage = critical, digitalSignature, nonRepudiation
-extendedKeyUsage = $3
-subjectKeyIdentifier = hash
-EOF
+  basic=${3:-critical, CA:FALSE}
+  usage=${4:-critical, digitalSignature, nonRepudiation}
+  eku=${5-critical, timeStamping}
+  extra=${6:-}
+  {
+    printf '[ req ]\ndistinguished_name = dn\nprompt = no\nx509_extensions = ext\n'
+    printf '[ dn ]\nC = KR\nO = ityv test\nCN = ityv test TSA %s\n' "$1"
+    printf '[ ext ]\nbasicConstraints = %s\nkeyUsage = %s\n' "$basic" "$usage"
+    if [ -n "$eku" ]; then
+      printf 'extendedKeyUsage = %s\n' "$eku"
+    fi
+    printf 'subjectKeyIdentifier = hash\n'
+    if [ -n "$extra" ]; then
+      printf '%s\n' "$extra"
+    fi
+  } > "$work/$2.req"
   openssl req -new -x509 -config "$work/$2.req" -key "$work/$1.key" -days 3650 \
     -sha256 -out "$work/$2.pem"
   openssl x509 -in "$work/$2.pem" -outform DER -out "$work/$2.der"
@@ -76,7 +82,7 @@ authority() {
   name=$1
   shift
   key "$name" "$@"
-  certificate "$name" "$name" "critical, timeStamping"
+  certificate "$name" "$name"
   cp -- "$work/$name.der" "$name.crt"
 }
 
@@ -86,9 +92,16 @@ authority rsa4096 -algorithm RSA -pkeyopt rsa_keygen_bits:4096
 authority rsa1024 -algorithm RSA -pkeyopt rsa_keygen_bits:1024
 authority p256 -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -pkeyopt ec_param_enc:named_curve
 authority p384 -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -pkeyopt ec_param_enc:named_curve
-# The rsa3072 key again, with a non-critical extended key usage (OpenSSL
-# refuses to sign with it; forge.py embeds it).
-certificate rsa3072 rsa3072-eku-noncritical "timeStamping"
+# The rsa3072 key again, in certificates that each break one profile rule
+# (OpenSSL refuses to sign with most of them; forge.py embeds them).
+certificate rsa3072 rsa3072-eku-noncritical "" "" "timeStamping"
+certificate rsa3072 rsa3072-eku-two "" "" "critical, timeStamping, serverAuth"
+certificate rsa3072 rsa3072-no-eku "" "" ""
+certificate rsa3072 rsa3072-ca "critical, CA:TRUE"
+certificate rsa3072 rsa3072-key-usage-sign "" "critical, digitalSignature, keyCertSign"
+certificate rsa3072 rsa3072-cert-critical-ext "" "" "critical, timeStamping" \
+  "1.2.3.4.5.6.7 = critical, ASN1:NULL"
+profiles="eku-noncritical eku-two no-eku ca key-usage-sign cert-critical-ext"
 
 # stamp OUT SIGNER DIGEST ESS-DIGEST QUERY-OPTIONS [CONFIG-LINES...]: one
 # token from SIGNER over object-hash.bin.
@@ -153,6 +166,9 @@ stamp p256-sha384.tst p256 sha384 sha256 "-sha512 -cert"
 stamp rsa1024-sha256.tst rsa1024 sha256 sha256 "-sha512 -cert"
 stamp rsa2048-imprint1.tst rsa2048 sha256 sha256 "-sha1 -cert"
 
-python3 -I forge.py forge "$work/rsa3072.key" sha384 rsa3072-sha384.tst rsa3072.crt \
-  "$work/rsa3072-eku-noncritical.der" .
-cp -- "$work/rsa3072-eku-noncritical.der" rsa3072-eku-noncritical.crt
+set --
+for profile in $profiles; do
+  set -- "$@" "$profile=$work/rsa3072-$profile.der"
+  cp -- "$work/rsa3072-$profile.der" "rsa3072-$profile.crt"
+done
+python3 -I forge.py forge "$work/rsa3072.key" sha384 rsa3072-sha384.tst rsa3072.crt . "$@"

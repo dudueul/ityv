@@ -63,10 +63,73 @@ fn forged_tokens_are_refused_each_for_its_rule() {
         ("forged-two-signers", TsaError::SignerCount),
         ("forged-crls", TsaError::CrlsPresent),
         ("forged-detached", TsaError::MissingContent),
+        (
+            "forged-ess-issuer-dns",
+            TsaError::SigningCertificateIssuerMismatch,
+        ),
+        (
+            "forged-ess-issuer-two",
+            TsaError::SigningCertificateIssuerMismatch,
+        ),
+        ("forged-duplicate-attr", TsaError::DuplicateAttribute),
+        ("forged-serial-21", TsaError::SerialTooLarge),
+        ("forged-nonce-33", TsaError::NonceTooLarge),
+        ("forged-time-before-not-before", TsaError::OutsideValidity),
+        ("forged-time-after-not-after", TsaError::OutsideValidity),
+        ("forged-sid-issuer-der", der(DerError::InvalidBoolean)),
+        ("forged-sid-keyid-bad", TsaError::SignerIdentifierMismatch),
+        ("forged-sid-keyid-v1", TsaError::SignerInfoVersion),
+        ("forged-sid-version3", TsaError::SignerInfoVersion),
+        ("forged-nine-certs", TsaError::TooManyCertificates),
+        ("forged-cert-choice", TsaError::UnsupportedCertificateChoice),
     ] {
         let token = vector(&std::format!("{name}.tst"));
         assert_eq!(pin.verify(&token, &imprint), Err(expected), "{name}");
     }
+}
+
+#[test]
+fn the_limits_are_inclusive() {
+    let base = base();
+    let pin = Pin::for_token(&base, true);
+    let imprint = imprint_of(DigestAlgorithm::Sha512);
+    let verify = |name: &str| {
+        let token = vector(&std::format!("{name}.tst"));
+        let verified = pin
+            .verify(&token, &imprint)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        (
+            verified.serial().to_vec(),
+            verified.nonce().map(<[u8]>::to_vec),
+            verified.gen_time(),
+        )
+    };
+    // A 160-bit serial and a 256-bit nonce.
+    assert_eq!(verify("forged-serial-20").0, [0xFF; 20]);
+    assert_eq!(verify("forged-nonce-32").1, Some(std::vec![0xFF; 32]));
+    // genTime equal to either end of the certificate's validity.
+    let at_start = verify("forged-time-not-before").2;
+    let at_end = verify("forged-time-not-after").2;
+    assert!(at_start < at_end);
+    assert_eq!(at_start.nanos(), 0);
+    assert_eq!(at_end.nanos(), 0);
+    // Exactly eight embedded certificates.
+    let token = vector("forged-eight-certs.tst");
+    check_result(
+        &base,
+        &pin.verify(&token, &imprint).unwrap(),
+        CertificateSource::Embedded,
+    );
+}
+
+#[test]
+fn a_signer_named_by_key_identifier_verifies() {
+    let base = base();
+    let token = vector("forged-sid-keyid.tst");
+    let verified = Pin::for_token(&base, true)
+        .verify(&token, &imprint_of(DigestAlgorithm::Sha512))
+        .unwrap();
+    check_result(&base, &verified, CertificateSource::Embedded);
 }
 
 #[test]
@@ -93,18 +156,30 @@ fn forged_tokens_with_allowed_changes_verify() {
 }
 
 #[test]
-fn the_extended_key_usage_must_be_critical() {
-    let token = vector("forged-eku-noncritical.tst");
-    let certificate = vector("rsa3072-eku-noncritical.crt");
-    let pin = Pin {
-        certificate_sha256: sha256(&certificate),
-        certificate: Some(certificate),
-        ..Pin::for_token(&base(), false)
-    };
-    assert_eq!(
-        pin.verify(&token, &imprint_of(DigestAlgorithm::Sha512)),
-        Err(TsaError::EkuNotCritical)
-    );
+fn the_certificate_profile_is_enforced() {
+    // Certificates for the same key that break one profile rule each
+    // (make.sh), embedded and bound by forge.py.
+    for (profile, expected) in [
+        ("eku-noncritical", TsaError::EkuNotCritical),
+        ("eku-two", TsaError::EkuNotTimestampingOnly),
+        ("no-eku", TsaError::MissingTimestampingEku),
+        ("ca", TsaError::SignerIsCa),
+        ("key-usage-sign", TsaError::InvalidKeyUsage),
+        ("cert-critical-ext", TsaError::CertificateCriticalExtension),
+    ] {
+        let token = vector(&std::format!("forged-{profile}.tst"));
+        let certificate = vector(&std::format!("rsa3072-{profile}.crt"));
+        let pin = Pin {
+            certificate_sha256: sha256(&certificate),
+            certificate: Some(certificate),
+            ..Pin::for_token(&base(), false)
+        };
+        assert_eq!(
+            pin.verify(&token, &imprint_of(DigestAlgorithm::Sha512)),
+            Err(expected),
+            "{profile}"
+        );
+    }
 }
 
 fn valid_tokens() -> std::vec::Vec<(Expected, std::vec::Vec<u8>)> {

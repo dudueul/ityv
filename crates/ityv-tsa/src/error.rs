@@ -243,3 +243,19 @@ impl core::fmt::Display for TsaError {
 impl core::error::Error for DerError {}
 
 impl core::error::Error for TsaError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::string::ToString;
+
+    #[test]
+    fn errors_display_their_names() {
+        assert_eq!(DerError::IndefiniteLength.to_string(), "IndefiniteLength");
+        assert_eq!(TsaError::ImprintMismatch.to_string(), "ImprintMismatch");
+        assert_eq!(
+            TsaError::from(DerError::SetNotSorted).to_string(),
+            "Der(SetNotSorted)"
+        );
+    }
+}

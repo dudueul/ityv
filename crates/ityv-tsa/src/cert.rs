@@ -375,4 +375,87 @@ mod tests {
         assert!(seen);
         assert_eq!(first_time(&mut seen), Err(TsaError::DuplicateExtension));
     }
+
+    /// A `SubjectPublicKeyInfo` with algorithm `id`, the encoded
+    /// `parameters` and the key octets `key` (in a `BIT STRING`).
+    fn spki(id: &[u8], parameters: &[u8], key: &[u8]) -> std::vec::Vec<u8> {
+        fn tlv(tag: u8, content: &[u8]) -> std::vec::Vec<u8> {
+            let mut out = std::vec![tag];
+            let len = content.len();
+            if len < 0x80 {
+                out.push(u8::try_from(len).unwrap());
+            } else {
+                out.push(0x82);
+                out.extend_from_slice(&u16::try_from(len).unwrap().to_be_bytes());
+            }
+            out.extend_from_slice(content);
+            out
+        }
+        let mut algorithm = tlv(OID, id);
+        algorithm.extend_from_slice(parameters);
+        let mut bits = std::vec![0x00];
+        bits.extend_from_slice(key);
+        let mut body = tlv(SEQUENCE, &algorithm);
+        body.extend_from_slice(&tlv(BIT_STRING, &bits));
+        tlv(SEQUENCE, &body)
+    }
+
+    fn key_of(spki: &[u8]) -> Result<PublicKey<'_>, TsaError> {
+        let mut reader = Reader::new(spki);
+        let key = read_public_key(&mut reader);
+        assert!(key.is_err() || reader.is_empty());
+        key
+    }
+
+    #[test]
+    fn public_key_algorithms_and_parameters() {
+        // RSAPublicKey { n (2048 bits, odd), e = 65537 }.
+        let mut rsa = std::vec![0x30, 0x82, 0x01, 0x0A, 0x02, 0x82, 0x01, 0x01, 0x00];
+        rsa.extend_from_slice(&[0xC5; 256]);
+        rsa.extend_from_slice(&[0x02, 0x03, 0x01, 0x00, 0x01]);
+        let null = [0x05, 0x00];
+        let other_oid = [0x06, 0x03, 0x2A, 0x03, 0x04];
+        assert!(matches!(
+            key_of(&spki(oid::RSA_ENCRYPTION, &null, &rsa)),
+            Ok(PublicKey::Rsa(_))
+        ));
+        for parameters in [&[][..], &other_oid] {
+            assert_eq!(
+                key_of(&spki(oid::RSA_ENCRYPTION, parameters, &rsa)),
+                Err(TsaError::UnsupportedPublicKey)
+            );
+        }
+
+        let mut p256_point = std::vec![0x04];
+        p256_point.extend_from_slice(&[0x11; 64]);
+        let mut p384_point = std::vec![0x04];
+        p384_point.extend_from_slice(&[0x11; 96]);
+        let named = |curve: &[u8]| {
+            let mut out = std::vec![OID, u8::try_from(curve.len()).unwrap()];
+            out.extend_from_slice(curve);
+            out
+        };
+        let p256 = spki(oid::EC_PUBLIC_KEY, &named(oid::P256), &p256_point);
+        assert!(matches!(key_of(&p256), Ok(PublicKey::Ec(key)) if key.curve() == Curve::P256));
+        let p384 = spki(oid::EC_PUBLIC_KEY, &named(oid::P384), &p384_point);
+        assert!(matches!(key_of(&p384), Ok(PublicKey::Ec(key)) if key.curve() == Curve::P384));
+        assert_eq!(
+            key_of(&spki(oid::EC_PUBLIC_KEY, &named(oid::P384), &p256_point)),
+            Err(TsaError::InvalidEcPoint)
+        );
+        // The P-256 identifier's octets, but not as an OBJECT IDENTIFIER.
+        let mut octets = named(oid::P256);
+        octets[0] = OCTET_STRING;
+        for parameters in [&octets[..], &null, &[], &named(oid::SHA256)] {
+            assert_eq!(
+                key_of(&spki(oid::EC_PUBLIC_KEY, parameters, &p256_point)),
+                Err(TsaError::UnsupportedPublicKey),
+                "{parameters:02x?}"
+            );
+        }
+        assert_eq!(
+            key_of(&spki(oid::SHA256, &null, &rsa)),
+            Err(TsaError::UnsupportedPublicKey)
+        );
+    }
 }
