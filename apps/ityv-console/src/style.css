@@ -253,3 +253,16 @@ th, td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: lef
 .status .pinnote { font-family: inherit; font-weight: 500; font-size: 0.7em; }
 .icon-rung { width: 1.15em; height: 1.15em; }
 .chart .gap { fill: var(--warn-bg); stroke: var(--text); stroke-width: 0.6; stroke-dasharray: 2 2; }
+
+/* The audit card. */
+.style-audit { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.style-audit h4 { margin: 10px 0 4px; font-size: 0.95rem; }
+table.kv th { text-align: left; white-space: nowrap; width: 9rem; vertical-align: top; }
+tr.diff td { background: var(--warn-bg); }
+ul.checks { list-style: none; margin: 6px 0; padding: 0; }
+ul.checks li { display: flex; gap: 6px; align-items: center; margin: 2px 0; }
+.timeline .late-zone { fill: var(--bad-bg); }
+.timeline circle { stroke: var(--text); stroke-width: 2; }
+.timeline .pt-commit { fill: var(--bg); }
+.timeline .pt-binding { fill: var(--text); }
+.timeline .pt-published { fill: var(--bad-bg); }

@@ -4,6 +4,8 @@
 // module are unsigned 32-bit (`>>> 0`); input buffers are freed in
 // `finally`; after any trap the instance is dropped and the next request
 // instantiates the module afresh (the page also replaces the worker).
+// `beacon: false` asks the verifier to run without the bundle's beacon
+// observation (flag bit 0 of verify_bundle_with clear).
 let exports = null;
 
 async function load() {
@@ -28,17 +30,15 @@ function result(ex, ptr) {
 function run(ex, data) {
   if (data.type === "verify") {
     const bytes = new Uint8Array(data.bundle);
+    const flags = data.beacon === false ? 0 : 1;
     const ptr = put(ex, bytes);
     try {
-      if (data.pin) {
-        const pin = put(ex, data.pin);
-        try {
-          return result(ex, ex.verify_bundle_pinned(ptr, bytes.length, pin));
-        } finally {
-          ex.dealloc(pin, 64);
-        }
+      const pin = data.pin ? put(ex, data.pin) : 0;
+      try {
+        return result(ex, ex.verify_bundle_with(ptr, bytes.length, pin, flags));
+      } finally {
+        if (pin) ex.dealloc(pin, 64);
       }
-      return result(ex, ex.verify_bundle(ptr, bytes.length));
     } finally {
       ex.dealloc(ptr, bytes.length);
     }

@@ -242,7 +242,7 @@ test("a slot refuses a value of another kind", () => {
 });
 
 test("every hold code of ityv-state has a Korean explanation", () => {
-  for (let code = 0; code <= 60; code++) {
+  for (let code = 0; code <= 71; code++) {
     expect(typeof HOLDS[code]?.ko).toBe("string");
   }
   expect(Object.keys(STRINGS).length).toBeGreaterThan(80);

@@ -218,6 +218,86 @@ export interface Report {
   };
   disputes?: { list: { filing: string; type: string; box: string | null; status: string; unresolved: boolean; events: Int[]; decisions: Int }[] };
   records?: RecordEntry[];
+  audit?: AuditReport;
+}
+
+/** What the audit did with one record: public information only. */
+export interface AuditRecord {
+  position?: Int;
+  code: string;
+  box: string | null;
+  opened: Int | null;
+  reconstruction: string | null;
+  comparison: { seq: Int; code: number; name: string; transferMark: boolean } | null;
+}
+
+export interface StyleAuditReport {
+  style: string;
+  units: string[];
+  frameCount: Int;
+  frameRoot: string | null;
+  freeze: Int | null;
+  frameProblems: string[];
+  rule: { ruleHash: string; riskLimitPpm: Int; beaconSource: string; beaconRound: Int } | null;
+  rounds: { size: Int; threshold: Int; drawn: Int; compared: Int; nonzero: Int }[];
+  phase: { kind: string; round: Int | null } | null;
+  concluded: boolean;
+  handCountFrom: Int | null;
+  handCounts: { unit: string; seq: Int }[];
+  sample: AuditRecord[];
+  fullComparison: AuditRecord[];
+  devices: {
+    box: string;
+    station: string;
+    records: Int;
+    compared: Int;
+    codes: Int[];
+    transferMarks: Int;
+    fullComparisonFrom: Int | null;
+    findings: Int[];
+    followedUp: boolean;
+    holds: Hold[];
+  }[];
+  reconstructions: { opened: Int; reconstructed: Int; mismatched: Int; notSupplied: Int };
+  holds: Hold[];
+}
+
+export interface AuditReport {
+  bundleHasObservation: boolean;
+  observation: {
+    fixture: boolean;
+    round: Int;
+    published: Int;
+    outputHex: string;
+    outputText: string | null;
+    beaconValue: string | null;
+  } | null;
+  /** WITNESS_TIME_TOLERANCE + CLOCK_ERROR_BUCKETS + 1. */
+  margin: Int;
+  commit: {
+    seq: Int;
+    bucket: Int;
+    dice: string;
+    beaconSource: string;
+    beaconRound: Int;
+    binding: { frame: Int; seq: Int; bucket: Int; fingerprint: string } | null;
+  } | null;
+  seed: { seq: Int; seed: string; beaconRound: Int; beaconConfirmed: boolean } | null;
+  passed: boolean;
+  allReconstructed: boolean;
+  styles: StyleAuditReport[];
+  refused: { seq: Int; event: string; refusal: string }[];
+  stationMarks: { station: string; marks: Int; compared: Int }[];
+  holds: Hold[];
+}
+
+/** 15-minute time bucket → "D일 HH:MM" of its start, counted from the
+ * election epoch day (PROTOCOL §5.8), exact for any 64-bit bucket. */
+export function bucketTime(bucket: Int): string {
+  const b = BigInt(bucket);
+  const minutes = Number((b * 15n) % 1440n);
+  const day = (b * 15n) / 1440n;
+  return `${day}일 ${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
 /** 10-minute slot → "HH:MM" of its start (slots count from the election

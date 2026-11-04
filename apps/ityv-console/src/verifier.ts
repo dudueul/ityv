@@ -65,12 +65,14 @@ export class VerifierClient {
     });
   }
 
-  /** Verifies a bundle (optionally under another pin, 64 bytes). */
-  async verify(bytes: ArrayBuffer, pin?: Uint8Array): Promise<Report> {
+  /** Verifies a bundle (optionally under another pin, 64 bytes), handing
+   * the verifier the bundle's beacon observation unless `beacon` is
+   * false. */
+  async verify(bytes: ArrayBuffer, pin?: Uint8Array, beacon = true): Promise<Report> {
     if (bytes.byteLength > MAX_BUNDLE_BYTES) {
       throw new Error(`번들이 ${MAX_BUNDLE_BYTES / 1024 / 1024} MB보다 크다`);
     }
-    const text = await this.call({ type: "verify", bundle: bytes, pin }, [bytes]);
+    const text = await this.call({ type: "verify", bundle: bytes, pin, beacon }, [bytes]);
     return JSON.parse(text) as Report;
   }
 
