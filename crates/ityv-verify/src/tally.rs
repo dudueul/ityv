@@ -385,7 +385,7 @@ impl<'a> TallyStage<'a> {
             .fold(HoldSet::empty(), |h, u| h.union(u.holds));
         self.refused
             .iter()
-            .fold(units, |h, r| h.with(refusal_hold(r.event)))
+            .fold(units, |h, r| h.with(r.event.hold()))
     }
 
     /// Whether every unit has its scope, openings and paper count.
@@ -401,15 +401,21 @@ impl<'a> TallyStage<'a> {
     }
 }
 
-/// The hold of a refused event.
-const fn refusal_hold(event: TallyEvent) -> HoldReason {
-    match event {
-        TallyEvent::Receipt => HoldReason::ReceiptResolutionRefused,
-        TallyEvent::Decision => HoldReason::TallyEffectRefused,
-        TallyEvent::Scope => HoldReason::TallyScopeRefused,
-        TallyEvent::Opening => HoldReason::AggregateRefused,
-        TallyEvent::Paper => HoldReason::PaperCountRefused,
-        TallyEvent::LateClose => HoldReason::LateCloseAfterScope,
+impl TallyEvent {
+    /// The hold a refused event of this kind puts on the ledger:
+    /// [`TallyStage::holds`] carries it once per kind refused. Public so
+    /// that a reader of the report (the verification console) can tell
+    /// which of the ledger's holds come from refused tally events.
+    #[must_use]
+    pub const fn hold(self) -> HoldReason {
+        match self {
+            Self::Receipt => HoldReason::ReceiptResolutionRefused,
+            Self::Decision => HoldReason::TallyEffectRefused,
+            Self::Scope => HoldReason::TallyScopeRefused,
+            Self::Opening => HoldReason::AggregateRefused,
+            Self::Paper => HoldReason::PaperCountRefused,
+            Self::LateClose => HoldReason::LateCloseAfterScope,
+        }
     }
 }
 

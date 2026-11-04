@@ -570,7 +570,7 @@ impl<'a> AuditStage<'a> {
             .fold(HoldSet::empty(), |h, s| h.union(s.holds));
         self.refused
             .iter()
-            .fold(styles, |h, r| h.with(refusal_hold(r.event)))
+            .fold(styles, |h, r| h.with(r.event.hold()))
     }
 
     /// Whether the style `style` concluded under its rule: the seed taken
@@ -607,16 +607,22 @@ impl<'a> AuditStage<'a> {
     }
 }
 
-/// The hold of a refused event.
-const fn refusal_hold(event: AuditEvent) -> HoldReason {
-    match event {
-        AuditEvent::Freeze => HoldReason::AuditFreezeRefused,
-        AuditEvent::Commit => HoldReason::AuditCommitRefused,
-        AuditEvent::Seed => HoldReason::AuditSeedRefused,
-        AuditEvent::Opening => HoldReason::SampleOpeningRefused,
-        AuditEvent::Comparison => HoldReason::SampleComparisonRefused,
-        AuditEvent::Finding => HoldReason::AuditFindingRefused,
-        AuditEvent::HandCount => HoldReason::HandCountRefused,
+impl AuditEvent {
+    /// The hold a refused event of this kind puts on the ledger:
+    /// [`AuditStage::holds`] carries it once per kind refused. Public so
+    /// that a reader of the report (the verification console) can tell
+    /// which of the ledger's holds come from refused audit events.
+    #[must_use]
+    pub const fn hold(self) -> HoldReason {
+        match self {
+            Self::Freeze => HoldReason::AuditFreezeRefused,
+            Self::Commit => HoldReason::AuditCommitRefused,
+            Self::Seed => HoldReason::AuditSeedRefused,
+            Self::Opening => HoldReason::SampleOpeningRefused,
+            Self::Comparison => HoldReason::SampleComparisonRefused,
+            Self::Finding => HoldReason::AuditFindingRefused,
+            Self::HandCount => HoldReason::HandCountRefused,
+        }
     }
 }
 
