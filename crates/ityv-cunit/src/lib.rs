@@ -34,7 +34,7 @@
 //! | [`config`] | the validated election configuration | ADR-0017 §2, §12 |
 //! | [`link`] | `Interpretation`, `VisitEnd`, `AttestChallenge`, `ModuleIssue`, `JournalEntry` objects | ENCODING.md §8.19 |
 //! | [`port`] | host traits, the module batch- and record-signing rules | ADR-0017 §3, §8, VC-068 |
-//! | [`rng`] | the SHA3-512 counter-mode generator | ADR-0017 §12 |
+//! | [`rng`] | the SHA3-512 counter-mode generator | its module documentation |
 //! | [`ballot`] | per-position typestate and every per-ballot object | PROTOCOL.md §7.3 steps 1–5, §9 |
 //! | [`visit`] | visit typestate: decision, journal, imprint, opening, sticker, slip | PROTOCOL.md §7.3 steps 6–11, §7.7, §8, ADR-0021 |
 //! | [`boxstate`] | box accounting, batches, scan counts, close | PROTOCOL.md §7.2.1, §7.8, §10.2 |

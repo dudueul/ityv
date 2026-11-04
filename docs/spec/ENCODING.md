@@ -91,7 +91,7 @@ offset  size  field
 | 0x000A | `Slip` | 1 | 슬립 본문 바이트 + 장치 하이브리드 서명(§8.18) |
 | 0x000B | `SharePackage` | 1 | 신뢰기관별 암호화 share 묶음(§8.10, 공개하지 않음) |
 | 0x000C | `ReceiptMark` | 1 | 관외 수령 라벨 목록 |
-| 0x000D | `AuditSeedBody` | 1 | 표본 추출 시드(`AuditSeed`): 주사위 기록 해시, 비콘 회차와 값, 체크포인트 해시, 시드(§8.67, ADR-0036). 서명은 `WitnessedEvent` |
+| 0x000D | `AuditSeedBody` | 1 | 표본 추출 시드(`AuditSeed`): 주사위 기록 해시, 비콘 회차와 값, 구속 체크포인트 해시, 시드(§8.67, ADR-0036). 서명은 `WitnessedEvent` |
 | 0x000E | `DisputeEventBody` | 1 | 분쟁 접수·처리 본문(§8.34). 서명은 `WitnessedEvent` |
 | 0x000F | `LegalDecisionRefBody` | 1 | 법적 결정 참조 본문: 결정 기관, 결정문 해시, 대상 분쟁, 결과, 집계 효과(§8.35). 서명은 `WitnessedEvent` |
 | 0x0010 | `SignedCheckpoint` | 1 | 체크포인트 본문 바이트와 증인 서명 묶음(§8.4, ADR-0016) |
@@ -118,7 +118,7 @@ offset  size  field
 | 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
 | 0x0026 | `ModuleProvisioned` | 1 | 모듈 발급 기록: 본체·패드 카드 ID, KEM 공개키, 챔버 엔트로피 약속, 보안 칩 여부, 정당 PRF 키 확인값(§8.31, ADR-0024) |
 | 0x0027 | `PartyKeyCeremony` | 1 | 정당 열쇠 생성 절차 기록. 키 자료 없음(§8.32, ADR-0024) |
-| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다. 버전 3(ADR-0036): 역할 10(감사인)과 감사 본문 0x000D·0x0048·0x004B·0x004C·0x004D를 받는다 |
+| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다. 버전 3(ADR-0036): 역할 10(감사인)과 감사 본문 0x000D·0x0048·0x004B·0x004C·0x004D·0x004E를 받는다 |
 | 0x0029 | `BoxOpenedBody` | 1 | 투표함 개시 본문(§8.36) |
 | 0x002A | `FallbackBody` | 1 | `FallbackDeclared`·`FallbackEnded` 본문(§8.37) |
 | 0x002B | `IssuanceCountBody` | 1 | 투표소 교부 회계 본문(§8.38) |
@@ -156,6 +156,7 @@ offset  size  field
 | 0x004B | `SampleComparisonBody` | 1 | 표본 대조: 기록 해시, 열기 해시, 장치, 사유 코드 0–6, `transfer_mark`(§8.70). 서명은 `WitnessedEvent` |
 | 0x004C | `AuditFindingBody` | 1 | 감사 발견: 투표양식, 장치, 발견 문서 해시(§8.71). 서명은 `WitnessedEvent` |
 | 0x004D | `HandCountReportBody` | 1 | 보고 단위별 수검표 결과(`PaperCountReportBody`와 같은 필드, §8.72). 서명은 `WitnessedEvent` |
+| 0x004E | `AuditCommitBody` | 1 | 감사 약정(`AuditCommit`): 모든 동결 뒤, 비콘 공표 전에 주사위 기록 해시, 비콘 지정 문서 해시와 회차, 동결 본문들의 정렬 집합 root를 고정(§8.73, ADR-0036). 서명은 `WitnessedEvent` |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -606,6 +607,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 0x0046 | `PaperCountReportBody` | `paper-count` | 구·시·군 선관위 위원장 1(그 보고 단위의 `commission_org`, `ityv-state`가 확인), 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음 |
 | 0x000D | `AuditSeedBody` | `audit-seed` | 위원회 1, 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음(버전 3부터) |
 | 0x0048 | `AuditManifestFreezeBody` | `audit-freeze` | 같음 |
+| 0x004E | `AuditCommitBody` | `audit-commit` | 같음 |
 | 0x004B | `SampleComparisonBody` | `sample-comparison` | 서로 다른 조직 감사인 2 이상, 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음(버전 3부터) |
 | 0x004C | `AuditFindingBody` | `audit-finding` | 같음 |
 | 0x004D | `HandCountReportBody` | `hand-count` | 위원장 1(그 보고 단위의 `commission_org`), 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음(버전 3부터) |
@@ -734,7 +736,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 1 | `body` | `Bytes<2048>` | 위 표의 본문 객체 전체. 다른 스키마는 `SchemaMismatch` |
 | 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치, 9 구·시·군 선관위 위원장(버전 2부터), 10 감사인(버전 3부터). 그 밖의 코드는 `ValueOutOfRange`. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
 
-`WitnessedEvent`는 버전 3이다(ADR-0036). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028, ADR-0035). 버전 3은 역할 10(감사인)과 감사 본문 다섯(0x000D, 0x0048, 0x004B, 0x004C, 0x004D)을 받는다. 버전 2의 거부 벡터 `role 10`은 버전 3에서 역할 조합 위반(`InvariantViolation`)이 되므로 다시 버전을 올렸다. 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
+`WitnessedEvent`는 버전 3이다(ADR-0036). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028, ADR-0035). 버전 3은 역할 10(감사인)과 감사 본문 여섯(0x000D, 0x0048, 0x004B, 0x004C, 0x004D, 0x004E)을 받는다. 0x004E는 같은 단계(ADR-0036)의 독립 리뷰에서 더했고, 버전 3이 아직 공개 장부에 쓰인 적이 없어 같은 버전에 넣었다. 버전 2의 거부 벡터 `role 10`은 버전 3에서 역할 조합 위반(`InvariantViolation`)이 되므로 다시 버전을 올렸다. 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
 
 #### 8.43 genesis 항목 `GenesisBox`(0x0035), `CustodyRoute`(0x0039), `RosterSigner`(0x003A)
 
@@ -996,9 +998,9 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 
 시험 벡터는 `tally_scope_body.txt`, `aggregate_opening_body.txt`, `quorum_signed.txt`, `paper_count_report_body.txt`, `receipt_resolution_body.txt`이고, 버전을 올린 `witnessed_event.txt`, `roster_signer.txt`, `reporting_unit_entry.txt`도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_tally.rs`에 있다.
 
-### 8.66–8.72 감사 (ADR-0036)
+### 8.66–8.73 감사 (ADR-0036)
 
-> English summary: the audit's ledger objects. `AuditManifestFreezeBody` (0x0048) freezes one ballot style's sample frame (the count and sorted-set root of its included records) and sampling rule: the rule document's hash, the risk limit in parts per million, the designated beacon and its round, and one to eight rounds of cumulative sample size and tolerated discrepancies. `AuditSeedBody` (0x000D) carries the dice transcript hash, the beacon round and value, the checkpoint hash and the seed. `SampleOpeningBody` (0x0049) is the restricted opening of one record and never reaches the public ledger; `SampleOpeningRefBody` (0x004A), in a `QuorumSigned`, is its public reference by object hash. `SampleComparisonBody` (0x004B) gives the reason code 0–6 and the transfer mark; `AuditFindingBody` (0x004C) a device's finding; `HandCountReportBody` (0x004D) a unit's full hand count with the paper count's fields. Per-record objects carry no time bucket. The encoding checks form only; `ityv-state` and `ityv-verify` check the signers, the frame, the seed, the sample, the openings and the escalation (PROTOCOL §12, §14 8).
+> English summary: the audit's ledger objects. `AuditManifestFreezeBody` (0x0048) freezes one ballot style's sample frame (the count and sorted-set root of its included records) and sampling rule: the rule document's hash, the risk limit in parts per million, the designated beacon and its round, and one to eight rounds of cumulative sample size and tolerated discrepancies. `AuditCommitBody` (0x004E) fixes, after every freeze and before the beacon round is published, the dice transcript hash, the designated beacon and round and the sorted-set root of the freeze bodies. `AuditSeedBody` (0x000D) carries the dice transcript hash, the beacon round and value (the published output mapped to 64 bytes), the binding checkpoint's hash (the first valid checkpoint covering the commit) and the seed. A round's threshold must be below its size. `SampleOpeningBody` (0x0049) is the restricted opening of one record and never reaches the public ledger; `SampleOpeningRefBody` (0x004A), in a `QuorumSigned`, is its public reference by object hash. `SampleComparisonBody` (0x004B) gives the reason code 0–6 and the transfer mark; `AuditFindingBody` (0x004C) a device's finding; `HandCountReportBody` (0x004D) a unit's full hand count with the paper count's fields. Per-record objects carry no time bucket. The encoding checks form only; `ityv-state` and `ityv-verify` check the signers, the frame, the seed, the sample, the openings and the escalation (PROTOCOL §12, §14 8).
 
 기록 하나에 관한 객체(0x0049, 0x004A, 0x004B)에는 시각이 없다(VC-001). 0이 아니어야 하는 해시가 0이면 `InvalidPreviousHash`다(§8.35와 같은 규칙).
 
@@ -1014,7 +1016,7 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 | 6 | `risk_limit_ppm` | `u32` | 위험 한도, 백만분율 `1..=999999`(`ValueOutOfRange`) |
 | 7 | `beacon_source` | `Hash512` | 공개 분산 난수 비콘 지정 문서의 해시, 0이 아님 |
 | 8 | `beacon_round` | `u64` | 시드가 쓰는 비콘 회차 |
-| 9 | `rounds` | `Array<{sample_size: u64, threshold: u32}, 8>` | 1개 이상(0이면 `InvariantViolation`). `sample_size`는 누적 표본 크기, `1..=2^26−1`(`ValueOutOfRange`), 엄격히 커짐(같으면 `Duplicate`, 작으면 `NotSorted`). `threshold`는 그 라운드에서 감사를 끝내는 비 0 코드 수의 상한, 줄지 않음(`InvariantViolation`, 그 라운드의 위치) |
+| 9 | `rounds` | `Array<{sample_size: u64, threshold: u32}, 8>` | 1개 이상(0이면 `InvariantViolation`). `sample_size`는 누적 표본 크기, `1..=2^26−1`(`ValueOutOfRange`), 엄격히 커짐(같으면 `Duplicate`, 작으면 `NotSorted`). `threshold`는 그 라운드에서 감사를 끝내는 비 0 코드 수의 상한으로 그 라운드의 `sample_size`보다 작고(같거나 크면 `ValueOutOfRange`: 모든 표본이 통과하는 라운드), 줄지 않음(`InvariantViolation`, 그 라운드의 위치). 코드에 가중치가 없으므로 상한은 가장 나쁜 불일치 유형을 가정해 정한다(PROTOCOL §12.4) |
 | 10 | `time_bucket` | `u64` | |
 
 #### 8.67 `AuditSeedBody` (0x000D)
@@ -1022,10 +1024,10 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
 | 1 | `election_id` | `Ident<64>` | |
-| 2 | `dice_hash` | `Hash512` | 주사위 추첨 공개 기록의 해시, 0이 아님 |
+| 2 | `dice_hash` | `Hash512` | 주사위 추첨 공개 기록의 해시(약정이 고정한 것), 0이 아님 |
 | 3 | `beacon_round` | `u64` | |
-| 4 | `beacon_value` | `Hash512` | 그 회차의 비콘 공표 값 |
-| 5 | `checkpoint_hash` | `Hash512` | 시드가 쓰는 체크포인트 본문의 객체 해시, 0이 아님 |
+| 4 | `beacon_value` | `Hash512` | 그 회차의 비콘 값: `SHA3-512("ityv:beacon:v1" ‖ 0x00 ‖ u32_be(len(source)) ‖ source ‖ u64_be(round) ‖ output)`, `source`는 비콘 지정 문서 해시(64바이트), `output`은 공표 출력(길이 무관, PROTOCOL §12.1) |
+| 5 | `checkpoint_hash` | `Hash512` | 구속 체크포인트(약정을 덮는 첫 유효 체크포인트) 본문의 객체 해시, 0이 아님 |
 | 6 | `seed` | `Hash512` | `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice_hash ‖ beacon_value ‖ checkpoint_hash)`. 디코더는 계산하지 않고 검증기가 다시 계산한다(VC-045) |
 | 7 | `time_bucket` | `u64` | |
 
@@ -1079,4 +1081,17 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 
 필드와 규칙은 `PaperCountReportBody`(§8.64)와 같다. 스키마가 다를 뿐이며, 감사가 마지막 라운드를 넘은 뒤의 보고 단위별 수검표(법적 결과)다.
 
-시험 벡터는 `audit_manifest_freeze_body.txt`, `audit_seed_body.txt`, `sample_opening_body.txt`, `sample_opening_ref_body.txt`, `sample_comparison_body.txt`, `audit_finding_body.txt`, `hand_count_report_body.txt`이고, 버전을 올린 `witnessed_event.txt`(버전 3), `roster_signer.txt`(버전 3), `quorum_signed.txt`(버전 2)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_audit.rs`에 있다.
+#### 8.73 `AuditCommitBody` (0x004E)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `dice_hash` | `Hash512` | 주사위 추첨 공개 기록의 해시, 0이 아님 |
+| 3 | `beacon_source` | `Hash512` | 비콘 지정 문서의 해시(모든 동결의 것), 0이 아님 |
+| 4 | `beacon_round` | `u64` | 비콘 회차(모든 동결의 것) |
+| 5 | `freezes_root` | `Hash512` | 모든 투표양식 동결 본문의 객체 해시를 정렬한 집합의 root, 0이 아님 |
+| 6 | `time_bucket` | `u64` | 비콘 공표 구간보다 앞서야 함(검증기) |
+
+0이 아니어야 하는 해시가 0이면 `InvalidPreviousHash`다. 비콘과 동결이 받아들인 것과 같은지, 약정이 선거마다 하나인지, 구속 체크포인트와 약정이 비콘 공표 전인지는 검증기가 확인한다(VC-045, VC-119).
+
+시험 벡터는 `audit_manifest_freeze_body.txt`, `audit_commit_body.txt`, `audit_seed_body.txt`, `sample_opening_body.txt`, `sample_opening_ref_body.txt`, `sample_comparison_body.txt`, `audit_finding_body.txt`, `hand_count_report_body.txt`이고, 버전을 올린 `witnessed_event.txt`(버전 3), `roster_signer.txt`(버전 3), `quorum_signed.txt`(버전 2)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_audit.rs`에 있다.

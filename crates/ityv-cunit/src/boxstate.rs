@@ -84,7 +84,7 @@ pub(crate) fn write_hybrid(
 }
 
 /// The device's hybrid signing key and the host's seed for one signing
-/// operation (hedged ML-DSA signing; ADR-0017 §12).
+/// operation (hedged ML-DSA signing).
 #[derive(Clone, Copy)]
 pub struct Signer<'k> {
     key: &'k HybridSigningKey,
