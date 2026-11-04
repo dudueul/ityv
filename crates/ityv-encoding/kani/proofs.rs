@@ -892,9 +892,10 @@ fn observer_count_round_trip() {
 }
 
 /// Two rounds of a sampling rule are accepted exactly when each size is in
-/// `1..=2^26 − 1`, the second size is above the first and the second
-/// threshold is not below the first (ADR-0036); one round alone exactly
-/// when its size is in range.
+/// `1..=2^26 − 1` with its threshold below it, the second size is above
+/// the first and the second threshold is not below the first (ADR-0036);
+/// one round alone exactly when its size is in range and its threshold
+/// below it.
 #[kani::proof]
 #[kani::unwind(4)]
 fn audit_round_rules_are_exact() {
@@ -906,7 +907,9 @@ fn audit_round_rules_are_exact() {
         sample_size: kani::any(),
         threshold: kani::any(),
     };
-    let in_range = |r: AuditRound| r.sample_size >= 1 && r.sample_size <= 67_108_863;
+    let in_range = |r: AuditRound| {
+        r.sample_size >= 1 && r.sample_size <= 67_108_863 && u64::from(r.threshold) < r.sample_size
+    };
     assert_eq!(AuditRounds::new(&[first]).is_some(), in_range(first));
     let expected = in_range(first)
         && in_range(second)

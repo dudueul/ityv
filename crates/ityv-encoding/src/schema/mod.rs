@@ -37,7 +37,7 @@ pub const SCHEMA_VERSION_1: u16 = 1;
 
 /// The current version of `WitnessedEvent` (`0x0028`): version 3 admits
 /// the event role 10, the auditor, and the audit bodies `0x000D`,
-/// `0x0048`, `0x004B`, `0x004C`, `0x004D` (ADR-0036). Version 2 admitted
+/// `0x0048`, `0x004B`, `0x004C`, `0x004D`, `0x004E` (ADR-0036). Version 2 admitted
 /// the event role 9, the district commission chair (ADR-0035); version 1
 /// neither.
 pub const SCHEMA_VERSION_WITNESSED: u16 = 3;
@@ -268,3 +268,6 @@ pub const SCHEMA_AUDIT_FINDING_BODY: SchemaId = SchemaId::new(0x004C);
 
 /// `HandCountReportBody` (ENCODING.md §8.72, `0x004D`).
 pub const SCHEMA_HAND_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x004D);
+
+/// `AuditCommitBody` (ENCODING.md §8.73, `0x004E`).
+pub const SCHEMA_AUDIT_COMMIT_BODY: SchemaId = SchemaId::new(0x004E);

@@ -25,21 +25,22 @@ mod common;
 
 use common::{encode_to_vec, ident_len};
 use ityv_encoding::{
-    AuditFindingBody, AuditFindingParts, AuditFreezeParts, AuditManifestFreezeBody, AuditRound,
-    AuditRounds, AuditSeedBody, AuditSeedParts, BallotStyleId, BoxId, ComparisonCode, Decode,
-    ElectionId, Encode, ErrorKind, EventRole, EventSig, HEADER_LEN, HYBRID_SIG_LEN,
-    HandCountReportBody, Hash512, MAX_AUDIT_ROUNDS, MAX_CANDIDATES, MAX_RISK_LIMIT_PPM,
-    MAX_TALLY_COUNT, OrgId, PURPOSE_AUDIT_FINDING, PURPOSE_AUDIT_FREEZE, PURPOSE_AUDIT_SEED,
-    PURPOSE_HAND_COUNT, PURPOSE_SAMPLE_COMPARISON, PURPOSE_SAMPLE_OPENING, PaperCountParts,
-    PaperVotes, QuorumKind, QuorumSig, QuorumSigned, Reader, ReportingUnitId,
-    SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
-    SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
-    SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY,
-    SCHEMA_VERSION_1, SCHEMA_VERSION_QUORUM_SIGNED, SCHEMA_VERSION_WITNESSED,
-    SCHEMA_WITNESSED_EVENT, SampleComparisonBody, SampleComparisonParts, SampleOpeningBody,
-    SampleOpeningParts, SampleOpeningRefBody, SampleOpeningRefParts, Scalar32, Scalars, SchemaId,
-    SignerId, TimeBucket, Token192, TrusteeId, WITNESSED_BODY_SCHEMAS, WitnessedEvent,
-    decode_object, purpose_of, roles_satisfied, schema_version,
+    AuditCommitBody, AuditCommitParts, AuditFindingBody, AuditFindingParts, AuditFreezeParts,
+    AuditManifestFreezeBody, AuditRound, AuditRounds, AuditSeedBody, AuditSeedParts, BallotStyleId,
+    BoxId, ComparisonCode, Decode, ElectionId, Encode, ErrorKind, EventRole, EventSig, HEADER_LEN,
+    HYBRID_SIG_LEN, HandCountReportBody, Hash512, MAX_AUDIT_ROUNDS, MAX_CANDIDATES,
+    MAX_RISK_LIMIT_PPM, MAX_TALLY_COUNT, OrgId, PURPOSE_AUDIT_COMMIT, PURPOSE_AUDIT_FINDING,
+    PURPOSE_AUDIT_FREEZE, PURPOSE_AUDIT_SEED, PURPOSE_HAND_COUNT, PURPOSE_SAMPLE_COMPARISON,
+    PURPOSE_SAMPLE_OPENING, PaperCountParts, PaperVotes, QuorumKind, QuorumSig, QuorumSigned,
+    Reader, ReportingUnitId, SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY,
+    SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY, SCHEMA_HAND_COUNT_REPORT_BODY,
+    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED, SCHEMA_SAMPLE_COMPARISON_BODY,
+    SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1,
+    SCHEMA_VERSION_QUORUM_SIGNED, SCHEMA_VERSION_WITNESSED, SCHEMA_WITNESSED_EVENT,
+    SampleComparisonBody, SampleComparisonParts, SampleOpeningBody, SampleOpeningParts,
+    SampleOpeningRefBody, SampleOpeningRefParts, Scalar32, Scalars, SchemaId, SignerId, TimeBucket,
+    Token192, TrusteeId, WITNESSED_BODY_SCHEMAS, WitnessedEvent, decode_object, purpose_of,
+    roles_satisfied, schema_version,
 };
 use proptest::prelude::*;
 use std::vec::Vec;
@@ -101,6 +102,17 @@ fn seed_parts() -> AuditSeedParts<'static> {
         checkpoint_hash: h(0x22),
         seed: h(0x23),
         time_bucket: TimeBucket::new(3_010),
+    }
+}
+
+fn commit_parts() -> AuditCommitParts<'static> {
+    AuditCommitParts {
+        election_id: e(),
+        dice_hash: h(0x20),
+        beacon_source: h(0x24),
+        beacon_round: 4_242,
+        freezes_root: h(0x25),
+        time_bucket: TimeBucket::new(3_005),
     }
 }
 
@@ -185,12 +197,14 @@ const SECOND_ROUND_AT: usize = FIRST_ROUND_AT + 12;
 fn purposes_codes_and_versions() {
     assert_eq!(PURPOSE_AUDIT_FREEZE, b"audit-freeze");
     assert_eq!(PURPOSE_AUDIT_SEED, b"audit-seed");
+    assert_eq!(PURPOSE_AUDIT_COMMIT, b"audit-commit");
     assert_eq!(PURPOSE_SAMPLE_OPENING, b"sample-opening");
     assert_eq!(PURPOSE_SAMPLE_COMPARISON, b"sample-comparison");
     assert_eq!(PURPOSE_AUDIT_FINDING, b"audit-finding");
     assert_eq!(PURPOSE_HAND_COUNT, b"hand-count");
     for (schema, purpose) in [
         (SCHEMA_AUDIT_SEED_BODY, PURPOSE_AUDIT_SEED),
+        (SCHEMA_AUDIT_COMMIT_BODY, PURPOSE_AUDIT_COMMIT),
         (SCHEMA_AUDIT_FREEZE_BODY, PURPOSE_AUDIT_FREEZE),
         (SCHEMA_SAMPLE_COMPARISON_BODY, PURPOSE_SAMPLE_COMPARISON),
         (SCHEMA_AUDIT_FINDING_BODY, PURPOSE_AUDIT_FINDING),
@@ -213,7 +227,9 @@ fn purposes_codes_and_versions() {
     assert_eq!(SCHEMA_SAMPLE_COMPARISON_BODY.get(), 0x004B);
     assert_eq!(SCHEMA_AUDIT_FINDING_BODY.get(), 0x004C);
     assert_eq!(SCHEMA_HAND_COUNT_REPORT_BODY.get(), 0x004D);
+    assert_eq!(SCHEMA_AUDIT_COMMIT_BODY.get(), 0x004E);
     for schema in [
+        SCHEMA_AUDIT_COMMIT_BODY,
         SCHEMA_AUDIT_SEED_BODY,
         SCHEMA_AUDIT_FREEZE_BODY,
         SCHEMA_SAMPLE_OPENING_BODY,
@@ -258,7 +274,14 @@ fn rounds_ascend_in_size_and_never_lower_the_threshold() {
     assert_eq!(AuditRounds::new(&[round(5, 0), round(4, 0)]), None);
     assert_eq!(AuditRounds::new(&[round(5, 2), round(6, 1)]), None);
     assert!(AuditRounds::new(&[round(5, 2), round(6, 2)]).is_some());
-    assert!(AuditRounds::new(&[round(5, 0), round(6, u32::MAX)]).is_some());
+    // A threshold below the size: a round every sample passes rules
+    // nothing.
+    assert!(AuditRounds::new(&[round(5, 4)]).is_some());
+    assert_eq!(AuditRounds::new(&[round(5, 5)]), None);
+    assert_eq!(AuditRounds::new(&[round(1, 1)]), None);
+    assert_eq!(AuditRounds::new(&[round(5, 0), round(6, u32::MAX)]), None);
+    let top = u32::try_from(MAX_TALLY_COUNT - 1).unwrap();
+    assert!(AuditRounds::new(&[round(5, 0), round(MAX_TALLY_COUNT, top)]).is_some());
     // A rule that fails at the second round fails as a whole.
     assert_eq!(AuditRounds::new(&[round(5, 0), round(0, 0)]), None);
 }
@@ -363,6 +386,10 @@ fn a_freeze_round_trips_and_decodes_each_rule_where_it_breaks() {
     b[SECOND_ROUND_AT..SECOND_ROUND_AT + 8].copy_from_slice(&9u64.to_be_bytes());
     assert_eq!(at(&b), (ErrorKind::NotSorted, SECOND_ROUND_AT));
     let mut b = bytes.clone();
+    // The first round's threshold not below its size.
+    b[FIRST_ROUND_AT + 8..FIRST_ROUND_AT + 12].copy_from_slice(&10u32.to_be_bytes());
+    assert_eq!(at(&b), (ErrorKind::ValueOutOfRange, FIRST_ROUND_AT));
+    let mut b = bytes.clone();
     // The first round's threshold above the second's.
     b[FIRST_ROUND_AT + 8..FIRST_ROUND_AT + 12].copy_from_slice(&3u32.to_be_bytes());
     assert_eq!(at(&b), (ErrorKind::InvariantViolation, SECOND_ROUND_AT));
@@ -417,6 +444,51 @@ fn a_seed_round_trips_and_needs_its_dice_and_checkpoint() {
 }
 
 #[test]
+fn a_commit_round_trips_and_needs_its_dice_beacon_and_freezes() {
+    let parts = commit_parts();
+    let body = AuditCommitBody::new(&parts).unwrap();
+    let bytes = encode_to_vec(SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_VERSION_1, &body);
+    assert_eq!(bytes.len(), HEADER_LEN + body.encoded_len());
+    let back: AuditCommitBody<'_> =
+        decode_object(SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(back.parts(), &parts);
+    for p in [
+        AuditCommitParts {
+            dice_hash: Hash512::ZERO,
+            ..parts
+        },
+        AuditCommitParts {
+            beacon_source: Hash512::ZERO,
+            ..parts
+        },
+        AuditCommitParts {
+            freezes_root: Hash512::ZERO,
+            ..parts
+        },
+    ] {
+        let err = AuditCommitBody::new(&p).unwrap_err();
+        assert_eq!(
+            (err.kind(), err.offset()),
+            (ErrorKind::InvalidPreviousHash, 0)
+        );
+    }
+    let dice_at = HEADER_LEN + 16;
+    let source_at = dice_at + 64;
+    let freezes_at = source_at + 64 + 8;
+    let at = |b: &[u8]| kind_of::<AuditCommitBody<'_>>(SCHEMA_AUDIT_COMMIT_BODY, b);
+    for place in [dice_at, source_at, freezes_at] {
+        let mut b = bytes.clone();
+        b[place..place + 64].fill(0);
+        assert_eq!(at(&b), (ErrorKind::InvalidPreviousHash, place));
+    }
+    let mut b = bytes;
+    b.truncate(b.len() - 1);
+    let n = u32::try_from(b.len() - HEADER_LEN).unwrap();
+    b[12..16].copy_from_slice(&n.to_be_bytes());
+    assert_eq!(at(&b).0, ErrorKind::UnexpectedEnd);
+}
+
+#[test]
 fn a_sample_opening_round_trips_and_keeps_its_secret() {
     let r = rand(2);
     let parts = SampleOpeningParts {
@@ -439,6 +511,22 @@ fn a_sample_opening_round_trips_and_keeps_its_secret() {
     let back: SampleOpeningBody<'_> =
         decode_object(SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
     assert_eq!(back, body);
+    // The parts' Debug shows neither the option nor the cast id: two parts
+    // that differ only there print alike.
+    let r2 = rand(2);
+    let other = SampleOpeningParts {
+        option_index: 5,
+        cast_id: Token192([0x78; 24]),
+        rand: &r2,
+        ..parts
+    };
+    let text = std::format!("{parts:?}");
+    assert_eq!(text, std::format!("{other:?}"));
+    assert!(
+        text.contains("record_hash") && text.contains("scalars: 2"),
+        "{text}"
+    );
+    assert!(!text.contains("option_index") && !text.contains("cast_id") && !text.contains("119"));
     // Debug shows the public fields only.
     let shown = std::format!("{back:?}");
     assert!(shown.contains("record_hash"));
@@ -727,7 +815,11 @@ fn each_audit_body_has_its_signers() {
     let ok = |schema: SchemaId, sigs: &[EventSig<'static>]| {
         roles_satisfied(schema, || sigs.iter().copied())
     };
-    for schema in [SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY] {
+    for schema in [
+        SCHEMA_AUDIT_FREEZE_BODY,
+        SCHEMA_AUDIT_COMMIT_BODY,
+        SCHEMA_AUDIT_SEED_BODY,
+    ] {
         assert!(ok(schema, &[committee, obs_a, obs_b]));
         assert!(ok(schema, &[committee, obs_a, obs_a2, obs_b]));
         assert!(!ok(schema, &[obs_a, obs_b]), "no committee");
@@ -852,7 +944,10 @@ proptest! {
         let list: Vec<AuditRound> = sizes
             .iter()
             .enumerate()
-            .map(|(i, s)| round(*s, threshold + u32::try_from(i).unwrap()))
+            .map(|(i, s)| {
+                let below = u32::try_from(*s - 1).unwrap_or(u32::MAX);
+                round(*s, (threshold + u32::try_from(i).unwrap()).min(below))
+            })
             .collect();
         let parts = AuditFreezeParts {
             ballot_style_id: BallotStyleId::new(leak(style_id)).unwrap(),
@@ -892,6 +987,30 @@ proptest! {
         let bytes = encode_to_vec(SCHEMA_AUDIT_SEED_BODY, SCHEMA_VERSION_1, &body);
         let back: AuditSeedBody<'_> =
             decode_object(SCHEMA_AUDIT_SEED_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+        prop_assert_eq!(back.parts(), &parts);
+    }
+
+    /// Every valid commit survives a round trip.
+    #[test]
+    fn commit_round_trip(
+        dice in 1u8..=255,
+        source in 1u8..=255,
+        freezes in 1u8..=255,
+        beacon_round in any::<u64>(),
+        bucket in any::<u64>(),
+    ) {
+        let parts = AuditCommitParts {
+            dice_hash: h(dice),
+            beacon_source: h(source),
+            beacon_round,
+            freezes_root: h(freezes),
+            time_bucket: TimeBucket::new(bucket),
+            ..commit_parts()
+        };
+        let body = AuditCommitBody::new(&parts).unwrap();
+        let bytes = encode_to_vec(SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_VERSION_1, &body);
+        let back: AuditCommitBody<'_> =
+            decode_object(SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
         prop_assert_eq!(back.parts(), &parts);
     }
 

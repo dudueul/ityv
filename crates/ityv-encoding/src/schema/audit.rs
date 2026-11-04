@@ -63,6 +63,9 @@ pub const PURPOSE_AUDIT_FREEZE: &[u8] = b"audit-freeze";
 /// Purpose of the signatures on an audit seed.
 pub const PURPOSE_AUDIT_SEED: &[u8] = b"audit-seed";
 
+/// Purpose of the signatures on an audit commit.
+pub const PURPOSE_AUDIT_COMMIT: &[u8] = b"audit-commit";
+
 /// Purpose of the trustees' signatures on a sample opening reference.
 pub const PURPOSE_SAMPLE_OPENING: &[u8] = b"sample-opening";
 
@@ -111,11 +114,16 @@ pub struct AuditRound {
 }
 
 /// Why `round` cannot follow `previous` (`None` for the first round): the
-/// size is 0 or above [`MAX_TALLY_COUNT`] (`ValueOutOfRange`), not above
-/// the previous size (`Duplicate` if equal, `NotSorted` if below), or the
-/// threshold is below the previous threshold (`InvariantViolation`).
+/// size is 0 or above [`MAX_TALLY_COUNT`], or the threshold is not below
+/// the size (a round that every sample would pass rules nothing,
+/// ADR-0036) (`ValueOutOfRange`); the size is not above the previous size
+/// (`Duplicate` if equal, `NotSorted` if below), or the threshold is below
+/// the previous threshold (`InvariantViolation`).
 fn round_error(previous: Option<AuditRound>, round: AuditRound) -> Option<Kind> {
-    if round.sample_size == 0 || round.sample_size > MAX_TALLY_COUNT {
+    if round.sample_size == 0
+        || round.sample_size > MAX_TALLY_COUNT
+        || u64::from(round.threshold) >= round.sample_size
+    {
         return Some(Kind::ValueOutOfRange);
     }
     let p = previous?;
@@ -365,13 +373,16 @@ impl<'a> Decode<'a> for AuditManifestFreezeBody<'a> {
 pub struct AuditSeedParts<'a> {
     /// The election.
     pub election_id: ElectionId<'a>,
-    /// The hash of the public record of the dice ceremony; not zero.
+    /// The hash of the public record of the dice ceremony (the one the
+    /// audit commit fixed); not zero.
     pub dice_hash: Hash512,
-    /// The beacon round the freezes designated.
+    /// The beacon round the freezes and the commit designated.
     pub beacon_round: u64,
-    /// The beacon's published value for that round.
+    /// The beacon value of that round: the published output mapped to 64
+    /// bytes (`ityv_crypto::beacon_value`, PROTOCOL.md §12.1).
     pub beacon_value: Hash512,
-    /// The object hash of the checkpoint body the seed takes; not zero.
+    /// The object hash of the binding checkpoint's body (the first valid
+    /// checkpoint that covers the audit commit); not zero.
     pub checkpoint_hash: Hash512,
     /// `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice_hash ‖ beacon_value ‖
     /// checkpoint_hash)`.
@@ -444,10 +455,101 @@ impl<'a> Decode<'a> for AuditSeedBody<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// 0x004E AuditCommitBody
+
+/// The fields of an audit commit (PROTOCOL.md §12.1, ADR-0036): every input
+/// of the seed but the beacon value, fixed after every freeze and before
+/// the beacon round is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuditCommitParts<'a> {
+    /// The election.
+    pub election_id: ElectionId<'a>,
+    /// The hash of the public record of the dice ceremony; not zero.
+    pub dice_hash: Hash512,
+    /// The hash of the beacon designation document every freeze names; not
+    /// zero.
+    pub beacon_source: Hash512,
+    /// The beacon round every freeze names.
+    pub beacon_round: u64,
+    /// The sorted-set root of the object hashes of every style's freeze
+    /// body; not zero.
+    pub freezes_root: Hash512,
+    /// When the commit was recorded.
+    pub time_bucket: TimeBucket,
+}
+
+/// An audit commit body (schema `0x004E`). Rules: `dice_hash`,
+/// `beacon_source` and `freezes_root` not zero (`InvalidPreviousHash`).
+/// That the beacon and the freezes are the ones taken, and the commit's
+/// place before the beacon, are the verifier's (VC-045).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuditCommitBody<'a> {
+    parts: AuditCommitParts<'a>,
+}
+
+impl<'a> AuditCommitBody<'a> {
+    /// Builds the body.
+    ///
+    /// # Errors
+    /// `InvalidPreviousHash` at 0 for a zero dice, beacon source or
+    /// freezes hash.
+    pub fn new(parts: &AuditCommitParts<'a>) -> Result<Self, Error> {
+        if parts.dice_hash.is_zero()
+            || parts.beacon_source.is_zero()
+            || parts.freezes_root.is_zero()
+        {
+            return Err(zero_hash(0));
+        }
+        Ok(Self { parts: *parts })
+    }
+
+    /// The fields.
+    #[must_use]
+    pub const fn parts(&self) -> &AuditCommitParts<'a> {
+        &self.parts
+    }
+}
+
+impl Encode for AuditCommitBody<'_> {
+    fn encoded_len(&self) -> usize {
+        self.parts
+            .election_id
+            .encoded_len()
+            .saturating_add(64 + 64 + 8 + 64 + 8)
+    }
+
+    fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        let p = &self.parts;
+        p.election_id.encode(w)?;
+        p.dice_hash.encode(w)?;
+        p.beacon_source.encode(w)?;
+        w.write_u64(p.beacon_round)?;
+        p.freezes_root.encode(w)?;
+        p.time_bucket.encode(w)
+    }
+}
+
+impl<'a> Decode<'a> for AuditCommitBody<'a> {
+    fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            parts: AuditCommitParts {
+                election_id: ElectionId::decode(r)?,
+                dice_hash: read_nonzero_hash(r)?,
+                beacon_source: read_nonzero_hash(r)?,
+                beacon_round: r.read_u64()?,
+                freezes_root: read_nonzero_hash(r)?,
+                time_bucket: TimeBucket::decode(r)?,
+            },
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 0x0049 SampleOpeningBody (restricted)
 
-/// Unvalidated inputs for [`SampleOpeningBody::new`].
-#[derive(Debug, Clone, Copy)]
+/// Unvalidated inputs for [`SampleOpeningBody::new`]. They hold the secret
+/// choice, so neither `Clone` nor `Copy`, and `Debug` shows only the public
+/// fields and the number of scalars.
 pub struct SampleOpeningParts<'a> {
     /// The election.
     pub election_id: ElectionId<'a>,
@@ -475,6 +577,17 @@ pub struct SampleOpeningBody<'a> {
     option_index: u16,
     cast_id: Token192,
     rand: Scalars<MAX_CHUNKS>,
+}
+
+impl fmt::Debug for SampleOpeningParts<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SampleOpeningParts")
+            .field("election_id", &self.election_id)
+            .field("ballot_style_id", &self.ballot_style_id)
+            .field("record_hash", &self.record_hash)
+            .field("scalars", &self.rand.count())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> SampleOpeningBody<'a> {

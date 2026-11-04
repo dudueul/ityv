@@ -1395,15 +1395,15 @@ mod tally {
 mod audit {
     use super::common::{Vector, check_file, encode_to_vec, ident_len, render, self_check};
     use ityv_encoding::{
-        AuditFindingBody, AuditFindingParts, AuditFreezeParts, AuditManifestFreezeBody, AuditRound,
-        AuditRounds, AuditSeedBody, AuditSeedParts, BallotStyleId, BoxId, ComparisonCode,
-        ElectionId, HEADER_LEN, HandCountReportBody, MAX_TALLY_COUNT, PaperCountParts, PaperVotes,
-        ReportingUnitId, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
-        SCHEMA_AUDIT_SEED_BODY, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY,
-        SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1,
-        SampleComparisonBody, SampleComparisonParts, SampleOpeningBody, SampleOpeningParts,
-        SampleOpeningRefBody, SampleOpeningRefParts, Scalar32, Scalars, TimeBucket, Token192,
-        decode_object,
+        AuditCommitBody, AuditCommitParts, AuditFindingBody, AuditFindingParts, AuditFreezeParts,
+        AuditManifestFreezeBody, AuditRound, AuditRounds, AuditSeedBody, AuditSeedParts,
+        BallotStyleId, BoxId, ComparisonCode, ElectionId, HEADER_LEN, HandCountReportBody,
+        MAX_TALLY_COUNT, PaperCountParts, PaperVotes, ReportingUnitId, SCHEMA_AUDIT_COMMIT_BODY,
+        SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
+        SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY,
+        SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1, SampleComparisonBody,
+        SampleComparisonParts, SampleOpeningBody, SampleOpeningParts, SampleOpeningRefBody,
+        SampleOpeningRefParts, Scalar32, Scalars, TimeBucket, Token192, decode_object,
     };
     use std::vec::Vec;
 
@@ -1520,6 +1520,14 @@ mod audit {
             "NotSorted",
             SECOND_ROUND_AT,
         ));
+        let mut b = ok.clone();
+        b[FIRST_ROUND_AT + 8..FIRST_ROUND_AT + 12].copy_from_slice(&10u32.to_be_bytes());
+        v.push(invalid(
+            "threshold_not_below_size",
+            b,
+            "ValueOutOfRange",
+            FIRST_ROUND_AT,
+        ));
         let mut b = ok;
         b[FIRST_ROUND_AT + 8..FIRST_ROUND_AT + 12].copy_from_slice(&3u32.to_be_bytes());
         v.push(invalid(
@@ -1547,6 +1555,36 @@ mod audit {
 
     const DICE_AT: usize = HEADER_LEN + 16;
     const CHECKPOINT_AT: usize = DICE_AT + 64 + 8 + 64;
+    const SOURCE_AT: usize = DICE_AT + 64;
+    const FREEZES_AT: usize = SOURCE_AT + 64 + 8;
+
+    fn commit() -> Vec<u8> {
+        let body = AuditCommitBody::new(&AuditCommitParts {
+            election_id: e(),
+            dice_hash: super::patterned(0x20),
+            beacon_source: super::patterned(0x24),
+            beacon_round: 4_242,
+            freezes_root: super::patterned(0x25),
+            time_bucket: TimeBucket::new(3_005),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    fn commit_vectors() -> Vec<Vector> {
+        let ok = commit();
+        let mut v = std::vec![valid("commit", ok.clone())];
+        for (label, at) in [
+            ("no_dice", DICE_AT),
+            ("no_beacon", SOURCE_AT),
+            ("no_freezes", FREEZES_AT),
+        ] {
+            let mut b = ok.clone();
+            b[at..at + 64].fill(0);
+            v.push(invalid(label, b, "InvalidPreviousHash", at));
+        }
+        v
+    }
 
     fn seed_vectors() -> Vec<Vector> {
         let ok = seed();
@@ -1751,6 +1789,14 @@ mod audit {
         "audit_seed_body.txt",
         SCHEMA_AUDIT_SEED_BODY,
         seed_vectors()
+    );
+    audit_file!(
+        commit_vectors_are_current_and_self_consistent,
+        AuditCommitBody<'_>,
+        "AuditCommitBody",
+        "audit_commit_body.txt",
+        SCHEMA_AUDIT_COMMIT_BODY,
+        commit_vectors()
     );
     audit_file!(
         opening_vectors_are_current_and_self_consistent,

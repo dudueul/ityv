@@ -18,7 +18,7 @@ use crate::error::{Error, Kind};
 use crate::primitives::{OrgId, SchemaId, SignerId};
 use crate::reader::Reader;
 use crate::schema::audit::{
-    AuditFindingBody, AuditManifestFreezeBody, AuditSeedBody, HandCountReportBody,
+    AuditCommitBody, AuditFindingBody, AuditManifestFreezeBody, AuditSeedBody, HandCountReportBody,
     SampleComparisonBody,
 };
 use crate::schema::checkin::{BoxUnitSwapBody, CheckinUnitSwapBody, ObserverCountAttestBody};
@@ -30,11 +30,11 @@ use crate::schema::progress::ProgressCheckBody;
 use crate::schema::tally::PaperCountReportBody;
 use crate::schema::util::{HYBRID_SIG_LEN, ascending_by, read_fixed};
 use crate::schema::{
-    SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
-    SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
-    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
-    SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
-    SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
+    SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
+    SCHEMA_AUDIT_SEED_BODY, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
+    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY,
+    SCHEMA_FALLBACK_BODY, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
+    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PROGRESS_CHECK_BODY,
     SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1,
 };
@@ -56,7 +56,7 @@ pub const MIN_EVENT_OBSERVER_ORGS: usize = 2;
 pub const MIN_EVENT_AUDITOR_ORGS: usize = 2;
 
 /// The body schemas a `WitnessedEvent` may carry.
-pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 19] = [
+pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 20] = [
     SCHEMA_CUSTODY_HANDOFF_BODY,
     SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_LEGAL_DECISION_REF_BODY,
@@ -76,6 +76,7 @@ pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 19] = [
     SCHEMA_SAMPLE_COMPARISON_BODY,
     SCHEMA_AUDIT_FINDING_BODY,
     SCHEMA_HAND_COUNT_REPORT_BODY,
+    SCHEMA_AUDIT_COMMIT_BODY,
 ];
 
 /// The signature purpose of a body schema (PROTOCOL.md Appendix B), or
@@ -102,6 +103,7 @@ pub fn purpose_of(schema: SchemaId) -> Option<&'static [u8]> {
         0x004B => b"sample-comparison",
         0x004C => b"audit-finding",
         0x004D => b"hand-count",
+        0x004E => b"audit-commit",
         _ => return None,
     };
     Some(purpose)
@@ -313,8 +315,8 @@ where
 /// * `PaperCountReport`, `HandCountReport`: the chair of the district
 ///   commission once, observers of two or more organisations, nothing
 ///   else;
-/// * `AuditManifestFreeze`, `AuditSeed`: the committee once, observers of
-///   two or more organisations, nothing else;
+/// * `AuditManifestFreeze`, `AuditCommit`, `AuditSeed`: the committee
+///   once, observers of two or more organisations, nothing else;
 /// * `SampleComparison`, `AuditFinding`: auditors of two or more
 ///   organisations and observers of two or more organisations, nothing
 ///   else;
@@ -331,7 +333,7 @@ where
         0x002A..=0x002E | 0x0032 | 0x0040 | 0x0041 => clerks_and_observers(sigs, None),
         0x003F => observers_with(sigs, None),
         0x0046 | 0x004D => observers_with(sigs, Some(EventRole::Chair)),
-        0x000D | 0x0048 => observers_with(sigs, Some(EventRole::Committee)),
+        0x000D | 0x0048 | 0x004E => observers_with(sigs, Some(EventRole::Committee)),
         0x004B | 0x004C => auditors_and_observers(sigs),
         0x0008 => exactly(sigs, &[EventRole::Sender, EventRole::Receiver]),
         0x000E => exactly(sigs, &[EventRole::Commission, EventRole::Committee]),
@@ -363,6 +365,7 @@ fn validate_body(schema: SchemaId, bytes: &[u8]) -> Result<(), Error> {
         0x004B => decode_object::<SampleComparisonBody<'_>>(schema, v, bytes).map(drop),
         0x004C => decode_object::<AuditFindingBody<'_>>(schema, v, bytes).map(drop),
         0x004D => decode_object::<HandCountReportBody<'_>>(schema, v, bytes).map(drop),
+        0x004E => decode_object::<AuditCommitBody<'_>>(schema, v, bytes).map(drop),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }
