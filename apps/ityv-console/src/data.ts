@@ -48,6 +48,8 @@ export interface IndexScenario {
   name: string;
   file: string;
   bytes: number;
+  /** SHA3-512 of the bundle: its metadata applies only to these bytes. */
+  sha3: string;
   set: "quick" | "full";
   group: "normal" | "attack";
   election: string;
@@ -67,11 +69,31 @@ export interface SimIndex {
   scenarios: IndexScenario[];
 }
 
+/** An integer of the report: a number up to 2^53 − 1, a decimal string
+ * beyond (ityv-wasm writes larger values as strings). */
+export type Int = number | string;
+
+/** The integer as text, exactly. */
+export function intText(v: Int | null | undefined): string {
+  return v === null || v === undefined ? "-" : String(v);
+}
+
+/** The integer as an exact BigInt. */
+export function intBig(v: Int): bigint {
+  return BigInt(v);
+}
+
+/** The integer as a number for drawing and comparisons; large values
+ * lose precision here, never in text. */
+export function intNum(v: Int | null | undefined): number {
+  return v === null || v === undefined ? 0 : Number(v);
+}
+
 export interface Checkpoint {
-  frame: number;
-  seq: number;
-  treeSize: number;
-  timeBucket: number;
+  frame: Int;
+  seq: Int;
+  treeSize: Int;
+  timeBucket: Int;
   fingerprint: string;
   root: string;
 }
@@ -85,19 +107,19 @@ export interface BoxReport {
   phase: string;
   holds: Hold[];
   close: null | {
-    paper: number;
-    records: number;
-    attested: number;
-    withoutRecord: number;
-    challenged: number;
-    quarantined: number;
-    visits: number;
-    envelopes: number;
-    stickers: number;
+    paper: Int;
+    records: Int;
+    attested: Int;
+    withoutRecord: Int;
+    challenged: Int;
+    quarantined: Int;
+    visits: Int;
+    envelopes: Int;
+    stickers: Int;
   };
-  accepted?: number;
-  rejected?: number;
-  unattested?: number;
+  accepted?: Int;
+  rejected?: Int;
+  unattested?: Int;
 }
 
 export interface UnitReport {
@@ -107,104 +129,109 @@ export interface UnitReport {
   holds: Hold[];
   unitHolds: Hold[];
   boxes: string[];
-  included: number;
-  excluded: number;
-  noRecord: number;
+  included: Int;
+  excluded: Int;
+  noRecord: Int;
   chunks: number;
-  scope: number | null;
+  scope: Int | null;
   scopeProblems: string[];
-  openings: { chunk: number; seq: number; outcome: string }[];
-  counts: number[] | null;
-  paper: number | null;
-  comparison: null | { agrees: boolean; firstBelow: number | null; totalsAgree: boolean };
+  openings: { chunk: number; seq: Int; outcome: string }[];
+  counts: Int[] | null;
+  paper: Int | null;
+  comparison: null | { agrees: boolean; firstBelow: Int | null; totalsAgree: boolean };
   complete: boolean;
   passed: boolean;
 }
 
 export interface ProgressPoint {
-  slot: number;
-  checkins: number;
-  issued: number;
-  spoiled: number;
-  returned: number;
-  sheetsIn: number;
-  out: number | null;
+  slot: Int;
+  checkins: Int;
+  issued: Int;
+  spoiled: Int;
+  returned: Int;
+  /** `null` with `overflow` when the boxes' sum does not fit in 64 bits. */
+  sheetsIn: Int | null;
+  out: Int | null;
+  overflow?: boolean;
 }
 
 export interface StationProgress {
   station: string;
-  limit: number | null;
-  firstSlot: number | null;
-  lastSlot: number | null;
-  ticks: number;
+  limit: Int | null;
+  firstSlot: Int | null;
+  lastSlot: Int | null;
+  ticks: Int;
   suspended: boolean;
   counterfoil: boolean;
   close: string;
   holds: Hold[];
-  alarms: { slot: number; alarm: string }[];
-  checks: number[];
+  alarms: { slot: Int; alarm: string }[];
+  checks: Int[];
   series: ProgressPoint[];
+  overflow: boolean;
 }
 
+/** A record with its inclusion in the first verified checkpoint that
+ * covers its frame (`ityv_ledger::verify_inclusion`, in the report). */
 export interface RecordEntry {
   code: string;
   box: string;
-  seq: number;
+  seq: Int;
   state: string;
-  checkpoint: number | null;
+  checkpoint: Int | null;
+  treeSize?: Int;
+  checkpointFingerprint?: string;
+  included: boolean;
+  pathLength?: Int;
 }
 
 export interface Report {
   format: string;
+  bundleHash: string;
+  bundleBytes: Int;
   error?: string;
   scenario?: string;
   pin?: string;
+  pinHex?: string;
+  /** No pin was given: the bundle's own was used. */
   pinFromBundle?: boolean;
-  genesis?: { ok: boolean; error?: string; election?: string; states?: number; boxes?: number; stations?: number };
+  /** The pin used equals the bundle's (always when none was given). */
+  pinEqualsBundle?: boolean;
+  genesis?: { ok: boolean; error?: string; election?: string; states?: Int; boxes?: Int; stations?: Int };
   status?: string;
   holds?: Hold[];
   countOnly?: boolean;
   receiptScan?: boolean;
   stages?: { step: string; outcome: string }[];
   publications?: { anchors: string; board: string };
-  ledger?: { treeSize: number; root: string; events: number };
-  checkpoints?: { covered: number; unchecked: number; valid: Checkpoint[]; findings: { frame: number; kind: string }[] };
+  ledger?: { treeSize: Int; root: string; events: Int };
+  checkpoints?: { covered: Int; unchecked: Int; valid: Checkpoint[]; findings: { frame: Int; kind: string }[] };
   boxes?: BoxReport[];
   units?: UnitReport[];
-  refused?: { seq: number; schema: string | null; stage: string; reason: string }[];
+  refused?: { seq: Int; schema: string | null; stage: string; reason: string }[];
   progress?: StationProgress[];
   participation?: {
     complete: boolean;
-    duplicates: number;
+    duplicates: Int;
     holds: Hold[];
-    stations: { station: string; set: number | null; count: number | null; observers: number | null; closed: boolean; holds: Hold[] }[];
+    stations: { station: string; set: Int | null; count: Int | null; observers: Int | null; closed: boolean; holds: Hold[] }[];
   };
-  disputes?: { list: { filing: string; type: string; box: string | null; status: string; unresolved: boolean; events: number[]; decisions: number }[] };
+  disputes?: { list: { filing: string; type: string; box: string | null; status: string; unresolved: boolean; events: Int[]; decisions: Int }[] };
   records?: RecordEntry[];
 }
 
-export interface Inclusion {
-  seq: number;
-  included: boolean;
-  checkpoint: number | null;
-  checkpointFrame?: number;
-  treeSize?: number;
-  pathLength?: number;
-  root?: string;
-}
-
 /** 10-minute slot → "HH:MM" of its start (slots count from the election
- * epoch day, PROTOCOL §5.8). */
-export function slotTime(slot: number): string {
-  const minutes = (slot * 10) % (24 * 60);
+ * epoch day, PROTOCOL §5.8), exact for any 64-bit slot. */
+export function slotTime(slot: Int): string {
+  const minutes = Number((BigInt(slot) * 10n) % 1440n);
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 /** The day offset of a slot. */
-export function slotDay(slot: number): number {
-  return Math.floor((slot * 10) / (24 * 60));
+export function slotDay(slot: Int): string {
+  return String((BigInt(slot) * 10n) / 1440n);
 }
 
 /** The first 16 characters of a grouped 32-character fingerprint. */
@@ -222,7 +249,7 @@ export type AttestReason = "sig" | "nonce" | "fp" | "build" | "timeout";
 export interface AttestationFixture {
   label: string;
   device: string;
-  kind: string;
+  kind: "dev.kind.scanner" | "dev.kind.unit";
   sig: boolean;
   nonce: boolean;
   fp: boolean;
@@ -230,30 +257,30 @@ export interface AttestationFixture {
 }
 
 export const ATTESTATION_FIXTURES: AttestationFixture[] = [
-  { label: "성공", device: "BOX-HB-1", kind: "투함 스캐너", sig: true, nonce: true, fp: true, reason: null },
-  { label: "실패: 서명 오류", device: "BOX-HB-1", kind: "투함 스캐너", sig: false, nonce: true, fp: true, reason: "sig" },
-  { label: "실패: 도전값 다름", device: "BOX-HB-1", kind: "투함 스캐너", sig: true, nonce: false, fp: true, reason: "nonce" },
-  { label: "실패: 지문 다름", device: "BOX-HB-1", kind: "투함 스캐너", sig: true, nonce: true, fp: false, reason: "fp" },
-  { label: "실패: 빌드 낮음", device: "ST-HB-1-UA", kind: "카운터·가명 유닛", sig: true, nonce: true, fp: false, reason: "build" },
-  { label: "실패: 시간 초과", device: "ST-HB-1-UA", kind: "카운터·가명 유닛", sig: false, nonce: false, fp: false, reason: "timeout" },
+  { label: "성공", device: "BOX-HB-1", kind: "dev.kind.scanner", sig: true, nonce: true, fp: true, reason: null },
+  { label: "실패: 서명 오류", device: "BOX-HB-1", kind: "dev.kind.scanner", sig: false, nonce: true, fp: true, reason: "sig" },
+  { label: "실패: 도전값 다름", device: "BOX-HB-1", kind: "dev.kind.scanner", sig: true, nonce: false, fp: true, reason: "nonce" },
+  { label: "실패: 지문 다름", device: "BOX-HB-1", kind: "dev.kind.scanner", sig: true, nonce: true, fp: false, reason: "fp" },
+  { label: "실패: 빌드 낮음", device: "ST-HB-1-UA", kind: "dev.kind.unit", sig: true, nonce: true, fp: false, reason: "build" },
+  { label: "실패: 시간 초과", device: "ST-HB-1-UA", kind: "dev.kind.unit", sig: false, nonce: false, fp: false, reason: "timeout" },
 ];
 
 export interface GatewayFixture {
   session: number;
-  links: { link: string; frames: number; slotFrames: number; head: string }[];
-  taps: { tap: string; inUse: boolean }[];
+  links: { link: "gw.link.scanner" | "dev.kind.unit"; frames: number; slotFrames: number; head: string }[];
+  taps: { tap: "gw.tap.device" | "gw.tap.line"; inUse: boolean }[];
   lineUp: boolean;
 }
 
 export const GATEWAY_FIXTURE: GatewayFixture = {
   session: 1,
   links: [
-    { link: "스캐너", frames: 1168, slotFrames: 16, head: "MZXW 6YTB OI3D QMRA" },
-    { link: "카운터·가명 유닛", frames: 292, slotFrames: 4, head: "GEZD GNBV GY3T QOJQ" },
+    { link: "gw.link.scanner", frames: 1168, slotFrames: 16, head: "MZXW 6YTB OI3D QMRA" },
+    { link: "dev.kind.unit", frames: 292, slotFrames: 4, head: "GEZD GNBV GY3T QOJQ" },
   ],
   taps: [
-    { tap: "장치 쪽 탭", inUse: true },
-    { tap: "회선 쪽 탭", inUse: false },
+    { tap: "gw.tap.device", inUse: true },
+    { tap: "gw.tap.line", inUse: false },
   ],
   lineUp: true,
 };

@@ -10,7 +10,9 @@
 // (ENCODING.md §8.26) are M8 work; this module is a development stand-in.
 
 /** The value kinds a slot may hold (SCREENS §0.2: integers, identifiers
- * such as a box ID, fingerprints, status vocabulary). */
+ * such as a box ID, fingerprints, status vocabulary), plus `ref`: another
+ * entry of this table without slots (a state word or a device name), so
+ * even a nested value comes from the table. */
 export const SLOT_KINDS = {
   count: "정수",
   sheet: "정수",
@@ -19,11 +21,13 @@ export const SLOT_KINDS = {
   build: "정수",
   slotTime: "정수",
   identifier: "식별자",
+  trackingCode: "식별자",
   semver: "식별자",
   errorCode: "식별자",
   fingerprint16: "지문",
   fingerprint32: "지문",
   status: "상태 어휘",
+  ref: "문구 표 항목",
 } as const;
 
 export type SlotKind = keyof typeof SLOT_KINDS;
@@ -55,7 +59,7 @@ export const STRINGS = {
   // §0.1 identity line and detail view (every screen).
   "id.line": {
     ko: "{program} {version} · 빌드 {build} · {fp}",
-    slots: { program: "identifier", version: "semver", build: "build", fp: "fingerprint16" },
+    slots: { program: "ref", version: "semver", build: "build", fp: "fingerprint16" },
     source: S01,
     spec: { program: "ityv 사전투표 스캐너", version: "1.4.2", build: "2071", fp: "K7QF 2M8D R5WN Q3XA" },
   },
@@ -64,7 +68,7 @@ export const STRINGS = {
   "id.detail.title": { ko: "소프트웨어 확인", source: S01 },
   "id.detail.component": {
     ko: "{name} {version} · 빌드 {build}",
-    slots: { name: "identifier", version: "semver", build: "build" },
+    slots: { name: "ref", version: "semver", build: "build" },
     source: P,
   },
   "id.detail.fp": { ko: "{fp}", slots: { fp: "fingerprint32" }, source: P },
@@ -162,7 +166,7 @@ export const STRINGS = {
   "clerk.modules": { ko: "챔버 모듈", source: S2 },
   "clerk.module.row": {
     ko: "{chamber} {state} · 패드 {percent}%",
-    slots: { chamber: "identifier", state: "identifier", percent: "percent" },
+    slots: { chamber: "identifier", state: "ref", percent: "percent" },
     source: P,
   },
   "clerk.module.present": { ko: "있음", source: S2 },
@@ -247,23 +251,45 @@ export const STRINGS = {
   },
   "gw.frames": {
     ko: "{link} · 이번 세션 {count}(빈 프레임 포함) · 이번 슬롯 {slotCount}",
-    slots: { link: "identifier", count: "count", slotCount: "count" },
+    slots: { link: "ref", count: "count", slotCount: "count" },
     source: P,
   },
   "gw.inbound": { ko: "들어오는 경로", source: S5 },
   "gw.inbound.none": { ko: "없음", source: S5 },
   "gw.taps": { ko: "관찰 탭", source: S5 },
-  "gw.tap": { ko: "{tap} {state}", slots: { tap: "identifier", state: "identifier" }, source: P },
+  "gw.tap": { ko: "{tap} {state}", slots: { tap: "ref", state: "ref" }, source: P },
+  "gw.tap.device": { ko: "장치 쪽 탭", source: P },
+  "gw.tap.line": { ko: "회선 쪽 탭", source: P },
+  "gw.link.scanner": { ko: "스캐너", source: P },
   "gw.tap.inUse": { ko: "사용 중", source: P },
   "gw.tap.idle": { ko: "쉬는 중", source: P },
   "gw.chain": { ko: "사슬", source: S5 },
-  "gw.chain.head": { ko: "{link} {head}", slots: { link: "identifier", head: "fingerprint16" }, source: P },
+  "gw.chain.head": { ko: "{link} {head}", slots: { link: "ref", head: "fingerprint16" }, source: P },
   "gw.line": { ko: "회선", source: S5 },
   "gw.line.up": { ko: "바깥 회선 연결됨", source: P },
   "gw.line.down": { ko: "바깥 회선 끊김", source: P },
 
   // §6.1 observer app: attestation result.
-  "obs.att.device": { ko: "장치 {device} · {kind}", slots: { device: "identifier", kind: "identifier" }, source: P },
+  "obs.att.device": { ko: "장치 {device} · {kind}", slots: { device: "identifier", kind: "ref" }, source: P },
+  "dev.kind.scanner": { ko: "투함 스캐너", source: P },
+  "dev.kind.unit": { ko: "카운터·가명 유닛", source: P },
+  // Program and component names of the prototypes' identity lines (a
+  // release manifest would name them; here they are fixed table text).
+  "dev.program.scanner": { ko: "ityv 투함 스캐너", source: P },
+  "dev.program.checkin": { ko: "ityv 확인 장치", source: P },
+  "dev.program.sorter": { ko: "ityv 분류기 확장", source: P },
+  "dev.program.gateway": { ko: "ityv 투표소 게이트웨이", source: P },
+  "dev.program.observer": { ko: "ityv 참관인 앱", source: P },
+  "dev.program.voter": { ko: "ityv 유권자 확인 앱", source: P },
+  "dev.comp.interpret": { ko: "해석 유닛", source: P },
+  "dev.comp.commit": { ko: "커밋먼트 유닛", source: P },
+  "dev.comp.imprinter": { ko: "각인기 제어기", source: P },
+  "dev.comp.host": { ko: "호스트", source: P },
+  "dev.comp.identity": { ko: "신원 확인 단말", source: P },
+  "dev.comp.reader": { ko: "각인 판독기", source: P },
+  "dev.comp.gateway": { ko: "게이트웨이", source: P },
+  "dev.comp.observer": { ko: "참관인 앱", source: P },
+  "dev.comp.voter": { ko: "유권자 확인 앱", source: P },
   "obs.att.sig": { ko: "서명 확인됨", source: S61 },
   "obs.att.nonce": { ko: "도전값 일치", source: S61 },
   "obs.att.fp": {
@@ -323,6 +349,11 @@ export const STRINGS = {
     ko: "비상 투입이 있어 이 투표소의 진행 경보는 마감까지 멈췄어요. 마감 등식으로 확인해요",
     source: S62,
   },
+  "obs.prog.overflow": {
+    ko: "{slot} 칸 · 투입 누계가 64비트를 넘어 합을 셀 수 없어요",
+    slots: { slot: "slotTime" },
+    source: P,
+  },
   "obs.prog.note": { ko: "경보는 확인이 필요하다는 뜻이에요. 어떤 투표지도 무효가 되지 않아요.", source: S62 },
   "obs.check.title": { ko: "현장 확인", source: S62 },
   "obs.check.f1": { ko: "현장 인원으로 설명됨", source: S62 },
@@ -346,7 +377,7 @@ export const STRINGS = {
     source: S7,
     spec: { n: "N", status: "LOG_CONSISTENT" },
   },
-  "app.code": { ko: "추적코드 {code}", slots: { code: "identifier" }, source: P },
+  "app.code": { ko: "추적코드 {code}", slots: { code: "trackingCode" }, source: P },
   "app.fp": { ko: "체크포인트 지문 {fp}", slots: { fp: "fingerprint32" }, source: P },
   "app.compare.match": { ko: "공표 지문과 대조: 같음", source: P },
   "app.compare.differ": {
@@ -375,6 +406,20 @@ export type StatusWord = (typeof STATUS_WORDS)[number];
 
 export type SlotValue = string | number;
 
+let plain: Set<string> | null = null;
+
+/** Every entry of the table without slots. */
+function plainStrings(): Set<string> {
+  if (!plain) {
+    plain = new Set(
+      Object.values(STRINGS as Record<string, StringEntry>)
+        .filter((e) => !e.slots)
+        .map((e) => e.ko),
+    );
+  }
+  return plain;
+}
+
 /** Checks that `value` is a value of `kind`; throws otherwise. A screen
  * that tries to put anything else in a slot fails loudly. */
 export function checkSlot(kind: SlotKind, value: SlotValue): string {
@@ -392,7 +437,11 @@ export function checkSlot(kind: SlotKind, value: SlotValue): string {
         return /^\d{2}:\d{2}$/.test(s);
       case "identifier":
       case "errorCode":
-        return /^[\p{L}\p{N} ._()/·-]{1,64}$/u.test(s);
+        return /^[A-Za-z0-9._:/-]{1,64}$/.test(s);
+      case "trackingCode":
+        return /^[0-9a-f]{8}( [0-9a-f]{8}){3}$/.test(s);
+      case "ref":
+        return plainStrings().has(s);
       case "semver":
         return /^\d+\.\d+\.\d+$/.test(s);
       case "fingerprint16":

@@ -8,8 +8,8 @@
 // draws the model, so `bun test` checks every state's text.
 
 import { type SlotKind, type SlotValue, type StringId, checkSlot, t } from "./strings";
-import type { AttestationFixture, GatewayFixture, IndexBox, RecordEntry, StationProgress } from "./data";
-import { slotTime } from "./data";
+import type { AttestationFixture, GatewayFixture, IndexBox, Int, RecordEntry, StationProgress } from "./data";
+import { intBig, intText, slotTime } from "./data";
 
 export type Icon = "wait" | "ok" | "warn" | "stop" | "info" | "paper" | "card" | "lock" | "fail";
 
@@ -21,6 +21,10 @@ export interface Block {
   value?: string;
   icon?: Icon;
   cells?: { text: string; selected: boolean; n: number }[];
+  /** A demonstration value (a fixture, a constant or a value derived by a
+   * rule rather than read from the ledger): drawn hatched, explained
+   * outside the frame. */
+  demo?: boolean;
 }
 
 export interface ScreenButton {
@@ -52,6 +56,7 @@ const big = (id: StringId, values?: Record<string, SlotValue>, icon?: Icon): Blo
 });
 const row = (label: StringId, value: string, icon?: Icon): Block => ({ kind: "row", label: t(label), value, icon });
 const section = (id: StringId): Block => ({ kind: "section", text: t(id) });
+const demo = (b: Block): Block => ({ ...b, demo: true });
 
 // ---------------------------------------------------------------------
 // §1 scanner voter screen.
@@ -194,49 +199,57 @@ export interface ClerkInput {
   state: ClerkState;
   box: string;
   absentee: boolean;
-  records: number;
-  challenged: number;
-  quarantined: number;
-  visits: number;
-  stickers: number;
-  slot: number;
-  framesSent: number;
+  /** From the verifier's close record (or its accepted records). */
+  records: Int;
+  challenged: Int;
+  quarantined: Int;
+  visits: Int;
+  stickers: Int;
+  /** Records not yet in a batch attestation (the verifier's UNATTESTED). */
+  unattested: Int;
+  /** The last slot of the box's progress stream. */
+  slot: Int;
   chambers: string[];
 }
 
+/** The scanner clerk screen. The counts and the open batch come from the
+ * verifier; the rest (closed batches, observer signature countdown,
+ * journal, send counters, modules, attestation) has no ledger source yet
+ * and is drawn as demo values. */
 export function clerkScreen(i: ClerkInput): ScreenModel {
   const stateId = `clerk.box.${i.state}` as StringId;
-  const closedBatches = Math.floor(i.records / 64);
-  const fill = i.records % 64;
-  const sinceAttest = i.records % 50;
+  const records = intBig(i.records);
+  const closedBatches = records / 64n;
+  const sinceAttest = Number(records % 50n);
+  const slot = intBig(i.slot);
   const blocks: Block[] = [
     section("clerk.box"),
     { kind: "row", label: v("identifier", i.box), value: t(stateId), icon: i.state === "fallback" ? "warn" : "info" },
     section("clerk.counts"),
-    row("clerk.records", v("count", i.records)),
-    row("clerk.challenged", v("count", i.challenged)),
-    row("clerk.quarantined", v("count", i.quarantined)),
-    row("clerk.visits", v("count", i.visits)),
+    row("clerk.records", v("count", intText(i.records))),
+    row("clerk.challenged", v("count", intText(i.challenged))),
+    row("clerk.quarantined", v("count", intText(i.quarantined))),
+    row("clerk.visits", v("count", intText(i.visits))),
   ];
-  if (i.absentee) blocks.push(row("clerk.stickers", v("count", i.stickers)));
+  if (i.absentee) blocks.push(row("clerk.stickers", v("count", intText(i.stickers))));
   blocks.push(
     section("clerk.batch"),
-    txt("clerk.batch.fill", { x: fill }),
-    txt("clerk.batch.closed", { count: closedBatches }),
+    txt("clerk.batch.fill", { x: intText(i.unattested) }),
+    demo(txt("clerk.batch.closed", { count: String(closedBatches) })),
     section("clerk.attest"),
-    txt("clerk.attest.left", { count: 50 - sinceAttest, minutes: 120 - ((i.slot * 10) % 120) }),
+    demo(txt("clerk.attest.left", { count: 50 - sinceAttest, minutes: 120 - Number((slot * 10n) % 120n) })),
     section("clerk.journal"),
-    txt("clerk.journal.ok", {}, "ok"),
+    demo(txt("clerk.journal.ok", {}, "ok")),
     section("clerk.send"),
-    txt("clerk.send.slot", { slot: i.slot, minutes: 10 }),
-    txt("clerk.send.frames", { count: i.framesSent }),
-    txt("clerk.send.backlog", { count: 0 }),
+    txt("clerk.send.slot", { slot: intText(i.slot), minutes: 10 }),
+    demo(txt("clerk.send.frames", { count: String(16n * (slot % 144n)) })),
+    demo(txt("clerk.send.backlog", { count: 0 })),
     section("clerk.modules"),
     ...i.chambers.map((c) =>
-      txt("clerk.module.row", { chamber: c, state: t("clerk.module.present"), percent: 97 }, "ok"),
+      demo(txt("clerk.module.row", { chamber: c, state: t("clerk.module.present"), percent: 97 }, "ok")),
     ),
     section("clerk.attestation"),
-    txt("clerk.attestation.opening", {}, "ok"),
+    demo(txt("clerk.attestation.opening", {}, "info")),
   );
   return { blocks, buttons: [] };
 }
@@ -272,33 +285,36 @@ export const CHECKIN_STATE_LABELS: Record<CheckinState, string> = {
 
 export interface CheckinInput {
   state: CheckinState;
-  checkins: number;
-  sheets: number;
+  /** From the verifier's progress record. */
+  checkins: Int;
 }
 
+/** The check-in clerk screen. The cumulative check-ins come from the
+ * verifier; the per-event counts (co-signatures waiting, one sheet
+ * issued, spoiled or returned) are demo values. */
 export function checkinScreen(i: CheckinInput): ScreenModel {
   const b = (() => {
     switch (i.state) {
       case "checking":
         return big("checkin.checking", {}, "wait");
       case "done":
-        return big("checkin.done", { count: i.checkins }, "ok");
+        return big("checkin.done", { count: intText(i.checkins) }, "ok");
       case "rollOk":
         return big("checkin.roll.ok", {}, "ok");
       case "rollLost":
         return big("checkin.roll.lost", {}, "stop");
       case "cosignWait":
-        return big("checkin.cosign.wait", { count: 2 }, "wait");
+        return demo(big("checkin.cosign.wait", { count: 2 }, "wait"));
       case "cosignDone":
-        return big("checkin.cosign.done", { count: i.checkins }, "ok");
+        return big("checkin.cosign.done", { count: intText(i.checkins) }, "ok");
       case "swap":
         return big("checkin.swap", {}, "warn");
       case "issue":
-        return big("checkin.issue", { count: i.sheets }, "paper");
+        return demo(big("checkin.issue", { count: 1 }, "paper"));
       case "spoiled":
-        return big("checkin.spoiled", { count: 1 }, "warn");
+        return demo(big("checkin.spoiled", { count: 1 }, "warn"));
       case "returned":
-        return big("checkin.returned", { count: 1 }, "info");
+        return demo(big("checkin.returned", { count: 1 }, "info"));
     }
   })();
   return { blocks: [b], buttons: [] };
@@ -310,8 +326,8 @@ export function checkinScreen(i: CheckinInput): ScreenModel {
 export interface SorterInput {
   box: IndexBox;
   /** Records and emergency-slot ballots from the close record. */
-  records: number;
-  fallback: number;
+  records: Int;
+  fallback: Int;
   /** Imprint findings (demo: zero unless a state injects one). */
   unimprinted: number;
   duplicates: number;
@@ -319,10 +335,12 @@ export interface SorterInput {
   paperDelta: number;
 }
 
+/** The sorter extension. The equation's right-hand side comes from the
+ * verifier's close record; the sorted paper is the simulator's (demo). */
 export function sorterScreen(i: SorterInput): ScreenModel {
-  const paper = i.box.paper.total + i.paperDelta;
-  const rhs = i.records + i.fallback;
-  const diff = Math.abs(paper - rhs);
+  const paper = BigInt(i.box.paper.total + i.paperDelta);
+  const rhs = intBig(i.records) + intBig(i.fallback);
+  const diff = paper > rhs ? paper - rhs : rhs - paper;
   const blocks: Block[] = [
     txt("sorter.box", { box: i.box.id, style: i.box.style }),
     section("sorter.paper"),
@@ -331,16 +349,21 @@ export function sorterScreen(i: SorterInput): ScreenModel {
         kind: "row",
         label: t("sorter.pocket", { sheet: k + 1 }),
         value: v("count", n + (k === 0 ? i.paperDelta : 0)),
+        demo: true,
       }),
     ),
-    row("sorter.unsorted", v("count", i.box.paper.unsorted)),
-    row("sorter.total", v("count", paper)),
+    demo(row("sorter.unsorted", v("count", i.box.paper.unsorted))),
+    demo(row("sorter.total", v("count", String(paper)))),
     section("sorter.equation"),
-    txt("sorter.equation.values", { paper, records: i.records, fallback: i.fallback, diff }, diff === 0 ? "ok" : "warn"),
-    txt("sorter.imprint.none", { count: i.unimprinted }),
-    txt("sorter.imprint.twice", { count: i.duplicates }),
+    txt(
+      "sorter.equation.values",
+      { paper: String(paper), records: intText(i.records), fallback: intText(i.fallback), diff: String(diff) },
+      diff === 0n ? "ok" : "warn",
+    ),
+    demo(txt("sorter.imprint.none", { count: i.unimprinted })),
+    demo(txt("sorter.imprint.twice", { count: i.duplicates })),
   ];
-  if (diff !== 0 || i.unimprinted > 0 || i.duplicates > 0) {
+  if (diff !== 0n || i.unimprinted > 0 || i.duplicates > 0) {
     blocks.push(big("sorter.hold", { status: "HOLD_REVIEW" }, "warn"));
   }
   return { blocks, buttons: [] };
@@ -349,20 +372,22 @@ export function sorterScreen(i: SorterInput): ScreenModel {
 // ---------------------------------------------------------------------
 // §5 station gateway.
 
+/** The gateway screen: a fixture throughout (no UplinkSession on the
+ * ledger yet), every value drawn as demo. */
 export function gatewayScreen(g: GatewayFixture, slot: number, minutesLeft: number, lineUp: boolean): ScreenModel {
   return {
     blocks: [
-      txt("gw.session", { session: g.session, slot, minutes: minutesLeft }),
-      ...g.links.map((l) => txt("gw.frames", { link: l.link, count: l.frames, slotCount: l.slotFrames })),
+      demo(txt("gw.session", { session: g.session, slot, minutes: minutesLeft })),
+      ...g.links.map((l) => demo(txt("gw.frames", { link: t(l.link), count: l.frames, slotCount: l.slotFrames }))),
       row("gw.inbound", t("gw.inbound.none")),
       section("gw.taps"),
       ...g.taps.map((tap) =>
-        txt("gw.tap", { tap: tap.tap, state: t(tap.inUse ? "gw.tap.inUse" : "gw.tap.idle") }, tap.inUse ? "info" : undefined),
+        demo(txt("gw.tap", { tap: t(tap.tap), state: t(tap.inUse ? "gw.tap.inUse" : "gw.tap.idle") }, tap.inUse ? "info" : undefined)),
       ),
       section("gw.chain"),
-      ...g.links.map((l) => txt("gw.chain.head", { link: l.link, head: l.head })),
+      ...g.links.map((l) => demo(txt("gw.chain.head", { link: t(l.link), head: l.head }))),
       section("gw.line"),
-      txt(lineUp ? "gw.line.up" : "gw.line.down", {}, lineUp ? "ok" : "warn"),
+      demo(txt(lineUp ? "gw.line.up" : "gw.line.down", {}, lineUp ? "ok" : "warn")),
     ],
     buttons: [],
   };
@@ -371,17 +396,20 @@ export function gatewayScreen(g: GatewayFixture, slot: number, minutesLeft: numb
 // ---------------------------------------------------------------------
 // §6.1 observer app: attestation result.
 
+/** The attestation result: a fixture (no DeviceAttestation on the ledger
+ * yet), drawn as demo; `configFp` is the attested device's prototype
+ * configuration fingerprint. */
 export function attestationScreen(a: AttestationFixture, configFp: string): ScreenModel {
   const result = (ok: boolean) => t(ok ? "obs.att.ok" : "obs.att.fail");
   const blocks: Block[] = [
-    txt("obs.att.device", { device: a.device, kind: a.kind }),
-    { kind: "row", label: t("obs.att.sig"), value: result(a.sig), icon: a.sig ? "ok" : "fail" },
-    { kind: "row", label: t("obs.att.nonce"), value: result(a.nonce), icon: a.nonce ? "ok" : "fail" },
-    { kind: "row", label: t("obs.att.fp", { fp: configFp }), value: result(a.fp), icon: a.fp ? "ok" : "fail" },
+    demo(txt("obs.att.device", { device: a.device, kind: t(a.kind) })),
+    { kind: "row", label: t("obs.att.sig"), value: result(a.sig), icon: a.sig ? "ok" : "fail", demo: true },
+    { kind: "row", label: t("obs.att.nonce"), value: result(a.nonce), icon: a.nonce ? "ok" : "fail", demo: true },
+    { kind: "row", label: t("obs.att.fp", { fp: configFp }), value: result(a.fp), icon: a.fp ? "ok" : "fail", demo: true },
   ];
   if (a.reason) {
     const id = `obs.att.reason.${a.reason}` as StringId;
-    blocks.push(big(id, {}, "stop"), txt("obs.att.next", {}, "info"), txt("obs.att.needs"));
+    blocks.push(demo(big(id, {}, "stop")), txt("obs.att.next", {}, "info"), txt("obs.att.needs"));
   }
   blocks.push({ kind: "note", text: t("obs.att.kept") });
   return { blocks, buttons: [] };
@@ -393,62 +421,74 @@ export function attestationScreen(a: AttestationFixture, configFp: string): Scre
 export interface ProgressInput {
   station: StationProgress;
   /** Show the counts after this slot. */
-  slot: number;
+  slot: Int;
   /** The checkpoint fingerprint both mirrors gave (16 characters). */
   mirrorFp: string | null;
 }
 
+const nonNegative = (x: Int | null): string => {
+  if (x === null) return "0";
+  const b = intBig(x);
+  return String(b < 0n ? 0n : b);
+};
+
 export function progressScreen(i: ProgressInput): ScreenModel {
   const s = i.station;
-  const point = [...s.series].reverse().find((p) => p.slot <= i.slot) ?? s.series[0];
+  const at = intBig(i.slot);
+  const point = [...s.series].reverse().find((p) => intBig(p.slot) <= at) ?? s.series[0];
   const blocks: Block[] = [];
   if (point) {
-    const out = point.out ?? 0;
-    blocks.push(
-      txt("obs.prog.line", {
-        slot: slotTime(point.slot),
-        issued: point.issued,
-        sheetsIn: point.sheetsIn,
-        spoiled: point.spoiled,
-        returned: point.returned,
-        out: Math.max(0, out),
-        limit: s.limit ?? 0,
-      }),
-    );
+    if (point.sheetsIn === null) {
+      blocks.push(txt("obs.prog.overflow", { slot: slotTime(point.slot) }, "warn"));
+    } else {
+      blocks.push(
+        txt("obs.prog.line", {
+          slot: slotTime(point.slot),
+          issued: intText(point.issued),
+          sheetsIn: intText(point.sheetsIn),
+          spoiled: intText(point.spoiled),
+          returned: intText(point.returned),
+          out: nonNegative(point.out),
+          limit: intText(s.limit ?? 0),
+        }),
+      );
+    }
   }
-  const shown = s.alarms.filter((a) => a.slot <= i.slot);
+  const shown = s.alarms.filter((a) => intBig(a.slot) <= at);
   for (const a of shown) {
-    const p = s.series.find((x) => x.slot === a.slot);
-    const out = p?.out ?? 0;
+    const p = s.series.find((x) => intBig(x.slot) === intBig(a.slot));
+    const out = p?.out ?? null;
+    const slot = intBig(a.slot);
     if (a.alarm === "Floor") {
       blocks.push({
         kind: "alarm",
         icon: "warn",
         text: t("obs.alarm.floor", {
-          from: slotTime(a.slot - 1),
+          from: slotTime(String(slot - 1n)),
           minutes: 20,
-          out: Math.max(0, out),
-          until: slotTime(a.slot + 3),
+          out: nonNegative(out),
+          until: slotTime(String(slot + 3n)),
         }),
       });
     } else if (a.alarm === "Negative") {
-      blocks.push({ kind: "alarm", icon: "warn", text: t("obs.alarm.negative", { count: Math.max(0, -out) }) });
+      const over = out === null ? 0n : -intBig(out);
+      blocks.push({ kind: "alarm", icon: "warn", text: t("obs.alarm.negative", { count: String(over < 0n ? 0n : over) }) });
     } else if (a.alarm === "High") {
       blocks.push({
         kind: "alarm",
         icon: "warn",
-        text: t("obs.alarm.high", { out: Math.max(0, out), limit: s.limit ?? 0 }),
+        text: t("obs.alarm.high", { out: nonNegative(out), limit: intText(s.limit ?? 0) }),
       });
     }
   }
-  if (s.suspended && s.lastSlot !== null && i.slot >= (s.firstSlot ?? 0)) {
+  if (s.suspended) {
     blocks.push({ kind: "alarm", icon: "info", text: t("obs.prog.suspended") });
   }
   if (shown.length > 0 || s.suspended) {
     blocks.push({ kind: "note", text: t("obs.prog.note") });
   }
   for (const c of s.checks) {
-    blocks.push(txt("obs.check.recorded", { seq: c }, "ok"));
+    blocks.push(txt("obs.check.recorded", { seq: intText(c) }, "ok"));
   }
   if (i.mirrorFp) blocks.push({ kind: "note", text: t("obs.prog.mirrors", { fp: i.mirrorFp }) });
   return { blocks, buttons: [] };
@@ -478,12 +518,9 @@ export type AppCompare = "match" | "differ" | "pending";
 
 export interface AppInput {
   code: string;
+  /** The record and its inclusion, from the verifier's report of the
+   * bundle the code was looked up in. */
   record: RecordEntry | null;
-  /** Whether a verified inclusion proof puts the record's frame in
-   * `checkpoint`. */
-  included: boolean;
-  checkpoint: number | null;
-  checkpointFp: string | null;
   /** The verifier's status of the ledger. */
   status: string;
   compare: AppCompare;
@@ -504,19 +541,20 @@ export function appStatus(ledger: string, compare: AppCompare): string {
 export function voterAppScreen(i: AppInput): ScreenModel {
   const code = i.code.slice(0, 32).replace(/(.{8})/g, "$1 ").trim();
   const blocks: Block[] = [txt("app.code", { code })];
-  if (!i.record) {
+  const r = i.record;
+  if (!r) {
     blocks.push(big("app.notFound", {}, "stop"));
     return { blocks, buttons: [] };
   }
-  if (!i.included || i.checkpoint === null) {
+  if (!r.included || r.checkpoint === null) {
     blocks.push(big("app.uncovered", {}, "wait"));
     return { blocks, buttons: [] };
   }
   const status = appStatus(i.status, i.compare);
   if (i.compare === "match" || i.status === "HOLD_REVIEW") {
-    blocks.push(big("app.included", { n: i.checkpoint, status }, status === "LOG_CONSISTENT" ? "ok" : "warn"));
+    blocks.push(big("app.included", { n: intText(r.checkpoint), status }, status === "LOG_CONSISTENT" ? "ok" : "warn"));
   }
-  if (i.checkpointFp) blocks.push(txt("app.fp", { fp: i.checkpointFp }));
+  if (r.checkpointFingerprint) blocks.push(txt("app.fp", { fp: r.checkpointFingerprint }));
   blocks.push(
     i.compare === "match"
       ? txt("app.compare.match", {}, "ok")

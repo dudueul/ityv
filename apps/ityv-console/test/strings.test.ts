@@ -4,7 +4,7 @@
 // is an allowed kind.
 
 import { expect, test } from "bun:test";
-import { SLOT_KINDS, STRINGS, type StringId, spec } from "../src/strings";
+import { SLOT_KINDS, STRINGS, type StringId, checkSlot, spec } from "../src/strings";
 
 const screensMd = await Bun.file(`${import.meta.dir}/../../../docs/ui/SCREENS.md`).text();
 
@@ -103,7 +103,9 @@ test("the table contains none of the forbidden judgement phrases", () => {
 });
 
 test("every slot is an allowed kind and every entry names its source", () => {
-  const allowed = new Set(["정수", "식별자", "지문", "상태 어휘"]);
+  // SCREENS §8 1항's kinds, and a reference to another fixed entry of the
+  // table (which is itself table text, never data).
+  const allowed = new Set(["정수", "식별자", "지문", "상태 어휘", "문구 표 항목"]);
   for (const id of ids) {
     const e = STRINGS[id] as { ko: string; slots?: Record<string, string>; source: string; spec?: Record<string, string> };
     const names = [...e.ko.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!);
@@ -122,13 +124,28 @@ test("every slot is an allowed kind and every entry names its source", () => {
   }
 });
 
+test("each slot kind refuses values outside its charset", () => {
+  for (const ok of ["BOX-HB-1", "ityv.scanner", "a:b/c_d", "x".repeat(64)]) expect(checkSlot("identifier", ok)).toBe(ok);
+  for (const bad of ["", "김가상", "a b", "x".repeat(65), "<b>", "a\nb"]) {
+    expect(() => checkSlot("identifier", bad)).toThrow();
+  }
+  expect(checkSlot("trackingCode", "0123abcd 0123abcd 0123abcd 0123abcd")).toContain("0123abcd");
+  for (const bad of ["0123ABCD 0123abcd 0123abcd 0123abcd", "0123abcd0123abcd", "BOX-HB-1"]) {
+    expect(() => checkSlot("trackingCode", bad)).toThrow();
+  }
+  // A reference names only a fixed entry of the table.
+  expect(checkSlot("ref", spec("gw.tap.device"))).toBe(spec("gw.tap.device"));
+  for (const bad of ["장치 쪽", "김가상", "BOX-HB-1"]) expect(() => checkSlot("ref", bad)).toThrow();
+});
+
 test("no slot kind can carry what a screen must never show", () => {
   const kinds = new Set(ids.flatMap((id) => Object.values((STRINGS[id] as { slots?: Record<string, string> }).slots ?? {})));
   for (const banned of ["candidate", "readResult", "ordinal", "eventTime", "pseudonym", "imprint"]) {
     expect(kinds.has(banned)).toBe(false);
   }
   for (const id of ids) {
-    const s = spec(id);
+    // "카운터·가명 유닛" is a device's name (SCREENS §3), not a pseudonym.
+    const s = spec(id).replaceAll("카운터·가명 유닛", "");
     for (const word of ["BLANK", "UNREADABLE", "번째", "가명", "각인 번호"]) expect(`${id}: ${s}`).not.toContain(word);
   }
 });

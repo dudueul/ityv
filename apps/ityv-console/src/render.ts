@@ -13,6 +13,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   const e = document.createElement(tag);
   for (const [k, val] of Object.entries(attrs)) {
     if (k === "class") e.className = val;
+    // Through the CSSOM, which a style-src without 'unsafe-inline' allows.
+    else if (k === "style") e.style.cssText = val;
     else e.setAttribute(k, val);
   }
   for (const c of children) {
@@ -48,7 +50,48 @@ export function icon(name: Icon, label?: string): SVGSVGElement {
   return svg;
 }
 
+/** One icon per rung of the status ladder, none of them a check mark: a
+ * check is shown only beside a status verified under an outside pin. */
+const RUNG_PATHS: Record<string, string> = {
+  // A dashed empty circle: nothing confirmed yet.
+  UNVERIFIED: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3"/>',
+  // Two chain links: the log is one consistent chain.
+  LOG_CONSISTENT:
+    '<rect x="2.5" y="8.5" width="10" height="7" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="11.5" y="8.5" width="10" height="7" rx="3.5" fill="none" stroke="currentColor" stroke-width="2"/>',
+  // A ballot box with its slot: every expected box closed.
+  SOURCE_COMPLETENESS_CHECKED:
+    '<rect x="3" y="9" width="18" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 9V3h8v6M9 13h6" fill="none" stroke="currentColor" stroke-width="2"/>',
+  // A sigma: the tally sums opened.
+  CRYPTO_TALLY_VERIFIED: '<path d="M18 4H6l7 8-7 8h12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>',
+  // Paper under a magnifier: the sampled paper compared.
+  PAPER_AUDITED:
+    '<path d="M4 2h9l3 3v6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 2v18h7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16.5" cy="16" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19 18.5l3 3" stroke="currentColor" stroke-width="2.4"/>',
+  // Two pause bars in a square: held for review.
+  HOLD_REVIEW:
+    '<rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.5 8v8M14.5 8v8" stroke="currentColor" stroke-width="2.6"/>',
+  // A balance: a legal decision, never a machine's status.
+  LEGAL_CERTIFIED:
+    '<path d="M12 3v18M7 21h10M4 7h16" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 7l-2.5 6h5zM20 7l-2.5 6h5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>',
+};
+
+/** The icon of a status word; an unknown word gets the empty circle. */
+export function rungIcon(word: string): SVGSVGElement {
+  const known = word in RUNG_PATHS ? word : "UNVERIFIED";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", `icon icon-rung rung-${known}`);
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = RUNG_PATHS[known] ?? "";
+  return svg;
+}
+
 function block(b: Block, onCell?: (n: number) => void): HTMLElement {
+  const e = blockInner(b, onCell);
+  if (b.demo) e.classList.add("demo");
+  return e;
+}
+
+function blockInner(b: Block, onCell?: (n: number) => void): HTMLElement {
   switch (b.kind) {
     case "cells":
       return el(

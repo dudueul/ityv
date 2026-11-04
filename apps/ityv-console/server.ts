@@ -12,7 +12,13 @@ const server = Bun.serve({
   development: { hmr: true, console: true },
   routes: { "/": index },
   async fetch(req: Request): Promise<Response> {
-    const path = decodeURIComponent(new URL(req.url).pathname);
+    let path: string;
+    try {
+      path = decodeURIComponent(new URL(req.url).pathname);
+    } catch {
+      // A malformed % escape.
+      return new Response("bad request", { status: 400 });
+    }
     if (path.includes("..") || !/^\/[\w./-]+$/.test(path)) {
       return new Response("not found", { status: 404 });
     }

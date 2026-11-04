@@ -36,8 +36,11 @@ import {
   type CheckinState,
   type VoterState,
 } from "./screens";
-import { STRINGS } from "./strings";
-import { fingerprintOf, inclusion, lastVerified, loadBundle, verifyBundle } from "./verifier";
+import { STRINGS, t } from "./strings";
+import { VerifierClient, loadBundle } from "./verifier";
+
+/** The device pages' own verifier (independent of the dashboard's). */
+const client = new VerifierClient();
 
 export interface DeviceDef {
   id: string;
@@ -57,13 +60,13 @@ export const DEVICES: DeviceDef[] = [
     id: "scanner-voter",
     title: "투함 스캐너: 유권자 화면",
     section: "SCREENS §1",
-    program: "ityv 투함 스캐너",
+    program: t("dev.program.scanner"),
     version: "0.1.0",
     build: 1,
     components: [
-      { name: "해석 유닛", version: "0.1.0", build: 1 },
-      { name: "커밋먼트 유닛", version: "0.1.0", build: 1 },
-      { name: "각인기 제어기", version: "0.1.0", build: 1 },
+      { name: t("dev.comp.interpret"), version: "0.1.0", build: 1 },
+      { name: t("dev.comp.commit"), version: "0.1.0", build: 1 },
+      { name: t("dev.comp.imprinter"), version: "0.1.0", build: 1 },
     ],
     modules: ["M-P1", "M-P2"],
     kind: "wide",
@@ -73,13 +76,13 @@ export const DEVICES: DeviceDef[] = [
     id: "scanner-clerk",
     title: "투함 스캐너: 사무원·참관인 화면",
     section: "SCREENS §2",
-    program: "ityv 투함 스캐너",
+    program: t("dev.program.scanner"),
     version: "0.1.0",
     build: 1,
     components: [
-      { name: "해석 유닛", version: "0.1.0", build: 1 },
-      { name: "커밋먼트 유닛", version: "0.1.0", build: 1 },
-      { name: "호스트", version: "0.1.0", build: 1 },
+      { name: t("dev.comp.interpret"), version: "0.1.0", build: 1 },
+      { name: t("dev.comp.commit"), version: "0.1.0", build: 1 },
+      { name: t("dev.comp.host"), version: "0.1.0", build: 1 },
     ],
     modules: ["M-P1", "M-P2"],
     kind: "tall",
@@ -89,12 +92,12 @@ export const DEVICES: DeviceDef[] = [
     id: "checkin",
     title: "확인 장치: 사무원 화면",
     section: "SCREENS §3",
-    program: "ityv 확인 장치",
+    program: t("dev.program.checkin"),
     version: "0.1.0",
     build: 1,
     components: [
-      { name: "신원 확인 단말", version: "0.1.0", build: 1 },
-      { name: "카운터·가명 유닛", version: "0.1.0", build: 1 },
+      { name: t("dev.comp.identity"), version: "0.1.0", build: 1 },
+      { name: t("dev.kind.unit"), version: "0.1.0", build: 1 },
     ],
     modules: ["M-UA-P1", "M-UA-P2"],
     kind: "wide",
@@ -104,10 +107,10 @@ export const DEVICES: DeviceDef[] = [
     id: "sorter",
     title: "개표소 투표지 분류기 확장",
     section: "SCREENS §4",
-    program: "ityv 분류기 확장",
+    program: t("dev.program.sorter"),
     version: "0.1.0",
     build: 1,
-    components: [{ name: "각인 판독기", version: "0.1.0", build: 1 }],
+    components: [{ name: t("dev.comp.reader"), version: "0.1.0", build: 1 }],
     modules: [],
     kind: "tall",
     states: [
@@ -120,10 +123,10 @@ export const DEVICES: DeviceDef[] = [
     id: "gateway",
     title: "투표소 게이트웨이",
     section: "SCREENS §5",
-    program: "ityv 투표소 게이트웨이",
+    program: t("dev.program.gateway"),
     version: "0.1.0",
     build: 1,
-    components: [{ name: "게이트웨이", version: "0.1.0", build: 1 }],
+    components: [{ name: t("dev.comp.gateway"), version: "0.1.0", build: 1 }],
     modules: [],
     kind: "wide",
     states: [
@@ -135,10 +138,10 @@ export const DEVICES: DeviceDef[] = [
     id: "observer-attest",
     title: "참관인 앱: 현장 증명 결과",
     section: "SCREENS §6.1",
-    program: "ityv 참관인 앱",
+    program: t("dev.program.observer"),
     version: "0.1.0",
     build: 1,
-    components: [{ name: "참관인 앱", version: "0.1.0", build: 1 }],
+    components: [{ name: t("dev.comp.observer"), version: "0.1.0", build: 1 }],
     modules: [],
     kind: "tall",
     states: ATTESTATION_FIXTURES.map((a, i) => ({ id: String(i), label: a.label })),
@@ -147,10 +150,10 @@ export const DEVICES: DeviceDef[] = [
     id: "observer-progress",
     title: "참관인 앱: 투표 진행과 경보",
     section: "SCREENS §6.2",
-    program: "ityv 참관인 앱",
+    program: t("dev.program.observer"),
     version: "0.1.0",
     build: 1,
-    components: [{ name: "참관인 앱", version: "0.1.0", build: 1 }],
+    components: [{ name: t("dev.comp.observer"), version: "0.1.0", build: 1 }],
     modules: [],
     kind: "tall",
     states: [
@@ -162,10 +165,10 @@ export const DEVICES: DeviceDef[] = [
     id: "voter-app",
     title: "유권자 확인 앱",
     section: "SCREENS §7",
-    program: "ityv 유권자 확인 앱",
+    program: t("dev.program.voter"),
     version: "0.1.0",
     build: 1,
-    components: [{ name: "유권자 확인 앱", version: "0.1.0", build: 1 }],
+    components: [{ name: t("dev.comp.voter"), version: "0.1.0", build: 1 }],
     modules: [],
     kind: "tall",
     states: [
@@ -184,15 +187,15 @@ export const DEVICES: DeviceDef[] = [
 export async function identityOf(d: DeviceDef): Promise<Identity> {
   const group = (fp: string) => fp.replace(/(.{4})/g, "$1 ").trim();
   const table = JSON.stringify(STRINGS);
-  const fp32 = group(await fingerprintOf(`prototype|${d.program}|${d.version}|${d.build}|${table}`));
+  const fp32 = group(await client.fingerprint(`prototype|${d.program}|${d.version}|${d.build}|${table}`));
   const components = await Promise.all(
     d.components.map(async (c) => ({
       ...c,
-      fp32: group(await fingerprintOf(`prototype-component|${d.program}|${c.name}|${c.version}|${c.build}`)),
+      fp32: group(await client.fingerprint(`prototype-component|${d.program}|${c.name}|${c.version}|${c.build}`)),
     })),
   );
   const modules = await Promise.all(
-    d.modules.map(async (m) => ({ id: m, build: 1, fp32: group(await fingerprintOf(`prototype-module|${m}`)) })),
+    d.modules.map(async (m) => ({ id: m, build: 1, fp32: group(await client.fingerprint(`prototype-module|${m}`)) })),
   );
   return { program: d.program, version: d.version, build: d.build, fp32, components, modules, boots: 3 };
 }
@@ -208,16 +211,21 @@ export interface DeviceParams {
   scenario: string | null;
   station: string | null;
   box: string | null;
-  slot: number | null;
+  slot: string | null;
   slip: number;
+  /** A `state` the device does not have, replaced by its first state. */
+  unknownState: string | null;
 }
 
 export function parseParams(device: string, query: URLSearchParams): DeviceParams {
   const def = DEVICES.find((d) => d.id === device) ?? DEVICES[0]!;
   const zoom = Number(query.get("zoom") ?? "1");
+  const asked = query.get("state");
+  const known = asked !== null && def.states.some((st) => st.id === asked);
   return {
     device: def.id,
-    state: query.get("state") ?? def.states[0]!.id,
+    state: known ? asked : def.states[0]!.id,
+    unknownState: asked !== null && !known ? asked : null,
     zoom: [1, 1.5, 2].includes(zoom) ? zoom : 1,
     contrast: query.get("hc") === "1",
     detail: query.get("detail") === "1",
@@ -230,7 +238,7 @@ export function parseParams(device: string, query: URLSearchParams): DeviceParam
     scenario: query.get("scenario"),
     station: query.get("station"),
     box: query.get("box"),
-    slot: query.get("slot") ? Number(query.get("slot")) : null,
+    slot: /^\d{1,20}$/.test(query.get("slot") ?? "") ? query.get("slot") : null,
     slip: Number(query.get("slip") ?? "0"),
   };
 }
@@ -252,24 +260,42 @@ function href(p: DeviceParams, change: Partial<DeviceParams>): string {
   return `#/devices/${q.device}?${s.toString()}`;
 }
 
-/** Report cache by scenario name. */
+/** Report cache by scenario name. A report carries every record's
+ * inclusion and the bundle's hash, so a cached one is self-contained. */
 const reports = new Map<string, Report>();
 
-/** The report of scenario `s`, with the worker holding its bundle for
- * inclusion proofs. */
 async function reportOf(s: IndexScenario): Promise<Report> {
   const cached = reports.get(s.name);
-  if (cached && lastVerified() === s.name) return cached;
-  const r = await verifyBundle(await loadBundle(s.file), undefined, s.name);
+  if (cached) return cached;
+  const r = await client.verify(await loadBundle(s.file));
+  if (r.bundleHash !== s.sha3) throw new Error(`${s.file}: 번들 해시가 index.json과 다르다`);
   reports.set(s.name, r);
   return r;
 }
 
 let voterTimer: number | null = null;
 
-export async function renderDevices(root: HTMLElement, index: SimIndex | null, p: DeviceParams): Promise<void> {
+/** Leaving the device pages: the voter screen's return timer must not
+ * pull the page back. */
+export function leaveDevices(): void {
+  if (voterTimer !== null) {
+    clearTimeout(voterTimer);
+    voterTimer = null;
+  }
+}
+
+/** Renders a device page into `root`. `current` says whether this render
+ * is still the page's latest; a stale one stops without drawing. */
+export async function renderDevices(
+  root: HTMLElement,
+  index: SimIndex | null,
+  p: DeviceParams,
+  current: () => boolean = () => true,
+): Promise<void> {
   const def = DEVICES.find((d) => d.id === p.device) ?? DEVICES[0]!;
   const identity = await identityOf(def);
+  const scanner = def.id === "observer-attest" ? await identityOf(DEVICES[0]!) : identity;
+  if (!current()) return;
   const normal = index?.scenarios.filter((s) => s.group === "normal") ?? [];
   const scenario =
     normal.find((s) => s.name === p.scenario) ??
@@ -282,6 +308,7 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
   if (needsData && scenario) {
     root.replaceChildren(el("p", { class: "busy" }, `검증기에서 자료를 읽는 중: ${scenario.title}`));
     report = await reportOf(scenario);
+    if (!current()) return;
   }
 
   const go = (change: Partial<DeviceParams>) => {
@@ -318,8 +345,7 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
     }
     case "scanner-clerk": {
       const c = boxReport?.close;
-      const series = progress?.series ?? [];
-      const slot = series.length ? series[series.length - 1]!.slot : 0;
+      const boxStream = report?.progress?.find((st) => st.station === boxReport?.station);
       model = clerkScreen({
         state: p.state as ClerkState,
         box: box?.id ?? "BOX",
@@ -329,20 +355,20 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
         quarantined: c?.quarantined ?? 0,
         visits: c?.visits ?? 0,
         stickers: c?.stickers ?? 0,
-        slot,
-        framesSent: (series.length || 1) * 16,
+        unattested: boxReport?.unattested ?? 0,
+        slot: boxStream?.lastSlot ?? 0,
         chambers: ["P1", "P2"],
       });
       notes = [
-        `수는 검증기가 읽은 마감 기록(${scenario?.title ?? "자료 없음"})에서 왔다. 송신 프레임 수는 슬롯당 16(PROTOCOL §5.8)으로 계산한 시연 값, 패드 잔량·저널은 시연 값이다.`,
+        `기록·확인·격리·방문·스티커 수, 지금 배치의 채움(UNATTESTED 기록 수), 슬롯은 검증기가 읽은 장부(${scenario?.title ?? "자료 없음"})에서 왔다. 빗금 친 값(닫힌 배치 수·참관 서명까지 남은 수와 시간: 기록 수와 슬롯에서 규칙으로 계산; 저널·송신 프레임·밀린 배치·챔버 모듈·현장 증명: 고정값)은 장부에 출처가 없는 시연 값이다.`,
       ];
       break;
     }
     case "checkin": {
       const last = progress?.series[progress.series.length - 1];
-      model = checkinScreen({ state: p.state as CheckinState, checkins: last?.checkins ?? 0, sheets: 1 });
+      model = checkinScreen({ state: p.state as CheckinState, checkins: last?.checkins ?? 0 });
       notes = [
-        `누적 인원은 검증기가 읽은 진행 기록(${station?.label ?? "-"})의 마지막 확인 인원이다. 교부 장수는 현재 genesis의 한계로 1장(투표지 한 장)이다. SCREENS §3의 예는 7장.`,
+        `누적 인원은 검증기가 읽은 진행 기록(${station?.label ?? "-"})의 마지막 확인 인원이다. 빗금 친 값(공동 서명 대기 2건, 한 번에 교부·훼손 회수·반납 1장)은 시연 값이다. 교부 1장은 현재 genesis의 한계(투표지 한 장)를 따른다. SCREENS §3의 예는 7장.`,
       ];
       break;
     }
@@ -361,19 +387,21 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
         paperDelta: p.state === "differs" ? 1 : 0,
       });
       notes = [
-        "기록 수와 비상 투입 수는 검증기가 읽은 마감 기록에서 왔다. 칸별 종이 수는 시뮬레이터가 만든 종이(시연 자료)다. '등식 다름'과 '각인 이상'은 시연용으로 한 장을 더한 상태다.",
+        "기록 수와 비상 투입 수는 검증기가 읽은 마감 기록에서 왔다. 빗금 친 값(칸별 종이 수, 미분류, 합계, 각인 수)은 시뮬레이터가 만든 종이(시연 자료)다. '등식 다름'과 '각인 이상'은 시연용으로 한 장을 더한 상태다.",
       ];
       break;
     }
     case "gateway": {
       model = gatewayScreen(GATEWAY_FIXTURE, 3 * 144 + 108, 7, p.state === "up");
-      notes = ["시연 자료(고정값): 장부에 아직 UplinkSession 이벤트가 없다(검증기 11단계 미구현). 슬롯당 프레임 수는 PROTOCOL §5.8의 값."];
+      notes = ["빗금 친 값은 모두 시연 자료(고정값)다. 장부에 아직 UplinkSession 이벤트가 없다(검증기 11단계 미구현). 슬롯당 프레임 수는 PROTOCOL §5.8의 값이다. '들어오는 경로 없음'은 고정 문구다."];
       break;
     }
     case "observer-attest": {
       const a = ATTESTATION_FIXTURES[Number(p.state)] ?? ATTESTATION_FIXTURES[0]!;
-      model = attestationScreen(a, fp16(identity.fp32));
-      notes = ["시연 자료(고정값): 장부에 아직 DeviceAttestation이 없다(검증기 12단계 미구현). 이유 코드마다 상태 하나."];
+      model = attestationScreen(a, fp16(scanner.fp32));
+      notes = [
+        "빗금 친 값은 시연 자료(고정값)다. 장부에 아직 DeviceAttestation이 없다(검증기 12단계 미구현). 이유 코드마다 상태 하나. 구성 지문은 스캐너 시제품의 신원 줄 지문이다.",
+      ];
       break;
     }
     case "observer-progress": {
@@ -416,28 +444,14 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
       }
       const slip = slips[p.slip] ?? slips[0];
       const code = slip?.code ?? "0".repeat(128);
+      // The record and its inclusion come from the report of the bundle
+      // the code was looked up in (each report carries its own proofs).
       const record = appReport?.records?.find((r) => r.code === code) ?? null;
-      let included = false;
-      let checkpoint: number | null = null;
-      if (record) {
-        const inc = await inclusion(record.seq);
-        included = inc.included;
-        checkpoint = inc.checkpoint;
-      }
-      const cp = appReport?.checkpoints?.valid.find((c) => c.seq === checkpoint);
       report = appReport;
       const compare: AppCompare = p.state === "match" ? "match" : p.state === "differ" ? "differ" : "pending";
-      model = voterAppScreen({
-        code,
-        record,
-        included,
-        checkpoint,
-        checkpointFp: cp?.fingerprint ?? null,
-        status: report?.status ?? "UNVERIFIED",
-        compare,
-      });
+      model = voterAppScreen({ code, record, status: report?.status ?? "UNVERIFIED", compare });
       notes = [
-        "포함 여부는 WASM의 ityv-ledger 포함 증명(검증한 체크포인트 root에 대해)에서 왔다. 미러 두 곳·공표 지문 대조는 시제품에 없어 '대조 같음/다름/전'을 상태로 고른다. 대조 전에는 LOG_CONSISTENT를 보이지 않는다(PROTOCOL §5.7 4항).",
+        `포함 여부는 WASM 안에서 ityv-ledger의 verify_inclusion이 검증한 체크포인트 root에 대해 판정했다(번들 ${report?.bundleHash.slice(0, 16) ?? "-"}…의 보고서). 미러 두 곳·공표 지문 대조는 시제품에 없어 '대조 같음/다름/전'을 상태로 고른다. 대조 전에는 LOG_CONSISTENT를 보이지 않는다(PROTOCOL §5.7 4항).`,
       ];
     }
   }
@@ -469,10 +483,8 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
     );
   };
   draw();
-  if (voterTimer !== null) {
-    clearTimeout(voterTimer);
-    voterTimer = null;
-  }
+  if (!current()) return;
+  leaveDevices();
   if (def.id === "scanner-voter" && p.detail) {
     // SCREENS §0.1: opened from the voter screen, the detail view returns
     // to the screen after 10 seconds.
@@ -553,7 +565,7 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
       value: String(p.slot ?? progress.lastSlot),
       "aria-label": "칸(10분 슬롯)",
     });
-    range.addEventListener("change", () => go({ slot: Number(range.value) }));
+    range.addEventListener("change", () => go({ slot: range.value }));
     extra.push(el("label", { class: "datapick" }, `칸 ${slotTime(p.slot ?? progress.lastSlot)} `, range));
   }
   if ((def.id === "scanner-clerk" || def.id === "sorter") && election) {
@@ -598,6 +610,7 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
     );
   }
 
+  if (!current()) return;
   root.replaceChildren(
     el(
       "div",
@@ -607,8 +620,19 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
         "section",
         { class: "device" },
         el("h2", {}, def.title, el("span", { class: "proto" }, "시제품"), el("span", { class: "ref" }, def.section)),
+        p.unknownState
+          ? el("p", { class: "warnline", "data-testid": "unknown-state" }, `이 기기에 없는 상태 "${p.unknownState}" 대신 첫 상태를 보인다.`)
+          : null,
         el("div", { class: "controls" }, picker, zooms, ...extra),
-        frame,
+        // The screenshot unit: the frame and, outside it, the demo legend.
+        el(
+          "div",
+          { class: "device-shot", "data-testid": "device-shot" },
+          frame,
+          model.blocks.some((b) => b.demo)
+            ? el("p", { class: "demo-legend" }, el("span", { class: "demo-swatch", "aria-hidden": "true" }), "빗금 친 값은 시연 값이다(장부에 출처가 없음). 아래 설명을 보라.")
+            : el("p", { class: "demo-legend" }, "빗금 친 값 없음: 이 화면의 값은 검증기가 읽은 장부 값, 고른 상태 또는 고정 문구다."),
+        ),
         keys,
         el("div", { class: "notes" }, ...notes.map((n) => el("p", {}, n))),
         el(

@@ -4,6 +4,8 @@
 // visible, the last row of the screen, fully drawn (not clipped) and not
 // covered by anything; body text ≥ 4% and the identity line ≥ 2.5% of the
 // screen height. Also: no horizontal page scroll at phone width.
+// Screenshots are of the frame together with its demo legend (hatched
+// values are demonstration values, not ledger values).
 //
 // Usage: node scripts/screens.cjs [outdir]
 //   ITYV_CONSOLE_URL  a running console (default: starts `bun server.ts`)
@@ -31,8 +33,9 @@ async function waitFor(url, ms) {
   throw new Error(`no server at ${url}`);
 }
 
+let server = null;
+
 async function main() {
-  let server = null;
   let base = process.env.ITYV_CONSOLE_URL;
   if (!base) {
     const port = 3170 + Math.floor(Math.random() * 20);
@@ -123,8 +126,10 @@ async function main() {
             }
             if (problems.length) failures.push(`${name}: ${problems.join("; ")}`);
             if (!detail) {
-              const frame = await page.$(".frame");
-              await frame.screenshot({ path: path.join(outdir, `${name}.png`) });
+              // The frame with the legend outside it that says which values
+              // (hatched) are demonstration values.
+              const shot = await page.$("[data-testid=device-shot]");
+              await shot.screenshot({ path: path.join(outdir, `${name}.png`) });
             }
           }
         }
@@ -159,5 +164,6 @@ async function main() {
 
 main().catch((e) => {
   console.error(e);
+  if (server) server.kill();
   process.exit(1);
 });

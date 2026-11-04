@@ -39,7 +39,11 @@ export const LEGAL_WORD = "LEGAL_CERTIFIED";
 export const HOLD_MEANS =
   "어떤 단계가 실패했거나, 보류 사유가 하나라도 있다. 사람이 원인을 확인해야 한다는 뜻이며 그 자체로 부정의 증거는 아니다.";
 export const LEGAL_MEANS =
-  "법적 결정(LegalDecisionRef)이 있을 때 그 참조를 옆에 표시할 뿐, 검증기가 판정하는 상태가 아니다.";
+  "기계가 판정하는 상태가 아니다(VC-049). 이 콘솔은 분쟁에 붙은 법적 결정 참조(LegalDecisionRef)의 건수만 보이며 그 내용은 보이지도 확인하지도 않는다.";
+
+/** What no bundle reaches in this base, said on every ladder. */
+export const NOT_REACHABLE =
+  "PAPER_AUDITED: 이 기반의 검증기에는 감사 단계(PROTOCOL §14 8항)가 아직 구현되지 않아 어떤 번들도 닿지 않는다. LEGAL_CERTIFIED: 기계가 닿는 상태가 아니다. 지금 줄 수 있는 가장 높은 상태는 CRYPTO_TALLY_VERIFIED다.";
 
 /** The verifier's steps as `verify_ledger` hands them to the status rule. */
 export const STEPS: Record<string, string> = {

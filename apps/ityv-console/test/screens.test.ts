@@ -3,7 +3,7 @@
 // imprint list, and the voter flow follows the SCREENS.md §1 table.
 
 import { expect, test } from "bun:test";
-import { ATTESTATION_FIXTURES, GATEWAY_FIXTURE, type IndexBox, type StationProgress } from "../src/data";
+import { ATTESTATION_FIXTURES, GATEWAY_FIXTURE, type IndexBox, type RecordEntry, type StationProgress } from "../src/data";
 import {
   CHECKIN_STATES,
   CLERK_STATES,
@@ -21,6 +21,7 @@ import {
   voterNext,
   voterScreen,
 } from "../src/screens";
+import { DEVICES } from "../src/devices";
 import { STRINGS, type StringId, t } from "../src/strings";
 import { HOLDS } from "../src/vocab";
 
@@ -67,6 +68,7 @@ const station: StationProgress = {
     sheetsIn: i,
     out: 1,
   })),
+  overflow: false,
 };
 
 const box: IndexBox = {
@@ -125,14 +127,14 @@ test("every other device screen renders every state cleanly", () => {
         quarantined: 0,
         visits: 130,
         stickers: 130,
+        unattested: 2,
         slot: 470,
-        framesSent: 1168,
         chambers: ["P1", "P2"],
       }),
       state,
     );
   }
-  for (const state of CHECKIN_STATES) clean(checkinScreen({ state, checkins: 412, sheets: 1 }), state);
+  for (const state of CHECKIN_STATES) clean(checkinScreen({ state, checkins: 412 }), state);
   for (const delta of [0, 1]) {
     const m = sorterScreen({ box, records: 9, fallback: 0, unimprinted: 0, duplicates: 0, paperDelta: delta });
     clean(m, "sorter");
@@ -156,8 +158,19 @@ test("the voter app shows LOG_CONSISTENT only after the cross-check and never a 
   expect(appStatus("LOG_CONSISTENT", "differ")).toBe("UNVERIFIED");
   expect(appStatus("HOLD_REVIEW", "match")).toBe("HOLD_REVIEW");
   expect(appStatus("UNVERIFIED", "match")).toBe("UNVERIFIED");
-  const record = { code: "ab".repeat(64), box: "BOX-HB-1", seq: 12, state: "CAST_COMMITTED", checkpoint: 2 };
-  const base = { code: record.code, record, included: true, checkpoint: 2, checkpointFp: "K7QF 2M7D R5WN Q3XA AAAA AAAA AAAA AAAA", status: "CRYPTO_TALLY_VERIFIED" };
+  const record: RecordEntry = {
+    code: "ab".repeat(64),
+    box: "BOX-HB-1",
+    seq: 12,
+    state: "CAST_COMMITTED",
+    checkpoint: 2,
+    treeSize: 40,
+    checkpointFingerprint: "K7QF 2M7D R5WN Q3XA AAAA AAAA AAAA AAAA",
+    included: true,
+    pathLength: 6,
+  };
+  const uncovered: RecordEntry = { ...record, checkpoint: null, included: false };
+  const base = { code: record.code, record, status: "CRYPTO_TALLY_VERIFIED" };
   const match = texts(voterAppScreen({ ...base, compare: "match" })).join("\n");
   expect(match).toContain("체크포인트 2(LOG_CONSISTENT)에 포함되어 있어요");
   const pending = texts(voterAppScreen({ ...base, compare: "pending" })).join("\n");
@@ -166,8 +179,59 @@ test("the voter app shows LOG_CONSISTENT only after the cross-check and never a 
   for (const compare of ["match", "pending", "differ"] as const) {
     clean(voterAppScreen({ ...base, compare }), compare);
     clean(voterAppScreen({ ...base, compare, record: null }), "missing");
-    clean(voterAppScreen({ ...base, compare, included: false }), "uncovered");
+    const u = voterAppScreen({ ...base, compare, record: uncovered });
+    clean(u, "uncovered");
+    expect(texts(u).join("\n")).not.toContain("포함되어 있어요");
   }
+});
+
+test("demo values are marked, ledger values are not", () => {
+  const clerk = clerkScreen({
+    state: "voting",
+    box: "BOX-HB-1",
+    absentee: false,
+    records: 130,
+    challenged: 1,
+    quarantined: 0,
+    visits: 130,
+    stickers: 130,
+    unattested: 2,
+    slot: 470,
+    chambers: ["P1", "P2"],
+  });
+  expect(clerk.blocks.some((b) => b.demo === true)).toBe(true);
+  expect(clerk.blocks.some((b) => b.demo !== true)).toBe(true);
+  // Every gateway value comes from the fixture: the session, each link's
+  // frames and chain head, each tap and the line. Only section titles and
+  // the fixed "no inbound path" row are unmarked.
+  const gw = gatewayScreen(GATEWAY_FIXTURE, 470, 7, true).blocks;
+  const fixtureBlocks = 1 + GATEWAY_FIXTURE.links.length * 2 + GATEWAY_FIXTURE.taps.length + 1;
+  expect(gw.filter((b) => b.demo === true).length).toBe(fixtureBlocks);
+  for (const b of gw.filter((x) => x.demo !== true)) expect(["section", "row"]).toContain(b.kind);
+  // The attestation's device line and its three checks are fixture values.
+  for (const a of ATTESTATION_FIXTURES) {
+    const blocks = attestationScreen(a, "K7QF 2M7D R5WN Q3XA").blocks;
+    expect(blocks.slice(0, 4).every((b) => b.demo === true)).toBe(true);
+  }
+  // The progress screen shows only the verifier's values.
+  const p = progressScreen({ station, slot: 474, mirrorFp: "K7QF 2M7D R5WN Q3XA" });
+  expect(p.blocks.some((b) => b.demo === true)).toBe(false);
+});
+
+test("the progress screen keeps 64-bit slots exact and says when a sum overflowed", () => {
+  const big = "18446744073709551615";
+  const s: StationProgress = {
+    ...station,
+    firstSlot: big,
+    lastSlot: big,
+    alarms: [],
+    series: [{ slot: big, checkins: 1, issued: 1, spoiled: 0, returned: 0, sheetsIn: null, out: null, overflow: true }],
+    overflow: true,
+  };
+  const all = texts(progressScreen({ station: s, slot: big, mirrorFp: "K7QF 2M7D R5WN Q3XA" })).join("\n");
+  expect(all).toContain("64비트를 넘어");
+  // 2^64 - 1 is 15 mod 144 (slots per day): the 16th slot, 02:30.
+  expect(all).toContain("02:30 칸");
 });
 
 test("a slot refuses a value of another kind", () => {
@@ -183,4 +247,14 @@ test("every hold code of ityv-state has a Korean explanation", () => {
   }
   expect(Object.keys(STRINGS).length).toBeGreaterThan(80);
   void (null as unknown as StringId);
+});
+
+test("every device's identity line and detail view fill their slots", () => {
+  for (const d of DEVICES) {
+    expect(t("id.line", { program: d.program, version: d.version, build: d.build, fp: "K7QF 2M7D R5WN Q3XA" })).toContain(d.program);
+    for (const c of d.components) {
+      expect(t("id.detail.component", { name: c.name, version: c.version, build: c.build })).toContain(c.name);
+    }
+    for (const m of d.modules) expect(t("id.detail.module", { module: m, build: 1 })).toContain(m);
+  }
 });

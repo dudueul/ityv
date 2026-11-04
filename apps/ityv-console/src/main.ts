@@ -3,16 +3,20 @@
 // #/devices/<device>[?state=…&zoom=…&hc=1&detail=1].
 
 import type { SimIndex } from "./data";
-import { renderDashboard } from "./dashboard";
-import { parseParams, renderDevices } from "./devices";
+import { leaveDashboard, renderDashboard } from "./dashboard";
+import { leaveDevices, parseParams, renderDevices } from "./devices";
 import { el } from "./render";
 import { loadIndex } from "./verifier";
 
 let index: SimIndex | null = null;
+/** Each navigation's ticket: an older render stops without drawing. */
+let routeTicket = 0;
 
 async function route(): Promise<void> {
   const main = document.getElementById("main");
   if (!main) return;
+  const ticket = ++routeTicket;
+  const current = () => ticket === routeTicket;
   const [path = "", query = ""] = location.hash.replace(/^#/, "").split("?");
   const q = new URLSearchParams(query);
   const parts = path.split("/").filter(Boolean);
@@ -21,13 +25,17 @@ async function route(): Promise<void> {
   }
   try {
     if (parts[0] === "devices") {
-      await renderDevices(main, index, parseParams(parts[1] ?? "scanner-voter", q));
+      // Leaving the dashboard stops its self-test and verification.
+      leaveDashboard();
+      await renderDevices(main, index, parseParams(parts[1] ?? "scanner-voter", q), current);
     } else {
+      leaveDevices();
       renderDashboard(main, index, q.get("scenario"));
     }
-    document.body.dataset.ready = "1";
+    if (current()) document.body.dataset.ready = "1";
   } catch (e) {
-    main.replaceChildren(el("p", { class: "card warnline" }, `오류: ${String(e)}`));
+    if (!current()) return;
+    main.replaceChildren(el("p", { class: "card warnline" }, `오류: ${String(e instanceof Error ? e.message : e)}`));
     document.body.dataset.ready = "error";
   }
 }
