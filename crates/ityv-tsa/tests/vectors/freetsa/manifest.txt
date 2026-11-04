@@ -1,0 +1,1 @@
+token.tst cert=tsa.crt signature=EcdsaP384Sha512 imprint=sha512 ess=sha1 time=1793799002 nanos=0 serial=09bc6d99 policy=1.2.3.4.1 nonce=572e70a2ef4f6e84 accuracy=- ordering=yes
