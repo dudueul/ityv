@@ -61,6 +61,11 @@ pub enum Error {
     LedgerMismatch,
     /// A checkpoint claims fewer leaves than its predecessor.
     TreeShrank,
+    /// A checkpoint's time bucket is below its predecessor's (VC-012).
+    TimeWentBack,
+    /// A checkpoint's time bucket is outside the witness's clock window
+    /// (`WITNESS_TIME_TOLERANCE`, VC-012).
+    TimeOutOfWindow,
     /// A checkpoint is bound to a different genesis.
     GenesisMismatch,
     /// A checkpoint root does not equal its recomputation.
@@ -150,6 +155,8 @@ impl core::fmt::Display for Error {
             Self::ElectionMismatch => f.write_str("election identifier differs"),
             Self::LedgerMismatch => f.write_str("election, ledger or key-set identifier differs"),
             Self::TreeShrank => f.write_str("tree size decreased"),
+            Self::TimeWentBack => f.write_str("time bucket decreased"),
+            Self::TimeOutOfWindow => f.write_str("time bucket outside the witness's clock window"),
             Self::GenesisMismatch => f.write_str("genesis hash differs"),
             Self::RootMismatch(root) => write!(f, "{root:?} root does not match"),
             Self::TornTail { offset } => write!(f, "torn tail at offset {offset}"),

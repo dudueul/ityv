@@ -28,7 +28,8 @@
 
 use ityv_encoding::{
     CheckpointBody, Decode, Encode, Error as EncodingError, ErrorKind, Hash512, Ident, Reader,
-    SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, SchemaId, Seq, TreeSize, Writer, decode_object,
+    SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, SchemaId, Seq, TimeBucket, TreeSize, Writer,
+    decode_object,
 };
 
 use crate::error::{Error, Root};
@@ -349,17 +350,43 @@ impl<'a> Successor<'a> {
     }
 }
 
+/// How far below the witness's own clock a checkpoint's `time_bucket` may
+/// be, in 15-minute buckets (PROTOCOL.md §5.4, VC-012): a witness at bucket
+/// `now` signs only `now − 1 ≤ time_bucket ≤ now`. The witnesses attest the
+/// time, so it is no longer the operator's proposal alone.
+pub const WITNESS_TIME_TOLERANCE: u64 = 1;
+
+/// The current version of `WitnessMemory` (`0x0011`): version 2 also
+/// remembers the time bucket of the last signed checkpoint (VC-012).
+pub const SCHEMA_VERSION_WITNESS_MEMORY: u16 = 2;
+
+/// Whether a witness whose clock reads bucket `now`, and whose last signed
+/// checkpoint carried `last` (if any), may sign a checkpoint of time bucket
+/// `bucket`: `now − WITNESS_TIME_TOLERANCE ≤ bucket ≤ now` and `bucket` not
+/// below `last` (PROTOCOL.md §5.4, VC-012).
+#[must_use]
+pub const fn witness_time_ok(now: u64, bucket: u64, last: Option<u64>) -> bool {
+    let in_window = bucket <= now && bucket >= now.saturating_sub(WITNESS_TIME_TOLERANCE);
+    let monotone = match last {
+        Some(last) => bucket >= last,
+        None => true,
+    };
+    in_window && monotone
+}
+
 /// Checks that `body` validly follows `prev` (the previous body and the
 /// object hash of its bytes): `checkpoint_seq` is `prev + 1` (or 1 with an
 /// all-zero previous hash when there is no predecessor),
 /// `previous_checkpoint_hash` equals the previous body hash, `tree_size`
-/// does not decrease, the election, ledger and key-set identifiers are
-/// unchanged, and `genesis_hash` equals the expected genesis.
+/// and `time_bucket` do not decrease, the election, ledger and key-set
+/// identifiers are unchanged, and `genesis_hash` equals the expected
+/// genesis.
 ///
 /// # Errors
 /// [`Error::SequenceGap`], [`Error::PreviousHashMismatch`],
-/// [`Error::TreeShrank`], [`Error::ElectionMismatch`],
-/// [`Error::LedgerMismatch`], [`Error::GenesisMismatch`].
+/// [`Error::TreeShrank`], [`Error::TimeWentBack`],
+/// [`Error::ElectionMismatch`], [`Error::LedgerMismatch`],
+/// [`Error::GenesisMismatch`].
 pub fn validate_successor<'a>(
     prev: Option<(&'a CheckpointBody<'a>, &'a Hash512)>,
     body: &'a CheckpointBody<'a>,
@@ -393,6 +420,9 @@ pub fn validate_successor<'a>(
             }
             if parts.tree_size < p.tree_size {
                 return Err(Error::TreeShrank);
+            }
+            if parts.time_bucket.get() < p.time_bucket.get() {
+                return Err(Error::TimeWentBack);
             }
             if parts.election_id != p.election_id {
                 return Err(Error::ElectionMismatch);
@@ -443,6 +473,7 @@ pub struct LastSigned {
     root_hash: Hash512,
     body_hash: Hash512,
     ids_hash: Hash512,
+    time_bucket: TimeBucket,
 }
 
 impl LastSigned {
@@ -471,6 +502,11 @@ impl LastSigned {
     pub const fn ids_hash(&self) -> &Hash512 {
         &self.ids_hash
     }
+    /// The time bucket of the body.
+    #[must_use]
+    pub const fn time_bucket(&self) -> TimeBucket {
+        self.time_bucket
+    }
 }
 
 /// A witness's persistent memory of what it last signed (ADR-0016 §4).
@@ -483,11 +519,11 @@ impl LastSigned {
 /// signature. A crash between persisting and signing loses at most one
 /// signature; it never allows a second body at the same sequence number.
 ///
-/// Persisted form (schema `0x0011`, version 1, with the ENCODING.md §3
+/// Persisted form (schema `0x0011`, version 2, with the ENCODING.md §3
 /// header): `last_seq: u64` (0 = nothing signed yet) ‖ `tree_size: u64` ‖
-/// `root_hash: Hash512` ‖ `body_hash: Hash512` ‖ `ids_hash: Hash512`. When
-/// `last_seq` is 0 every other field must be zero; `tree_size` must not
-/// exceed 2^40.
+/// `root_hash: Hash512` ‖ `body_hash: Hash512` ‖ `ids_hash: Hash512` ‖
+/// `time_bucket: u64`. When `last_seq` is 0 every other field must be
+/// zero; `tree_size` must not exceed 2^40.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WitnessMemory {
     last: Option<LastSigned>,
@@ -570,7 +606,7 @@ impl WitnessMemory {
     pub fn to_object(&self, out: &mut [u8]) -> Result<usize, Error> {
         Ok(ityv_encoding::encode_object(
             SCHEMA_WITNESS_MEMORY,
-            SCHEMA_VERSION_1,
+            SCHEMA_VERSION_WITNESS_MEMORY,
             self,
             out,
         )?)
@@ -583,7 +619,7 @@ impl WitnessMemory {
     pub fn from_object(bytes: &[u8]) -> Result<Self, Error> {
         Ok(decode_object(
             SCHEMA_WITNESS_MEMORY,
-            SCHEMA_VERSION_1,
+            SCHEMA_VERSION_WITNESS_MEMORY,
             bytes,
         )?)
     }
@@ -601,7 +637,11 @@ impl WitnessMemory {
     ///    none, which requires an empty proof);
     /// 5. `genesis_hash` equals `genesis_hash`;
     /// 6. `box_close_root` and `dispute_root` equal the sorted-set roots of
-    ///    `box_close_hashes` and `dispute_hashes`.
+    ///    `box_close_hashes` and `dispute_hashes`;
+    /// 7. `time_bucket` is within [`WITNESS_TIME_TOLERANCE`] below the
+    ///    witness's clock `now` and not after it, and not below the last
+    ///    signed body's ([`witness_time_ok`]): the witness attests the
+    ///    time.
     ///
     /// The memory always comes back as the second element: advanced on
     /// success (persist it before signing), unchanged on failure.
@@ -611,7 +651,8 @@ impl WitnessMemory {
     /// [`Error::PreviousHashMismatch`], [`Error::LedgerMismatch`],
     /// [`Error::TreeShrank`], [`Error::ProofInvalid`],
     /// [`Error::GenesisMismatch`], [`Error::RootMismatch`],
-    /// [`Error::NotSorted`], [`Error::Duplicate`].
+    /// [`Error::NotSorted`], [`Error::Duplicate`],
+    /// [`Error::TimeOutOfWindow`], [`Error::TimeWentBack`].
     #[must_use = "the returned memory must be persisted; dropping it loses the state"]
     pub fn may_sign<'a>(
         self,
@@ -620,6 +661,7 @@ impl WitnessMemory {
         box_close_hashes: &'a [Hash512],
         dispute_hashes: &'a [Hash512],
         genesis_hash: &'a Hash512,
+        now: TimeBucket,
     ) -> (Result<Verified<Signable<'a>>, Error>, Self) {
         match self.check(
             body_bytes,
@@ -627,6 +669,7 @@ impl WitnessMemory {
             box_close_hashes,
             dispute_hashes,
             genesis_hash,
+            now,
         ) {
             Ok((signable, ids)) => {
                 let parts = signable.body.parts();
@@ -637,6 +680,7 @@ impl WitnessMemory {
                         root_hash: parts.root_hash,
                         body_hash: signable.body_hash,
                         ids_hash: ids,
+                        time_bucket: parts.time_bucket,
                     }),
                 };
                 (Ok(Verified::new(signable)), advanced)
@@ -652,6 +696,7 @@ impl WitnessMemory {
         box_close_hashes: &'a [Hash512],
         dispute_hashes: &'a [Hash512],
         genesis_hash: &'a Hash512,
+        now: TimeBucket,
     ) -> Result<(Signable<'a>, Hash512), Error> {
         let body: CheckpointBody<'a> =
             decode_object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, body_bytes)?;
@@ -679,6 +724,14 @@ impl WitnessMemory {
         }
         if parts.tree_size.get() < old_size {
             return Err(Error::TreeShrank);
+        }
+        let last_bucket = self.last.as_ref().map(|l| l.time_bucket.get());
+        let bucket = parts.time_bucket.get();
+        if !witness_time_ok(now.get(), bucket, None) {
+            return Err(Error::TimeOutOfWindow);
+        }
+        if !witness_time_ok(now.get(), bucket, last_bucket) {
+            return Err(Error::TimeWentBack);
         }
         let _consistent = verify_consistency(
             old_size,
@@ -713,7 +766,7 @@ impl WitnessMemory {
 
 impl Encode for WitnessMemory {
     fn encoded_len(&self) -> usize {
-        8 + 8 + 64 + 64 + 64
+        8 + 8 + 64 + 64 + 64 + 8
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), EncodingError> {
@@ -723,14 +776,16 @@ impl Encode for WitnessMemory {
                 w.write_u64(0)?;
                 Hash512::ZERO.encode(w)?;
                 Hash512::ZERO.encode(w)?;
-                Hash512::ZERO.encode(w)
+                Hash512::ZERO.encode(w)?;
+                w.write_u64(0)
             }
             Some(last) => {
                 last.seq.encode(w)?;
                 last.tree_size.encode(w)?;
                 last.root_hash.encode(w)?;
                 last.body_hash.encode(w)?;
-                last.ids_hash.encode(w)
+                last.ids_hash.encode(w)?;
+                last.time_bucket.encode(w)
             }
         }
     }
@@ -748,12 +803,14 @@ impl<'a> Decode<'a> for WitnessMemory {
         let root_hash = Hash512::decode(r)?;
         let body_hash = Hash512::decode(r)?;
         let ids_hash = Hash512::decode(r)?;
+        let time_bucket = TimeBucket::decode(r)?;
         match Seq::new(last_seq) {
             None => {
                 if tree_size != 0
                     || !root_hash.is_zero()
                     || !body_hash.is_zero()
                     || !ids_hash.is_zero()
+                    || time_bucket.get() != 0
                 {
                     return Err(EncodingError::new(ErrorKind::InvariantViolation, seq_at));
                 }
@@ -766,6 +823,7 @@ impl<'a> Decode<'a> for WitnessMemory {
                     root_hash,
                     body_hash,
                     ids_hash,
+                    time_bucket,
                 }),
             }),
         }
