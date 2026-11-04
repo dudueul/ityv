@@ -194,6 +194,14 @@ pub fn record_sig(label: &str, purpose: RecordPurpose, message: &[u8]) -> &'stat
     )
 }
 
+/// The SHA3-512 of `bytes`, hexadecimal (a bundle's identity in
+/// `index.json`).
+pub fn sha3_hex(bytes: &[u8]) -> String {
+    let mut h = Sha3Hasher::new();
+    h.absorb(bytes);
+    hex(&h.finish())
+}
+
 /// Lower-case hexadecimal.
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;

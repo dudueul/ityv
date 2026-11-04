@@ -60,7 +60,7 @@ fn alarms_agree(s: &Scenario, report: &ityv_verify::Report<'_>) {
             .collect();
         let got: Vec<(u64, ityv_encoding::ProgressAlarm)> =
             p.alarms.iter().map(|a| (a.slot, a.alarm)).collect();
-        if s.name.starts_with("attack-no-authorization") {
+        if s.name.starts_with("attack-no-authorization") || s.name == "attack-overflow-progress" {
             continue;
         }
         assert_eq!(got, want, "{}: alarms of {}", s.name, st.id);
@@ -170,21 +170,23 @@ fn a_clean_report_carries_checkpoints_units_records_and_inclusion() {
     ] {
         assert!(v.json.contains(key), "{key}");
     }
-    // The first record's frame is in a checkpoint, by a verified proof.
-    let at = v.json.find("\"records\":[{").unwrap();
-    let seq_at = v.json[at..].find("\"seq\":").unwrap() + at + 6;
-    let seq: u64 = v.json[seq_at..]
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
+    // Every record of the clean ledger is in a checkpoint, by a verified
+    // proof carried in the report, with the bundle's identity beside it.
+    let records = &v.json[v.json.find("\"records\":[").unwrap()..];
+    assert!(records.matches("\"included\":true").count() >= 17);
+    assert!(!records.contains("\"included\":false"));
+    assert!(v.json.contains(&format!(
+        "\"bundleHash\":\"{}\"",
+        ityv_sim::util::sha3_hex(&bytes)
+    )));
+    // A record the last checkpoint does not cover is on the ledger but not
+    // included.
+    let s = scenarios(Set::Quick)
+        .into_iter()
+        .find(|s| s.name == "fault-missing-coverage")
         .unwrap();
-    let inc = v.proofs.inclusion_json(seq);
-    assert!(inc.contains("\"included\":true"), "{inc}");
-    // A frame past every checkpoint is not.
-    assert!(
-        v.proofs
-            .inclusion_json(1_000_000)
-            .contains("\"included\":false")
-    );
+    let v = ityv_wasm::verify(&bundle::encode(&s, ledger(&s)), None);
+    let records = &v.json[v.json.find("\"records\":[").unwrap()..];
+    assert!(records.contains("\"checkpoint\":null,\"included\":false"));
+    assert!(records.contains("\"included\":true"));
 }

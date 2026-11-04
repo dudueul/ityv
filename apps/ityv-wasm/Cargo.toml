@@ -23,22 +23,38 @@ ityv-state = { path = "../../crates/ityv-state", version = "=0.1.0" }
 ityv-verify = { path = "../../crates/ityv-verify", version = "=0.1.0" }
 
 # Outside the TCB (CONSTITUTION.md §0), so this crate sets its own lints:
-# the workspace set minus `unsafe_code = forbid`. `unsafe` is denied
-# everywhere except the one FFI module, which allows it item by item, and
-# every unsafe block carries a SAFETY comment.
+# the workspace set (Cargo.toml [workspace.lints]) word for word, except
+# `unsafe_code`, which is `deny` instead of `forbid` so that the FFI module
+# can allow it item by item (`src/ffi.rs`, every unsafe block with its
+# SAFETY comment). No crate-wide allow.
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "deny"
 unused_must_use = "deny"
 unreachable_pub = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
-undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
 indexing_slicing = "deny"
-module_name_repetitions = "allow"
-too_many_lines = "allow"
+arithmetic_side_effects = "deny"
+float_arithmetic = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+cast_lossless = "deny"
+wildcard_enum_match_arm = "deny"
+exit = "deny"
+std_instead_of_core = "deny"
+alloc_instead_of_core = "deny"
+missing_panics_doc = "deny"
+missing_errors_doc = "deny"
+undocumented_unsafe_blocks = "deny"

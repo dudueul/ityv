@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나 위의 25개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 28개다.
+`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나 위의 26개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 29개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
 
 TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바뀌지 않는다. 시뮬레이터가 만든 장부는 검증기가 그대로 검증하고, 시나리오의 기대와 검증기의 판정이 다르면 테스트와 콘솔이 불일치로 보인다. 의존성은 워크스페이스 크레이트뿐이다. 서명의 hedged 난수와 커밋먼트·증명의 난수는 `ityv-cunit`의 SHA3 카운터 생성기(`DeviceRng::for_signing`)에 입력에서 유도한 씨앗을 넣어 얻는다. 키는 이름표와 고정 씨앗(`util::SEED`)의 SHA3-512로 정한다. 그래서 두 번 돌리면 같은 바이트가 나온다(`tests/scenarios.rs`의 `bundles_are_byte_identical_across_runs`).
 
@@ -68,6 +68,9 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `fault-seal-mismatch` | 장애 | `HOLD_REVIEW` | SealMismatch |
 | `fault-board-late` | 장애 | `HOLD_REVIEW` | PublicationLate |
 | `attack-no-authorization` | 공격 | `HOLD_REVIEW` | ProgressStream, BoxEventRefused, AuthorizationMissing, TallyScopeRefused, AggregateRefused, ReceiptResolutionRefused |
+| `attack-overflow-progress` | 공격 | `HOLD_REVIEW` | ProgressStream, ProgressUnresolved |
+
+`attack-overflow-progress`는 한 투표함의 장치가 투입 누계를 2^64 − 1장으로 서명한 하루다. 같은 투표소의 다른 투표함과 더하면 64비트를 넘으므로 `ityv-wasm`의 진행 수열은 그 칸을 `null`과 `overflow`로 쓰고, 콘솔은 '넘침'으로 보인다(트랩하지 않는다). 그 하루의 경보는 시뮬레이터가 의도한 하루와 다르므로 경보 일치 시험에서 뺀다.
 
 여러 사유가 함께 나오는 시나리오는 주입 하나가 뒤 단계에 퍼진 결과다(예: 바꿔치기한 기록이 거부되면 배치, 마감 기록 집합, 교부 등식, 집계 범위가 함께 어긋난다). 기대는 그 퍼짐까지 적는다. 테스트는 사유 집합이 정확히 같은지 본다. 또 큰 선거와 경보 시나리오는 검증기가 낸 경보(투표소·슬롯·종류)가 시뮬레이터가 그 하루에 일으키려 한 경보와 같은지, 비상 투입 투표소의 경보가 멈췄는지 본다.
 
@@ -82,8 +85,8 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | 23 | `StepFailed` | `attack-checkpoint-fork`, `attack-mirror-tampered`, `attack-unknown-event`, `fault-missing-amendment` |
 | 24 | `OpenDispute` | `fault-open-dispute` |
 | 26 | `PublicationLate` | `fault-board-late` |
-| 30 | `ProgressUnresolved` | `fault-progress-unresolved` |
-| 32 | `ProgressStream` | `attack-wrong-role`, `attack-no-authorization` |
+| 30 | `ProgressUnresolved` | `fault-progress-unresolved`, `attack-overflow-progress` |
+| 32 | `ProgressStream` | `attack-wrong-role`, `attack-no-authorization`, `attack-overflow-progress` |
 | 33 | `EventReplayed` | `attack-replayed-record` |
 | 34 | `RecordAfterClose` | `attack-record-after-close` |
 | 35 | `LedgerUnchecked` | `attack-mirror-tampered`, `attack-unknown-event` |
@@ -138,14 +141,15 @@ sets    = list(boxes) ‖ list(stations) ‖ list(progress_policies) ‖ list(re
 
 | 묶음 | 시나리오 | 크기 합계 | 생성 시간 |
 |---|---|---|---|
-| `--quick` | 25 | 36.9 MB (번들 하나 1.1–1.7 MB) | 6.1초 |
-| 전체 | 28 | 66.8 MB (`local-clean` 12.5 MB, `local-voting` 9.4 MB, `national-clean` 7.9 MB) | 13.7초 |
+| `--quick` | 26 | 38.4 MB (번들 하나 1.1–1.7 MB) | 6.5초 |
+| 전체 | 29 | 68.4 MB (`local-clean` 12.5 MB, `local-voting` 9.4 MB, `national-clean` 7.9 MB) | 14.3초 |
 
 번들이 큰 까닭은 하이브리드 서명(ML-DSA-87, 4,627바이트)이다. 진행 기록 한 건, 모듈 발급 기록, 증인 체크포인트마다 붙는다. 번들은 저장소에 넣지 않는다(`bun run dev`/`build`가 만든다). 브라우저 WASM 검증 시간은 빠른 번들 약 0.3–0.4초, `local-clean` 약 6초, `national-clean` 약 3.5초(node 22, 같은 컨테이너)다.
 
 ## 검증
 
-- `cargo test -p ityv-sim`: 빠른 시나리오 25개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부한다.
+- `cargo test -p ityv-sim`: 빠른 시나리오 26개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다.
+- `tests/robustness.rs`(`ityv-wasm`의 견고성): 모든 보고서가 올바른 JSON이다. 빠른 번들의 비트를 뒤집고(56번) 자르고 바이트를 덧붙여도 패닉하지 않는다. 적대적인 시나리오 이름(HTML, 따옴표, 제어 문자, U+2028/2029)이 한 문자열로 이스케이프된다. 두 투표함이 같은 칸에 2^63을, 한 투표함이 u64::MAX를 적어 합이 넘쳐도 트랩 없이 `overflow`로 보고되고 상태는 `ityv-verify`와 같다. 보고 단위가 장부보다 높게 읽히는 것은 장부의 보류가 모두 다른 단위의 투표함·집계 탓일 때뿐이다. `ityv-wasm`의 집계 거부 보류 표(사본)가 시나리오에서 나오는 모든 거부에 대해 검증기와 같다. 콘솔의 보류 이름 표(`apps/ityv-console/src/vocab.ts`)가 `ityv-state`의 이름과 같다.
 - 큰 시나리오: `cargo test -p ityv-sim --release -- --ignored`(약 1분).
 
 ## 하지 않는 것

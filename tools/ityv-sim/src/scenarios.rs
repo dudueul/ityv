@@ -8,8 +8,9 @@
 use std::sync::OnceLock;
 
 use ityv_encoding::{
-    DisputeType, ProgressAlarm, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD, SCHEMA_PARTICIPATION_SET,
-    SCHEMA_QUORUM_SIGNED, SCHEMA_WITNESSED_EVENT, SchemaId,
+    DisputeType, ProgressAlarm, ProgressBody, ProgressTick, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD,
+    SCHEMA_PARTICIPATION_SET, SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1,
+    SCHEMA_WITNESSED_EVENT, SchemaId, decode_object,
 };
 use ityv_state::{HoldReason, Status};
 use ityv_verify::AmendmentInput;
@@ -877,6 +878,39 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::TallyScopeRefused,
                 H::AggregateRefused,
             ]),
+            Vec::new(),
+        ));
+    }
+    // A device reporting an impossible count (u64::MAX sheets in).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let open = e.days[e.boxes[out_box].station].open_slot;
+        for step in &mut bld.plan.steps {
+            let Step::Event { schema, event, .. } = step else {
+                continue;
+            };
+            if *schema != SCHEMA_PROGRESS_TICK {
+                continue;
+            }
+            let tick: ProgressTick<'_> =
+                decode_object(SCHEMA_PROGRESS_TICK, SCHEMA_VERSION_1, event).unwrap();
+            if let ProgressBody::Box(b) = tick.body() {
+                let p = *b.parts();
+                if p.box_id.as_bytes() == e.boxes[out_box].id.as_bytes() && p.slot >= open + 3 {
+                    *event = e.box_tick(out_box, p.slot, u64::MAX, p.state);
+                }
+            }
+        }
+        out.push(bld.scenario(
+            "attack-overflow-progress",
+            q,
+            a,
+            (
+                "불가능한 진행 누계",
+                "누리구 사전투표소 관외 투표함의 장치가 06:30부터 투입 누계를 2^64 − 1장으로 서명했다(같은 투표소의 다른 투표함과 더하면 64비트를 넘는 값).",
+                "검증기는 진행 기록 흐름의 규칙 위반(ProgressStream)과 해소되지 않은 경보(ProgressUnresolved)로 그 투표소를 HOLD_REVIEW로 둔다. 콘솔은 넘치는 합을 계산하지 않고 '넘침'으로 보인다.",
+            ),
+            hold(&[H::ProgressStream, H::ProgressUnresolved]),
             Vec::new(),
         ));
     }

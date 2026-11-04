@@ -50,7 +50,7 @@ fn main() -> ExitCode {
             t.elapsed().as_millis()
         );
         total += bytes.len();
-        written.push((s, file, bytes.len()));
+        written.push((s, file, bytes.len(), ityv_sim::util::sha3_hex(&bytes)));
     }
     let index = meta::index_json(set, &written);
     if let Err(e) = std::fs::write(out.join("index.json"), index) {
