@@ -27,14 +27,14 @@
 //! genesis, recomputed set roots) are checked in the same call.
 
 use ityv_encoding::{
-    CheckpointBody, Decode, Encode, Error as EncodingError, ErrorKind, Hash512, Ident, Reader,
-    SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, SchemaId, Seq, TimeBucket, TreeSize, Writer,
-    decode_object,
+    CheckpointBody, Decode, ElectionId, Encode, Error as EncodingError, ErrorKind, Hash512, Ident,
+    KeysetId, LedgerId, Reader, SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, SchemaId, Seq,
+    TimeBucket, TreeSize, Writer, decode_object,
 };
 
 use crate::error::{Error, Root};
 use crate::merkle::{ConsistencyProof, sorted_set_root, verify_consistency};
-use crate::policy::Published;
+use crate::policy::{DiversityPolicy, QuorumProfile, Roster, evaluate, profile_matches_roster};
 use crate::verified::Verified;
 
 /// `SignedCheckpoint` (ENCODING.md §6, `0x0010`).
@@ -459,14 +459,69 @@ const IDS_MAX_LEN: usize = 3 * (4 + ityv_encoding::IDENT_MAX_STANDARD);
 
 fn ids_hash(body: &CheckpointBody<'_>) -> Result<Hash512, Error> {
     let p = body.parts();
+    ids_hash_of(p.election_id, p.ledger_id, p.keyset_id)
+}
+
+fn ids_hash_of(
+    election_id: ElectionId<'_>,
+    ledger_id: LedgerId<'_>,
+    keyset_id: KeysetId<'_>,
+) -> Result<Hash512, Error> {
     let mut buffer = [0u8; IDS_MAX_LEN];
     let mut w = Writer::new(&mut buffer);
-    p.election_id.encode(&mut w)?;
-    p.ledger_id.encode(&mut w)?;
-    p.keyset_id.encode(&mut w)?;
+    election_id.encode(&mut w)?;
+    ledger_id.encode(&mut w)?;
+    keyset_id.encode(&mut w)?;
     let used = w.finish();
     let bytes = buffer.get(..used).ok_or(Error::Capacity)?;
     Ok(ityv_crypto::object_hash(bytes))
+}
+
+/// The genesis witness set a witness adopts published checkpoints under
+/// (PROTOCOL.md §5.4): the pinned genesis hash, the election, ledger and
+/// key-set identifiers, the witness roster, the quorum profile and the
+/// diversity policy, built once from the pinned genesis. Adoption checks a
+/// published checkpoint against this set itself, so no token from another
+/// roster or profile is ever taken.
+#[derive(Debug, Clone, Copy)]
+pub struct WitnessSet<'a> {
+    genesis_hash: Hash512,
+    ids_hash: Hash512,
+    roster: Roster<'a>,
+    profile: QuorumProfile,
+    diversity: DiversityPolicy,
+}
+
+impl<'a> WitnessSet<'a> {
+    /// The witness set of the pinned genesis `genesis_hash`.
+    ///
+    /// # Errors
+    /// [`Error::ProfileInvalid`] if `profile` does not match `roster`,
+    /// [`Error::Encoding`] for an identifier that does not encode.
+    pub fn new(
+        genesis_hash: Hash512,
+        ids: (ElectionId<'_>, LedgerId<'_>, KeysetId<'_>),
+        roster: Roster<'a>,
+        profile: QuorumProfile,
+        diversity: DiversityPolicy,
+    ) -> Result<Self, Error> {
+        if !profile_matches_roster(profile, &roster) {
+            return Err(Error::ProfileInvalid);
+        }
+        Ok(Self {
+            genesis_hash,
+            ids_hash: ids_hash_of(ids.0, ids.1, ids.2)?,
+            roster,
+            profile,
+            diversity,
+        })
+    }
+
+    /// The pinned genesis hash.
+    #[must_use]
+    pub const fn genesis_hash(&self) -> &Hash512 {
+        &self.genesis_hash
+    }
 }
 
 /// `WitnessMemory` (ENCODING.md §6, `0x0011`): the persisted form of a
@@ -697,39 +752,63 @@ impl WitnessMemory {
         }
     }
 
-    /// Advances the memory to `published`, a checkpoint a quorum of the
-    /// witness set signed while this witness was away, without signing
+    /// Advances the memory over `run`, the checkpoints a quorum of the
+    /// witness set published while this witness was away, without signing
     /// anything (the catch-up after an outage, PROTOCOL.md §5.4, ADR-0016
-    /// §4). `published` comes from [`crate::evaluate`] under the genesis
-    /// witness roster, profile and diversity policy; the checkpoint is
-    /// adopted only if
+    /// §4). `run` holds every published checkpoint from the one after the
+    /// last signed or adopted one up to the one adopted, in order;
+    /// `consistency` proves that the last of them extends the last tree.
+    /// It is adopted only if
     ///
-    /// 1. its `genesis_hash` is `genesis_hash`;
-    /// 2. its `checkpoint_seq` is above the last signed or adopted one;
-    /// 3. its election, ledger and key-set identifiers are unchanged;
-    /// 4. its `time_bucket` is not below the last one;
-    /// 5. its `tree_size` does not decrease and `consistency` proves that
-    ///    its tree extends the last one (from the empty tree if none).
+    /// 1. the memory is not empty: a witness whose memory was lost or rolled
+    ///    back cannot know what it signed, so it counts in `f` for the rest
+    ///    of the election, and there is no adoption from an empty memory (a
+    ///    witness that never signed and was not there from the start counts
+    ///    in `f` too);
+    /// 2. every checkpoint of the run is published under `set` (its roster,
+    ///    profile and diversity, through [`evaluate`]) and names its
+    ///    genesis and identifiers;
+    /// 3. the first follows the last one: the next sequence number, and its
+    ///    previous hash is the body this witness signed or adopted (another
+    ///    body there is a split view, [`Error::SplitView`]: the evidence of
+    ///    VC-065 is this witness's own body at that sequence number, whose
+    ///    hash the unchanged memory keeps, and the first checkpoint of the
+    ///    run, quorum-signed, whose previous hash names the other body);
+    /// 4. each next one follows the one before ([`validate_successor`]:
+    ///    sequence, previous hash, tree size and time not decreasing,
+    ///    identifiers, genesis);
+    /// 5. its time does not go back from the last one, and no checkpoint is
+    ///    timed past `now + CLOCK_ERROR_BUCKETS`, the latest bucket an
+    ///    honest quorum could have attested by this witness's clock `now`
+    ///    (an attesting witness signs at most its own clock's bucket, and two
+    ///    honest clocks, each within a minute, are at most one bucket apart;
+    ///    the signing tolerance only lowers the bucket):
+    ///    [`Error::TimeAhead`] is the host's alarm;
+    /// 6. the tree does not shrink and `consistency` proves the extension.
     ///
-    /// The witness then signs only the checkpoint after it. It never signs
-    /// two bodies at one sequence number (VC-013): it signed nothing at the
-    /// sequence numbers it skipped, and it adopts only above its last one.
-    /// The memory comes back as the second element: advanced on success,
+    /// The witness then signs only the checkpoint after the run. With its
+    /// memory intact it signed nothing at the sequence numbers it skipped,
+    /// so it never signs two bodies at one sequence number (VC-013). The
+    /// memory comes back as the second element: advanced on success,
     /// unchanged on failure.
     ///
     /// # Errors
-    /// [`Error::Encoding`], [`Error::GenesisMismatch`],
-    /// [`Error::SequenceGap`], [`Error::LedgerMismatch`],
-    /// [`Error::TimeWentBack`], [`Error::TreeShrank`],
-    /// [`Error::ProofInvalid`].
+    /// [`Error::NoMemory`], [`Error::SequenceGap`] (also for an empty
+    /// run), [`Error::SplitView`], [`Error::GenesisMismatch`],
+    /// [`Error::LedgerMismatch`], [`Error::TimeWentBack`],
+    /// [`Error::TimeAhead`], [`Error::TreeShrank`],
+    /// [`Error::ProofInvalid`], [`Error::PreviousHashMismatch`],
+    /// [`Error::ElectionMismatch`], [`Error::Encoding`], and the quorum
+    /// errors of [`evaluate`].
     #[must_use = "the returned memory must be persisted; dropping it loses the state"]
     pub fn adopt(
         self,
-        published: &Verified<Published<'_>>,
+        set: &WitnessSet<'_>,
+        run: &[SignedCheckpoint<'_>],
         consistency: &ConsistencyProof,
-        genesis_hash: &Hash512,
+        now: TimeBucket,
     ) -> (Result<(), Error>, Self) {
-        match self.check_adopt(published.get().signed(), consistency, genesis_hash) {
+        match self.check_adopt(set, run, consistency, now) {
             Ok(last) => (Ok(()), Self { last: Some(last) }),
             Err(err) => (Err(err), self),
         }
@@ -737,37 +816,60 @@ impl WitnessMemory {
 
     fn check_adopt(
         &self,
-        signed: &SignedCheckpoint<'_>,
+        set: &WitnessSet<'_>,
+        run: &[SignedCheckpoint<'_>],
         consistency: &ConsistencyProof,
-        genesis_hash: &Hash512,
+        now: TimeBucket,
     ) -> Result<LastSigned, Error> {
-        let body = signed.body();
-        let parts = body.parts();
-        if parts.genesis_hash != *genesis_hash {
-            return Err(Error::GenesisMismatch);
-        }
-        let ids = ids_hash(body)?;
-        let (old_size, old_root) = match &self.last {
-            None => (0u64, crate::merkle::EMPTY_ROOT),
-            Some(last) => {
-                if parts.checkpoint_seq.get() <= last.seq.get() {
-                    return Err(Error::SequenceGap);
-                }
-                if last.ids_hash != ids {
-                    return Err(Error::LedgerMismatch);
-                }
-                if parts.time_bucket.get() < last.time_bucket.get() {
-                    return Err(Error::TimeWentBack);
-                }
-                (last.tree_size.get(), last.root_hash)
-            }
+        let last = self.last.as_ref().ok_or(Error::NoMemory)?;
+        let (Some(first), Some(target)) = (run.first(), run.last()) else {
+            return Err(Error::SequenceGap);
         };
-        if parts.tree_size.get() < old_size {
+        let latest = now.get().saturating_add(CLOCK_ERROR_BUCKETS);
+        for signed in run {
+            let _published = evaluate(&set.roster, &set.profile, &set.diversity, signed)?;
+            let parts = signed.body().parts();
+            if parts.genesis_hash != set.genesis_hash {
+                return Err(Error::GenesisMismatch);
+            }
+            if ids_hash(signed.body())? != set.ids_hash {
+                return Err(Error::LedgerMismatch);
+            }
+            if parts.time_bucket.get() > latest {
+                return Err(Error::TimeAhead);
+            }
+        }
+        let parts = first.body().parts();
+        let expected = last.seq.get().checked_add(1).ok_or(Error::SequenceGap)?;
+        if parts.checkpoint_seq.get() != expected {
+            return Err(Error::SequenceGap);
+        }
+        if parts.previous_checkpoint_hash != last.body_hash {
+            return Err(Error::SplitView { seq: last.seq });
+        }
+        if last.ids_hash != set.ids_hash {
+            return Err(Error::LedgerMismatch);
+        }
+        if parts.time_bucket.get() < last.time_bucket.get() {
+            return Err(Error::TimeWentBack);
+        }
+        if parts.tree_size.get() < last.tree_size.get() {
             return Err(Error::TreeShrank);
         }
+        for pair in run.windows(2) {
+            if let [before, after] = pair {
+                let before_hash = before.body_hash();
+                let _next = validate_successor(
+                    Some((before.body(), &before_hash)),
+                    after.body(),
+                    &set.genesis_hash,
+                )?;
+            }
+        }
+        let parts = target.body().parts();
         let _consistent = verify_consistency(
-            old_size,
-            &old_root,
+            last.tree_size.get(),
+            &last.root_hash,
             parts.tree_size.get(),
             &parts.root_hash,
             consistency,
@@ -776,8 +878,8 @@ impl WitnessMemory {
             seq: parts.checkpoint_seq,
             tree_size: parts.tree_size,
             root_hash: parts.root_hash,
-            body_hash: signed.body_hash(),
-            ids_hash: ids,
+            body_hash: target.body_hash(),
+            ids_hash: set.ids_hash,
             time_bucket: parts.time_bucket,
         })
     }

@@ -841,10 +841,11 @@ fn witness_memory_signs_only_the_time_of_its_own_clock() {
     assert_eq!(ityv_ledger::SCHEMA_VERSION_WITNESS_MEMORY, 2);
 }
 
-/// A quorum-signed checkpoint over `ls[..size]` at `seq` after `previous`,
-/// time bucket `bucket`: the body and the signed object (witnesses 0..9).
-fn quorum_signed(
+/// A checkpoint over `ls[..size]` at `seq` after `previous`, time bucket
+/// `bucket`: the body and the object signed by witnesses `signers` of `ws`.
+fn checkpoint_by(
     ws: &[common::Witness],
+    signers: &[usize],
     ls: &[Hash512],
     seq: u64,
     size: u64,
@@ -855,42 +856,53 @@ fn quorum_signed(
     let body = body_object(&body_parts(
         seq, size, root, previous, EMPTY_ROOT, EMPTY_ROOT, GENESIS, bucket,
     ));
-    let signed = signed_checkpoint_object(ws, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &body);
+    let signed = signed_checkpoint_object(ws, signers, &body);
     (body, signed)
 }
 
-/// Catch-up after an outage (PROTOCOL §5.4): a witness that missed a
-/// checkpoint can neither sign it later (its time is past) nor the next one
-/// (a sequence gap); it adopts the quorum-signed checkpoint without signing
-/// it, then signs the next. Adoption needs a quorum, a later sequence
-/// number, the same ledger, a time not going back, a consistent tree and
-/// the same genesis; a refused adoption leaves the memory unchanged.
+const QUORUM: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+/// The genesis witness set of the tests' ledger: 13 witnesses, 13/9/4.
+fn witness_set<'a>(
+    entries: &'a [ityv_ledger::WitnessEntry<'a>],
+    genesis: Hash512,
+    ledger: &'static [u8],
+) -> ityv_ledger::WitnessSet<'a> {
+    ityv_ledger::WitnessSet::new(
+        genesis,
+        (
+            common::election(),
+            ityv_encoding::LedgerId::new(ledger).unwrap(),
+            ityv_encoding::KeysetId::new(common::KEYSET).unwrap(),
+        ),
+        ityv_ledger::Roster::new(entries).unwrap(),
+        ityv_ledger::QuorumProfile::DEFAULT_13_9_4,
+        ityv_ledger::DiversityPolicy::DEFAULT,
+    )
+    .unwrap()
+}
+
+/// Catch-up after an outage (PROTOCOL §5.4): a witness that missed
+/// checkpoints can neither sign them later (their time is past) nor the
+/// next one (a sequence gap). It adopts the run of published checkpoints it
+/// missed, without signing them, then signs the next.
 #[test]
-#[allow(clippy::too_many_lines)]
-fn a_witness_back_from_an_outage_adopts_the_checkpoints_it_missed() {
+fn a_witness_back_from_an_outage_adopts_the_run_it_missed() {
     let ws = witnesses(13);
     let entries = roster_entries(&ws);
-    let roster = ityv_ledger::Roster::new(&entries).unwrap();
-    let profile = ityv_ledger::QuorumProfile::DEFAULT_13_9_4;
-    let diversity = ityv_ledger::DiversityPolicy::DEFAULT;
-    let quorum = |bytes: &'static [u8]| {
-        let signed: &'static SignedCheckpoint<'static> = Box::leak(Box::new(decode_signed(bytes)));
-        ityv_ledger::evaluate(Box::leak(Box::new(roster)), &profile, &diversity, signed).unwrap()
-    };
-    let leak = |v: Vec<u8>| -> &'static [u8] { Box::leak(v.into_boxed_slice()) };
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
     let ls = leaves(8);
     let empty = ConsistencyProof::EMPTY;
-    // Checkpoint 1 over 3 leaves at bucket 100: signed.
-    let (b1, s1) = quorum_signed(&ws, &ls, 1, 3, Hash512::ZERO, 100);
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
     let (t1, memory) =
         WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
     assert!(t1.is_ok());
     let h1 = ityv_crypto::object_hash(&b1);
-    // Checkpoint 2 over 6 leaves at bucket 101, while the witness is away.
-    let (b2, s2) = quorum_signed(&ws, &ls, 2, 6, h1, 101);
-    let h2 = ityv_crypto::object_hash(&b2);
+    // Away while checkpoints 2 and 3 are published.
+    let (b2, s2) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let (_, s3) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, ityv_crypto::object_hash(&b2), 103);
     let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
-    // Back at bucket 103: too late for 2, a gap for 3.
+    let p38 = consistency_proof(&ls.as_slice(), 3, 8).unwrap();
     let memory = refuse(
         memory,
         &b2,
@@ -898,57 +910,34 @@ fn a_witness_back_from_an_outage_adopts_the_checkpoints_it_missed() {
         &[],
         &[],
         &GENESIS,
-        TimeBucket::new(103),
+        TimeBucket::new(104),
         &Error::TimeOutOfWindow,
     );
-    let (b3, s3) = quorum_signed(&ws, &ls, 3, 8, h2, 103);
-    let p68 = consistency_proof(&ls.as_slice(), 6, 8).unwrap();
+    let h3 = ityv_crypto::object_hash(decode_signed(&s3).body_bytes());
+    let (b4, _) = checkpoint_by(&ws, &QUORUM, &ls, 4, 8, h3, 104);
     let memory = refuse(
         memory,
-        &b3,
-        &p68,
+        &b4,
+        &empty,
         &[],
         &[],
         &GENESIS,
-        TimeBucket::new(103),
+        TimeBucket::new(104),
         &Error::SequenceGap,
     );
-    // Adoption's refusals leave the memory as it was.
-    let published2 = quorum(leak(s2));
+    // One checkpoint, then the rest of the run.
+    let run2 = [decode_signed(&s2)];
     let before = WitnessMemory::from_last(memory.last().copied());
-    let (r, memory) = memory.adopt(&published2, &empty, &GENESIS);
-    assert_eq!(r.unwrap_err(), Error::ProofInvalid);
-    let (r, memory) = memory.adopt(&published2, &p36, &Hash512([8; 64]));
-    assert_eq!(r.unwrap_err(), Error::GenesisMismatch);
-    // The checkpoint it signed, again: not above its last.
-    let (r, memory) = memory.adopt(&quorum(leak(s1)), &empty, &GENESIS);
-    assert_eq!(r.unwrap_err(), Error::SequenceGap);
-    // A later checkpoint dated before the last one, over a smaller tree, or
-    // of another ledger.
-    let (_, back) = quorum_signed(&ws, &ls, 2, 6, h1, 99);
-    let (r, memory) = memory.adopt(&quorum(leak(back)), &p36, &GENESIS);
-    assert_eq!(r.unwrap_err(), Error::TimeWentBack);
-    let (_, small) = quorum_signed(&ws, &ls, 2, 2, h1, 101);
-    let (r, memory) = memory.adopt(&quorum(leak(small)), &empty, &GENESIS);
-    assert_eq!(r.unwrap_err(), Error::TreeShrank);
-    let mut other = body_parts(
-        2,
-        6,
-        root_of_leaves(&ls.as_slice(), 6).unwrap(),
-        h1,
-        EMPTY_ROOT,
-        EMPTY_ROOT,
-        GENESIS,
-        101,
+    let (r, one) = before.adopt(&set, &run2, &p36, TimeBucket::new(104));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(one.last().unwrap().seq().get(), 2);
+    assert_eq!(
+        *one.last().unwrap().body_hash(),
+        ityv_crypto::object_hash(&b2)
     );
-    other.ledger_id = ityv_encoding::LedgerId::new(b"OTHER").unwrap();
-    let other = signed_checkpoint_object(&ws, &[0, 1, 2, 3, 4, 5, 6, 7, 8], &body_object(&other));
-    let (r, memory) = memory.adopt(&quorum(leak(other)), &p36, &GENESIS);
-    assert_eq!(r.unwrap_err(), Error::LedgerMismatch);
-    assert_eq!(memory, before);
-    // Adopt 2, then sign 3 in time.
-    let (r, memory) = memory.adopt(&published2, &p36, &GENESIS);
-    assert!(r.is_ok());
+    let run = [decode_signed(&s2), decode_signed(&s3)];
+    let (r, memory) = memory.adopt(&set, &run, &p38, TimeBucket::new(104));
+    assert!(r.is_ok(), "{r:?}");
     let last = memory.last().unwrap();
     assert_eq!(
         (
@@ -956,41 +945,159 @@ fn a_witness_back_from_an_outage_adopts_the_checkpoints_it_missed() {
             last.tree_size().get(),
             last.time_bucket().get()
         ),
-        (2, 6, 101)
+        (3, 8, 103)
     );
-    assert_eq!(*last.body_hash(), h2);
+    assert_eq!(*last.body_hash(), h3);
     assert_eq!(
         *last.root_hash(),
-        root_of_leaves(&ls.as_slice(), 6).unwrap()
+        root_of_leaves(&ls.as_slice(), 8).unwrap()
     );
-    let (t3, memory) = memory.may_sign(&b3, &p68, &[], &[], &GENESIS, TimeBucket::new(103));
-    assert!(t3.is_ok());
-    assert_eq!(memory.last().unwrap().seq().get(), 3);
-    // Adoption may skip several checkpoints, and a fresh witness adopts
-    // from the empty tree.
-    let published3 = quorum(leak(s3));
-    let p38 = consistency_proof(&ls.as_slice(), 3, 8).unwrap();
-    let (_, m1) =
-        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
-    let (r, m3) = m1.adopt(&published3, &p38, &GENESIS);
-    assert!(r.is_ok());
-    assert_eq!(m3.last().unwrap().seq().get(), 3);
-    let (r, fresh) = WitnessMemory::fresh().adopt(&published3, &empty, &GENESIS);
-    assert!(r.is_ok(), "{r:?}");
-    assert_eq!(fresh.last().unwrap().seq().get(), 3);
-    // The same tree and the same bucket as the last one are adopted: neither
-    // has to grow.
-    let (_, same) = quorum_signed(&ws, &ls, 2, 3, h1, 100);
-    let (_, m1) =
-        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
-    let (r, m2) = m1.adopt(&quorum(leak(same)), &empty, &GENESIS);
-    assert!(r.is_ok(), "{r:?}");
+    let (t4, memory) = memory.may_sign(&b4, &empty, &[], &[], &GENESIS, TimeBucket::new(104));
+    assert!(t4.is_ok());
+    assert_eq!(memory.last().unwrap().seq().get(), 4);
+}
+
+/// Every rule of adoption (PROTOCOL §5.4): a refused adoption leaves the
+/// memory unchanged.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn adoption_refuses_what_an_honest_quorum_did_not_publish_after_this_witness() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let signed_1 = || {
+        WitnessMemory::fresh()
+            .may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100))
+            .1
+    };
+    let (_, s2) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let run2 = [decode_signed(&s2)];
+    let now = TimeBucket::new(101);
+    let check = |memory: WitnessMemory,
+                 set: &ityv_ledger::WitnessSet<'_>,
+                 run: &[SignedCheckpoint<'_>],
+                 proof: &ConsistencyProof,
+                 now: TimeBucket| {
+        let before = WitnessMemory::from_last(memory.last().copied());
+        let (r, after) = memory.adopt(set, run, proof, now);
+        if r.is_err() {
+            assert_eq!(after, before, "a refused adoption changes nothing");
+        }
+        r
+    };
+    // No adoption from an empty memory: a witness that lost its memory, or
+    // never had one, counts in f.
     assert_eq!(
-        (
-            m2.last().unwrap().seq().get(),
-            m2.last().unwrap().tree_size().get()
-        ),
-        (2, 3)
+        check(WitnessMemory::fresh(), &set, &run2, &p36, now),
+        Err(Error::NoMemory)
     );
+    // An empty run, a run that skips a checkpoint, a run with a break.
+    assert_eq!(
+        check(signed_1(), &set, &[], &p36, now),
+        Err(Error::SequenceGap)
+    );
+    let (_, s3) = checkpoint_by(&ws, &QUORUM, &ls, 3, 6, h1, 101);
+    let skip = [decode_signed(&s3)];
+    assert_eq!(
+        check(signed_1(), &set, &skip, &p36, now),
+        Err(Error::SequenceGap)
+    );
+    let broken = [decode_signed(&s2), decode_signed(&s3)];
+    assert_eq!(
+        check(signed_1(), &set, &broken, &p36, now),
+        Err(Error::PreviousHashMismatch)
+    );
+    // Not the witness set's quorum: eight signers, or a roster of one.
+    let (_, short) = checkpoint_by(&ws, &QUORUM[..8], &ls, 2, 6, h1, 101);
+    assert!(matches!(
+        check(signed_1(), &set, &[decode_signed(&short)], &p36, now),
+        Err(Error::QuorumShort { .. })
+    ));
+    let stranger = witnesses(14);
+    let (_, foreign) = checkpoint_by(&stranger[13..], &[0], &ls, 2, 6, h1, 101);
+    assert!(check(signed_1(), &set, &[decode_signed(&foreign)], &p36, now).is_err());
+    // Another genesis or ledger than the set's.
+    let other_genesis = witness_set(&entries, Hash512([8; 64]), common::LEDGER);
+    assert_eq!(
+        check(signed_1(), &other_genesis, &run2, &p36, now),
+        Err(Error::GenesisMismatch)
+    );
+    let other_ledger = witness_set(&entries, GENESIS, b"OTHER");
+    assert_eq!(
+        check(signed_1(), &other_ledger, &run2, &p36, now),
+        Err(Error::LedgerMismatch)
+    );
+    // Timed past what an honest quorum could attest by this clock: one
+    // bucket ahead is possible (two honest clocks a bucket apart), two are
+    // not.
+    assert_eq!(
+        check(signed_1(), &set, &run2, &p36, TimeBucket::new(99)),
+        Err(Error::TimeAhead)
+    );
+    assert!(check(signed_1(), &set, &run2, &p36, TimeBucket::new(100)).is_ok());
+    // Time going back from the last one, a smaller tree, no proof.
+    let (_, back) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 99);
+    assert_eq!(
+        check(signed_1(), &set, &[decode_signed(&back)], &p36, now),
+        Err(Error::TimeWentBack)
+    );
+    let (_, small) = checkpoint_by(&ws, &QUORUM, &ls, 2, 2, h1, 101);
+    assert_eq!(
+        check(signed_1(), &set, &[decode_signed(&small)], &empty, now),
+        Err(Error::TreeShrank)
+    );
+    assert_eq!(
+        check(signed_1(), &set, &run2, &empty, now),
+        Err(Error::ProofInvalid)
+    );
+    // The same tree and the same bucket are adopted: neither has to grow.
+    let (_, same) = checkpoint_by(&ws, &QUORUM, &ls, 2, 3, h1, 100);
+    assert!(check(signed_1(), &set, &[decode_signed(&same)], &empty, now).is_ok());
     assert_eq!(ityv_ledger::CLOCK_ERROR_BUCKETS, 1);
+    assert_eq!(*set.genesis_hash(), GENESIS);
+}
+
+/// A split view (VC-065): the witness signed X at seq 2, the published
+/// chain has Y there and Z after it. Adopting Z reports the split view
+/// instead of following the other branch; the evidence is the witness's X
+/// and the quorum-signed Z naming Y.
+#[test]
+fn adoption_reports_a_split_view() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let p68 = consistency_proof(&ls.as_slice(), 6, 8).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let (_, memory) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    let (x, _) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let (tx, memory) = memory.may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101));
+    assert!(tx.is_ok());
+    let (y, _) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 102);
+    let (_, z) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, ityv_crypto::object_hash(&y), 102);
+    let run = [decode_signed(&z)];
+    let (r, memory) = memory.adopt(&set, &run, &p68, TimeBucket::new(103));
+    assert_eq!(
+        r,
+        Err(Error::SplitView {
+            seq: Seq::new(2).unwrap()
+        })
+    );
+    assert_eq!(
+        *memory.last().unwrap().body_hash(),
+        ityv_crypto::object_hash(&x)
+    );
+    assert_ne!(
+        run[0].body().parts().previous_checkpoint_hash,
+        *memory.last().unwrap().body_hash()
+    );
 }
