@@ -471,7 +471,7 @@ impl<'a> Ctx<'_, 'a> {
 }
 
 /// The commitments of a record, as group elements.
-fn commitments_of(record: &CastRecord<'_>) -> Option<Vec<Commitment>> {
+pub(crate) fn commitments_of(record: &CastRecord<'_>) -> Option<Vec<Commitment>> {
     record
         .body()
         .commitments()
@@ -551,7 +551,10 @@ fn opening_reconstructs(
 
 /// Exactly `chunks` canonical scalars, padded with zero to the chunk
 /// capacity.
-fn scalars(raw: &[ityv_encoding::Scalar32], chunks: usize) -> Option<[Scalar; CRYPTO_MAX_CHUNKS]> {
+pub(crate) fn scalars(
+    raw: &[ityv_encoding::Scalar32],
+    chunks: usize,
+) -> Option<[Scalar; CRYPTO_MAX_CHUNKS]> {
     let mut out = [Scalar::ZERO; CRYPTO_MAX_CHUNKS];
     if raw.len() != chunks {
         return None;

@@ -30,6 +30,14 @@
 //!    recomputation, an opening of every chunk that verifies, and a paper
 //!    count that agrees; not run while any of them is not yet on the
 //!    ledger; a refused event or a mismatch holds;
+//! 8. audit ([`crate::verify_audit`]): passed when the seed is taken with
+//!    the beacon value the caller observed and every ballot style's audit
+//!    concluded under its rule (a round within its threshold or a hand
+//!    count of every unit, every device with a code 1 or 2 compared in full
+//!    with a finding); not run otherwise; a refused event, a frame that is
+//!    not the ledger's, an opening that does not reconstruct or a missing
+//!    ballot holds. The report computes this itself: no caller flag makes
+//!    the audit concluded;
 //! 9. disputes ([`crate::verify_disputes`]): a dispute still unresolved
 //!    after every dispute event holds the ledger, and so does a dispute
 //!    event or legal decision that cannot be taken (a signature that does
@@ -48,15 +56,16 @@
 //! stays `UNVERIFIED`.
 //!
 //! With the participation ledger complete and every unit's tally passed,
-//! the status reaches `CRYPTO_TALLY_VERIFIED`. What the report does not
-//! reach yet: audit, split view, connectivity and software (stages 8,
-//! 10–12), so `PAPER_AUDITED` is out of reach.
+//! the status reaches `CRYPTO_TALLY_VERIFIED`; with every style's audit
+//! concluded, `PAPER_AUDITED`. What the report does not run yet: split
+//! view, connectivity and software (stages 10–12).
 
 use ityv_encoding::{CaptureProfile, ScopeSet};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
 use ityv_state::status::{Step, evaluate};
 use ityv_state::{Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport};
 
+use crate::audit::{AuditInput, AuditStage, verify_audit};
 use crate::authority::{AuthorityStage, authorize_ledger};
 use crate::boxes::{BoxStage, verify_boxes};
 use crate::checkpoint::{CheckpointChain, verify_checkpoints};
@@ -90,6 +99,7 @@ pub struct Report<'a> {
     participation: ParticipationStage<'a>,
     disputes: DisputeStage<'a>,
     tally: TallyStage<'a>,
+    audit: AuditStage<'a>,
     evidence: Evidence,
     status: StatusReport,
 }
@@ -149,6 +159,12 @@ impl<'a> Report<'a> {
         &self.tally
     }
 
+    /// The audit (stage 8).
+    #[must_use]
+    pub const fn audit(&self) -> &AuditStage<'a> {
+        &self.audit
+    }
+
     /// What was handed to the status rule, step by step.
     #[must_use]
     pub const fn evidence(&self) -> &Evidence {
@@ -168,6 +184,16 @@ fn without_close_missing(holds: HoldSet) -> HoldSet {
         .iter()
         .filter(|r| *r != HoldReason::CloseMissing)
         .fold(HoldSet::empty(), HoldSet::with)
+}
+
+/// The outcome of a step that only passes or is not yet run: what it
+/// found wrong is a hold, not a failure.
+const fn ran(passed: bool) -> Outcome {
+    if passed {
+        Outcome::Passed
+    } else {
+        Outcome::NotRun
+    }
 }
 
 const fn outcome(passed: bool) -> Outcome {
@@ -202,13 +228,36 @@ fn checkpoint_outcome(chain: &CheckpointChain, index: &LedgerIndex<'_>) -> Outco
 }
 
 /// Runs every stage over the ledger `frames` (with the event objects
-/// `events` published beside it) against `genesis`, and gives the status.
+/// `events` published beside it) against `genesis`, and gives the status,
+/// with nothing observed for the audit: no beacon value, no restricted
+/// opening. The audit cannot conclude without the beacon value, so the
+/// status stops at `CRYPTO_TALLY_VERIFIED` ([`verify_ledger_with`]).
 #[must_use]
 pub fn verify_ledger<'a>(
     genesis: &VerifiedGenesis<'a>,
     frames: &'a [u8],
     events: &[&'a [u8]],
     publications: Publications,
+) -> Report<'a> {
+    verify_ledger_with(
+        genesis,
+        frames,
+        events,
+        publications,
+        &AuditInput::default(),
+    )
+}
+
+/// As [`verify_ledger`], with what the caller brings to the audit: the
+/// beacon value it observed and, for a verifier with access, the
+/// restricted sample openings ([`AuditInput`]).
+#[must_use]
+pub fn verify_ledger_with<'a>(
+    genesis: &VerifiedGenesis<'a>,
+    frames: &'a [u8],
+    events: &[&'a [u8]],
+    publications: Publications,
+    audit_input: &AuditInput<'_>,
 ) -> Report<'a> {
     let index = build_index(genesis, frames, events);
     let authority = authorize_ledger(genesis, &index);
@@ -227,6 +276,15 @@ pub fn verify_ledger<'a>(
         &records,
         &disputes,
     );
+    let audit = verify_audit(
+        genesis,
+        &index,
+        &authority,
+        &checkpoints,
+        &records,
+        &tally,
+        audit_input,
+    );
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
         acc.union(without_close_missing(r.holds))
@@ -240,7 +298,8 @@ pub fn verify_ledger<'a>(
         .union(progress.holds())
         .union(participation.holds())
         .union(disputes.holds())
-        .union(tally.holds());
+        .union(tally.holds())
+        .union(audit.holds());
     let scopes = authority
         .authorization()
         .map_or(ScopeSet::empty(), ityv_state::Authorization::scopes);
@@ -252,31 +311,11 @@ pub fn verify_ledger<'a>(
         .with_step(Step::Checkpoints, checkpoint_outcome(&checkpoints, &index))
         .with_step(Step::Frames, outcome(index.ledger_holds().is_empty()))
         .with_step(Step::BoxInvariants, Outcome::Passed)
-        .with_step(
-            Step::BoxCompleteness,
-            if boxes.complete() {
-                Outcome::Passed
-            } else {
-                Outcome::NotRun
-            },
-        )
+        .with_step(Step::BoxCompleteness, ran(boxes.complete()))
         .with_step(Step::Records, Outcome::Passed)
-        .with_step(
-            Step::Participation,
-            if participation.complete() {
-                Outcome::Passed
-            } else {
-                Outcome::NotRun
-            },
-        )
-        .with_step(
-            Step::Tally,
-            if tally.passed() {
-                Outcome::Passed
-            } else {
-                Outcome::NotRun
-            },
-        )
+        .with_step(Step::Participation, ran(participation.complete()))
+        .with_step(Step::Tally, ran(tally.passed()))
+        .with_step(Step::Audit, ran(audit.passed()))
         .with_anchors(publications.anchors)
         .with_board(publications.board)
         .with_holds(holds);
@@ -294,6 +333,7 @@ pub fn verify_ledger<'a>(
         participation,
         disputes,
         tally,
+        audit,
         evidence,
         status,
     }

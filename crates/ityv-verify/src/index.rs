@@ -45,6 +45,11 @@ use alloc::vec::Vec;
 use ityv_crypto::hash::object_hash;
 use ityv_encoding::schema_version;
 use ityv_encoding::{
+    AuditFindingBody, AuditManifestFreezeBody, AuditSeedBody, HandCountReportBody,
+    SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
+    SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY, SampleComparisonBody,
+};
+use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CastRecord, ChallengeOpening,
     CheckinUnitSwapBody, CustodyHandoffBody, Decode, DeviceAttestation, DisputeEventBody,
     ElectionId, FallbackBody, Hash512, ImprintAuditBody, IssuanceCountBody, LateBatchCloseBody,
@@ -86,8 +91,12 @@ pub enum Scope<'a> {
 /// only restricted or sealed verifiers hold the bodies. The index keeps
 /// such a frame by its hash (replays still count) and asks for no body:
 /// `CheckinCounter` (0x0009, restricted) and `SharePackage` (0x000B,
-/// sealed). Restricted events without a schema yet (`SampleOpening`) join
-/// the list when they get one.
+/// sealed). A sample opening is not among them: its restricted body
+/// (`SampleOpeningBody`, `0x0049`) never reaches the public ledger, which
+/// carries instead the trustees' public reference to it
+/// (`SampleOpeningRefBody` in a `QuorumSigned`, ADR-0036); a frame of the
+/// restricted schema is one the verifier does not know, and holds the
+/// ledger.
 pub const OPAQUE_SCHEMAS: [SchemaId; 2] = [SchemaId::new(0x0009), SCHEMA_SHARE_PACKAGE];
 
 /// What is wrong with a frame.
@@ -398,6 +407,23 @@ fn witnessed<'a>(event: &WitnessedEvent<'a>) -> Option<(Scope<'a>, ElectionId<'a
         // unit's scopes and openings.
         let b = event.body::<PaperCountReportBody<'a>>(s).ok()?;
         (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_HAND_COUNT_REPORT_BODY {
+        // A reporting unit's hand count: the audit stage reads it.
+        let b = event.body::<HandCountReportBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_AUDIT_FREEZE_BODY {
+        let b = event.body::<AuditManifestFreezeBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_AUDIT_SEED_BODY {
+        let b = event.body::<AuditSeedBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_SAMPLE_COMPARISON_BODY {
+        // The paper of the device's box was compared.
+        let b = event.body::<SampleComparisonBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().device_id), b.parts().election_id)
+    } else if s == SCHEMA_AUDIT_FINDING_BODY {
+        let b = event.body::<AuditFindingBody<'a>>(s).ok()?;
+        (Scope::Box(b.parts().device_id), b.parts().election_id)
     } else {
         return None;
     };
@@ -518,16 +544,12 @@ fn classify<'a>(
         // reporting unit, or the receipt resolution of an out-of-district
         // box: the tally stage reads every one.
         let q = decode::<QuorumSigned<'a>>(schema, bytes)?;
-        let election = match (
-            q.tally_scope(),
-            q.aggregate_opening(),
-            q.receipt_resolution(),
-        ) {
-            (Some(t), _, _) => t.parts().election_id,
-            (None, Some(o), _) => o.parts().election_id,
-            (None, None, Some(r)) => r.parts().election_id,
-            (None, None, None) => return None,
-        };
+        let election = q
+            .tally_scope()
+            .map(|t| t.parts().election_id)
+            .or_else(|| q.aggregate_opening().map(|o| o.parts().election_id))
+            .or_else(|| q.receipt_resolution().map(|r| r.parts().election_id))
+            .or_else(|| q.sample_opening_ref().map(|s| s.parts().election_id))?;
         Classified::new(Scope::Election, Role::Other, election)
     } else if schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION {
         let a = decode::<SignedLegalAuthorization<'a>>(schema, bytes)?;

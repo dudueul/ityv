@@ -526,7 +526,10 @@ impl BoxInfo<'_> {
 }
 
 /// The accepted event at frame `seq`.
-fn event_at<'s, 'a>(index: &'s LedgerIndex<'a>, seq: Seq) -> Option<&'s IndexedEvent<'a>> {
+pub(crate) fn event_at<'s, 'a>(
+    index: &'s LedgerIndex<'a>,
+    seq: Seq,
+) -> Option<&'s IndexedEvent<'a>> {
     let events = index.events();
     let at = events
         .binary_search_by_key(&seq.get(), |e| e.seq.get())
@@ -609,14 +612,29 @@ fn box_info<'a>(
 }
 
 /// The trustees of the genesis and the access structure of its chambers.
-struct Trustees<'a> {
+pub(crate) struct Trustees<'a> {
     entries: Vec<Entry<TrusteeEntry<'a>>>,
     structure: Option<AccessStructure>,
 }
 
+impl<'a> Trustees<'a> {
+    /// The trustees of `genesis`, proved, and the access structure of its
+    /// chambers.
+    pub(crate) fn of(genesis: &VerifiedGenesis<'a>) -> Self {
+        let body = genesis.genesis().body();
+        Self {
+            entries: genesis
+                .trustees()
+                .filter_map(|t| genesis.trustee_entry(t.trustee_id.as_bytes()))
+                .collect(),
+            structure: access_structure(body.parties().count(), body.chambers()),
+        }
+    }
+}
+
 impl Trustees<'_> {
     /// Whether a qualified quorum of trustees signed `q`.
-    fn signed(&self, q: &QuorumSigned<'_>) -> bool {
+    pub(crate) fn signed(&self, q: &QuorumSigned<'_>) -> bool {
         let Some(structure) = self.structure.as_ref() else {
             return false;
         };
@@ -1422,18 +1440,11 @@ pub fn verify_tally<'a>(
     records: &RecordStage<'a>,
     disputes: &DisputeStage<'a>,
 ) -> TallyStage<'a> {
-    let body = genesis.genesis().body();
     let ctx = Ctx {
         genesis,
         index,
         authority,
-        trustees: Trustees {
-            entries: genesis
-                .trustees()
-                .filter_map(|t| genesis.trustee_entry(t.trustee_id.as_bytes()))
-                .collect(),
-            structure: access_structure(body.parties().count(), body.chambers()),
-        },
+        trustees: Trustees::of(genesis),
         checkpoints: checkpoints
             .checkpoints()
             .iter()
