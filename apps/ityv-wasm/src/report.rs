@@ -236,6 +236,7 @@ pub fn verify(bytes: &[u8], pin: Option<Hash512>) -> Verification {
     j.str("format", "ityv-console-report/1");
     j.str("scenario", bundle.name);
     j.str("pin", &grouped(&fingerprint(pin_used.as_bytes())));
+    j.str("pinHex", &hex(pin_used.as_bytes()));
     j.bool("pinFromBundle", pin.is_none() || pin == Some(bundle.pin));
     let genesis = match verify_genesis(&pin_used, &input, &amendments) {
         Ok(g) => g,

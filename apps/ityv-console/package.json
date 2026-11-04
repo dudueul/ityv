@@ -1,0 +1,20 @@
+{
+  "name": "ityv-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "description": "ityv read-only public verification console and device screen prototypes (outside the TCB, development only)",
+  "scripts": {
+    "data": "bun scripts/data.ts",
+    "dev": "bun scripts/data.ts && bun --hot server.ts",
+    "build": "bun scripts/data.ts && bun scripts/build.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "screens": "node scripts/screens.cjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "trustedDependencies": []
+}
