@@ -1,8 +1,10 @@
 # ityv workspace. Every crate under crates/ is trusted computing base (TCB) and
 # inherits the lint set below without exception (CONSTITUTION.md §1.1).
+# `tools/` and `apps/` hold code outside the TCB (CONSTITUTION.md §0): it may
+# depend on TCB crates, never the reverse, and sets its own lints.
 [workspace]
 resolver = "3"
-members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit", "crates/ityv-state", "crates/ityv-verify", "crates/ityv-tsa"]
+members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit", "crates/ityv-state", "crates/ityv-verify", "crates/ityv-tsa", "tools/ityv-sim", "apps/ityv-wasm"]
 # cargo-fuzz targets: outside the TCB, built only with nightly (their own workspace).
 exclude = ["crates/ityv-tsa/fuzz"]
 

@@ -1,0 +1,55 @@
+[package]
+name = "ityv-sim"
+description = "ityv synthetic-election generator (outside the TCB): deterministic signed elections, attack and fault scenarios, and development bundles for the verification console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "ityv-sim"
+path = "src/main.rs"
+
+# Only workspace crates (no external dependency). Randomness for hedged
+# signing and for commitments comes from `ityv-cunit`'s SHA3 counter-mode
+# generator seeded from the scenario seed, so every run is byte-identical.
+[dependencies]
+ityv-encoding = { path = "../../crates/ityv-encoding", version = "=0.1.0" }
+ityv-crypto = { path = "../../crates/ityv-crypto", version = "=0.1.0" }
+ityv-ledger = { path = "../../crates/ityv-ledger", version = "=0.1.0" }
+ityv-cunit = { path = "../../crates/ityv-cunit", version = "=0.1.0" }
+ityv-state = { path = "../../crates/ityv-state", version = "=0.1.0" }
+ityv-verify = { path = "../../crates/ityv-verify", version = "=0.1.0" }
+
+[dev-dependencies]
+ityv-wasm = { path = "../../apps/ityv-wasm", version = "=0.1.0" }
+
+# Outside the TCB (CONSTITUTION.md §0): the workspace lint set is not
+# inherited. A generator is allowed to stop on its own bug, so the
+# restriction lints against panics are off; the documentation and pedantic
+# lints stay on.
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# Every constructor here unwraps a value the generator itself made valid;
+# a failure is a generator bug, not an input error.
+missing_panics_doc = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+module_name_repetitions = "allow"
+# Builders return leaked values whose use is obvious at every call site,
+# and scenario code names its election, plan and box with one letter.
+must_use_candidate = "allow"
+many_single_char_names = "allow"
+similar_names = "allow"
+unused_self = "allow"

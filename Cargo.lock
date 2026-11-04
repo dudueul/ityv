@@ -376,6 +376,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ityv-sim"
+version = "0.1.0"
+dependencies = [
+ "ityv-crypto",
+ "ityv-cunit",
+ "ityv-encoding",
+ "ityv-ledger",
+ "ityv-state",
+ "ityv-verify",
+ "ityv-wasm",
+]
+
+[[package]]
 name = "ityv-state"
 version = "0.1.0"
 dependencies = [
@@ -409,6 +422,17 @@ dependencies = [
  "ityv-state",
  "rand_chacha",
  "rand_core",
+]
+
+[[package]]
+name = "ityv-wasm"
+version = "0.1.0"
+dependencies = [
+ "ityv-crypto",
+ "ityv-encoding",
+ "ityv-ledger",
+ "ityv-state",
+ "ityv-verify",
 ]
 
 [[package]]
