@@ -16,7 +16,7 @@
 //! | [`day`] | One station's day, slot by slot, with alarms and the emergency slot |
 //! | [`election`] | The signed genesis and every event builder |
 //! | [`plan`] | The ledger plan of a whole election |
-//! | [`ledger`] | Steps laid down as frames with witness checkpoints |
+//! | [`mod@ledger`] | Steps laid down as frames with witness checkpoints |
 //! | [`scenarios`] | The named scenarios and their expected outcomes |
 //! | [`bundle`] | The development bundle encoder |
 //! | [`meta`] | `index.json` |

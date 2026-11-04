@@ -151,3 +151,31 @@ jobs:
           toolchain: 1.97.0
       - run: cargo install --locked cargo-mutants@27.1.0
       - run: cargo mutants -p ${{ matrix.crate }} --shard ${{ matrix.shard }} --jobs 2 --timeout 300
+
+  console:
+    name: console (WASM verifier, scenario bundles, TypeScript)
+    runs-on: ubuntu-24.04
+    # Outside the TCB (ADR-0038): the WASM wrapper, the simulator's quick
+    # scenario set and the read-only console. The Rust crates themselves
+    # are covered by the clippy and test jobs above.
+    env:
+      ITYV_SIM_SET: quick
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          targets: wasm32-unknown-unknown
+      - run: cargo build --locked -p ityv-wasm --target wasm32-unknown-unknown --release
+      - run: cargo run --locked --release -p ityv-sim -- --quick apps/ityv-console/public/bundles
+      - uses: oven-sh/setup-bun@v2.0.2
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile
+        working-directory: apps/ityv-console
+      - run: bunx tsc --noEmit
+        working-directory: apps/ityv-console
+      - run: bun test
+        working-directory: apps/ityv-console
+      - run: bun run build
+        working-directory: apps/ityv-console
