@@ -101,7 +101,24 @@ HonestAdopt(w, b) ==
   /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
   /\ UNCHANGED sigs
 
-Next == \E w \in Honest, b \in Bodies : HonestSign(w, b) \/ HonestAdopt(w, b)
+(* Past a split view (WitnessMemory::adopt_past_split): the witness's last
+   body did not reach a quorum and another body at the same sequence number
+   did, over a tree extending the witness's own; it takes the published
+   body into its memory without signing, and signs only after it. It never
+   signs a second body at that sequence number. *)
+HonestAdoptPastSplit(w, b) ==
+  /\ w \in Honest
+  /\ lastSigned[w] # None
+  /\ b \in Published
+  /\ b.seq = lastSigned[w].seq
+  /\ b # lastSigned[w]
+  /\ IsPrefix(lastSigned[w].prefix, b.prefix)
+  /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
+  /\ UNCHANGED sigs
+
+Next ==
+  \E w \in Honest, b \in Bodies :
+    HonestSign(w, b) \/ HonestAdopt(w, b) \/ HonestAdoptPastSplit(w, b)
 
 Spec == Init /\ [][Next]_vars
 
