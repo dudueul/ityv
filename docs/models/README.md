@@ -24,7 +24,7 @@ java -XX:+UseParallelGC -jar tla2tools.jar -config LedgerWitness.cfg LedgerWitne
 
 ## 코드와의 대응
 
-`HonestSign`의 전제(다음 seq, 직전 서명 본문의 접두 확장)는 `ityv-ledger`의 `WitnessMemory::may_sign`이 구현한다(ADR-0016 §4). 모델의 접두 관계는 코드에서 일관성 증명 검증으로, `Quorum`은 `QuorumProfile`로 대응하며, 모델의 `ASSUME 2·Quorum − N > Byzantine`는 `QuorumProfile::new`의 유효성 조건이다.
+`HonestSign`의 전제(다음 seq, 직전 서명 본문의 접두 확장)는 `ityv-ledger`의 `WitnessMemory::may_sign`이 구현한다(ADR-0016 §4). 코드에는 모델에 없는 전제가 하나 더 있다: `time_bucket`이 증인 시계의 허용 범위 안이고 직전 서명 이상이어야 한다(PROTOCOL §5.4, VC-012). 모델은 시각을 추상화한다. 이 전제는 서명을 줄이기만 하므로 `Agreement`·`Linear`에 영향이 없다. 모델의 접두 관계는 코드에서 일관성 증명 검증으로, `Quorum`은 `QuorumProfile`로 대응하며, 모델의 `ASSUME 2·Quorum − N > Byzantine`는 `QuorumProfile::new`의 유효성 조건이다.
 
 ## 모델이 다루지 않는 것
 

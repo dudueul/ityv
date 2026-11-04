@@ -44,7 +44,7 @@ ityv의 다른 모든 크레이트는 암호를 이 크레이트를 통해서만
 | Fiat-Shamir | `SHA3-512("ityv:fs:v1:" ‖ proof_system ‖ 0x00 ‖ u64_be(len) ‖ transcript)`를 스칼라로 균등 축소 |
 | 해시-투-그룹 | `from_uniform_bytes(SHA3-512(label ‖ 0x00))`, 라벨은 `ityv:base:val:v1`, `ityv:base:id:v1`, `ityv:base:rand:v1` |
 | 비콘 값 | `SHA3-512("ityv:beacon:v1" ‖ 0x00 ‖ u32_be(len(source)) ‖ source ‖ u64_be(round) ‖ output)` |
-| 감사 시드 | `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice ‖ beacon ‖ binding_checkpoint)` (구속 체크포인트, PROTOCOL §12.1) |
+| 감사 시드 | `SHA3-512("ityv:seed:v1" ‖ 0x00 ‖ dice ‖ beacon ‖ binding_checkpoint)` (고정 체크포인트, PROTOCOL §12.1) |
 | 표본 흐름 | 열쇠 `SHA3-512("ityv:sample:v1" ‖ 0x00 ‖ seed ‖ u32_be(len(style)) ‖ style)`, 블록 `SHA3-512(열쇠 ‖ u64_be(i))`, big-endian `u64` 낱말, `x ≤ 2^64 − 1 − (2^64 mod n)`일 때만 `x mod n` |
 | KEM 키 유도 | `SHA3-512("ityv:kem:v1" ‖ 0x00 ‖ ss_mlkem ‖ ss_x25519 ‖ ct_mlkem ‖ ct_x25519 ‖ pk_x25519)[0..32]` (수신자 X25519 공개키까지 결속; X-Wing 결합기 논증) |
 

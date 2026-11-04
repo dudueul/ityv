@@ -71,6 +71,10 @@ Init ==
   /\ sigs = ByzantineSigs
 
 (* An honest witness signs body b only as the next step of its own chain. *)
+\* The code adds one premise the model abstracts away: the body's time
+\* bucket is within the witness's clock tolerance and not below its last
+\* signed one (PROTOCOL.md §5.4, VC-012). It only removes signatures, so
+\* Agreement and Linear are unaffected.
 HonestSign(w, b) ==
   /\ w \in Honest
   /\ b \in Bodies

@@ -106,9 +106,10 @@ impl TreeSize {
     }
 }
 
-/// A coarse time bucket. The width of a bucket is fixed by the protocol
-/// specification (fifteen minutes for check-in events); this crate treats
-/// the value as opaque.
+/// A coarse time bucket: the fifteen-minute index from 00:00 UTC of the
+/// genesis's `election_epoch_day` (days since the Unix epoch), as the
+/// protocol specification fixes it (PROTOCOL.md §2, ENCODING.md §8.3);
+/// this crate treats the value as opaque.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TimeBucket(u64);
 
