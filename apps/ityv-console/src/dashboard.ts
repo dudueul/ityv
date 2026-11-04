@@ -7,7 +7,7 @@
 import type { Hold, IndexElection, IndexScenario, Report, SimIndex, StationProgress } from "./data";
 import { slotDay, slotTime } from "./data";
 import { el, icon } from "./render";
-import { inclusion, loadBundle, parsePin, verifyBundle } from "./verifier";
+import { inclusion, lastVerified, loadBundle, parsePin, verifyBundle } from "./verifier";
 import { ALARMS, HOLDS, HOLD_MEANS, HOLD_WORD, LADDER, LEGAL_MEANS, LEGAL_WORD, OUTCOMES, STAGES, STEPS } from "./vocab";
 
 interface State {
@@ -80,7 +80,7 @@ async function run(bytes: ArrayBuffer, pin?: Uint8Array): Promise<void> {
   const start = performance.now();
   st.busy = st.busy ?? "검증 중…";
   rerender();
-  const report = await verifyBundle(bytes, pin);
+  const report = await verifyBundle(bytes, pin, st.scenario?.name ?? st.fileName);
   st.report = report;
   st.busy = null;
   st.error = report.error ?? null;
@@ -663,6 +663,10 @@ function lookupCard(r: Report): HTMLElement {
       out.textContent = "이 번들의 공개원장에서 그 추적코드를 찾지 못했다.";
       return;
     }
+    // The worker answers for the bundle it verified last (the self-test
+    // may have verified others since): verify this one again if needed.
+    const key = st.scenario?.name ?? st.fileName;
+    if (lastVerified() !== key && st.bytes) await verifyBundle(st.bytes.slice(0), undefined, key);
     const inc = await inclusion(rec.seq);
     out.textContent = inc.included
       ? `프레임 ${rec.seq} (${rec.box}, ${rec.state})가 체크포인트 ${inc.checkpoint}(트리 크기 ${inc.treeSize})에 포함됨: ityv-ledger 포함 증명 ${inc.pathLength}단계를 검증한 root ${inc.root}에 대해 확인했다. 누구를 찍었는지는 알 수 없다.`
@@ -699,7 +703,7 @@ function selfTestCard(): HTMLElement {
     const list = st.index?.scenarios.filter((s) => s.set === "quick") ?? [];
     st.selftest = [];
     for (const s of list) {
-      const r = await verifyBundle(await loadBundle(s.file));
+      const r = await verifyBundle(await loadBundle(s.file), undefined, s.name);
       const ok = r.status === s.expected.status && sameHolds(s.expected.holds, r.holds ?? []);
       st.selftest.push({
         name: s.title,

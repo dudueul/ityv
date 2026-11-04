@@ -25,10 +25,22 @@ function call(message: Record<string, unknown>, transfer: Transferable[] = []): 
   });
 }
 
-/** Verifies a bundle (optionally under another pin, 64 bytes). */
-export async function verifyBundle(bytes: ArrayBuffer, pin?: Uint8Array): Promise<Report> {
+let lastKey: string | null = null;
+
+/** Verifies a bundle (optionally under another pin, 64 bytes). `key`
+ * names it: the worker keeps the last verified bundle for inclusion
+ * proofs, and `lastVerified` says which one that is. */
+export async function verifyBundle(bytes: ArrayBuffer, pin?: Uint8Array, key: string | null = null): Promise<Report> {
+  lastKey = null;
   const text = await call({ type: "verify", bundle: bytes, pin }, [bytes]);
+  lastKey = pin ? null : key;
   return JSON.parse(text) as Report;
+}
+
+/** The key of the bundle the worker verified last (`null` if unnamed or
+ * verified under another pin). */
+export function lastVerified(): string | null {
+  return lastKey;
 }
 
 /** The inclusion of frame `seq` of the last verified bundle. */

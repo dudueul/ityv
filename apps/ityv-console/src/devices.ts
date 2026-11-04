@@ -37,7 +37,7 @@ import {
   type VoterState,
 } from "./screens";
 import { STRINGS } from "./strings";
-import { fingerprintOf, inclusion, loadBundle, verifyBundle } from "./verifier";
+import { fingerprintOf, inclusion, lastVerified, loadBundle, verifyBundle } from "./verifier";
 
 export interface DeviceDef {
   id: string;
@@ -255,10 +255,12 @@ function href(p: DeviceParams, change: Partial<DeviceParams>): string {
 /** Report cache by scenario name. */
 const reports = new Map<string, Report>();
 
+/** The report of scenario `s`, with the worker holding its bundle for
+ * inclusion proofs. */
 async function reportOf(s: IndexScenario): Promise<Report> {
   const cached = reports.get(s.name);
-  if (cached) return cached;
-  const r = await verifyBundle(await loadBundle(s.file));
+  if (cached && lastVerified() === s.name) return cached;
+  const r = await verifyBundle(await loadBundle(s.file), undefined, s.name);
   reports.set(s.name, r);
   return r;
 }
@@ -394,19 +396,36 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
       break;
     }
     default: {
-      const slips = scenario?.slips ?? [];
+      // Every state shows real data: "missing" a slip whose code is on no
+      // ledger, "uncovered" a code the missing-coverage scenario has on its
+      // ledger but in no checkpoint, the others a code in a checkpoint
+      // under the three cross-check results.
+      let appReport = report;
+      let slips = scenario?.slips ?? [];
+      const onLedger = (code: string) => appReport?.records?.some((r) => r.code === code) ?? false;
+      if (p.state === "uncovered") {
+        const s = index?.scenarios.find((x) => x.name === "fault-missing-coverage");
+        if (s) {
+          appReport = await reportOf(s);
+          slips = s.slips.filter((sl) => appReport?.records?.find((r) => r.code === sl.code)?.checkpoint === null);
+        }
+      } else if (p.state === "missing") {
+        slips = slips.filter((sl) => !onLedger(sl.code));
+      } else {
+        slips = slips.filter((sl) => onLedger(sl.code));
+      }
       const slip = slips[p.slip] ?? slips[0];
       const code = slip?.code ?? "0".repeat(128);
-      let record = report?.records?.find((r) => r.code === code) ?? null;
+      const record = appReport?.records?.find((r) => r.code === code) ?? null;
       let included = false;
       let checkpoint: number | null = null;
-      if (record && p.state !== "missing") {
+      if (record) {
         const inc = await inclusion(record.seq);
-        included = inc.included && p.state !== "uncovered";
+        included = inc.included;
         checkpoint = inc.checkpoint;
       }
-      if (p.state === "missing") record = null;
-      const cp = report?.checkpoints?.valid.find((c) => c.seq === checkpoint);
+      const cp = appReport?.checkpoints?.valid.find((c) => c.seq === checkpoint);
+      report = appReport;
       const compare: AppCompare = p.state === "match" ? "match" : p.state === "differ" ? "differ" : "pending";
       model = voterAppScreen({
         code,
@@ -558,7 +577,8 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
       ),
     );
   }
-  if (def.id === "voter-app" && scenario) {
+  if (def.id === "voter-app" && scenario && ["match", "pending", "differ"].includes(p.state)) {
+    const included = scenario.slips.filter((sl) => report?.records?.some((r) => r.code === sl.code));
     extra.push(
       el(
         "label",
@@ -566,7 +586,7 @@ export async function renderDevices(root: HTMLElement, index: SimIndex | null, p
         "쪽지(시연용 추적코드): ",
         (() => {
           const sel = el("select", {});
-          scenario.slips.forEach((s, i) => {
+          included.forEach((s, i) => {
             const o = el("option", { value: String(i) }, s.note);
             if (i === p.slip) o.selected = true;
             sel.append(o);
