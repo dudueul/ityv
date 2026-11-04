@@ -2,7 +2,9 @@
 # inherits the lint set below without exception (CONSTITUTION.md §1.1).
 [workspace]
 resolver = "3"
-members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit", "crates/ityv-state", "crates/ityv-verify"]
+members = ["crates/ityv-encoding", "crates/ityv-crypto", "crates/ityv-ledger", "crates/ityv-cunit", "crates/ityv-state", "crates/ityv-verify", "crates/ityv-tsa"]
+# cargo-fuzz targets: outside the TCB, built only with nightly (their own workspace).
+exclude = ["crates/ityv-tsa/fuzz"]
 
 [workspace.package]
 version = "0.1.0"

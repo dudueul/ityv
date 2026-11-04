@@ -1,0 +1,36 @@
+[package]
+name = "ityv-tsa"
+description = "ityv RFC 3161 timestamp token verifier: strict DER subset, pinned authorities; no_std, no alloc, no unsafe, no panics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+categories = ["cryptography", "no-std", "no-std::no-alloc"]
+keywords = ["rfc3161", "timestamp", "der", "election", "no_std"]
+
+[lib]
+doctest = true
+
+# Every dependency is pinned to an exact version and explained in README.md
+# (dependency table) and ADR-0037. All are RustCrypto crates of the same
+# release line as `ityv-crypto`'s (`digest` 0.11, `crypto-bigint` 0.7), with
+# default features off; only verification code paths are called.
+[dependencies]
+sha2 = { version = "=0.11.1", default-features = false }
+# SHA-1 only for the ESS signing-certificate v1 binding, and only when the pin
+# allows it; never for an imprint or a signature (ADR-0037).
+sha1 = { version = "=0.11.0", default-features = false }
+# RSA PKCS#1 v1.5 verification is this crate's own `s^e mod n` over this
+# vetted bignum (the version `elliptic-curve` already uses), not the `rsa`
+# crate (RUSTSEC-2023-0071 concerns its private-key operations).
+crypto-bigint = { version = "=0.7.10", default-features = false }
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+p384 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+
+[dev-dependencies]
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

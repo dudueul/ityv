@@ -1,0 +1,40 @@
+# cargo-fuzz targets for ityv-tsa (verification ladder V1). Outside the TCB
+# and outside the workspace (the root Cargo.toml excludes this directory);
+# needs a nightly toolchain and cargo-fuzz:
+#
+#   cd crates/ityv-tsa/fuzz
+#   cargo +nightly fuzz run verify_token ../tests/vectors ../tests/vectors/freetsa
+#   cargo +nightly fuzz run pin
+#
+# CI does not run these; tests/proptests.rs is the CI-run stand-in.
+[package]
+name = "ityv-tsa-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+ityv-tsa = { path = ".." }
+sha2 = { version = "=0.11.1", default-features = false }
+
+# Its own workspace, so it never joins the TCB workspace.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "verify_token"
+path = "fuzz_targets/verify_token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pin"
+path = "fuzz_targets/pin.rs"
+test = false
+doc = false
+bench = false
