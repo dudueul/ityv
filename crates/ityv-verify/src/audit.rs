@@ -29,9 +29,11 @@
 //!   (VC-045). The verifier cannot fetch the beacon: the caller supplies the
 //!   publication it observed ([`AuditInput::beacon`]: round, raw output,
 //!   time bucket); the seed's value must be `ityv_crypto::beacon_value` of
-//!   that output, and the binding checkpoint and the commit must be timed
-//!   strictly before the publication. A mismatch refuses the seed (or the
-//!   commit); no observation leaves the stage incomplete.
+//!   that output; the commit must be dated before the publication and
+//!   the binding checkpoint at or after the commit and at least
+//!   `WITNESS_TIME_TOLERANCE + CLOCK_ERROR_BUCKETS + 1` buckets before the
+//!   publication. A mismatch refuses the seed (or the commit); no
+//!   observation leaves the stage incomplete.
 //! * **The sample** (§12.2, VC-046): for each style, a partial Fisher–Yates
 //!   shuffle of the sorted frame driven by the style's sample stream
 //!   ([`draw_sample`], `ityv_crypto::SampleStream`), as long as the last
@@ -106,7 +108,7 @@ use ityv_encoding::{
     SampleComparisonBody, SampleComparisonParts, SampleOpeningBody, SampleOpeningRefParts,
     SchemaId, Seq, StationId, TimeBucket, WitnessedEvent, decode_object, schema_version,
 };
-use ityv_ledger::{WITNESS_TIME_TOLERANCE, sorted_set_root};
+use ityv_ledger::{CLOCK_ERROR_BUCKETS, WITNESS_TIME_TOLERANCE, sorted_set_root};
 use ityv_state::{
     AuditPhase, Cap, FollowUp, HandCount, HoldReason, HoldSet, ObserverAccess, Rla, RosterEntry,
     RoundCount, SeedReadiness, Signed, admit_audit_commit, admit_audit_finding, admit_audit_freeze,
@@ -138,7 +140,8 @@ pub struct BeaconObservation<'i> {
     /// 15-minute index from 00:00 UTC of the genesis's `election_epoch_day`
     /// (days since the Unix epoch), rounded down (PROTOCOL.md §12.1). The
     /// commit must be dated strictly earlier and the binding checkpoint at
-    /// least `WITNESS_TIME_TOLERANCE + 1` buckets earlier.
+    /// least `WITNESS_TIME_TOLERANCE + CLOCK_ERROR_BUCKETS + 1` buckets
+    /// earlier (`binding ≤ published − 3`).
     pub published: TimeBucket,
 }
 
@@ -216,10 +219,12 @@ pub enum AuditRefusal {
     Beacon,
     /// The commit is dated at or after the observed beacon publication, or
     /// the seed's binding checkpoint is not timed at least
-    /// `WITNESS_TIME_TOLERANCE + 1` buckets before it (a witness signing
-    /// after the publication attests at least `published − 1`): the beacon
-    /// value could have been known when the inputs were fixed. An empty
-    /// observed output is no observation of a value.
+    /// `WITNESS_TIME_TOLERANCE + CLOCK_ERROR_BUCKETS + 1` buckets before it:
+    /// an honest witness signing after the publication reads at least
+    /// `published − CLOCK_ERROR_BUCKETS` (its clock may lag by up to a
+    /// minute) and attests at least one bucket below that, `published −
+    /// 2`; so the beacon value could have been known when the inputs were
+    /// fixed. An empty observed output is no observation of a value.
     Late,
     /// The seed's binding checkpoint is timed before the commit it covers:
     /// the witnesses attest time and the chain's time never decreases, so
@@ -1135,13 +1140,16 @@ impl<'a> Work<'a> {
             {
                 return Err(AuditRefusal::Beacon);
             }
-            // A witness signing at or after the publication attests at
-            // least `published − WITNESS_TIME_TOLERANCE`, so a binding
-            // checkpoint below that was witnessed before the value was out.
+            // An honest witness signing at or after the publication reads
+            // at least `published − CLOCK_ERROR_BUCKETS` and attests at
+            // least `published − CLOCK_ERROR_BUCKETS −
+            // WITNESS_TIME_TOLERANCE`; a binding checkpoint below that was
+            // witnessed before the value was out (ADR-0036 4).
             if binding
                 .time_bucket
                 .get()
                 .saturating_add(WITNESS_TIME_TOLERANCE)
+                .saturating_add(CLOCK_ERROR_BUCKETS)
                 >= b.published.get()
             {
                 return Err(AuditRefusal::Late);

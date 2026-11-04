@@ -73,8 +73,9 @@ const BEACON_SOURCE: Hash512 = Hash512([0xBE; 64]);
 const FREEZE_BUCKET: u64 = READY + 10;
 const SEED_BUCKET: u64 = READY + 20;
 const COMMIT_BUCKET: u64 = READY + 15;
-/// When the beacon round was published: after the commit (READY + 15) and
-/// its binding checkpoint (READY + 1), before the seed.
+/// When the beacon round was published: after the commit (READY + 15)
+/// and its binding checkpoint (`checkpoint_at(COMMIT_BUCKET)`, three
+/// buckets earlier: the least margin, `PUBLISHED − 3`), before the seed.
 const PUBLISHED: u64 = READY + 18;
 
 /// The 64-byte beacon value of the round's output.
@@ -1906,14 +1907,16 @@ fn the_commit_fixes_the_dice_and_the_freezes_before_the_beacon() {
     assert!(r.audit().commit().is_none());
     assert_eq!(r.status().status(), Status::HoldReview);
 
-    // A binding checkpoint witnessed within the witnesses' tolerance of the
-    // publication (`published − 1`) refuses the seed: a witness signing
-    // after the publication attests that much. Two buckets before is in
-    // time.
+    // A binding checkpoint witnessed within the witnesses' tolerance and
+    // clock error of the publication (`published − 2` and later) refuses the
+    // seed: an honest witness whose clock lags by under a minute still reads
+    // `published − 1` just after the publication and attests one below.
+    // Three buckets before is in time.
     for (bucket, late) in [
         (PUBLISHED, true),
         (PUBLISHED - 1, true),
-        (PUBLISHED - 2, false),
+        (PUBLISHED - 2, true),
+        (PUBLISHED - 3, false),
     ] {
         let (mut book, casts) = tallied(audit_world());
         let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
@@ -1939,20 +1942,24 @@ fn the_commit_fixes_the_dice_and_the_freezes_before_the_beacon() {
 /// P1 of the second review: once the beacon is public the operator would
 /// have one more checkpoint signed at whatever time bucket gives the sample
 /// it wants. An honest witness signs only its own clock's bucket or the one
-/// before (VC-012), so after the publication it attests at least
-/// `published − 1`; the verifier takes a binding checkpoint only below
-/// that, and only at or after the commit. No bucket is both.
+/// before (VC-012), and its clock is off by at most a minute, so after the
+/// publication it reads at least `published − CLOCK_ERROR_BUCKETS` and
+/// attests at least `published − 2`; the verifier takes a binding
+/// checkpoint only below that, and only at or after the commit. No bucket
+/// is both, for exact, lagging and leading clocks.
 #[test]
 fn a_binding_checkpoint_cannot_be_backdated_after_the_beacon() {
     let tolerance = ityv_ledger::WITNESS_TIME_TOLERANCE;
+    let error = ityv_ledger::CLOCK_ERROR_BUCKETS;
     let (mut book, casts) = tallied(audit_world());
     let body = freeze_body(STYLE1, &codes(&casts), &[(1, 0)]);
     book.w(freeze(body));
     book.w(commit(commit_body(&[body], |_| {})));
     for bucket in (READY + 1)..PUBLISHED + 2 {
-        let accepted = bucket >= COMMIT_BUCKET && bucket + tolerance < PUBLISHED;
-        // An honest witness whose clock is at or after the publication.
-        for now in PUBLISHED..PUBLISHED + 3 {
+        let accepted = bucket >= COMMIT_BUCKET && bucket + tolerance + error < PUBLISHED;
+        // An honest witness after the publication: its clock reads the
+        // publication's bucket or later, or one bucket earlier if it lags.
+        for now in PUBLISHED - error..PUBLISHED + 3 {
             let signs = ityv_ledger::witness_time_ok(now, bucket, None);
             assert!(!(accepted && signs), "bucket {bucket} at {now}");
         }
@@ -2467,4 +2474,89 @@ fn an_empty_frame_is_not_a_vacuous_rule() {
         "{:?}",
         r.status()
     );
+}
+
+/// P6 and P6b of the third review: honest witnesses whose clocks lag by
+/// under a minute still read `PUBLISHED − 1` just after the publication,
+/// so they sign `PUBLISHED − 2`, the operator having chosen the body (filler
+/// checkpoints, or a commit declared at that bucket) once the beacon value
+/// is known. The verifier refuses such a binding checkpoint, so neither
+/// reaches `PAPER_AUDITED`.
+#[test]
+fn lagging_honest_witnesses_after_the_beacon_cannot_fix_the_seed() {
+    let lag_now = PUBLISHED - ityv_ledger::CLOCK_ERROR_BUCKETS;
+    let bucket = PUBLISHED - 2;
+    assert!(ityv_ledger::witness_time_ok(lag_now, bucket, None));
+    let list = [(1u64, 0u32)];
+    // P6: an honest commit before the beacon; after it, the binding
+    // checkpoint at `PUBLISHED − 2` (any body the operator likes: filler
+    // checkpoints before it change its hash, not its bucket).
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_at(bucket);
+    let binding = book.last.unwrap().1;
+    let at = book.w(seed(seed_body(binding, |_| {})));
+    let sample = drawn(
+        &audit_seed(&DICE, &beacon(), &binding),
+        STYLE1,
+        &casts,
+        &list,
+    );
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r)[0],
+        (at, AuditEvent::Seed, AuditRefusal::Late)
+    );
+    assert_ne!(r.status().status(), Status::PaperAudited);
+    // P6b: the commit itself declared at `PUBLISHED − 2` with a dice record
+    // chosen after the beacon, and its binding checkpoint at the same bucket.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    let dice = Hash512([0xD7; 64]);
+    book.w(commit(commit_body(&[body], |p| {
+        p.time_bucket = TimeBucket::new(bucket);
+        p.dice_hash = dice;
+    })));
+    book.checkpoint_at(bucket);
+    let binding = book.last.unwrap().1;
+    let s = audit_seed(&dice, &beacon(), &binding);
+    let at = book.w(seed(seed_body(binding, |p| {
+        p.dice_hash = dice;
+        p.seed = s;
+    })));
+    let sample = drawn(&s, STYLE1, &casts, &list);
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed());
+    assert_eq!(
+        audit_refused(&r)[0],
+        (at, AuditEvent::Seed, AuditRefusal::Late)
+    );
+    assert_ne!(r.status().status(), Status::PaperAudited);
+    // At `PUBLISHED − 3` both commit and binding are in time.
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |p| {
+        p.time_bucket = TimeBucket::new(PUBLISHED - 3);
+    })));
+    book.checkpoint_at(PUBLISHED - 3);
+    let binding = book.last.unwrap().1;
+    book.w(seed(seed_body(binding, |_| {})));
+    let sample = drawn(
+        &audit_seed(&DICE, &beacon(), &binding),
+        STYLE1,
+        &casts,
+        &list,
+    );
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    let r = report(&mut book, &observed());
+    assert!(audit_refused(&r).is_empty());
+    assert_eq!(r.status().status(), Status::PaperAudited);
 }
