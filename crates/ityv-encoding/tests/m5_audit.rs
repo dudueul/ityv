@@ -857,6 +857,23 @@ fn each_audit_body_has_its_signers() {
             assert!(!roles_satisfied(schema, || [aud_1, aud_2, obs_a, obs_b].into_iter()));
         }
     }
+    // A commit in its envelope round trips, signed like the seed.
+    let body = leak(encode_to_vec(
+        SCHEMA_AUDIT_COMMIT_BODY,
+        SCHEMA_VERSION_1,
+        &AuditCommitBody::new(&commit_parts()).unwrap(),
+    ));
+    let event = WitnessedEvent::new(body, &[committee, obs_a, obs_b]).unwrap();
+    assert_eq!(event.purpose(), PURPOSE_AUDIT_COMMIT);
+    let bytes = encode_to_vec(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_WITNESSED, &event);
+    let back: WitnessedEvent<'_> =
+        decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_WITNESSED, &bytes).unwrap();
+    assert_eq!(
+        back.body::<AuditCommitBody<'_>>(SCHEMA_AUDIT_COMMIT_BODY)
+            .unwrap()
+            .parts(),
+        &commit_parts()
+    );
     // A comparison in its envelope round trips.
     let body = leak(encode_to_vec(
         SCHEMA_SAMPLE_COMPARISON_BODY,
