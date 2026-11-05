@@ -279,12 +279,24 @@ fn a_changed_tst_info_byte_breaks_the_message_digest() {
         let imprint = imprint_of(expected.imprint);
         let pin = Pin::for_token(&expected, true);
         // A byte of the hashed message inside the TSTInfo: still DER, still
-        // the right shape, but not what was signed.
+        // the right shape, but not what was signed. Against the expected
+        // imprint it is refused as another imprint, before any digest or
+        // signature is computed; against the changed imprint itself, by the
+        // message digest.
         let at = find(&token, imprint.digest()) + 5;
         let mut changed = token.clone();
         changed[at] ^= 0x80;
         assert_eq!(
             pin.verify(&changed, &imprint),
+            Err(TsaError::ImprintMismatch),
+            "{}",
+            expected.token
+        );
+        let mut digest = imprint.digest().to_vec();
+        digest[5] ^= 0x80;
+        let changed_imprint = Imprint::new(expected.imprint, &digest).unwrap();
+        assert_eq!(
+            pin.verify(&changed, &changed_imprint),
             Err(TsaError::MessageDigestMismatch),
             "{}",
             expected.token
@@ -296,6 +308,111 @@ fn a_changed_tst_info_byte_breaks_the_message_digest() {
         assert_eq!(
             pin.verify(&retimed, &imprint),
             Err(TsaError::MessageDigestMismatch),
+            "{}",
+            expected.token
+        );
+    }
+}
+
+/// The `SubjectPublicKeyInfo` of the certificate `cert` (a file under
+/// `tests/vectors`): the seventh element of its `TBSCertificate`.
+fn key_info(cert: &[u8]) -> std::vec::Vec<u8> {
+    let certificate = common::elements(cert)[0].1;
+    let tbs = common::elements(certificate)[0].1;
+    common::elements(tbs)[6].2.to_vec()
+}
+
+#[test]
+fn a_pin_names_its_signer_key_when_some_token_could_verify() {
+    use DigestAlgorithm::{Sha256, Sha384, Sha512};
+    use SignatureAlgorithm as S;
+    let pin_of = |cert: &str, digests: &[DigestAlgorithm], signatures: &[S]| Pin {
+        digests: digests.iter().fold(0, |m, d| m | d.bit()),
+        signatures: signatures.iter().fold(0, |m, s| m | s.bit()),
+        ..permissive(cert)
+    };
+    let key = |pin: &Pin| {
+        let bytes = pin.bytes();
+        PinnedTsa::from_bytes(&bytes)
+            .unwrap()
+            .signer_key()
+            .map(<[u8]>::to_vec)
+    };
+    // Each key with each algorithm it makes, over an allowed digest.
+    for (cert, algorithm) in [
+        ("rsa2048.crt", S::RsaPkcs1Sha256),
+        ("rsa3072.crt", S::RsaPkcs1Sha384),
+        ("rsa4096.crt", S::RsaPkcs1Sha512),
+        ("p256.crt", S::EcdsaP256Sha256),
+        ("p384.crt", S::EcdsaP384Sha384),
+        ("p384.crt", S::EcdsaP384Sha512),
+    ] {
+        let spki = key_info(&vector(cert));
+        assert_eq!(
+            key(&pin_of(cert, &[algorithm.digest()], &[algorithm])),
+            Ok(spki.clone()),
+            "{cert} {algorithm:?}"
+        );
+        // The digest the algorithm signs is not allowed.
+        let others: std::vec::Vec<DigestAlgorithm> = [Sha256, Sha384, Sha512]
+            .into_iter()
+            .filter(|d| *d != algorithm.digest())
+            .collect();
+        assert_eq!(
+            key(&pin_of(cert, &others, &[algorithm])),
+            Err(TsaError::SignatureNotAllowed),
+            "{cert} {algorithm:?}"
+        );
+        // Only algorithms the key does not make.
+        let foreign: std::vec::Vec<S> = [
+            S::RsaPkcs1Sha256,
+            S::RsaPkcs1Sha384,
+            S::RsaPkcs1Sha512,
+            S::EcdsaP256Sha256,
+            S::EcdsaP384Sha384,
+            S::EcdsaP384Sha512,
+        ]
+        .into_iter()
+        .filter(|s| {
+            let rsa = cert.starts_with("rsa");
+            let makes = match s {
+                S::RsaPkcs1Sha256 | S::RsaPkcs1Sha384 | S::RsaPkcs1Sha512 => rsa,
+                S::EcdsaP256Sha256 => cert == "p256.crt",
+                S::EcdsaP384Sha384 | S::EcdsaP384Sha512 => cert == "p384.crt",
+            };
+            !makes
+        })
+        .collect();
+        assert_eq!(
+            key(&pin_of(cert, &[Sha256, Sha384, Sha512], &foreign)),
+            Err(TsaError::SignatureNotAllowed),
+            "{cert}"
+        );
+        // Every algorithm and digest: the key.
+        assert_eq!(key(&permissive(cert)), Ok(spki), "{cert}");
+    }
+    // A pin without a copy names no key.
+    let mut bare = permissive("rsa2048.crt");
+    bare.certificate = None;
+    assert_eq!(key(&bare), Err(TsaError::CertificateNotPinned));
+    // A copy `verify_token` would refuse as a signer's certificate.
+    assert_eq!(
+        key(&permissive("rsa3072-no-eku.crt")),
+        Err(TsaError::MissingTimestampingEku)
+    );
+    assert_eq!(
+        key(&permissive("rsa3072-ca.crt")),
+        Err(TsaError::SignerIsCa)
+    );
+    // The key is the one tokens verify under: every valid token verifies
+    // under a pin whose key is its certificate's.
+    for expected in generated() {
+        let pin = Pin::for_token(&expected, true);
+        let bytes = pin.bytes();
+        let pinned = PinnedTsa::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            pinned.signer_key(),
+            Ok(key_info(pinned.certificate().unwrap()).as_slice()),
             "{}",
             expected.token
         );

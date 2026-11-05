@@ -183,6 +183,16 @@ pub enum SignatureAlgorithm {
 }
 
 impl SignatureAlgorithm {
+    /// Every algorithm, in the order of their bits.
+    pub(crate) const ALL: [Self; 6] = [
+        Self::RsaPkcs1Sha256,
+        Self::RsaPkcs1Sha384,
+        Self::RsaPkcs1Sha512,
+        Self::EcdsaP256Sha256,
+        Self::EcdsaP384Sha384,
+        Self::EcdsaP384Sha512,
+    ];
+
     /// The bit of this algorithm in a pin's signature mask.
     #[must_use]
     pub const fn bit(self) -> u8 {

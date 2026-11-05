@@ -12,6 +12,7 @@
 //! extension is refused, a processed extension may not repeat, and
 //! everything else must still be in the DER subset.
 
+use crate::alg::SignatureAlgorithm;
 use crate::der::{
     self, BIT_STRING, BOOLEAN, CONTEXT_0, CONTEXT_3, GENERALIZED_TIME, INTEGER, NULL, OCTET_STRING,
     OID, Reader, SEQUENCE, UTC_TIME,
@@ -29,6 +30,39 @@ pub(crate) enum PublicKey<'a> {
     Ec(EcPublicKey<'a>),
 }
 
+impl PublicKey<'_> {
+    /// Whether this key makes signatures of `algorithm`: an RSA key the
+    /// three RSA algorithms, a P-256 key ECDSA P-256/SHA-256, a P-384 key
+    /// the two P-384 ones (the pairs `verify_token` accepts).
+    pub(crate) fn makes(&self, algorithm: SignatureAlgorithm) -> bool {
+        match (self, algorithm) {
+            (
+                Self::Rsa(_),
+                SignatureAlgorithm::RsaPkcs1Sha256
+                | SignatureAlgorithm::RsaPkcs1Sha384
+                | SignatureAlgorithm::RsaPkcs1Sha512,
+            ) => true,
+            (Self::Ec(key), SignatureAlgorithm::EcdsaP256Sha256) => key.curve() == Curve::P256,
+            (
+                Self::Ec(key),
+                SignatureAlgorithm::EcdsaP384Sha384 | SignatureAlgorithm::EcdsaP384Sha512,
+            ) => key.curve() == Curve::P384,
+            (
+                Self::Rsa(_),
+                SignatureAlgorithm::EcdsaP256Sha256
+                | SignatureAlgorithm::EcdsaP384Sha384
+                | SignatureAlgorithm::EcdsaP384Sha512,
+            )
+            | (
+                Self::Ec(_),
+                SignatureAlgorithm::RsaPkcs1Sha256
+                | SignatureAlgorithm::RsaPkcs1Sha384
+                | SignatureAlgorithm::RsaPkcs1Sha512,
+            ) => false,
+        }
+    }
+}
+
 /// The parts of a certificate that verification uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Certificate<'a> {
@@ -41,6 +75,8 @@ pub(crate) struct Certificate<'a> {
     pub(crate) not_before: GenTime,
     pub(crate) not_after: GenTime,
     pub(crate) key: PublicKey<'a>,
+    /// The `SubjectPublicKeyInfo`, whole encoding.
+    pub(crate) key_info: &'a [u8],
     /// The subject key identifier extension's key identifier, if present.
     pub(crate) subject_key_id: Option<&'a [u8]>,
 }
@@ -100,7 +136,7 @@ pub(crate) fn parse(raw: &[u8]) -> Result<Certificate<'_>, TsaError> {
     let not_after = read_time(&mut validity)?;
     validity.finish()?;
     let subject = tbs.checked(SEQUENCE)?;
-    let key = read_public_key(&mut tbs)?;
+    let (key, key_info) = read_public_key(&mut tbs)?;
     if tbs.is_empty() {
         return Err(TsaError::MissingTimestampingEku);
     }
@@ -116,6 +152,7 @@ pub(crate) fn parse(raw: &[u8]) -> Result<Certificate<'_>, TsaError> {
         not_before,
         not_after,
         key,
+        key_info,
         subject_key_id,
     })
 }
@@ -132,9 +169,11 @@ fn read_time(validity: &mut Reader<'_>) -> Result<GenTime, DerError> {
 }
 
 /// `SubjectPublicKeyInfo`: RSA (`rsaEncryption` with `NULL` parameters,
-/// RFC 3279 §2.3.1) or EC (`id-ecPublicKey` with a named curve, RFC 5480 §2.1.1).
-fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<PublicKey<'a>, TsaError> {
-    let mut info = tbs.sequence()?;
+/// RFC 3279 §2.3.1) or EC (`id-ecPublicKey` with a named curve, RFC 5480
+/// §2.1.1). The key and the whole encoding.
+fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<(PublicKey<'a>, &'a [u8]), TsaError> {
+    let whole = tbs.read(SEQUENCE)?;
+    let mut info = tbs.enter(&whole)?;
     let mut algorithm = info.sequence()?;
     let id = algorithm.oid()?;
     let parameters = if algorithm.is_empty() {
@@ -151,7 +190,10 @@ fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<PublicKey<'a>, TsaError> 
             let modulus = rsa.unsigned()?;
             let exponent = rsa.unsigned()?;
             rsa.finish()?;
-            Ok(PublicKey::Rsa(RsaPublicKey::new(modulus, exponent)?))
+            Ok((
+                PublicKey::Rsa(RsaPublicKey::new(modulus, exponent)?),
+                whole.raw,
+            ))
         }
         (oid::EC_PUBLIC_KEY, Some(parameters)) if parameters.tag == OID => {
             let curve = match parameters.value {
@@ -159,7 +201,7 @@ fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<PublicKey<'a>, TsaError> 
                 oid::P384 => Curve::P384,
                 _ => return Err(TsaError::UnsupportedPublicKey),
             };
-            Ok(PublicKey::Ec(EcPublicKey::new(curve, key)?))
+            Ok((PublicKey::Ec(EcPublicKey::new(curve, key)?), whole.raw))
         }
         _ => Err(TsaError::UnsupportedPublicKey),
     }
@@ -480,7 +522,10 @@ mod tests {
         let mut reader = Reader::new(spki);
         let key = read_public_key(&mut reader);
         assert!(key.is_err() || reader.is_empty());
-        key
+        if let Ok((_, whole)) = key {
+            assert_eq!(whole, spki);
+        }
+        key.map(|(key, _)| key)
     }
 
     #[test]

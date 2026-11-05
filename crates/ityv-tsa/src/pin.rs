@@ -18,7 +18,8 @@
 //! and the pin's copy is used only when the token does not.
 
 use crate::MAX_TOKEN_LEN;
-use crate::alg::{self, DigestSet, SignatureSet};
+use crate::alg::{self, DigestSet, SignatureAlgorithm, SignatureSet};
+use crate::cert;
 use crate::der::{self, OID, SEQUENCE};
 use crate::error::TsaError;
 use crate::oid::ObjectId;
@@ -195,6 +196,40 @@ impl<'a> PinnedTsa<'a> {
     #[must_use]
     pub const fn certificate(&self) -> Option<&'a [u8]> {
         self.certificate
+    }
+
+    /// The signer's key as the pin fixes it: the DER
+    /// `SubjectPublicKeyInfo` of the pin's certificate copy, once the copy
+    /// reads as [`verify_token`](crate::verify_token) reads a signer's
+    /// certificate and some token could verify under the pin, that is some
+    /// signature algorithm the pin allows is one the key makes, over a
+    /// digest the pin allows. An ESS v2 binding may use any digest the pin
+    /// allows, so it never stands in the way; the imprint's digest is the
+    /// caller's to require.
+    ///
+    /// The key, not the certificate, is what one authority is: the same
+    /// key under two certificates signs for one authority.
+    ///
+    /// # Errors
+    ///
+    /// - [`TsaError::CertificateNotPinned`] if the pin carries no copy.
+    /// - The error of the copy, if `verify_token` would refuse it as a
+    ///   signer's certificate (its profile, its key).
+    /// - [`TsaError::SignatureNotAllowed`] if no signature algorithm the pin
+    ///   allows is one the key makes with a digest the pin allows.
+    pub fn signer_key(&self) -> Result<&'a [u8], TsaError> {
+        let raw = self.certificate.ok_or(TsaError::CertificateNotPinned)?;
+        let certificate = cert::parse(raw)?;
+        let usable = SignatureAlgorithm::ALL.into_iter().any(|algorithm| {
+            self.signatures.contains(algorithm)
+                && self.digests.contains(algorithm.digest())
+                && certificate.key.makes(algorithm)
+        });
+        if usable {
+            Ok(certificate.key_info)
+        } else {
+            Err(TsaError::SignatureNotAllowed)
+        }
     }
 
     /// Whether the policy with content octets `policy` is allowed.

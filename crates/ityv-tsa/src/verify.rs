@@ -160,10 +160,12 @@ impl<'t> VerifiedTimestamp<'t> {
 /// certificate is the embedded one whose SHA-256 is the pinned hash, or the
 /// pin's own copy; the certificate's profile, the signer identifier, and
 /// that the pin allows every digest and the signature algorithm are
-/// checked; then the signed attributes' content type, the ESS certificate
-/// binding, the message digest over the `TSTInfo`, and the signature over
-/// the DER signed attributes; and last the content: the imprint against
-/// `expected`, the policy against the pin, the `tsa` name against the
+/// checked; then the imprint against `expected`, before any digest or
+/// signature is computed, so that a token over another imprint costs no
+/// signature check; then the signed attributes' content type, the ESS
+/// certificate binding, the message digest over the `TSTInfo`, and the
+/// signature over the DER signed attributes; and last the rest of the
+/// content: the policy against the pin, the `tsa` name against the
 /// certificate subject, and `genTime` within the certificate's validity.
 ///
 /// What this does not prove: that `genTime` is the true time (the authority
@@ -190,6 +192,12 @@ pub fn verify_token<'t>(
     check_signer_id(signed.signer_id, &certificate)?;
     let signature_algorithm = signature_algorithm(signed.family, signed.digest, &certificate.key)?;
     check_allowed(&signed, info.imprint_algorithm, signature_algorithm, pin)?;
+    if info.imprint_algorithm != expected.algorithm() {
+        return Err(TsaError::ImprintAlgorithmMismatch);
+    }
+    if info.imprint != expected.digest() {
+        return Err(TsaError::ImprintMismatch);
+    }
 
     if let Some((algorithm, id)) = signed.ess_v2 {
         check_ess(
@@ -217,12 +225,6 @@ pub fn verify_token<'t>(
         PublicKey::Ec(key) => key.verify(digest.as_slice(), signed.signature)?,
     }
 
-    if info.imprint_algorithm != expected.algorithm() {
-        return Err(TsaError::ImprintAlgorithmMismatch);
-    }
-    if info.imprint != expected.digest() {
-        return Err(TsaError::ImprintMismatch);
-    }
     if !pin.allows_policy(info.policy) {
         return Err(TsaError::PolicyNotAllowed);
     }
