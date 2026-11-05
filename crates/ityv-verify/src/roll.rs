@@ -87,7 +87,7 @@ use alloc::vec::Vec;
 use ityv_crypto::hash::object_hash;
 use ityv_crypto::{Purpose, Sha3Hasher};
 use ityv_encoding::{
-    AuthorityId, CheckinUnit, ContestedCheckin, EntrySet, EventRole, HYBRID_VK_LEN, Hash512,
+    AuthorityId, CheckinUnit, ContestedCheckin, EntrySet, EventRole, HYBRID_VK_LEN, Hash512, OrgId,
     PSEUDONYM_LEN, PURPOSE_CONTESTED_CHECKIN, RollAmendmentBody, RollAmendmentReason,
     RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody, RollFreezeBody,
     RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_CONTESTED_CHECKIN,
@@ -104,6 +104,7 @@ use ityv_state::{
 use crate::error::{Error, Rule};
 use crate::genesis::VerifiedGenesis;
 use crate::index::LedgerIndex;
+use crate::org::same_org;
 use crate::participation::ParticipationStage;
 use crate::sets::Set;
 use crate::sigs::Material;
@@ -157,11 +158,17 @@ pub(crate) fn check_authorities(
     set: &Set<'_, RollAuthorityEntry<'_>>,
     quorum: u8,
 ) -> Result<(), Error> {
-    let mut orgs: BTreeSet<&[u8]> = BTreeSet::new();
+    // Organisations as names compare (`same_org`): one body under two
+    // spellings would count twice toward the quorum.
+    let mut orgs: Vec<OrgId<'_>> = Vec::new();
     let mut kinds: Vec<RollAuthorityKind> = Vec::new();
     for (index, item) in set.items().iter().enumerate() {
         let entry = &item.value;
-        if entry.kind.is_custodian() && !orgs.insert(entry.org_id.as_bytes()) {
+        let repeated = orgs.iter().any(|o| same_org(*o, entry.org_id));
+        if entry.kind.is_custodian() {
+            orgs.push(entry.org_id);
+        }
+        if entry.kind.is_custodian() && repeated {
             return Err(Error::entry(
                 state,
                 EntrySet::RollAuthorities,

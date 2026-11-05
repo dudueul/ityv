@@ -1219,6 +1219,15 @@ fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
     let mut d = base.clone();
     d.timestamps[2].operator = OrgId::new(b"mois-gpki").unwrap();
     assert_eq!(verify(&d), Ok(()));
+    // Names compare with the separators dropped too (the second review's
+    // I-b): MOIS_GPKI and mois.gpki are MOIS-GPKI.
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"MOIS_GPKI").unwrap();
+    d.timestamps[2].kind = TimestampAuthorityKind::NonGovernment;
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampOperator)));
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"mois.gpki").unwrap();
+    assert_eq!(verify(&d), Ok(()));
     // Many authorities of one operator and one kind are fine (they count
     // as one toward an anchor).
     let mut d = base.clone();
@@ -1246,7 +1255,20 @@ fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
 
     // An operator that is a witness's organisation or an election
     // commission's, in any case: refused in the genesis.
-    for org in [b"ORG-C".as_slice(), b"org-c", b"NEC-D", b"nec-d"] {
+    // Every roster organisation too (clerks, observers, custodians of
+    // the paper, the court), in any spelling.
+    for org in [
+        b"ORG-C".as_slice(),
+        b"org-c",
+        b"ORG_C",
+        b"NEC-D",
+        b"nec-d",
+        b"N.E.C-D",
+        b"ORG-ST",
+        b"org_st",
+        b"Police",
+        b"COURT",
+    ] {
         let mut d = base.clone();
         d.timestamps[0].operator = OrgId::new(org).unwrap();
         assert_eq!(
@@ -1312,6 +1334,22 @@ fn refuses_a_roll_authority_set_that_breaks_a_rule() {
     let mut d = base.clone();
     d.rolls[5].org_id = OrgId::new(b"PARTY-A").unwrap();
     assert_eq!(verify(&d), Err(at(set, 5, Rule::RollCustodians)));
+    // Also under another spelling (the second review's proof of concept:
+    // the Ministry as `MOIS` and again as `mois` met a quorum of three
+    // with two organisations).
+    for spelling in [b"mois".as_slice(), b"M.O.I.S", b"Mois", b"party_a"] {
+        let mut d = base.clone();
+        d.rolls[5].org_id = OrgId::new(spelling).unwrap();
+        assert_eq!(
+            verify(&d),
+            Err(at(set, 5, Rule::RollCustodians)),
+            "{}",
+            String::from_utf8_lossy(spelling)
+        );
+    }
+    let mut d = base.clone();
+    d.rolls[5].org_id = OrgId::new(b"MOIS-2").unwrap();
+    assert_eq!(verify(&d), Ok(()));
     // A source may share its organisation with a custodian (the court
     // administration keeps the deaths and a copy).
     let mut d = base.clone();

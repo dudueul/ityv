@@ -352,7 +352,7 @@ pub(crate) fn check<'a>(
 
     check_appointments(state, a, f)?;
     check_devices(state, a)?;
-    timestamp::check_operators_apart(state, &f.timestamps, &f.witnesses, &a.units)?;
+    timestamp::check_operators_apart(state, &f.timestamps, &f.witnesses, &a.roster, &a.units)?;
     check_keys(state, a, f, body)
 }
 

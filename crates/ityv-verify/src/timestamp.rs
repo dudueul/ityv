@@ -10,7 +10,7 @@
 //! no signing certificate and no public key is pinned twice; every declared
 //! accuracy is between [`MIN_POLICY_ACCURACY_MS`] and
 //! [`MAX_TIMESTAMP_ACCURACY_MS`]; an operator's authorities are all of one
-//! kind, operators compared without regard to ASCII case; the set has a
+//! kind, operators compared as names (ASCII case and `._:-` aside); the set has a
 //! government-run and a non-government authority (VC-114); and, for every
 //! genesis state, no operator is a witness's organisation or an election
 //! commission's that a reporting unit names. Which operator is the
@@ -71,7 +71,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use ityv_encoding::{
-    AuthorityId, Day, EntrySet, Hash512, OrgId, PolicyAccuracy, ReportingUnitEntry,
+    AuthorityId, Day, EntrySet, Hash512, OrgId, PolicyAccuracy, ReportingUnitEntry, RosterSigner,
     SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
     SCHEMA_SIGNED_GENESIS, SCHEMA_TIMESTAMP_RECORD, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
     TimeBucket, TimestampAuthorityEntry, TimestampAuthorityKind, TimestampRecord,
@@ -84,6 +84,7 @@ use ityv_tsa::{DigestAlgorithm, Imprint, PinnedTsa, TsaError, VerifiedTimestamp,
 use crate::error::{Error, Rule};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
+use crate::org::same_org;
 use crate::sets::Set;
 
 /// Seconds in a day.
@@ -107,17 +108,10 @@ pub const MIN_POLICY_ACCURACY_MS: u32 = 1_000;
 /// honest authority.
 pub const MAX_TIMESTAMP_ACCURACY_MS: u32 = 60_000;
 
-/// Whether `operator` is `other`, without regard to ASCII case: an
-/// organisation identifier is ASCII, and two spellings of one name are one
-/// organisation.
-fn same_org(operator: OrgId<'_>, other: OrgId<'_>) -> bool {
-    operator.as_bytes().eq_ignore_ascii_case(other.as_bytes())
-}
-
 /// Checks the genesis's timestamp authority set (VC-114): every declared
 /// accuracy within bounds; pins that allow SHA-512 and name a signer key
 /// some token could verify under; no certificate and no key pinned twice;
-/// one kind per operator, operators compared without regard to ASCII case;
+/// one kind per operator, operators compared as names (`same_org`);
 /// and a government-run and a non-government authority.
 ///
 /// # Errors
@@ -186,10 +180,12 @@ pub(crate) fn check_authorities(
 }
 
 /// Checks that no timestamp authority's operator is a witness's
-/// organisation or an election commission's that a reporting unit names,
-/// without regard to ASCII case (ADR-0039 2): the tokens corroborate the
-/// witnesses' time and the commission's events, so their operators must be
-/// others. Runs for every genesis state, since reporting units can change.
+/// organisation, an organisation of the roster (clerks, observers, the
+/// commission's chairs and auditors) or an election commission's that a
+/// reporting unit names, as names compare ([`same_org`], ADR-0039 2): the
+/// tokens corroborate the witnesses' time and the commission's events, so
+/// their operators must be others. Runs for every genesis state, since the
+/// roster and the reporting units can change.
 ///
 /// # Errors
 /// [`Rule::TimestampOperatorConflict`] at the timestamp authority.
@@ -197,6 +193,7 @@ pub(crate) fn check_operators_apart(
     state: u64,
     authorities: &Set<'_, TimestampAuthorityEntry<'_>>,
     witnesses: &Set<'_, WitnessRosterEntry<'_>>,
+    roster: &Set<'_, RosterSigner<'_>>,
     units: &Set<'_, ReportingUnitEntry<'_>>,
 ) -> Result<(), Error> {
     for (index, item) in authorities.items().iter().enumerate() {
@@ -205,11 +202,15 @@ pub(crate) fn check_operators_apart(
             .items()
             .iter()
             .any(|w| same_org(operator, w.value.org_id));
+        let signer = roster
+            .items()
+            .iter()
+            .any(|r| same_org(operator, r.value.org_id));
         let commission = units
             .items()
             .iter()
             .any(|u| same_org(operator, u.value.commission_org()));
-        if witness || commission {
+        if witness || signer || commission {
             return Err(Error::entry(
                 state,
                 EntrySet::TimestampAuthorities,
@@ -380,8 +381,8 @@ impl Anchoring {
     }
 }
 
-/// The anchoring of `tokens`. Operators are counted without regard to
-/// ASCII case, as the genesis compares them.
+/// The anchoring of `tokens`. Operators are counted as the genesis
+/// compares them ([`same_org`]).
 pub(crate) fn anchoring<'t, 'a: 't>(
     tokens: impl Iterator<Item = &'t StampedToken<'a>>,
 ) -> Anchoring {
@@ -673,7 +674,7 @@ mod tests {
 
     use super::{
         Anchoring, MAX_TIMESTAMP_ACCURACY_MS, MIN_POLICY_ACCURACY_MS, StampedToken, anchoring,
-        before_start, bucket_start, plus_millis, same_org, within_accuracy_cap,
+        before_start, bucket_start, plus_millis, within_accuracy_cap,
     };
 
     const EPOCH: Day = Day::new(20_000);
@@ -803,20 +804,16 @@ mod tests {
         assert_eq!(one_operator.kinds(), 2);
         assert!(!one_operator.satisfied());
         // Two spellings of one operator are one operator.
-        let one_spelled_twice =
-            anchoring([gov, token(4, TimestampAuthorityKind::NonGovernment, b"gov")].iter());
+        let one_spelled_twice = anchoring(
+            [
+                gov,
+                token(4, TimestampAuthorityKind::NonGovernment, b"g_o-v"),
+            ]
+            .iter(),
+        );
         assert_eq!(one_spelled_twice.operators, 1);
         assert!(!one_spelled_twice.satisfied());
         assert_eq!(anchoring([free, free2, free].iter()).operators, 2);
-    }
-
-    #[test]
-    fn operators_compare_without_ascii_case() {
-        let org = |b: &'static [u8]| OrgId::new(b).unwrap();
-        assert!(same_org(org(b"MOIS-GPKI"), org(b"mois-gpki")));
-        assert!(same_org(org(b"Mois-Gpki"), org(b"MOIS-GPKI")));
-        assert!(!same_org(org(b"MOIS-GPKI"), org(b"MOIS-GPKI2")));
-        assert!(!same_org(org(b"MOIS-GPKI"), org(b"MOIS_GPKI")));
     }
 
     #[test]

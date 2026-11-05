@@ -111,12 +111,13 @@ pub enum Rule {
     TimestampKey,
     /// Two timestamp authorities of one operator differ in kind: an
     /// operator is either the government or not (VC-114). Operators are
-    /// compared without regard to ASCII case.
+    /// compared as names: ASCII case and the separators `._:-` aside.
     TimestampOperator,
-    /// A timestamp authority's operator is a witness's organisation or an
-    /// election commission's (one a reporting unit names), compared
-    /// without regard to ASCII case: its tokens would not be independent
-    /// of the witnesses' time they check (ADR-0039 2).
+    /// A timestamp authority's operator is a witness's organisation, a
+    /// roster organisation or an election commission's (one a reporting
+    /// unit names), compared as names: its tokens would not be independent
+    /// of the witnesses' time and the commission's events they check
+    /// (ADR-0039 2).
     TimestampOperatorConflict,
     /// A timestamp authority's declared accuracy is below one second or
     /// above a minute (`MIN_POLICY_ACCURACY_MS`,
@@ -126,7 +127,8 @@ pub enum Rule {
     /// non-government authority (VC-114).
     TimestampAuthorities,
     /// The roll's custodians cannot confirm a roll: two custodians of one
-    /// organisation (one would count twice), fewer custodians than the
+    /// organisation, compared as names (ASCII case and the separators
+    /// `._:-` aside; one would count twice), fewer custodians than the
     /// custody quorum, or no custodian of the court administration or of
     /// the Ministry of the Interior (ADR-0033 decision 2, VC-108,
     /// ADR-0040).
