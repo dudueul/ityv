@@ -829,6 +829,69 @@ fn the_genesis_and_a_legal_decision_are_stamped() {
 }
 
 #[test]
+fn the_callers_clock_never_anchors_a_checkpoint() {
+    // The review's fourth proof of concept, kept as a regression test: the
+    // caller's `now` and board status never make an unanchored last
+    // checkpoint read as anchored; a deadline past the end of the bucket
+    // range holds.
+    let mut book = Book::new(world());
+    book.checkpoint_bare_at(B);
+    let checkpoint = last(&book);
+    // One kind only: not anchored.
+    push(
+        &mut book,
+        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, at(B, 60)),
+    );
+    for now in [0, B, B + 4, B + 5, u64::MAX] {
+        for board in [Publication::Pending, Publication::Satisfied] {
+            let r = verify_ledger(
+                world().genesis,
+                book.ledger.bytes(),
+                &book.ledger.events,
+                Publications {
+                    now: TimeBucket::new(now),
+                    board,
+                },
+            );
+            assert_eq!(r.status().status(), Status::Unverified, "now {now}");
+            assert!(r.status().holds().is_empty());
+        }
+    }
+    // With both kinds the same ledger is consistent at any `now`.
+    push(
+        &mut book,
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, at(B, 60)),
+    );
+    for now in [0, B + 5, u64::MAX] {
+        let r = verify_ledger(
+            world().genesis,
+            book.ledger.bytes(),
+            &book.ledger.events,
+            Publications {
+                now: TimeBucket::new(now),
+                board: Publication::Pending,
+            },
+        );
+        assert_eq!(r.status().status(), Status::LogConsistent, "now {now}");
+    }
+    // A last checkpoint at the end of the bucket range: its deadline
+    // overflows, which holds.
+    let mut book = Book::new(world());
+    book.checkpoint_bare_at(u64::MAX);
+    let r = verify_ledger(
+        world().genesis,
+        book.ledger.bytes(),
+        &book.ledger.events,
+        Publications {
+            now: TimeBucket::new(u64::MAX),
+            board: Publication::Pending,
+        },
+    );
+    assert_eq!(r.status().status(), Status::HoldReview);
+    assert!(r.status().holds().contains(HoldReason::StepFailed));
+}
+
+#[test]
 fn records_and_tokens_reach_the_status() {
     let now = Publications {
         now: TimeBucket::new(B),
