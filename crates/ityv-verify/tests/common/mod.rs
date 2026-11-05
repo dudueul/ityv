@@ -42,6 +42,7 @@ use rand_core::SeedableRng;
 
 pub mod roll;
 pub mod tsa;
+pub mod uplink;
 
 pub fn leak<T>(value: T) -> &'static T {
     Box::leak(Box::new(value))
@@ -210,6 +211,8 @@ pub struct Draft {
     pub parties: Vec<PartyEntry<'static>>,
     pub chambers: Vec<ChamberThreshold>,
     pub quorum: WitnessQuorum,
+    /// The encoded connectivity manifest the body pins.
+    pub manifest: &'static [u8],
 }
 
 pub fn genesis_box(
@@ -228,6 +231,7 @@ pub fn genesis_box(
         reporting_unit_id: ReportingUnitId::new(unit).unwrap(),
         device_key: registered(BOX_DEVICE_BASE + n),
         attest_key: registered(BOX_ATTEST_BASE + n),
+        frame_key: uplink::frame_key(uplink::BOX_FRAME_BASE + n),
         modules: modules(mods),
     }
 }
@@ -237,6 +241,7 @@ pub fn checkin_unit(n: u16, id: &'static [u8], mods: &[&'static [u8]]) -> Checki
         unit_id: UnitId::new(id).unwrap(),
         key: registered(UNIT_BASE + n),
         attest_key: registered(UNIT_ATTEST_BASE + n),
+        frame_key: uplink::frame_key(uplink::UNIT_FRAME_BASE + n),
         modules: modules(mods),
     }
 }
@@ -254,6 +259,7 @@ pub fn station(
         kind,
         primary,
         spare,
+        gateway: uplink::gateway(id),
         boxes: leak_slice(boxes.iter().map(|b| BoxId::new(b).unwrap()).collect()),
         id_terminals_hash: Hash512([0x33; 64]),
         tokens: leak_slice(tokens.to_vec()),
@@ -499,6 +505,7 @@ impl Draft {
                 min_providers: 4,
                 min_regions: 3,
             },
+            manifest: uplink::standard_manifest(),
         };
         draft.appointments = draft.referenced_appointments();
         draft
@@ -534,6 +541,7 @@ impl Draft {
             witnesses: encode_set(&self.witnesses),
             timestamps: encode_set(&self.timestamps),
             rolls: encode_set(&self.rolls),
+            manifest: self.manifest,
         }
     }
 }
@@ -564,6 +572,7 @@ pub struct Raw {
     pub witnesses: Vec<&'static [u8]>,
     pub timestamps: Vec<&'static [u8]>,
     pub rolls: Vec<&'static [u8]>,
+    pub manifest: &'static [u8],
 }
 
 fn commit_objects(objects: &[&[u8]]) -> SetCommitment {
@@ -643,6 +652,7 @@ impl Built {
     pub fn input(&self) -> GenesisInput<'static> {
         GenesisInput {
             signed: self.signed,
+            connectivity: self.raw.manifest,
             sets: self.raw.amendable(),
             fixed: self.raw.fixed(),
         }
@@ -673,7 +683,7 @@ pub fn parts(draft: &Draft, raw: &Raw) -> GenesisParts<'static> {
         policy_hash: Hash512([0x01; 64]),
         proof_system_id: id(b"ityv-orproof-v1"),
         legal_authorization_hash: Hash512([0x02; 64]),
-        connectivity_manifest_hash: Hash512([0x03; 64]),
+        connectivity_manifest_hash: ityv_crypto::object_hash(raw.manifest),
         release_manifest_hash: Hash512([0x04; 64]),
         commission_key: registered(COMMISSION),
         committee_key: registered(COMMITTEE),

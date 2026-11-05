@@ -1,5 +1,5 @@
-//! The genesis (ADR-0028, ADR-0039, ADR-0040): `GenesisBody` (0x0002,
-//! version 8),
+//! The genesis (ADR-0028, ADR-0039, ADR-0040, ADR-0041): `GenesisBody`
+//! (0x0002, version 8),
 //! `SignedGenesis` (0x0033), `GenesisAmendmentBody` (0x0034), the entry
 //! objects 0x0035–0x003E, and the check-in events `ObserverCountAttestBody`
 //! (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041):
@@ -30,22 +30,23 @@ use ityv_encoding::{
     AMENDABLE_SET_COUNT, AmendmentReason, BallotStyleEntry, BallotStyleId, BoxId, BoxUnitSwapBody,
     BoxUnitSwapParts, CaptureProfile, ChamberCode, ChamberThreshold, CheckinUnit,
     CheckinUnitSwapBody, CheckinUnitSwapParts, CustodyRoute, Day, Decode, ENTRY_SET_COUNT,
-    ElectionId, Encode, EntrySet, ErrorKind, EventRole, EventSig, GenesisAmendmentBody,
-    GenesisAmendmentParts, GenesisBody, GenesisBox, GenesisEntry, GenesisKind, GenesisParts,
-    GenesisWitnessSig, HEADER_LEN, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, Ident,
-    MAX_GENESIS_WITNESSES, MIN_QUORUM, ModuleEntry, ModuleId, ModuleIds, ObserverCountAttestBody,
-    ObserverCountKind, ObserverCountParts, ObserverToken, OrgId, PURPOSE_GENESIS,
-    PURPOSE_GENESIS_AMENDMENT, PartyEntry, Reader, ReportingUnitEntry, ReportingUnitId, RosterRole,
-    RosterSigner, RouteId, SCHEMA_BALLOT_STYLE_ENTRY, SCHEMA_BOX_UNIT_SWAP_BODY,
-    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_ROUTE, SCHEMA_GENESIS_AMENDMENT_BODY,
-    SCHEMA_GENESIS_BODY, SCHEMA_GENESIS_BOX, SCHEMA_MODULE_ENTRY,
+    ElectionId, Encode, EntrySet, ErrorKind, EventRole, EventSig, GatewayEntry, GatewayId,
+    GenesisAmendmentBody, GenesisAmendmentParts, GenesisBody, GenesisBox, GenesisEntry,
+    GenesisKind, GenesisParts, GenesisWitnessSig, HEADER_LEN, HYBRID_SIG_LEN, HYBRID_VK_LEN,
+    Hash512, Ident, MAX_GENESIS_WITNESSES, MIN_QUORUM, ModuleEntry, ModuleId, ModuleIds,
+    ObserverCountAttestBody, ObserverCountKind, ObserverCountParts, ObserverToken, OrgId,
+    PURPOSE_GENESIS, PURPOSE_GENESIS_AMENDMENT, PartyEntry, Reader, ReportingUnitEntry,
+    ReportingUnitId, RosterRole, RosterSigner, RouteId, SCHEMA_BALLOT_STYLE_ENTRY,
+    SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_ROUTE,
+    SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_GENESIS_BODY, SCHEMA_GENESIS_BOX, SCHEMA_MODULE_ENTRY,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_ROLL_AUTHORITY_ENTRY,
     SCHEMA_ROSTER_SIGNER, SCHEMA_SIGNED_GENESIS, SCHEMA_STATION_ENTRY,
     SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TIMESTAMP_AUTHORITY_ENTRY, SCHEMA_TRUSTEE_ENTRY,
-    SCHEMA_VERSION_1, SCHEMA_VERSION_GENESIS, SCHEMA_WITNESS_ROSTER_ENTRY, SchemaId, SetCommitment,
-    SignedGenesis, SignerId, StationEntry, StationId, StationKind, StationParts,
-    StationProgressPolicy, TimeBucket, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum,
-    WitnessRosterEntry, WitnessedEvent, chunks_for, decode_object, keys_share_half, purpose_of,
+    SCHEMA_VERSION_1, SCHEMA_VERSION_DEVICE_ENTRY, SCHEMA_VERSION_GENESIS,
+    SCHEMA_WITNESS_ROSTER_ENTRY, SchemaId, SetCommitment, SignedGenesis, SignerId, StationEntry,
+    StationId, StationKind, StationParts, StationProgressPolicy, TimeBucket, TrusteeEntry,
+    TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry, WitnessedEvent, chunks_for,
+    decode_object, keys_share_half, purpose_of,
 };
 use proptest::prelude::*;
 use std::vec::Vec;
@@ -60,6 +61,9 @@ static VK_B: [u8; HYBRID_VK_LEN] = [0xB2; HYBRID_VK_LEN];
 static VK_C: [u8; HYBRID_VK_LEN] = [0xC3; HYBRID_VK_LEN];
 static VK_D: [u8; HYBRID_VK_LEN] = [0xD4; HYBRID_VK_LEN];
 static CHECK: [u8; 32] = [0x3C; 32];
+static FRAME_A: [u8; 32] = [0xF1; 32];
+static FRAME_B: [u8; 32] = [0xF2; 32];
+static FRAME_C: [u8; 32] = [0xF3; 32];
 static SIG_X: [u8; HYBRID_SIG_LEN] = [0x5A; HYBRID_SIG_LEN];
 static SIG_Y: [u8; HYBRID_SIG_LEN] = [0x6B; HYBRID_SIG_LEN];
 static SIG_W: [u8; HYBRID_SIG_LEN] = [0x7C; HYBRID_SIG_LEN];
@@ -197,6 +201,7 @@ fn genesis_box() -> GenesisBox<'static> {
         reporting_unit_id: ReportingUnitId::new(b"ru-11-0042").unwrap(),
         device_key: &VK_A,
         attest_key: &VK_B,
+        frame_key: &FRAME_A,
         modules: modules(),
     }
 }
@@ -204,16 +209,21 @@ fn genesis_box() -> GenesisBox<'static> {
 #[test]
 fn genesis_box_vectors() {
     let entry = genesis_box();
-    let bytes = encode_to_vec(SCHEMA_GENESIS_BOX, SCHEMA_VERSION_1, &entry);
+    let bytes = encode_to_vec(SCHEMA_GENESIS_BOX, SCHEMA_VERSION_DEVICE_ENTRY, &entry);
     let mut buf = Vec::new();
     assert_eq!(
-        round_trip(SCHEMA_GENESIS_BOX, SCHEMA_VERSION_1, &entry, &mut buf),
+        round_trip(
+            SCHEMA_GENESIS_BOX,
+            SCHEMA_VERSION_DEVICE_ENTRY,
+            &entry,
+            &mut buf
+        ),
         entry
     );
     assert_eq!(entry.key(), BOX);
     let profile_at = HEADER_LEN + ident_len(BOX) + ident_len(ST) + ident_len(b"pres-2030");
     let modules_at =
-        profile_at + 1 + ident_len(b"route-11") + ident_len(b"ru-11-0042") + 2 * HYBRID_VK_LEN;
+        profile_at + 1 + ident_len(b"route-11") + ident_len(b"ru-11-0042") + 2 * HYBRID_VK_LEN + 32;
     let mut v = std::vec![valid("in-person box with two modules", bytes.clone())];
     let mut b = bytes.clone();
     b[profile_at] = 4;
@@ -228,7 +238,7 @@ fn genesis_box_vectors() {
         "genesis_box.txt",
         "GenesisBox",
         SCHEMA_GENESIS_BOX,
-        SCHEMA_VERSION_1,
+        SCHEMA_VERSION_DEVICE_ENTRY,
         &v,
     );
 }
@@ -238,7 +248,16 @@ fn checkin_unit(id: &'static [u8], key: &'static [u8; HYBRID_VK_LEN]) -> Checkin
         unit_id: unit(id),
         key,
         attest_key: &VK_D,
+        frame_key: if id == b"unit-a" { &FRAME_B } else { &FRAME_C },
         modules: modules(),
+    }
+}
+
+fn gateway() -> GatewayEntry<'static> {
+    GatewayEntry {
+        gateway_id: GatewayId::new(b"gw-11-0042").unwrap(),
+        key: &VK_B,
+        attest_key: &VK_C,
     }
 }
 
@@ -263,6 +282,7 @@ fn station_parts() -> StationParts<'static> {
         kind: StationKind::ElectionDay,
         primary: checkin_unit(b"unit-a", &VK_A),
         spare: checkin_unit(b"unit-b", &VK_C),
+        gateway: gateway(),
         boxes: &BOXES,
         id_terminals_hash: patterned64(0x44),
         tokens: &TOKENS,
@@ -276,20 +296,28 @@ fn station_entry_vectors() {
     assert_eq!(entry.kind(), StationKind::ElectionDay);
     assert_eq!(entry.primary(), &checkin_unit(b"unit-a", &VK_A));
     assert_eq!(entry.spare(), &checkin_unit(b"unit-b", &VK_C));
+    assert_eq!(entry.gateway(), &gateway());
     assert_eq!(entry.boxes().collect::<Vec<_>>(), BOXES.to_vec());
     assert_eq!(entry.id_terminals_hash(), &patterned64(0x44));
     assert_eq!(entry.tokens().collect::<Vec<_>>(), TOKENS.to_vec());
     assert_eq!(entry.key(), ST);
-    let bytes = encode_to_vec(SCHEMA_STATION_ENTRY, SCHEMA_VERSION_1, &entry);
+    let bytes = encode_to_vec(SCHEMA_STATION_ENTRY, SCHEMA_VERSION_DEVICE_ENTRY, &entry);
     let mut buf = Vec::new();
     assert_eq!(
-        round_trip(SCHEMA_STATION_ENTRY, SCHEMA_VERSION_1, &entry, &mut buf),
+        round_trip(
+            SCHEMA_STATION_ENTRY,
+            SCHEMA_VERSION_DEVICE_ENTRY,
+            &entry,
+            &mut buf
+        ),
         entry
     );
-    let unit_len = ident_len(b"unit-a") + 2 * HYBRID_VK_LEN + MODULES_LEN;
+    let unit_len = ident_len(b"unit-a") + 2 * HYBRID_VK_LEN + 32 + MODULES_LEN;
+    let gateway_len = ident_len(b"gw-11-0042") + 2 * HYBRID_VK_LEN;
     let kind_at = HEADER_LEN + ident_len(ST);
     let spare_at = kind_at + 1 + unit_len;
-    let boxes_at = spare_at + unit_len;
+    let gateway_at = spare_at + unit_len;
+    let boxes_at = gateway_at + gateway_len;
     let second_box = boxes_at + 4 + ident_len(BOX);
     let tokens_at = second_box + ident_len(BOX2) + 64;
     let second_token = tokens_at + 4 + ident_len(b"obs-a") + ident_len(b"PARTY-A") + 32;
@@ -317,6 +345,23 @@ fn station_entry_vectors() {
         "InvariantViolation",
         spare_at,
     ));
+    let mut b = bytes.clone();
+    let spare_frame = spare_at + ident_len(b"unit-b") + 2 * HYBRID_VK_LEN;
+    b[spare_frame..spare_frame + 32].fill(0xF2);
+    v.push(invalid(
+        "spare shares the frame key",
+        b,
+        "InvariantViolation",
+        spare_at,
+    ));
+    let mut b = bytes.clone();
+    b[gateway_at + 4] = b' ';
+    v.push(invalid(
+        "gateway id with a space",
+        b,
+        "InvalidIdentByte",
+        gateway_at + 4,
+    ));
     let mut b = bytes[..boxes_at].to_vec();
     b.extend_from_slice(&0u32.to_be_bytes());
     fix_len(&mut b);
@@ -333,7 +378,7 @@ fn station_entry_vectors() {
         "station_entry.txt",
         "StationEntry",
         SCHEMA_STATION_ENTRY,
-        SCHEMA_VERSION_1,
+        SCHEMA_VERSION_DEVICE_ENTRY,
         &v,
     );
 }
@@ -362,6 +407,13 @@ fn station_entry_rules() {
     }));
     let shared_ml = StationParts {
         spare: checkin_unit(b"unit-b", shared_ml),
+        ..ok
+    };
+    let shared_frame = StationParts {
+        spare: CheckinUnit {
+            frame_key: &FRAME_B,
+            ..checkin_unit(b"unit-b", &VK_C)
+        },
         ..ok
     };
     let no_boxes = StationParts { boxes: &[], ..ok };
@@ -417,6 +469,7 @@ fn station_entry_rules() {
         same_unit,
         shared_ed,
         shared_ml,
+        shared_frame,
         no_boxes,
         too_many,
         unsorted,

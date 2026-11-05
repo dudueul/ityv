@@ -452,6 +452,7 @@ fn through_records(world: &'static World) -> Book {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     book
 }
 
@@ -1472,6 +1473,23 @@ fn codes_1_and_2_call_for_a_full_comparison_and_a_finding() {
     let r = report(&mut book, &observed());
     assert_eq!(r.status().holds(), HoldSet::empty());
     assert_eq!(r.status().status(), Status::PaperAudited);
+
+    // A connectivity incident that involves BOX-1's commitment unit lists
+    // the box for a full comparison, which this audit made (VC-083); the
+    // electronic layer holds all the same.
+    book.w(witnessed(
+        common::uplink::incident_body(Some(b"ST-1"), Some(B1.id), true),
+        &PEOPLE,
+    ));
+    let r = report(&mut book, &observed());
+    let incident = &r.connectivity().incidents()[0];
+    assert_eq!(incident.refused, None);
+    assert_eq!(
+        incident.full_comparison,
+        [(BoxId::new(B1.id).unwrap(), true)]
+    );
+    assert_eq!(r.status().holds(), only(HoldReason::ConnectivityIncident));
+    assert_eq!(r.status().status(), Status::HoldReview);
 }
 
 #[test]
@@ -1619,6 +1637,7 @@ fn two_style_tallied(world: &'static World) -> (Book, Vec<Cast>, Vec<Cast>) {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     book.checkpoint();
     tally1(
         &mut book,
@@ -2237,6 +2256,7 @@ fn two_unit_tallied(world: &'static World) -> (Book, Vec<Cast>) {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     book.checkpoint();
     tally1(
         &mut book,
@@ -2389,6 +2409,7 @@ fn large_tallied(world: &'static World, n: u64) -> (Book, Vec<Cast>) {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     book.checkpoint();
     let mut votes = [0u64; 5];
     for c in &casts {
@@ -2454,6 +2475,7 @@ fn an_empty_frame_is_not_a_vacuous_rule() {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     book.checkpoint();
     tally1(
         &mut book,

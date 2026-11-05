@@ -200,8 +200,14 @@ fn genesis_box(
         reporting_unit_id: ReportingUnitId::new(b"RU-1").unwrap(),
         device_key: device,
         attest_key: registered(90),
+        frame_key: frame_key(device[0]),
         modules: modules(),
     }
+}
+
+/// A frame key, distinct per seed (`ityv-state` does not read it).
+fn frame_key(seed: u8) -> &'static [u8; 32] {
+    leak([seed; 32])
 }
 
 fn boxes(profile: CaptureProfile, device: &'static [u8; HYBRID_VK_LEN]) -> Set {
@@ -222,6 +228,7 @@ fn unit(id: &'static [u8], seed: u8) -> CheckinUnit<'static> {
         unit_id: ityv_encoding::UnitId::new(id).unwrap(),
         key: registered(seed),
         attest_key: registered(92),
+        frame_key: frame_key(seed),
         modules: ModuleIds::new(&[
             ModuleId::new(b"MOD-P1").unwrap(),
             ModuleId::new(b"MOD-P2").unwrap(),
@@ -241,6 +248,12 @@ fn station(
         kind: StationKind::ElectionDay,
         primary,
         spare,
+        gateway: ityv_encoding::GatewayEntry {
+            gateway_id: ityv_encoding::GatewayId::new(leak_slice([&b"GW-"[..], id].concat()))
+                .unwrap(),
+            key: registered(80),
+            attest_key: registered(82),
+        },
         boxes: leak_slice(b.iter().map(|b| BoxId::new(b).unwrap()).collect()),
         id_terminals_hash: Hash512([0x33; 64]),
         tokens: &[],

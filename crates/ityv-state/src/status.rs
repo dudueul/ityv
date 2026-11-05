@@ -7,7 +7,9 @@
 //!   or other hold: `HOLD_REVIEW`;
 //! * otherwise steps 1–3, the box invariants of step 4 and step 5 passed,
 //!   with the checkpoints anchored in time: `LOG_CONSISTENT`;
-//! * and the completeness of step 4: `SOURCE_COMPLETENESS_CHECKED`;
+//! * and the completeness of step 4 and of step 11 (every station's
+//!   gateway sent its final session, ADR-0041 decision 10):
+//!   `SOURCE_COMPLETENESS_CHECKED`;
 //! * and steps 6 and 7: `CRYPTO_TALLY_VERIFIED`;
 //! * and step 8: `PAPER_AUDITED`. The verifier passes step 8 only when it
 //!   computed, from the ledger, that every ballot style's audit concluded
@@ -76,7 +78,7 @@ pub enum Step {
     Tally = 7,
     /// 8. Audit.
     Audit = 8,
-    /// 11. Connectivity.
+    /// 11. Connectivity: every station's gateway sent its final session.
     Connectivity = 9,
     /// 12. Software.
     Software = 10,
@@ -324,7 +326,7 @@ pub fn evaluate(evidence: &Evidence) -> StatusReport {
     ]) && matches!(evidence.anchors, Publication::Satisfied))
     {
         Status::Unverified
-    } else if !passed(&[Step::BoxCompleteness]) {
+    } else if !passed(&[Step::BoxCompleteness, Step::Connectivity]) {
         Status::LogConsistent
     } else if !passed(&[Step::Participation, Step::Tally]) {
         Status::SourceCompletenessChecked
@@ -489,6 +491,10 @@ mod tests {
         assert_eq!(evaluate(&passed(&LOG)).status(), Status::LogConsistent);
         let mut steps = LOG.to_vec();
         steps.push(Step::BoxCompleteness);
+        // Every box closed but no gateway's final session: the sources are
+        // not all accounted for (ADR-0041 decision 10).
+        assert_eq!(evaluate(&passed(&steps)).status(), Status::LogConsistent);
+        steps.push(Step::Connectivity);
         assert_eq!(
             evaluate(&passed(&steps)).status(),
             Status::SourceCompletenessChecked
@@ -515,18 +521,21 @@ mod tests {
             let e = passed(&all_but(missing));
             assert_eq!(evaluate(&e).status(), Status::Unverified, "{missing:?}");
         }
-        let e = passed(&all_but(Step::BoxCompleteness));
-        assert_eq!(evaluate(&e).status(), Status::LogConsistent);
+        for missing in [Step::BoxCompleteness, Step::Connectivity] {
+            let e = passed(&all_but(missing));
+            assert_eq!(evaluate(&e).status(), Status::LogConsistent, "{missing:?}");
+        }
         for missing in [Step::Participation, Step::Tally] {
             let e = passed(&all_but(missing));
             assert_eq!(evaluate(&e).status(), Status::SourceCompletenessChecked);
         }
         let e = passed(&all_but(Step::Audit));
         assert_eq!(evaluate(&e).status(), Status::CryptoTallyVerified);
-        // Steps 11 and 12 not run do not block the ladder.
+        // Step 12 not run does not block the ladder.
         let mut core = LOG.to_vec();
         core.extend([
             Step::BoxCompleteness,
+            Step::Connectivity,
             Step::Participation,
             Step::Tally,
             Step::Audit,

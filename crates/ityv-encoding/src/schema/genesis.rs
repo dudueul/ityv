@@ -15,10 +15,11 @@
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Kind};
 use crate::primitives::{
-    BallotStyleId, BoxId, Hash512, IDENT_MAX_STANDARD, Ident, ModuleId, OrgId, ReportingUnitId,
-    RouteId, SchemaId, SignerId, StationId, TrusteeId, UnitId,
+    BallotStyleId, BoxId, GatewayId, Hash512, IDENT_MAX_STANDARD, Ident, ModuleId, OrgId,
+    ReportingUnitId, RouteId, SchemaId, SignerId, StationId, TrusteeId, UnitId,
 };
 use crate::reader::Reader;
+use crate::schema::connectivity::FRAME_KEY_LEN;
 use crate::schema::share_package::ChamberCode;
 use crate::schema::util::{
     HYBRID_VK_LEN, MAX_CHUNKS, ModuleIds, ascending_by, keys_share_half, read_fixed,
@@ -309,7 +310,8 @@ fn ident_len(id: &Ident<'_>) -> usize {
     id.byte_len().saturating_add(4)
 }
 
-/// One expected box (`expected_boxes[]`, schema `0x0035`).
+/// One expected box (`expected_boxes[]`, schema `0x0035`, version 2:
+/// with the scanner's frame key, ADR-0041).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GenesisBox<'a> {
     /// The box.
@@ -328,6 +330,9 @@ pub struct GenesisBox<'a> {
     pub device_key: &'a [u8; HYBRID_VK_LEN],
     /// The commitment unit's attestation key (PROTOCOL.md §7.9).
     pub attest_key: &'a [u8; HYBRID_VK_LEN],
+    /// The Ed25519 key that signs the scanner's uplink frames (PROTOCOL.md
+    /// §5.8, ADR-0041 decision 2).
+    pub frame_key: &'a [u8; FRAME_KEY_LEN],
     /// The chamber modules registered for it (ascending).
     pub modules: ModuleIds<'a>,
 }
@@ -343,6 +348,7 @@ impl Encode for GenesisBox<'_> {
             .saturating_add(self.reporting_unit_id.encoded_len())
             .saturating_add(HYBRID_VK_LEN)
             .saturating_add(HYBRID_VK_LEN)
+            .saturating_add(FRAME_KEY_LEN)
             .saturating_add(self.modules.encoded_len())
     }
 
@@ -355,6 +361,7 @@ impl Encode for GenesisBox<'_> {
         self.reporting_unit_id.encode(w)?;
         w.write_array(self.device_key)?;
         w.write_array(self.attest_key)?;
+        w.write_array(self.frame_key)?;
         self.modules.encode(w)
     }
 }
@@ -370,6 +377,7 @@ impl<'a> Decode<'a> for GenesisBox<'a> {
             reporting_unit_id: ReportingUnitId::decode(r)?,
             device_key: read_fixed::<HYBRID_VK_LEN>(r)?,
             attest_key: read_fixed::<HYBRID_VK_LEN>(r)?,
+            frame_key: read_fixed::<FRAME_KEY_LEN>(r)?,
             modules: ModuleIds::decode(r)?,
         })
     }
@@ -384,7 +392,7 @@ impl<'a> GenesisEntry<'a> for GenesisBox<'a> {
 }
 
 /// A check-in unit (카운터·가명 유닛) of a station: its device key, its
-/// attestation key and the party modules plugged into it.
+/// attestation key, its frame key and the party modules plugged into it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CheckinUnit<'a> {
     /// The unit.
@@ -393,6 +401,9 @@ pub struct CheckinUnit<'a> {
     pub key: &'a [u8; HYBRID_VK_LEN],
     /// The unit's attestation key (PROTOCOL.md §7.9).
     pub attest_key: &'a [u8; HYBRID_VK_LEN],
+    /// The Ed25519 key that signs the unit's uplink frames (version 2,
+    /// ADR-0041).
+    pub frame_key: &'a [u8; FRAME_KEY_LEN],
     /// The party modules plugged into the unit (ascending).
     pub modules: ModuleIds<'a>,
 }
@@ -403,6 +414,7 @@ impl<'a> CheckinUnit<'a> {
             .encoded_len()
             .saturating_add(HYBRID_VK_LEN)
             .saturating_add(HYBRID_VK_LEN)
+            .saturating_add(FRAME_KEY_LEN)
             .saturating_add(self.modules.encoded_len())
     }
 
@@ -410,6 +422,7 @@ impl<'a> CheckinUnit<'a> {
         self.unit_id.encode(w)?;
         w.write_array(self.key)?;
         w.write_array(self.attest_key)?;
+        w.write_array(self.frame_key)?;
         self.modules.encode(w)
     }
 
@@ -418,7 +431,43 @@ impl<'a> CheckinUnit<'a> {
             unit_id: UnitId::decode(r)?,
             key: read_fixed::<HYBRID_VK_LEN>(r)?,
             attest_key: read_fixed::<HYBRID_VK_LEN>(r)?,
+            frame_key: read_fixed::<FRAME_KEY_LEN>(r)?,
             modules: ModuleIds::decode(r)?,
+        })
+    }
+}
+
+/// A station's gateway (version 2 of `StationEntry`, ADR-0041): the
+/// untrusted relay that chains the devices' frames and signs the sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GatewayEntry<'a> {
+    /// The gateway.
+    pub gateway_id: GatewayId<'a>,
+    /// Its hybrid verifying key (`UplinkSession`).
+    pub key: &'a [u8; HYBRID_VK_LEN],
+    /// Its attestation key (PROTOCOL.md §7.9).
+    pub attest_key: &'a [u8; HYBRID_VK_LEN],
+}
+
+impl<'a> GatewayEntry<'a> {
+    fn len(&self) -> usize {
+        self.gateway_id
+            .encoded_len()
+            .saturating_add(HYBRID_VK_LEN)
+            .saturating_add(HYBRID_VK_LEN)
+    }
+
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        self.gateway_id.encode(w)?;
+        w.write_array(self.key)?;
+        w.write_array(self.attest_key)
+    }
+
+    fn read(r: &mut Reader<'a>) -> Result<Self, Error> {
+        Ok(Self {
+            gateway_id: GatewayId::decode(r)?,
+            key: read_fixed::<HYBRID_VK_LEN>(r)?,
+            attest_key: read_fixed::<HYBRID_VK_LEN>(r)?,
         })
     }
 }
@@ -447,6 +496,8 @@ pub struct StationParts<'a> {
     pub primary: CheckinUnit<'a>,
     /// The sealed spare unit (PROTOCOL.md §6.2).
     pub spare: CheckinUnit<'a>,
+    /// The station's gateway (version 2, ADR-0041).
+    pub gateway: GatewayEntry<'a>,
     /// Every box at the station, ascending.
     pub boxes: &'a [BoxId<'a>],
     /// Hash of the station's identity-terminal list (the terminals are
@@ -456,10 +507,11 @@ pub struct StationParts<'a> {
     pub tokens: &'a [ObserverToken<'a>],
 }
 
-/// One polling station (`stations[]`, schema `0x0036`).
+/// One polling station (`stations[]`, schema `0x0036`, version 2: with
+/// each unit's frame key and the station's gateway, ADR-0041).
 ///
-/// Rules: the two units have different identifiers and keys that share no
-/// half (`InvariantViolation`); one to eight boxes (`InvariantViolation`
+/// Rules: the two units have different identifiers, keys that share no
+/// half and different frame keys (`InvariantViolation`); one to eight boxes (`InvariantViolation`
 /// for none, `CountExceedsMax`) and at most sixteen tokens, each list
 /// strictly ascending (`NotSorted`, `Duplicate`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -468,6 +520,7 @@ pub struct StationEntry<'a> {
     kind: StationKind,
     primary: CheckinUnit<'a>,
     spare: CheckinUnit<'a>,
+    gateway: GatewayEntry<'a>,
     boxes: [Option<BoxId<'a>>; MAX_STATION_BOXES],
     box_count: u8,
     id_terminals_hash: Hash512,
@@ -476,7 +529,9 @@ pub struct StationEntry<'a> {
 }
 
 fn units_valid(a: &CheckinUnit<'_>, b: &CheckinUnit<'_>) -> bool {
-    a.unit_id.as_bytes() != b.unit_id.as_bytes() && !keys_share_half(a.key, b.key)
+    a.unit_id.as_bytes() != b.unit_id.as_bytes()
+        && !keys_share_half(a.key, b.key)
+        && a.frame_key != b.frame_key
 }
 
 impl<'a> StationEntry<'a> {
@@ -507,6 +562,7 @@ impl<'a> StationEntry<'a> {
             kind: parts.kind,
             primary: parts.primary,
             spare: parts.spare,
+            gateway: parts.gateway,
             boxes,
             box_count: u8::try_from(parts.boxes.len()).map_err(|_| bad)?,
             id_terminals_hash: parts.id_terminals_hash,
@@ -537,6 +593,12 @@ impl<'a> StationEntry<'a> {
     #[must_use]
     pub const fn spare(&self) -> &CheckinUnit<'a> {
         &self.spare
+    }
+
+    /// The station's gateway.
+    #[must_use]
+    pub const fn gateway(&self) -> &GatewayEntry<'a> {
+        &self.gateway
     }
 
     /// Every box at the station, ascending.
@@ -579,6 +641,7 @@ impl Encode for StationEntry<'_> {
             .saturating_add(1)
             .saturating_add(self.primary.len())
             .saturating_add(self.spare.len())
+            .saturating_add(self.gateway.len())
             .saturating_add(boxes)
             .saturating_add(64)
             .saturating_add(tokens)
@@ -589,6 +652,7 @@ impl Encode for StationEntry<'_> {
         w.write_u8(self.kind.code())?;
         self.primary.write(w)?;
         self.spare.write(w)?;
+        self.gateway.write(w)?;
         w.write_count(usize::from(self.box_count), MAX_STATION_BOXES)?;
         for b in self.boxes() {
             b.encode(w)?;
@@ -614,6 +678,7 @@ impl<'a> Decode<'a> for StationEntry<'a> {
         if !units_valid(&primary, &spare) {
             return Err(Error::new(Kind::InvariantViolation, spare_at));
         }
+        let gateway = GatewayEntry::read(r)?;
         let boxes_at = r.position();
         let box_count = r.read_count(MAX_STATION_BOXES)?;
         if box_count == 0 {
@@ -649,6 +714,7 @@ impl<'a> Decode<'a> for StationEntry<'a> {
             kind,
             primary,
             spare,
+            gateway,
             boxes,
             box_count: u8::try_from(box_count)
                 .map_err(|_| Error::new(Kind::CountExceedsMax, boxes_at))?,

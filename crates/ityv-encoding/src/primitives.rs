@@ -289,6 +289,10 @@ pub struct ReportingUnitId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AuthorityId<'a>(Ident<'a>);
 
+/// Identifier of a station gateway (PROTOCOL.md §5.8; ADR-0041).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GatewayId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -346,6 +350,7 @@ ident_newtype!(RouteId);
 ident_newtype!(UnitId);
 ident_newtype!(ReportingUnitId);
 ident_newtype!(AuthorityId);
+ident_newtype!(GatewayId);
 
 /// Whether `byte` is a separator an organisation name may be written with
 /// or without.

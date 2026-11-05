@@ -25,14 +25,18 @@
 //!   chamber the genesis does not have; and each chamber has exactly
 //!   `n_c` trustees, at most eight (the threshold sharing's capacity, so
 //!   that a trustee quorum can be checked at all) (VC-067, VC-017);
-//! * no two devices share an identifier (boxes, check-in units and
-//!   modules), so a device attestation names exactly one device;
+//! * no two devices share an identifier (boxes, check-in units, modules
+//!   and gateways), so a device attestation names exactly one device;
+//! * every frame key (a box's scanner, a check-in unit) is a valid Ed25519
+//!   key, and no two devices of the state share one: a frame key names
+//!   one link (ADR-0041 decision 2);
 //! * no timestamp authority's operator is a witness's organisation or an
 //!   election commission's that a reporting unit names (ADR-0039 2);
 //! * every registered key is a valid key, and no two keys of the state
 //!   share a half: the two authorities, every
 //!   box's device and attestation keys, every check-in unit's keys, every
-//!   roster signer, module, trustee and witness.
+//!   station gateway's keys, every roster signer, module, trustee and
+//!   witness.
 //!
 //! What these checks do not prove: that an entry is true of the world (a
 //! box exists physically, a person holds the key registered for them);
@@ -42,7 +46,7 @@
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
-use ityv_crypto::MAX_MEMBERS;
+use ityv_crypto::{MAX_MEMBERS, RecordVerifyingKey};
 use ityv_encoding::{
     ChamberCode, EntrySet, GenesisBody, HYBRID_VK_LEN, MLDSA87_VK_HALF, ModuleIds, RosterRole,
     RosterSigner,
@@ -353,6 +357,7 @@ pub(crate) fn check<'a>(
 
     check_appointments(state, a, f)?;
     check_devices(state, a)?;
+    check_frame_keys(state, a)?;
     timestamp::check_operators_apart(state, &f.timestamps, &f.witnesses, &a.roster, &a.units)?;
     roll::check_custodians_apart(state, &f.rolls, &a.units)?;
     check_keys(state, a, f, body)
@@ -403,10 +408,37 @@ fn check_devices(state: u64, a: &Amendable<'_>) -> Result<(), Error> {
         }
     }
     for (i, item) in a.stations.items().iter().enumerate() {
-        for unit in [item.value.primary(), item.value.spare()] {
-            if !ids.insert(unit.unit_id.as_bytes()) {
+        let s = &item.value;
+        let units = [s.primary().unit_id.as_bytes(), s.spare().unit_id.as_bytes()];
+        for id in units.into_iter().chain([s.gateway().gateway_id.as_bytes()]) {
+            if !ids.insert(id) {
                 return Err(Error::entry(state, EntrySet::Stations, i, Rule::DeviceId));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Every frame key of one state is a valid Ed25519 key and names one
+/// device (ADR-0041 decision 2).
+fn check_frame_keys(state: u64, a: &Amendable<'_>) -> Result<(), Error> {
+    let boxes = a
+        .boxes
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(i, item)| (item.value.frame_key, EntrySet::Boxes, i));
+    let units = a.stations.items().iter().enumerate().flat_map(|(i, item)| {
+        [item.value.primary(), item.value.spare()]
+            .map(|unit| (unit.frame_key, EntrySet::Stations, i))
+    });
+    let mut seen: BTreeSet<[u8; ityv_encoding::FRAME_KEY_LEN]> = BTreeSet::new();
+    for (key, set, i) in boxes.chain(units) {
+        if RecordVerifyingKey::from_bytes(*key).is_err() {
+            return Err(Error::entry(state, set, i, Rule::InvalidKey));
+        }
+        if !seen.insert(*key) {
+            return Err(Error::entry(state, set, i, Rule::SharedKey));
         }
     }
     Ok(())
@@ -431,6 +463,9 @@ fn check_keys(
             keys.add(unit.key, Some(EntrySet::Stations), i)?;
             keys.add(unit.attest_key, Some(EntrySet::Stations), i)?;
         }
+        let gateway = item.value.gateway();
+        keys.add(gateway.key, Some(EntrySet::Stations), i)?;
+        keys.add(gateway.attest_key, Some(EntrySet::Stations), i)?;
     }
     for (i, item) in a.roster.items().iter().enumerate() {
         keys.add(item.value.key, Some(EntrySet::Roster), i)?;

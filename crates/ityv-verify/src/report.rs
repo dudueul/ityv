@@ -41,6 +41,12 @@
 //!    not the ledger's, an opening that does not reconstruct or a missing
 //!    ballot holds. The report computes this itself: no caller flag makes
 //!    the audit concluded;
+//! 11. connectivity ([`crate::verify_connectivity`]): passed when every
+//!     station's gateway sent its final session, which together with box
+//!     completeness gives `SOURCE_COMPLETENESS_CHECKED` (ADR-0041 decision
+//!     10); a manifest rule broken, a session refused, a frame or object
+//!     that breaks a rule, a device event outside every received frame or
+//!     a connectivity incident holds;
 //! 9. disputes ([`crate::verify_disputes`]): a dispute still unresolved
 //!    after every dispute event holds the ledger, and so does a dispute
 //!    event or legal decision that cannot be taken (a signature that does
@@ -66,7 +72,7 @@
 //! With the participation ledger complete and every unit's tally passed,
 //! the status reaches `CRYPTO_TALLY_VERIFIED`; with every style's audit
 //! concluded, `PAPER_AUDITED`. What the report does not run yet: split
-//! view, connectivity and software (stages 10–12).
+//! view and software (stages 10 and 12).
 
 use ityv_encoding::{CaptureProfile, SCHEMA_TIMESTAMP_RECORD, ScopeSet, TimeBucket};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
@@ -77,6 +83,7 @@ use crate::audit::{AuditInput, AuditStage, verify_audit};
 use crate::authority::{AuthorityStage, authorize_ledger};
 use crate::boxes::{BoxStage, verify_boxes};
 use crate::checkpoint::{CheckpointChain, verify_checkpoints};
+use crate::connectivity::{ConnectivityStage, verify_connectivity};
 use crate::disputes::{DisputeStage, verify_disputes};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{LedgerIndex, build_index};
@@ -114,6 +121,7 @@ pub struct Report<'a> {
     disputes: DisputeStage<'a>,
     tally: TallyStage<'a>,
     audit: AuditStage<'a>,
+    connectivity: ConnectivityStage<'a>,
     evidence: Evidence,
     status: StatusReport,
 }
@@ -183,6 +191,12 @@ impl<'a> Report<'a> {
     #[must_use]
     pub const fn audit(&self) -> &AuditStage<'a> {
         &self.audit
+    }
+
+    /// The connectivity stage (stage 11).
+    #[must_use]
+    pub const fn connectivity(&self) -> &ConnectivityStage<'a> {
+        &self.connectivity
     }
 
     /// What was handed to the status rule, step by step.
@@ -331,6 +345,7 @@ pub fn verify_ledger_full<'a>(
         &tally,
         audit_input,
     );
+    let connectivity = verify_connectivity(genesis, &index, &audit);
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
         acc.union(without_close_missing(r.holds))
@@ -346,7 +361,8 @@ pub fn verify_ledger_full<'a>(
         .union(roll.holds())
         .union(disputes.holds())
         .union(tally.holds())
-        .union(audit.holds());
+        .union(audit.holds())
+        .union(connectivity.holds());
     let scopes = authority
         .authorization()
         .map_or(ScopeSet::empty(), ityv_state::Authorization::scopes);
@@ -366,6 +382,7 @@ pub fn verify_ledger_full<'a>(
         )
         .with_step(Step::Tally, ran(tally.passed()))
         .with_step(Step::Audit, ran(audit.passed()))
+        .with_step(Step::Connectivity, ran(connectivity.complete()))
         .with_anchors(checkpoints.anchor_deadline(publications.now))
         .with_board(publications.board)
         .with_holds(holds);
@@ -385,6 +402,7 @@ pub fn verify_ledger_full<'a>(
         disputes,
         tally,
         audit,
+        connectivity,
         evidence,
         status,
     }

@@ -899,7 +899,7 @@ fn every_schema_has_its_current_version() {
         schema_version(SCHEMA_WITNESSED_EVENT),
         SCHEMA_VERSION_WITNESSED
     );
-    assert_eq!(SCHEMA_VERSION_WITNESSED, 4);
+    assert_eq!(SCHEMA_VERSION_WITNESSED, 5);
     assert_eq!(
         schema_version(SCHEMA_REPORTING_UNIT_ENTRY),
         SCHEMA_VERSION_REPORTING_UNIT
@@ -925,7 +925,8 @@ fn every_schema_has_its_current_version() {
     }
     assert_eq!(EntrySet::ReportingUnits.version(), 2);
     assert_eq!(EntrySet::Roster.version(), 3);
-    assert_eq!(EntrySet::Boxes.version(), SCHEMA_VERSION_1);
+    assert_eq!(EntrySet::Boxes.version(), 2);
+    assert_eq!(EntrySet::Stations.version(), 2);
     // The appointment hashes are not objects.
     assert_eq!(EntrySet::Appointments.version(), SCHEMA_VERSION_1);
 }

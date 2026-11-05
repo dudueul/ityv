@@ -1,10 +1,10 @@
-//! `WitnessedEvent` (schema `0x0028`), version 4: one human-signed ledger
+//! `WitnessedEvent` (schema `0x0028`), version 5: one human-signed ledger
 //! event, the body object bytes with the signatures of the people the
 //! event names (ENCODING.md §8.42). Version 2 added the district
 //! commission chair (role 9) and the paper count (ADR-0035); version 3 the
 //! auditor (role 10) and the audit bodies (ADR-0036); version 4 the roll
 //! source (role 11), the roll custodian (role 12) and the roll bodies
-//! (ADR-0040).
+//! (ADR-0040); version 5 the connectivity incident (ADR-0041).
 //!
 //! Field order: `body`, `sigs`. The body is a complete object of one of
 //! the schemas in [`WITNESSED_BODY_SCHEMAS`]; each signature is a hybrid
@@ -24,6 +24,7 @@ use crate::schema::audit::{
     SampleComparisonBody,
 };
 use crate::schema::checkin::{BoxUnitSwapBody, CheckinUnitSwapBody, ObserverCountAttestBody};
+use crate::schema::connectivity::ConnectivityIncidentBody;
 use crate::schema::events::{
     BoxOpenedBody, CustodyHandoffBody, DisputeEventBody, FallbackBody, ImprintAuditBody,
     IssuanceCountBody, LateBatchCloseBody, LegalDecisionRefBody, SealChangeBody,
@@ -37,13 +38,13 @@ use crate::schema::util::{HYBRID_SIG_LEN, ascending_by, read_fixed};
 use crate::schema::{
     SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
     SCHEMA_AUDIT_SEED_BODY, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
-    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_FALLBACK_BODY, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
-    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
-    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PROGRESS_CHECK_BODY,
-    SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
-    SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SEAL_CHANGE_BODY,
-    SCHEMA_VERSION_1,
+    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_CUSTODY_HANDOFF_BODY,
+    SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY, SCHEMA_HAND_COUNT_REPORT_BODY,
+    SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
+    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_ROLL_AMENDMENT_BODY,
+    SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
+    SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1,
 };
 use crate::writer::Writer;
 
@@ -63,7 +64,7 @@ pub const MIN_EVENT_OBSERVER_ORGS: usize = 2;
 pub const MIN_EVENT_AUDITOR_ORGS: usize = 2;
 
 /// The body schemas a `WitnessedEvent` may carry.
-pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 24] = [
+pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 25] = [
     SCHEMA_CUSTODY_HANDOFF_BODY,
     SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_LEGAL_DECISION_REF_BODY,
@@ -88,6 +89,7 @@ pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 24] = [
     SCHEMA_ROLL_FREEZE_BODY,
     SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
     SCHEMA_ROLL_AMENDMENT_BODY,
+    SCHEMA_CONNECTIVITY_INCIDENT_BODY,
 ];
 
 /// The signature purpose of a body schema (PROTOCOL.md Appendix B), or
@@ -119,6 +121,7 @@ pub fn purpose_of(schema: SchemaId) -> Option<&'static [u8]> {
         0x0053 => b"roll-freeze",
         0x0054 => b"roll-receipt",
         0x0055 => b"roll-amendment",
+        0x0059 => b"connectivity-incident",
         _ => return None,
     };
     Some(purpose)
@@ -354,7 +357,11 @@ where
 /// * `RollSourceExtract`: exactly one roll source;
 /// * `RollCustodyReceipt`: exactly one roll custodian;
 /// * `RollAmendment`: exactly the commission, the committee and one roll
-///   source.
+///   source;
+/// * `ConnectivityIncident`: two or more clerks and observers of two or
+///   more organisations (found on site), or the committee once and
+///   observers of two or more organisations (found afterwards), nothing
+///   else (ADR-0041 decision 11).
 pub fn roles_satisfied<'a, F, I>(schema: SchemaId, sigs: F) -> bool
 where
     F: Fn() -> I,
@@ -380,6 +387,9 @@ where
                 EventRole::RollSource,
             ],
         ),
+        0x0059 => {
+            clerks_and_observers(&sigs, None) || observers_with(&sigs, Some(EventRole::Committee))
+        }
         _ => false,
     }
 }
@@ -412,6 +422,7 @@ fn validate_body(schema: SchemaId, bytes: &[u8]) -> Result<(), Error> {
         0x0053 => decode_object::<RollFreezeBody<'_>>(schema, v, bytes).map(drop),
         0x0054 => decode_object::<RollCustodyReceiptBody<'_>>(schema, v, bytes).map(drop),
         0x0055 => decode_object::<RollAmendmentBody<'_>>(schema, v, bytes).map(drop),
+        0x0059 => decode_object::<ConnectivityIncidentBody<'_>>(schema, v, bytes).map(drop),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }

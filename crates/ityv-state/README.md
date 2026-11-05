@@ -16,6 +16,7 @@
 | `issuance` | 서명된 교부 회계, 용지 재고·교부·참여 등식 | §10.2, FAILURE_CASES §0 |
 | `tally` | `TallyScope`·`AggregateOpening` 관문 | §11.1, §11.2, VC-057, VC-063 |
 | `audit` | 감사 관문(동결·약정·시드·발견의 `RLA`, 약정은 모든 동결 뒤, 시드는 약정과 고정 체크포인트 뒤, 열기의 `OBSERVER_ACCESS`), 위원회·감사인·참관인 서명 결속, 수검표, 확대 규칙 `audit_phase`, 사유 코드별 후속 | §12, VC-074, ADR-0036 |
+| `connectivity` | 연결 사건의 서명자(`check_incident_signers`): 사무원 둘 이상과 서로 다른 조직의 참관인 둘 이상, 또는 위원회와 서로 다른 조직의 참관인 둘 이상, 모두 명부에 그 역할·조직으로 등록되고 그 키로 서명(ADR-0041 11항). 보류 79–85와 11단계(`Step::Connectivity`, `SOURCE_COMPLETENESS_CHECKED`에 필요)는 `hold`와 `status`에 |
 | `roll` | 명부 사건의 서명자(추출은 그 출처, 동결은 선관위·위원회, 영수증은 그 보관 기관, 변경은 둘과 사유의 출처)와 기능, 보관 정족수(수와 법원행정처·행정안전부) | §6.1, ADR-0033, ADR-0040, VC-107, VC-108, VC-111 |
 | `dispute` | 두 기관이 서명한 분쟁 이벤트(접수와 상태 변경), 앞으로만 가는 상태 | §13, VC-048, VC-098 |
 | `status` | 검증기 상태 어휘, 공표 기한 결과의 반영, `LegalReference` | §14, VC-049, VC-050 |

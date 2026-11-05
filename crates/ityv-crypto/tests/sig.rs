@@ -234,6 +234,34 @@ fn the_ed25519_half_of_a_hybrid_key_signs_the_attestation_purposes() {
 }
 
 #[test]
+fn a_frame_key_signs_only_uplink_frames() {
+    let mut rng = rng(9);
+    let key = RecordSigningKey::generate(&mut rng);
+    let vk = key.verifying_key();
+    let frame = sign_record(&key, RecordPurpose::UplinkFrame, OBJ).unwrap();
+    assert!(verify_record(&vk, RecordPurpose::UplinkFrame, OBJ, &frame).is_ok());
+    for purpose in [
+        RecordPurpose::CastRecord,
+        RecordPurpose::ModuleRecord,
+        RecordPurpose::AttestChallenge,
+        RecordPurpose::AttestSummary,
+    ] {
+        assert_eq!(
+            verify_record(&vk, purpose, OBJ, &frame).unwrap_err(),
+            Error::SignatureInvalid
+        );
+    }
+    assert_eq!(
+        RecordPurpose::UplinkFrame.purpose(),
+        ityv_crypto::PURPOSE_UPLINK_FRAME
+    );
+    assert_eq!(
+        ityv_crypto::PURPOSE_UPLINK_FRAME.as_bytes(),
+        b"uplink-frame"
+    );
+}
+
+#[test]
 fn record_signature_negatives_and_encoding() {
     let mut rng = rng(4);
     let key = RecordSigningKey::generate(&mut rng);

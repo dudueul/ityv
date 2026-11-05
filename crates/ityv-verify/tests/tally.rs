@@ -1395,6 +1395,7 @@ fn a_clean_election_reaches_crypto_tally_verified() {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     tally1(
         &mut book,
         &casts,
@@ -1463,6 +1464,7 @@ fn a_clean_election_reaches_crypto_tally_verified() {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     let body = scope_body(&spec(STYLE1, RU1, &codes(&casts)));
     book.q(scope(body));
     book.checkpoint();
@@ -1521,6 +1523,7 @@ fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
     for (schema, event) in roll() {
         book.push(schema, event);
     }
+    book.uplink();
     book.checkpoint();
     tally1(
         &mut book,
@@ -1578,6 +1581,7 @@ fn election_with_roll(
     for (schema, event) in roll_events {
         book.push(*schema, event);
     }
+    book.uplink();
     tally1(
         &mut book,
         &casts,

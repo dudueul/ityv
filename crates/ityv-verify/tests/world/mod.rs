@@ -1061,6 +1061,16 @@ impl Book {
         self.push(SCHEMA_QUORUM_SIGNED, event)
     }
 
+    /// The gateways' frame logs and sessions over every device event so
+    /// far, each station's last session final (ADR-0041): the uplink the
+    /// status ladder needs for `SOURCE_COMPLETENESS_CHECKED`.
+    pub(crate) fn uplink(&mut self) {
+        let events = self.ledger.events.clone();
+        for (schema, event) in common::uplink::for_ledger(self.world.genesis, &events) {
+            self.push(schema, event);
+        }
+    }
+
     /// A checkpoint over every frame so far, after the last one, in the
     /// first bucket after the late-close window.
     pub(crate) fn checkpoint(&mut self) -> u64 {

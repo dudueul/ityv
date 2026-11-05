@@ -22,6 +22,8 @@
 //! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
 //! | [`tally`] | 7. Tally: receipt resolutions, legal tally effects, tally scopes recomputed, aggregate openings against the commitments, paper counts per reporting unit | §10.6, §11, §14 7, VC-024, VC-042..044, VC-057, VC-063, VC-075, VC-099 |
 //! | [`audit`] | 8. Audit: freezes against the recomputed frames, the commit, the seed recomputed against the binding checkpoint and the observed beacon, the sample redrawn, opening references and comparisons, restricted openings reconstructed, escalation, full comparisons, findings, hand counts | §12, §14 8, VC-045..047, VC-059, VC-074 |
+//! | [`connectivity`] | 11. Connectivity: the manifest's one-way rules, gateway sessions and their frame logs, every frame's signature, shape, window and padding proof, every stream's objects, the inclusion of every device event, incidents | §5.8, §14 11, ADR-0041, VC-077..080, VC-083 |
+//! | [`capture`] | Tools outside the status: an observer's capture against the published chain, the carrier's records against the sessions | §5.8 item 7, ADR-0041, VC-081 |
 //! | [`report`] | Every stage over one ledger and the status ladder | §14 (end), VC-049, VC-050 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -42,8 +44,9 @@
 //! External timestamps (ADR-0039) are verified with `ityv-tsa` and judged
 //! by the checkpoint stage; the ledger's anchor deadline comes from them.
 //!
-//! What this crate does **not** do yet (ROADMAP M5): the split-view,
-//! connectivity and software stages (10–12). The highest status
+//! What this crate does **not** do yet (ROADMAP M5): the split-view and
+//! software stages (10 and 12), and the radio checks and teardown reports
+//! of the connectivity stage (VC-082). The highest status
 //! [`report::verify_ledger_with`] gives is `PAPER_AUDITED`, and only with
 //! the beacon value the caller observed; [`report::verify_ledger`], which
 //! has none, stops at `CRYPTO_TALLY_VERIFIED`.
@@ -58,7 +61,9 @@ extern crate std;
 pub mod audit;
 pub mod authority;
 pub mod boxes;
+pub mod capture;
 pub mod checkpoint;
+pub mod connectivity;
 mod cross;
 pub mod disputes;
 pub mod error;
@@ -87,9 +92,18 @@ pub use audit::{
 };
 pub use authority::{AuthorityStage, authorize_ledger};
 pub use boxes::{BoxRefusal, BoxReport, BoxStage, Phase, Refusal, verify_boxes};
+pub use capture::{
+    CaptureComparison, CaptureFinding, CaptureFrame, CaptureProblem, CarrierFinding,
+    CarrierInterval, CarrierLine, CarrierLog, CarrierProblem, compare_capture, compare_carrier,
+};
 pub use checkpoint::{
     CheckpointChain, CheckpointFinding, CheckpointFindingKind, VerifiedCheckpoint,
     verify_checkpoints, witness_entries, witness_set,
+};
+pub use connectivity::{
+    ConnectivityStage, IncidentProblem, IncidentReport, LinkDevice, LinkFinding, LinkProblem,
+    LinkReport, ManifestFinding, ManifestProblem, OutsideEvent, SessionFinding, SessionProblem,
+    SessionReport, StationUplink, verify_connectivity,
 };
 pub use disputes::{Decision, DisputeEntry, DisputeStage, verify_disputes};
 pub use error::{Error, Reference, Rule};

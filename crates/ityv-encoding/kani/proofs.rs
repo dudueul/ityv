@@ -984,3 +984,162 @@ fn roll_codes_are_exact() {
         assert!(!r.source().is_custodian());
     }
 }
+
+use crate::primitives::GatewayId;
+use crate::schema::connectivity::{
+    ConnectivityIncidentBody, ConnectivityIncidentParts, DeviceClass, Direction, FrameKind,
+    IncidentKind, MAX_PAYLOAD_LEN, ManifestEntry, Medium, Schedule, SessionLinks,
+    UplinkFrameHeader, UplinkFrameHeaderParts, UplinkSessionBody, UplinkSessionParts, data_chunks,
+};
+use crate::schema::{SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1 as V1};
+
+static G1: GatewayId<'static> = match GatewayId::new(b"G") {
+    Some(id) => id,
+    None => panic!("valid identifier"),
+};
+
+/// The connectivity codes (ADR-0041): each table decodes exactly its
+/// defined codes and gives them back; the TCB classes are exactly 1–4 and
+/// only the normal frame kind uses the normal count; the manifest's frame
+/// counts are in form exactly when none or `1 ≤ frames ≤ catch-up ≤ 64`;
+/// a payload length has `⌈len / 4096⌉` data chunks.
+#[kani::proof]
+fn connectivity_codes_are_exact() {
+    let code: u8 = kani::any();
+    let class = DeviceClass::from_code(code);
+    assert_eq!(class.is_some(), (1..=15).contains(&code));
+    if let Some(c) = class {
+        assert_eq!(c.code(), code);
+        assert_eq!(c.is_tcb(), code <= 4);
+    }
+    assert_eq!(Direction::from_code(code).is_some(), code <= 3);
+    assert_eq!(Medium::from_code(code).is_some(), code <= 7);
+    assert_eq!(Schedule::from_code(code).is_some(), code <= 4);
+    let kind = FrameKind::from_code(code);
+    assert_eq!(kind.is_some(), code <= 3);
+    if let Some(k) = kind {
+        assert_eq!(k.code(), code);
+        assert_eq!(k.uses_catchup(), code != 0);
+    }
+    let incident = IncidentKind::from_code(code);
+    assert_eq!(incident.is_some(), (1..=10).contains(&code));
+    if let Some(i) = incident {
+        assert_eq!(i.code(), code);
+    }
+    let (frames, catchup): (u16, u16) = (kani::any(), kani::any());
+    let entry = ManifestEntry {
+        device_class: DeviceClass::CommitmentUnit,
+        port: P1,
+        direction: Direction::OutOnly,
+        medium: Medium::OpticalTransmit,
+        peer_class: Some(DeviceClass::Gateway),
+        counterpart: P1,
+        schedule: Schedule::BoxOpenToClose,
+        frames_per_slot: frames,
+        catchup_frames_per_slot: catchup,
+        carries: 1,
+    };
+    assert_eq!(
+        entry.counts_valid(),
+        (frames == 0 && catchup == 0) || (frames >= 1 && frames <= catchup && catchup <= 64)
+    );
+    assert_eq!(entry.sends_frames(), frames > 0);
+    let len: u32 = kani::any();
+    let chunks = data_chunks(len);
+    let n = len as usize;
+    assert!(chunks * 4096 >= n && (chunks == 0 || (chunks - 1) * 4096 < n));
+}
+
+static P1: Ident<'static> = match Ident::new(b"P", 32) {
+    Some(id) => id,
+    None => panic!("valid identifier"),
+};
+
+/// A frame header with symbolic fields is built exactly when its index is
+/// below 64 and its payload length at most 1,048,425, and survives an
+/// object-level round trip.
+#[kani::proof]
+#[kani::unwind(70)] // 64-byte array comparisons unroll to 64 iterations plus slack.
+fn uplink_frame_header_round_trip() {
+    let Some(kind) = FrameKind::from_code(kani::any()) else {
+        return;
+    };
+    let parts = UplinkFrameHeaderParts {
+        link_id_hash: Hash512(kani::any()),
+        slot: kani::any(),
+        index: kani::any(),
+        kind,
+        stream_offset: kani::any(),
+        payload_len: kani::any(),
+        payload_root: Hash512(kani::any()),
+    };
+    let ok = parts.index < 64 && (parts.payload_len as usize) <= MAX_PAYLOAD_LEN;
+    let built = UplinkFrameHeader::new(&parts);
+    assert_eq!(built.is_ok(), ok);
+    let Ok(header) = built else {
+        return;
+    };
+    let mut buf = [0u8; 16 + 151];
+    let Ok(len) = encode(SCHEMA_UPLINK_FRAME_HEADER, V1, &header, &mut buf) else {
+        unreachable!("167 bytes hold a header");
+    };
+    assert_eq!(len, 16 + 151);
+    let decoded: Result<UplinkFrameHeader, _> = decode(SCHEMA_UPLINK_FRAME_HEADER, V1, &buf);
+    assert_eq!(decoded, Ok(header));
+}
+
+/// A session body is built exactly with a session number of at least 1, a
+/// zero previous hash exactly for the first, and a window of one to six
+/// slots.
+#[kani::proof]
+#[kani::unwind(70)]
+fn uplink_session_rules_are_exact() {
+    let session_index: u32 = kani::any();
+    let zero_previous: bool = kani::any();
+    let (start_slot, end_slot): (u64, u64) = (kani::any(), kani::any());
+    let parts = UplinkSessionParts {
+        election_id: E1,
+        station_id: ST1,
+        gateway_id: G1,
+        session_index,
+        is_final: kani::any(),
+        start_slot,
+        end_slot,
+        links: SessionLinks::EMPTY,
+        wan_bytes: kani::any(),
+        previous_session_hash: if zero_previous {
+            Hash512::ZERO
+        } else {
+            Hash512([1; 64])
+        },
+    };
+    let window = start_slot <= end_slot && end_slot - start_slot < 6;
+    let expected = session_index >= 1 && (session_index == 1) == zero_previous && window;
+    assert_eq!(UplinkSessionBody::new(&parts).is_ok(), expected);
+}
+
+/// A connectivity incident is built exactly when a box comes with its
+/// station, the interval is ordered and the evidence hash is nonzero.
+#[kani::proof]
+#[kani::unwind(70)]
+fn connectivity_incident_rules_are_exact() {
+    let (station, boxed, zero_evidence): (bool, bool, bool) =
+        (kani::any(), kani::any(), kani::any());
+    let (from_slot, to_slot): (u64, u64) = (kani::any(), kani::any());
+    let parts = ConnectivityIncidentParts {
+        election_id: E1,
+        station_id: station.then_some(ST1),
+        box_id: boxed.then_some(B1),
+        kind: IncidentKind::CaptureMismatch,
+        from_slot,
+        to_slot,
+        commitment_unit: kani::any(),
+        evidence_hash: if zero_evidence {
+            Hash512::ZERO
+        } else {
+            Hash512([2; 64])
+        },
+    };
+    let expected = (!boxed || station) && from_slot <= to_slot && !zero_evidence;
+    assert_eq!(ConnectivityIncidentBody::new(&parts).is_ok(), expected);
+}

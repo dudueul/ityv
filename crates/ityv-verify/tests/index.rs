@@ -594,6 +594,8 @@ fn vector(name: &str) -> &'static [u8] {
 /// `st-11-0042`).
 fn vector_genesis() -> &'static VerifiedGenesis<'static> {
     let mut draft = Draft::standard();
+    draft.manifest =
+        common::uplink::manifest_of(vector_election(), &common::uplink::standard_entries());
     let st = StationId::new(b"st-11-0042").unwrap();
     draft.boxes[0].box_id = BoxId::new(b"box-11-0042").unwrap();
     draft.boxes[0].station_id = st;

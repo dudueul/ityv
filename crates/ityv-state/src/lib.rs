@@ -20,6 +20,7 @@
 //! | [`tally`] | Tally-scope and aggregate-opening gates, trustee quorum, paper comparison | §11.1, §11.2, §11.5, VC-057, VC-063, VC-075 |
 //! | [`audit`] | Audit gates, audit signers, the escalation rule, the reason-code follow-ups, hand counts | §12, VC-045..047, VC-074 |
 //! | [`roll`] | Roll-event signers and the custody quorum | §6.1, ADR-0033, ADR-0040, VC-107, VC-108, VC-111 |
+//! | [`connectivity`] | Connectivity-incident signers | §5.8, ADR-0041, VC-083 |
 //! | [`dispute`] | Dispute life cycle | §13, VC-048, VC-049 |
 //! | [`status`] | The verifier status vocabulary | §14, VC-049, VC-050 |
 //! | [`progress`] | Progress streams, alarms, observer counts and device swaps | §6.2, §6.3, §7.10, VC-102, VC-103 |
@@ -71,6 +72,7 @@ pub mod audit;
 pub mod auth;
 pub mod boxes;
 pub mod close;
+pub mod connectivity;
 pub mod custody;
 pub mod dispute;
 pub mod error;
@@ -108,6 +110,7 @@ pub use close::{
     CountFacts, MAX_VISIT_BALLOTS, Named, Observed, RosterEntry, check_observers,
     check_witness_set, check_witnesses, count_verdict, modules_gap_free, roster_key,
 };
+pub use connectivity::check_incident_signers;
 pub use custody::CustodyChain;
 pub use dispute::{Dispute, DisputeEvent, DisputeStatus, DisputeType};
 pub use error::Error;
