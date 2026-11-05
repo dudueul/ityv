@@ -2690,10 +2690,10 @@ fn the_binding_checkpoint_needs_tokens_from_before_the_publication() {
     use common::tsa::{FREE, GOV, GOV_SAME_OPERATOR, at};
     let start = |k: u64| at(k, 0);
     // Both kinds, the government's latest instant (one second of
-    // accuracy) and the other's (500 ms, rounded down) the last second
+    // accuracy) and the other's (two seconds declared) the last second
     // before the publication bucket: taken.
     let (r, _) = stamped_seed(
-        &[(GOV, start(PUBLISHED) - 2), (FREE, start(PUBLISHED) - 1)],
+        &[(GOV, start(PUBLISHED) - 2), (FREE, start(PUBLISHED) - 3)],
         &[],
     );
     assert!(audit_refused(&r).is_empty(), "{:?}", audit_refused(&r));
@@ -2719,7 +2719,17 @@ fn the_binding_checkpoint_needs_tokens_from_before_the_publication() {
     );
     // The government's latest instant reaches the publication bucket.
     let (r, seed_at) = stamped_seed(
-        &[(GOV, start(PUBLISHED) - 1), (FREE, start(PUBLISHED) - 1)],
+        &[(GOV, start(PUBLISHED) - 1), (FREE, start(PUBLISHED) - 3)],
+        &[],
+    );
+    assert_eq!(
+        audit_refused(&r)[0],
+        (seed_at, AuditEvent::Seed, AuditRefusal::Unstamped)
+    );
+    // The other's declared two seconds carry it into the publication
+    // bucket from two seconds before.
+    let (r, seed_at) = stamped_seed(
+        &[(GOV, start(PUBLISHED) - 2), (FREE, start(PUBLISHED) - 2)],
         &[],
     );
     assert_eq!(

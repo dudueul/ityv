@@ -220,13 +220,15 @@ fn signer(a: Authority) -> Signer {
         DigestSet::from_bits(DigestAlgorithm::Sha256.bit() | DigestAlgorithm::Sha512.bit())
             .unwrap();
     let signatures = SignatureSet::from_bits(SignatureAlgorithm::EcdsaP256Sha256.bit()).unwrap();
+    // The pin carries the certificate: the verifier compares the signer
+    // keys of every pin (ADR-0039 2).
     let pinned = PinnedTsa::new(
         sha256(&certificate),
         digests,
         signatures,
         false,
         &POLICY,
-        None,
+        Some(&certificate),
     )
     .unwrap();
     let mut pin = vec![0u8; pinned.encoded_len()];
@@ -241,8 +243,9 @@ fn signer(a: Authority) -> Signer {
     }
 }
 
-/// The genesis entries of both authorities (set 12): policy accuracy 0,
-/// one pin each.
+/// The genesis entries of both authorities (set 12): a declared accuracy
+/// of one second (the least the verifier takes, ADR-0039 5; the tokens
+/// state none), one pin each.
 #[must_use]
 pub fn authorities() -> Vec<TimestampAuthorityEntry<'static>> {
     AUTHORITIES
@@ -253,7 +256,7 @@ pub fn authorities() -> Vec<TimestampAuthorityEntry<'static>> {
                 tsa_id: AuthorityId::new(a.id.as_bytes()).unwrap(),
                 operator: OrgId::new(a.operator.as_bytes()).unwrap(),
                 kind: a.kind,
-                policy_accuracy: PolicyAccuracy::from_millis(0).unwrap(),
+                policy_accuracy: PolicyAccuracy::from_millis(1000).unwrap(),
                 pins: TimestampPins::new(&[pin]).unwrap(),
             }
         })

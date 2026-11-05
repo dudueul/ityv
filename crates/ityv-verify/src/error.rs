@@ -95,16 +95,33 @@ pub enum Rule {
     /// unit and another unit, a box or a module, or a box and a module.
     /// A device attestation names its device by this identifier alone.
     DeviceId,
-    /// A timestamp authority's pin is not a valid `ityv-tsa` pin, or does
-    /// not allow SHA-512, the digest every imprint uses (ADR-0034 §3): no
-    /// token of it could ever verify.
+    /// A timestamp authority's pin is not a valid `ityv-tsa` pin, does
+    /// not allow SHA-512 (the digest every imprint uses, ADR-0034 §3), does
+    /// not carry its certificate, or allows no signature algorithm its
+    /// certificate's key makes over a digest it allows
+    /// (`PinnedTsa::signer_key`): no token of it could ever verify, or
+    /// its key could not be compared with the others' (ADR-0039 2).
     TimestampPin,
     /// Two pins of the timestamp authority set name one signing
     /// certificate: one authority would count as two.
     TimestampCertificate,
+    /// Two pins of the timestamp authority set carry one public key
+    /// (`SubjectPublicKeyInfo`) under two certificates: one signer would
+    /// count as two authorities (ADR-0039 2).
+    TimestampKey,
     /// Two timestamp authorities of one operator differ in kind: an
-    /// operator is either the government or not (VC-114).
+    /// operator is either the government or not (VC-114). Operators are
+    /// compared without regard to ASCII case.
     TimestampOperator,
+    /// A timestamp authority's operator is a witness's organisation or an
+    /// election commission's (one a reporting unit names), compared
+    /// without regard to ASCII case: its tokens would not be independent
+    /// of the witnesses' time they check (ADR-0039 2).
+    TimestampOperatorConflict,
+    /// A timestamp authority's declared accuracy is below one second or
+    /// above a minute (`MIN_POLICY_ACCURACY_MS`,
+    /// `MAX_TIMESTAMP_ACCURACY_MS`; ADR-0039 1, 5).
+    TimestampAccuracy,
     /// The timestamp authority set lacks a government-run or a
     /// non-government authority (VC-114).
     TimestampAuthorities,

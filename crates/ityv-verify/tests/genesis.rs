@@ -1108,14 +1108,49 @@ fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
     let mut d = base.clone();
     d.timestamps[2].pins = TimestampPins::new(&[&[0x01, 0x02]]).unwrap();
     assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampPin)));
+    let gov2 = tsa::signer(tsa::GOV_SAME_OPERATOR).cert;
+    let sha256 = DigestAlgorithm::Sha256.bit();
+    let sha384 = DigestAlgorithm::Sha384.bit();
+    let sha512 = DigestAlgorithm::Sha512.bit();
+    let rsa256 = SignatureAlgorithm::RsaPkcs1Sha256.bit();
+    let with_pin = |pin: &'static [u8]| {
+        let mut d = base.clone();
+        d.timestamps[2].pins = TimestampPins::new(&[pin]).unwrap();
+        verify(&d)
+    };
     // A pin that does not allow SHA-512, the digest of every imprint.
-    let cert_hash: [u8; 32] = tsa::signer(tsa::GOV_SAME_OPERATOR).pin[1..33]
+    assert_eq!(
+        with_pin(tsa::pin_of(gov2, sha256, rsa256)),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A pin that allows SHA-512 but not the digest of the only signature
+    // algorithm it allows (the review's second proof of concept): no
+    // token could verify under it.
+    assert_eq!(
+        with_pin(tsa::pin_of(
+            gov2,
+            sha512,
+            rsa256 | SignatureAlgorithm::EcdsaP256Sha256.bit()
+        )),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A pin whose only algorithms the certificate's RSA key does not make.
+    assert_eq!(
+        with_pin(tsa::pin_of(
+            gov2,
+            sha256 | sha384 | sha512,
+            SignatureAlgorithm::EcdsaP256Sha256.bit() | SignatureAlgorithm::EcdsaP384Sha384.bit()
+        )),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A pin without its certificate: its key cannot be compared.
+    let hash: [u8; 32] = tsa::signer(tsa::GOV_SAME_OPERATOR).pin[1..33]
         .try_into()
         .unwrap();
     let pin = PinnedTsa::new(
-        cert_hash,
-        DigestSet::from_bits(DigestAlgorithm::Sha256.bit()).unwrap(),
-        SignatureSet::from_bits(SignatureAlgorithm::RsaPkcs1Sha256.bit()).unwrap(),
+        hash,
+        DigestSet::from_bits(sha256 | sha512).unwrap(),
+        SignatureSet::from_bits(rsa256).unwrap(),
         false,
         &tsa::POLICY,
         None,
@@ -1124,46 +1159,103 @@ fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
     let mut bytes = std::vec![0u8; pin.encoded_len()];
     let len = pin.encode(&mut bytes).unwrap();
     bytes.truncate(len);
-    let bytes: &'static [u8] = common::leak_slice(bytes);
-    let mut d = base.clone();
-    d.timestamps[2].pins = TimestampPins::new(&[bytes]).unwrap();
-    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampPin)));
+    assert_eq!(
+        with_pin(common::leak_slice(bytes)),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // The same certificate with SHA-512 and the algorithm it signs with is
+    // the standard pin, and verifies.
+    assert_eq!(with_pin(tsa::pin_of(gov2, sha256 | sha512, rsa256)), Ok(()));
+    assert_eq!(
+        tsa::pin_of(gov2, sha256 | sha512, rsa256),
+        tsa::signer(tsa::GOV_SAME_OPERATOR).pin
+    );
 
     // One certificate pinned for two authorities.
     let mut d = base.clone();
     d.timestamps[2].pins = TimestampPins::new(&[tsa::signer(tsa::FREE).pin]).unwrap();
     assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampCertificate)));
     // One certificate pinned twice for one authority, under two encodings
-    // (another policy list).
-    let pin = PinnedTsa::new(
-        cert_hash,
-        DigestSet::from_bits(DigestAlgorithm::Sha256.bit() | DigestAlgorithm::Sha512.bit())
-            .unwrap(),
-        SignatureSet::from_bits(SignatureAlgorithm::RsaPkcs1Sha256.bit()).unwrap(),
-        false,
-        &[0x06, 0x04, 0x2A, 0x03, 0x04, 0x02],
-        None,
-    )
-    .unwrap();
-    let mut bytes = std::vec![0u8; pin.encoded_len()];
-    let len = pin.encode(&mut bytes).unwrap();
-    bytes.truncate(len);
-    let other_policy: &'static [u8] = common::leak_slice(bytes);
-    let mut pins = std::vec![tsa::signer(tsa::GOV_SAME_OPERATOR).pin, other_policy];
+    // (another digest set).
+    let other_digests = tsa::pin_of(gov2, sha256 | sha384 | sha512, rsa256);
+    let mut pins = std::vec![tsa::signer(tsa::GOV_SAME_OPERATOR).pin, other_digests];
     pins.sort();
     let mut d = base.clone();
     d.timestamps[2].pins = TimestampPins::new(&pins).unwrap();
     assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampCertificate)));
+    // One key under two certificates, for two authorities or for one: one
+    // signer would count twice (the review's key-reuse case).
+    let again = tsa::recertified(tsa::FREE);
+    assert_ne!(again[1..33], tsa::signer(tsa::FREE).pin[1..33]);
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[again]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampKey)));
+    let mut pins = std::vec![
+        tsa::signer(tsa::GOV_SAME_OPERATOR).pin,
+        tsa::recertified(tsa::GOV_SAME_OPERATOR)
+    ];
+    pins.sort();
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&pins).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampKey)));
 
     // One operator, two kinds.
     let mut d = base.clone();
     d.timestamps[2].operator = OrgId::new(b"FREE-TSA").unwrap();
     assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampOperator)));
+    // One operator spelled twice is one operator (the review's third
+    // proof of concept): the government's operator in lower case, declared
+    // non-government, is refused.
+    let mut d = base.clone();
+    d.timestamps
+        .retain(|a| a.tsa_id.as_bytes() != b"TSA-FREE-1");
+    d.timestamps[1].operator = OrgId::new(b"mois-gpki").unwrap();
+    d.timestamps[1].kind = TimestampAuthorityKind::NonGovernment;
+    assert_eq!(verify(&d), Err(at(set, 1, Rule::TimestampOperator)));
+    let mut d = base.clone();
+    d.timestamps[0].operator = OrgId::new(b"Mois-Gpki").unwrap();
+    assert_eq!(verify(&d), Err(at(set, 1, Rule::TimestampOperator)));
+    // The same spelling with the same kind is one operator and fine.
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"mois-gpki").unwrap();
+    assert_eq!(verify(&d), Ok(()));
     // Many authorities of one operator and one kind are fine (they count
     // as one toward an anchor).
     let mut d = base.clone();
-    d.timestamps[2].policy_accuracy = PolicyAccuracy::from_millis(1000).unwrap();
+    d.timestamps[2].policy_accuracy = PolicyAccuracy::from_millis(2000).unwrap();
     assert_eq!(verify(&d), Ok(()));
+
+    // The declared accuracy: one second to one minute.
+    for (ms, ok) in [
+        (0, false),
+        (999, false),
+        (1000, true),
+        (60_000, true),
+        (60_001, false),
+        (3_600_000, false),
+    ] {
+        let mut d = base.clone();
+        d.timestamps[0].policy_accuracy = PolicyAccuracy::from_millis(ms).unwrap();
+        let expected = if ok {
+            Ok(())
+        } else {
+            Err(at(set, 0, Rule::TimestampAccuracy))
+        };
+        assert_eq!(verify(&d), expected, "{ms} ms");
+    }
+
+    // An operator that is a witness's organisation or an election
+    // commission's, in any case: refused in the genesis.
+    for org in [b"ORG-C".as_slice(), b"org-c", b"NEC-D", b"nec-d"] {
+        let mut d = base.clone();
+        d.timestamps[0].operator = OrgId::new(org).unwrap();
+        assert_eq!(
+            verify(&d),
+            Err(at(set, 0, Rule::TimestampOperatorConflict)),
+            "{}",
+            String::from_utf8_lossy(org)
+        );
+    }
 
     // The set's own rules: order, count, root.
     let mut raw = base.raw();

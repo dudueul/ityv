@@ -25,14 +25,19 @@
 //! The authorities (indices of [`signer`]):
 //!
 //! * 0: `TSA-GOV-1` (operator `MOIS-GPKI`, government), its first
-//!   certificate; tokens state an accuracy of one second;
-//! * 1: `TSA-GOV-1`'s second certificate (a rotation: the genesis pins
-//!   both);
+//!   certificate; tokens state an accuracy of one second, as the genesis
+//!   declares for the authority;
+//! * 1: `TSA-GOV-1`'s second certificate and key (a rotation: the genesis
+//!   pins both);
 //! * 2: `TSA-FREE-1` (operator `FREE-TSA`, not government); tokens state no
-//!   accuracy, and the genesis entry gives its policy accuracy, 500 ms;
+//!   accuracy, and the genesis declares two seconds for it;
 //! * 3: `TSA-GOV-2` (operator `MOIS-GPKI` again, government), so that two
-//!   authorities of one operator count once;
+//!   authorities of one operator count once; tokens state three seconds,
+//!   more than the one second the genesis declares;
 //! * 4: an authority no genesis pins.
+//!
+//! Every pin carries its certificate (ADR-0039 2: the genesis compares
+//! the signer keys).
 // Test helper: outside the TCB. It expresses "this must hold" with
 // unwrap/expect/panic/indexing and small arithmetic, so those lints are
 // relaxed for this file only (CONSTITUTION.md §1.1).
@@ -63,7 +68,7 @@ use ityv_encoding::{
     SCHEMA_VERSION_1, SchemaId, TimestampAuthorityEntry, TimestampAuthorityKind, TimestampPins,
     TimestampRecord, TimestampRecordParts,
 };
-use ityv_tsa::{DigestAlgorithm, DigestSet, PinnedTsa, SignatureAlgorithm, SignatureSet};
+use ityv_tsa::{DigestSet, PinnedTsa, SignatureSet};
 
 use super::{leak, leak_slice, object};
 
@@ -73,13 +78,14 @@ pub const EPOCH_SECONDS: u64 = 20_000 * 86_400;
 /// The policy every authority uses: 1.2.3.4.1.
 pub const POLICY: [u8; 6] = [0x06, 0x04, 0x2A, 0x03, 0x04, 0x01];
 
-/// Signers: (authority, operator, government, certificate name).
-const SIGNERS: [(&str, &str, bool, &str); 5] = [
-    ("TSA-GOV-1", "MOIS-GPKI", true, "gov-1a"),
-    ("TSA-GOV-1", "MOIS-GPKI", true, "gov-1b"),
-    ("TSA-FREE-1", "FREE-TSA", false, "free-1"),
-    ("TSA-GOV-2", "MOIS-GPKI", true, "gov-2"),
-    ("TSA-ROGUE", "ROGUE", false, "rogue"),
+/// Signers: (authority, operator, government, certificate name, the
+/// accuracy its tokens state in seconds).
+const SIGNERS: [(&str, &str, bool, &str, Option<u32>); 5] = [
+    ("TSA-GOV-1", "MOIS-GPKI", true, "gov-1a", Some(1)),
+    ("TSA-GOV-1", "MOIS-GPKI", true, "gov-1b", Some(1)),
+    ("TSA-FREE-1", "FREE-TSA", false, "free-1", None),
+    ("TSA-GOV-2", "MOIS-GPKI", true, "gov-2", Some(3)),
+    ("TSA-ROGUE", "ROGUE", false, "rogue", Some(1)),
 ];
 
 /// The government authority's first certificate.
@@ -101,12 +107,14 @@ pub struct Signer {
     pub operator: &'static str,
     /// Whether the government runs it.
     pub government: bool,
+    /// The accuracy its tokens state, in seconds.
+    pub accuracy: Option<u32>,
     key_pem: String,
     cert_pem: String,
     /// The certificate, DER.
-    pub cert: Vec<u8>,
+    pub cert: &'static [u8],
     /// Its pin bytes (certificate SHA-256, SHA-256 and SHA-512 digests,
-    /// RSA PKCS#1 v1.5 SHA-256, the one policy, no certificate copy).
+    /// RSA PKCS#1 v1.5 SHA-256, the one policy, the certificate).
     pub pin: &'static [u8],
 }
 
@@ -148,8 +156,104 @@ fn in_scratch<T>(f: impl FnOnce(&Path) -> T) -> T {
     result
 }
 
+/// The bytes of a pin of `cert` (DER) with the given masks, the tests'
+/// policy and the certificate copy.
+pub fn pin_of(cert: &'static [u8], digests: u8, signatures: u8) -> &'static [u8] {
+    let hash: [u8; 32] = in_scratch(|dir| run(dir, &["dgst", "-sha256", "-binary"], Some(cert)))
+        .try_into()
+        .unwrap();
+    let pin = PinnedTsa::new(
+        hash,
+        DigestSet::from_bits(digests).unwrap(),
+        SignatureSet::from_bits(signatures).unwrap(),
+        false,
+        &POLICY,
+        Some(cert),
+    )
+    .unwrap();
+    let mut bytes = std::vec![0u8; pin.encoded_len()];
+    let len = pin.encode(&mut bytes).unwrap();
+    bytes.truncate(len);
+    leak_slice(bytes)
+}
+
+/// The digests every test pin allows: SHA-256 (the signer's) and SHA-512
+/// (the imprint's).
+pub const DIGESTS: u8 = 0x01 | 0x04;
+
+/// The signature algorithm every test pin allows: RSA PKCS#1 v1.5 SHA-256.
+pub const SIGNATURES: u8 = 0x01;
+
+/// A certificate configuration for `openssl ca`, with the profile
+/// `ityv-tsa` requires, under the common name `name`.
+fn ca_config(name: &str) -> String {
+    std::format!(
+        "[ ca ]\ndefault_ca = d\n[ d ]\ndatabase = index.txt\nnew_certs_dir = .\n\
+         serial = serial\ndefault_md = sha256\npolicy = p\nx509_extensions = ext\n\
+         unique_subject = no\n[ p ]\ncommonName = supplied\n[ req ]\n\
+         distinguished_name = dn\nprompt = no\n[ dn ]\nC = KR\nO = ityv test\n\
+         CN = ityv verify test TSA {name}\n[ ext ]\n\
+         basicConstraints = critical, CA:FALSE\n\
+         keyUsage = critical, digitalSignature, nonRepudiation\n\
+         extendedKeyUsage = critical, timeStamping\nsubjectKeyIdentifier = hash\n"
+    )
+}
+
+/// A self-signed certificate (DER) over the key `k.pem` in `dir`, under
+/// the common name `name` and serial `serial`.
+fn self_signed(dir: &Path, name: &str, serial: usize) -> (Vec<u8>, String) {
+    std::fs::write(dir.join("ca.cnf"), ca_config(name)).unwrap();
+    std::fs::write(dir.join("index.txt"), "").unwrap();
+    std::fs::write(dir.join("serial"), std::format!("{serial:02X}\n")).unwrap();
+    run(
+        dir,
+        &[
+            "req", "-new", "-config", "ca.cnf", "-key", "k.pem", "-out", "r.csr",
+        ],
+        None,
+    );
+    run(
+        dir,
+        &[
+            "ca",
+            "-batch",
+            "-selfsign",
+            "-config",
+            "ca.cnf",
+            "-keyfile",
+            "k.pem",
+            "-in",
+            "r.csr",
+            "-startdate",
+            "20240101000000Z",
+            "-enddate",
+            "20361231000000Z",
+            "-notext",
+            "-out",
+            "c.pem",
+        ],
+        None,
+    );
+    (
+        run(dir, &["x509", "-in", "c.pem", "-outform", "DER"], None),
+        std::fs::read_to_string(dir.join("c.pem")).unwrap(),
+    )
+}
+
+/// A second certificate over signer `index`'s key (another name and
+/// serial): its pin bytes, as [`Signer::pin`] but for that certificate.
+/// One key under two certificates is one signer (ADR-0039 2).
+pub fn recertified(index: usize) -> &'static [u8] {
+    let signer = signer(index);
+    in_scratch(|dir| {
+        std::fs::write(dir.join("k.pem"), &signer.key_pem).unwrap();
+        let (cert, _) = self_signed(dir, "recertified", 0x40 + index);
+        pin_of(leak_slice(cert), DIGESTS, SIGNATURES)
+    })
+}
+
 fn make_signer(index: usize) -> Signer {
-    let (authority, operator, government, name) = SIGNERS[index];
+    let (authority, operator, government, name, accuracy) = SIGNERS[index];
     in_scratch(|dir| {
         run(
             dir,
@@ -164,74 +268,17 @@ fn make_signer(index: usize) -> Signer {
             ],
             None,
         );
-        let config = std::format!(
-            "[ ca ]\ndefault_ca = d\n[ d ]\ndatabase = index.txt\nnew_certs_dir = .\n\
-             serial = serial\ndefault_md = sha256\npolicy = p\nx509_extensions = ext\n\
-             unique_subject = no\n[ p ]\ncommonName = supplied\n[ req ]\n\
-             distinguished_name = dn\nprompt = no\n[ dn ]\nC = KR\nO = ityv test\n\
-             CN = ityv verify test TSA {name}\n[ ext ]\n\
-             basicConstraints = critical, CA:FALSE\n\
-             keyUsage = critical, digitalSignature, nonRepudiation\n\
-             extendedKeyUsage = critical, timeStamping\nsubjectKeyIdentifier = hash\n"
-        );
-        std::fs::write(dir.join("ca.cnf"), config).unwrap();
-        std::fs::write(dir.join("index.txt"), "").unwrap();
-        std::fs::write(dir.join("serial"), std::format!("{:02X}\n", index + 1)).unwrap();
-        run(
-            dir,
-            &[
-                "req", "-new", "-config", "ca.cnf", "-key", "k.pem", "-out", "r.csr",
-            ],
-            None,
-        );
-        run(
-            dir,
-            &[
-                "ca",
-                "-batch",
-                "-selfsign",
-                "-config",
-                "ca.cnf",
-                "-keyfile",
-                "k.pem",
-                "-in",
-                "r.csr",
-                "-startdate",
-                "20240101000000Z",
-                "-enddate",
-                "20361231000000Z",
-                "-notext",
-                "-out",
-                "c.pem",
-            ],
-            None,
-        );
-        let cert = run(dir, &["x509", "-in", "c.pem", "-outform", "DER"], None);
-        let hash = run(dir, &["dgst", "-sha256", "-binary"], Some(&cert));
-        let digests =
-            DigestSet::from_bits(DigestAlgorithm::Sha256.bit() | DigestAlgorithm::Sha512.bit())
-                .unwrap();
-        let signatures = SignatureSet::from_bits(SignatureAlgorithm::RsaPkcs1Sha256.bit()).unwrap();
-        let pin = PinnedTsa::new(
-            hash.try_into().unwrap(),
-            digests,
-            signatures,
-            false,
-            &POLICY,
-            None,
-        )
-        .unwrap();
-        let mut bytes = std::vec![0u8; pin.encoded_len()];
-        let len = pin.encode(&mut bytes).unwrap();
-        bytes.truncate(len);
+        let (cert, cert_pem) = self_signed(dir, name, index + 1);
+        let cert = leak_slice(cert);
         Signer {
             authority,
             operator,
             government,
+            accuracy,
             key_pem: std::fs::read_to_string(dir.join("k.pem")).unwrap(),
-            cert_pem: std::fs::read_to_string(dir.join("c.pem")).unwrap(),
+            cert_pem,
             cert,
-            pin: leak_slice(bytes),
+            pin: pin_of(cert, DIGESTS, SIGNATURES),
         }
     })
 }
@@ -266,9 +313,9 @@ pub fn authorities() -> Vec<TimestampAuthorityEntry<'static>> {
             }
         };
     std::vec![
-        entry("TSA-FREE-1", "FREE-TSA", false, &[FREE], 500),
-        entry("TSA-GOV-1", "MOIS-GPKI", true, &[GOV, GOV_ROTATED], 0),
-        entry("TSA-GOV-2", "MOIS-GPKI", true, &[GOV_SAME_OPERATOR], 0),
+        entry("TSA-FREE-1", "FREE-TSA", false, &[FREE], 2000),
+        entry("TSA-GOV-1", "MOIS-GPKI", true, &[GOV, GOV_ROTATED], 1000),
+        entry("TSA-GOV-2", "MOIS-GPKI", true, &[GOV_SAME_OPERATOR], 1000),
     ]
 }
 
@@ -324,14 +371,11 @@ fn generalized_time(seconds: u64) -> [u8; 15] {
 }
 
 /// A token of signer `index` over `target` (an event's object hash) with
-/// `genTime` at Unix second `seconds`.
-fn make_token(index: usize, target: &Hash512, seconds: u64) -> Vec<u8> {
+/// `genTime` at Unix second `seconds`, stating an accuracy of `accuracy`
+/// seconds or none.
+fn make_token(index: usize, target: &Hash512, seconds: u64, accuracy: Option<u32>) -> Vec<u8> {
     let signer = signer(index);
-    let accuracy = if index == FREE {
-        ""
-    } else {
-        "accuracy = secs:1\n"
-    };
+    let accuracy = accuracy.map_or(String::new(), |s| std::format!("accuracy = secs:{s}\n"));
     in_scratch(|dir| {
         std::fs::write(dir.join("k.pem"), &signer.key_pem).unwrap();
         std::fs::write(dir.join("c.pem"), &signer.cert_pem).unwrap();
@@ -432,17 +476,31 @@ fn make_token(index: usize, target: &Hash512, seconds: u64) -> Vec<u8> {
     })
 }
 
-/// A token of signer `index` over `target` at Unix second `seconds`, made
-/// once and shared.
+/// A token of signer `index` over `target` at Unix second `seconds`,
+/// stating the signer's own accuracy, made once and shared.
 pub fn token(index: usize, target: &Hash512, seconds: u64) -> &'static [u8] {
-    type Cache = Mutex<BTreeMap<(usize, [u8; 64], u64), &'static [u8]>>;
+    token_stating(index, target, seconds, signer(index).accuracy)
+}
+
+/// A token of signer `index` over `target` at Unix second `seconds`,
+/// stating an accuracy of `accuracy` seconds (or none), made once and
+/// shared.
+pub fn token_stating(
+    index: usize,
+    target: &Hash512,
+    seconds: u64,
+    accuracy: Option<u32>,
+) -> &'static [u8] {
+    type Key = (usize, [u8; 64], u64, Option<u32>);
+    type Cache = Mutex<BTreeMap<Key, &'static [u8]>>;
     static TOKENS: OnceLock<Cache> = OnceLock::new();
     let cache = TOKENS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    if let Some(t) = cache.lock().unwrap().get(&(index, target.0, seconds)) {
+    let key = (index, target.0, seconds, accuracy);
+    if let Some(t) = cache.lock().unwrap().get(&key) {
         return t;
     }
-    let t = leak_slice(make_token(index, target, seconds));
-    cache.lock().unwrap().insert((index, target.0, seconds), t);
+    let t = leak_slice(make_token(index, target, seconds, accuracy));
+    cache.lock().unwrap().insert(key, t);
     t
 }
 

@@ -122,6 +122,6 @@ pub use tally::{
     TallyRefused, TallyStage, UnitTally, verify_tally,
 };
 pub use timestamp::{
-    Anchoring, StampedToken, TimestampProblem, TimestampRefusal, TimestampStage, Unanswered,
-    verify_timestamps,
+    Anchoring, MAX_TIMESTAMP_ACCURACY_MS, MIN_POLICY_ACCURACY_MS, StampedToken, TimestampProblem,
+    TimestampRefusal, TimestampStage, Unanswered, verify_timestamps,
 };

@@ -210,10 +210,13 @@ impl<'a> Decode<'a> for TimestampPins<'a> {
 /// (`ValueOutOfRange`); one to four pins (`InvariantViolation` for none,
 /// `CountExceedsMax`), none empty (`InvariantViolation`), strictly
 /// ascending (`NotSorted`, `Duplicate`). That each pin is a valid
-/// `ityv-tsa` pin allowing SHA-512 imprints, that no certificate is pinned
-/// twice, that one operator's authorities are of one kind, and that the
-/// set has a government and a non-government authority (VC-114) are the
-/// verifier's genesis rules.
+/// `ityv-tsa` pin allowing SHA-512 imprints, carrying its certificate and
+/// an algorithm its key makes; that no certificate or key is pinned twice;
+/// that the accuracy is one second to one minute; that one operator's
+/// authorities are of one kind; that the set has a government and a
+/// non-government authority (VC-114); and that no operator is a witness's
+/// or a commission's organisation are the verifier's genesis rules
+/// (ADR-0039 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TimestampAuthorityEntry<'a> {
     /// The authority, as timestamp records name it.

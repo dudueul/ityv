@@ -105,8 +105,9 @@ fn real_tokens_of_two_operators_anchor_a_checkpoint() {
         assert_eq!(t.target_frame.get(), checkpoint_frame);
         assert_eq!(t.gen_time, at(B, 60));
     }
-    // The government's tokens state one second of accuracy; the other
-    // authority's state none and its policy gives 500 ms.
+    // The government's tokens state one second of accuracy, as the genesis
+    // declares; the other authority's state none and the genesis declares
+    // two seconds.
     assert_eq!(tokens[0].authority.as_bytes(), b"TSA-GOV-1");
     assert_eq!(tokens[0].operator.as_bytes(), b"MOIS-GPKI");
     assert_eq!(tokens[0].kind, TimestampAuthorityKind::Government);
@@ -117,7 +118,7 @@ fn real_tokens_of_two_operators_anchor_a_checkpoint() {
     );
     assert_eq!(tokens[1].authority.as_bytes(), b"TSA-FREE-1");
     assert_eq!(tokens[1].kind, TimestampAuthorityKind::NonGovernment);
-    assert_eq!(tokens[1].latest, at(B, 60));
+    assert_eq!(tokens[1].latest, at(B, 62));
     assert_eq!(
         c.timestamps().tokens_for(&object_hash(checkpoint)).count(),
         2
@@ -131,25 +132,25 @@ fn real_tokens_of_two_operators_anchor_a_checkpoint() {
 
 #[test]
 fn a_token_anchors_only_within_the_window_of_its_latest_instant() {
-    // Both tokens one second before bucket B + 5: the government's
-    // accuracy carries its latest instant into B + 5, outside the window;
-    // the other's 500 ms keeps it in B + 4.
+    // Both tokens two seconds before bucket B + 5: the other authority's
+    // declared two seconds carry its latest instant into B + 5, outside
+    // the window; the government's one second keeps it in B + 4.
     let (mut book, checkpoint) = bare();
     push(
         &mut book,
-        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 1),
+        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 2),
     );
     push(
         &mut book,
-        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 1),
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 2),
     );
     let c = chain(&book);
     assert!(c.holds().is_empty());
     assert_eq!(
         c.last().unwrap().anchoring,
         Anchoring {
-            government: false,
-            non_government: true,
+            government: true,
+            non_government: false,
             operators: 1
         }
     );
@@ -161,24 +162,135 @@ fn a_token_anchors_only_within_the_window_of_its_latest_instant() {
         c.anchor_deadline(TimeBucket::new(B + 5)),
         Publication::Breached(ityv_ledger::Breach::AnchorsShort { have: 1, need: 2 })
     );
-    // Two seconds earlier both are in the window.
+    // A second earlier both are in the window; a second later the
+    // government's is out too.
     let (mut book, checkpoint) = bare();
     push(
         &mut book,
-        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 2),
+        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 3),
     );
     push(
         &mut book,
-        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 2),
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 3),
     );
     assert!(chain(&book).last().unwrap().anchoring.satisfied());
+    let (mut book, checkpoint) = bare();
+    push(
+        &mut book,
+        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B + 5) - 1),
+    );
+    assert_eq!(chain(&book).last().unwrap().anchoring.kinds(), 0);
+}
+
+#[test]
+fn the_larger_of_the_stated_and_the_declared_accuracy_counts() {
+    // ADR-0039 5: TSA-GOV-2's tokens state three seconds, more than the
+    // one second its entry declares: the stated accuracy counts.
+    let (mut book, checkpoint) = bare();
+    push(
+        &mut book,
+        stamp(
+            GOV_SAME_OPERATOR,
+            SCHEMA_SIGNED_CHECKPOINT,
+            checkpoint,
+            start(B + 5) - 3,
+        ),
+    );
+    push(
+        &mut book,
+        stamp(
+            GOV_SAME_OPERATOR,
+            SCHEMA_SIGNED_CHECKPOINT,
+            checkpoint,
+            start(B + 5) - 4,
+        ),
+    );
+    let c = chain(&book);
+    let latest: Vec<u64> = c.timestamps().tokens().iter().map(|t| t.latest).collect();
+    assert_eq!(latest, [start(B + 5), start(B + 5) - 1]);
+    // TSA-GOV-1 declares one second: a token stating none, or one second,
+    // reaches a second later; one stating five seconds reaches five.
+    let (mut book, checkpoint) = bare();
+    let target = object_hash(checkpoint);
+    for (stated, seconds) in [
+        (None, at(B, 10)),
+        (Some(1), at(B, 20)),
+        (Some(5), at(B, 30)),
+    ] {
+        push(
+            &mut book,
+            record_for(
+                election(),
+                "TSA-GOV-1",
+                SCHEMA_SIGNED_CHECKPOINT,
+                target,
+                Some(tsa::token_stating(GOV, &target, seconds, stated)),
+            ),
+        );
+    }
+    let c = chain(&book);
+    assert!(c.holds().is_empty(), "{:?}", c.timestamps().refusals());
+    let latest: Vec<u64> = c.timestamps().tokens().iter().map(|t| t.latest).collect();
+    assert_eq!(latest, [at(B, 11), at(B, 21), at(B, 35)]);
+    // Before the backdating edge, the declared accuracy alone decides for
+    // a token that states none: TSA-FREE-1's two seconds.
+    let (mut book, checkpoint) = bare();
+    push(
+        &mut book,
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B - 1) - 2),
+    );
+    assert!(chain(&book).findings().is_empty());
+}
+
+#[test]
+fn a_token_stating_more_than_a_minute_is_refused() {
+    // ADR-0039 5: the stated accuracy is capped at a minute
+    // (`MAX_TIMESTAMP_ACCURACY_MS`); a vaguer token is refused and holds.
+    let (mut book, checkpoint) = bare();
+    let target = object_hash(checkpoint);
+    let minute = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-GOV-1",
+            SCHEMA_SIGNED_CHECKPOINT,
+            target,
+            Some(tsa::token_stating(GOV, &target, at(B, 60), Some(60))),
+        ),
+    );
+    let over = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-FREE-1",
+            SCHEMA_SIGNED_CHECKPOINT,
+            target,
+            Some(tsa::token_stating(FREE, &target, at(B, 60), Some(61))),
+        ),
+    );
+    let c = chain(&book);
+    let tokens = c.timestamps().tokens();
+    assert_eq!(tokens.len(), 1);
+    assert_eq!(tokens[0].frame.get(), minute);
+    assert_eq!(tokens[0].latest, at(B, 120));
+    let refused: Vec<(u64, TimestampProblem)> = c
+        .timestamps()
+        .refusals()
+        .iter()
+        .map(|r| (r.frame.get(), r.problem))
+        .collect();
+    assert_eq!(refused, [(over, TimestampProblem::Accuracy)]);
+    assert_eq!(c.holds(), HoldSetOf::one(HoldReason::TimestampInvalid));
+    // The refused token anchors nothing.
+    assert!(!c.last().unwrap().anchoring.non_government);
 }
 
 #[test]
 fn a_token_earlier_than_the_tolerance_ends_the_chain() {
     // A second before bucket B − 1: the government's token, with its one
-    // second of accuracy, reaches B − 1 and is within the tolerance; the
-    // other's latest instant, 500 ms later, stays in B − 2.
+    // second of accuracy, reaches B − 1 and is within the tolerance; two
+    // seconds before, it stays in B − 2. The other's declared two seconds
+    // reach B − 1 from two seconds before it, not from three.
     let (mut book, checkpoint) = bare();
     push(
         &mut book,
@@ -190,13 +302,22 @@ fn a_token_earlier_than_the_tolerance_ends_the_chain() {
     let (mut book, checkpoint) = bare();
     push(
         &mut book,
-        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B - 1)),
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B - 1) - 2),
     );
     assert!(chain(&book).findings().is_empty());
     let (mut book, checkpoint) = bare();
     push(
         &mut book,
-        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B - 1) - 1),
+        stamp(GOV, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B - 1) - 2),
+    );
+    assert_eq!(
+        chain(&book).findings()[0].kind,
+        CheckpointFindingKind::Backdated
+    );
+    let (mut book, checkpoint) = bare();
+    push(
+        &mut book,
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, start(B - 1) - 3),
     );
     // A later, valid checkpoint is not checked: the chain ended.
     book.checkpoint_at(B + 1);
@@ -281,7 +402,12 @@ fn every_record_that_cannot_be_taken_is_listed_and_holds() {
             Some(tsa::token(ROGUE, &target, at(B, 60))),
         ),
     );
-    expected.push((f, TimestampProblem::Token(TsaError::CertificateNotPinned)));
+    // Every pin carries its certificate, which stands in for the one the
+    // token embeds and is not the signer the token names.
+    expected.push((
+        f,
+        TimestampProblem::Token(TsaError::SignerIdentifierMismatch),
+    ));
     // Another authority's token under this one's name.
     let f = push(
         &mut book,
@@ -293,7 +419,10 @@ fn every_record_that_cannot_be_taken_is_listed_and_holds() {
             Some(token),
         ),
     );
-    expected.push((f, TimestampProblem::Token(TsaError::CertificateNotPinned)));
+    expected.push((
+        f,
+        TimestampProblem::Token(TsaError::SignerIdentifierMismatch),
+    ));
     // A token over another event.
     let f = push(
         &mut book,
@@ -308,7 +437,7 @@ fn every_record_that_cannot_be_taken_is_listed_and_holds() {
     expected.push((f, TimestampProblem::Token(TsaError::ImprintMismatch)));
     // The same from the authority's other certificate: whichever of the
     // two pins comes first, the one whose certificate is the token's names
-    // the error, never the other's `CertificateNotPinned`.
+    // the error, never the other's `SignerIdentifierMismatch`.
     let f = push(
         &mut book,
         record_for(
@@ -603,6 +732,49 @@ fn a_rotated_certificate_verifies_and_one_operator_counts_once() {
             operators: 1
         }
     );
+}
+
+#[test]
+fn one_operator_spelled_two_ways_counts_once() {
+    // The review's third proof of concept, the case the genesis takes:
+    // TSA-GOV-2's operator spelled in lower case, still the government's.
+    // Its tokens and TSA-GOV-1's are one operator's, and anchor nothing
+    // without the other kind.
+    let mut d = world::draft();
+    let second = d
+        .timestamps
+        .iter_mut()
+        .find(|a| a.tsa_id.as_bytes() == b"TSA-GOV-2")
+        .unwrap();
+    second.operator = ityv_encoding::OrgId::new(b"mois-gpki").unwrap();
+    let w = leak(world::build(&d, &world::TALLY_SCOPES));
+    let mut book = Book::new(w);
+    book.checkpoint_bare_at(B);
+    let checkpoint = last(&book);
+    for signer in [GOV, GOV_SAME_OPERATOR] {
+        push(
+            &mut book,
+            stamp(signer, SCHEMA_SIGNED_CHECKPOINT, checkpoint, at(B, 60)),
+        );
+    }
+    let c = chain(&book);
+    assert!(c.holds().is_empty());
+    assert_eq!(c.timestamps().tokens().len(), 2);
+    assert_eq!(
+        c.last().unwrap().anchoring,
+        Anchoring {
+            government: true,
+            non_government: false,
+            operators: 1
+        }
+    );
+    push(
+        &mut book,
+        stamp(FREE, SCHEMA_SIGNED_CHECKPOINT, checkpoint, at(B, 60)),
+    );
+    let c = chain(&book);
+    assert_eq!(c.last().unwrap().anchoring.operators, 2);
+    assert!(c.last().unwrap().anchoring.satisfied());
 }
 
 #[test]
