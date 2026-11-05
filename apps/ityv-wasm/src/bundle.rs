@@ -7,9 +7,10 @@ use ityv_verify::{AmendableSets, AmendmentInput, FixedSets, GenesisInput};
 
 /// The magic bytes.
 pub const MAGIC: &[u8; 8] = b"ITYVSIMB";
-/// The only version this reader takes (2: with the optional beacon
-/// observation section).
-pub const VERSION: u16 = 2;
+/// The only version this reader takes: 3, with the timestamp and roll
+/// authority sets (genesis sets 12 and 13) and the optional beacon
+/// observation section (version 2 had either, on two branches).
+pub const VERSION: u16 = 3;
 
 /// Why a bundle could not be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,9 +47,10 @@ impl BundleError {
 /// The publication deadlines' inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicationInput {
-    /// The latest checkpoint's time bucket.
+    /// The latest checkpoint's time bucket (not read: the verifier decides
+    /// the anchor deadline from the ledger's timestamp tokens, ADR-0039).
     pub checkpoint: u64,
-    /// Buckets of the anchor receipts.
+    /// Buckets of the anchor receipts (not read, as `checkpoint`).
     pub receipts: Vec<u64>,
     /// The close of voting.
     pub close: u64,
@@ -111,6 +113,8 @@ pub struct Bundle<'a> {
     styles: Vec<&'a [u8]>,
     trustees: Vec<&'a [u8]>,
     witnesses: Vec<&'a [u8]>,
+    timestamps: Vec<&'a [u8]>,
+    rolls: Vec<&'a [u8]>,
     amendments: Vec<(&'a [u8], Sets<'a>)>,
     /// The frame stream.
     pub frames: &'a [u8],
@@ -133,6 +137,8 @@ impl Bundle<'_> {
                 ballot_styles: &self.styles,
                 trustees: &self.trustees,
                 witnesses: &self.witnesses,
+                timestamp_authorities: &self.timestamps,
+                roll_authorities: &self.rolls,
             },
         }
     }
@@ -316,7 +322,9 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
                 let styles = s.list()?;
                 let trustees = s.list()?;
                 let witnesses = s.list()?;
-                genesis = Some((signed, sets, styles, trustees, witnesses));
+                let timestamps = s.list()?;
+                let rolls = s.list()?;
+                genesis = Some((signed, sets, styles, trustees, witnesses, timestamps, rolls));
             }
             0x0004 => {
                 let n = s.u32()?;
@@ -340,7 +348,8 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
         s.end()?;
     }
     c.end()?;
-    let (signed, sets, styles, trustees, witnesses) = genesis.ok_or(BundleError::Missing)?;
+    let (signed, sets, styles, trustees, witnesses, timestamps, rolls) =
+        genesis.ok_or(BundleError::Missing)?;
     Ok(Bundle {
         name: name.ok_or(BundleError::Missing)?,
         pin: pin.ok_or(BundleError::Missing)?,
@@ -349,6 +358,8 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
         styles,
         trustees,
         witnesses,
+        timestamps,
+        rolls,
         amendments,
         frames: frames.ok_or(BundleError::Missing)?,
         events: events.ok_or(BundleError::Missing)?,

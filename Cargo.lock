@@ -384,8 +384,11 @@ dependencies = [
  "ityv-encoding",
  "ityv-ledger",
  "ityv-state",
+ "ityv-tsa",
  "ityv-verify",
  "ityv-wasm",
+ "p256",
+ "sha2",
 ]
 
 [[package]]

@@ -31,7 +31,7 @@ use ityv_encoding::{
     Hash512, ProgressBody, ProgressTick, SCHEMA_PROGRESS_TICK, SCHEMA_VERSION_1, ScopeSet,
     TimeBucket, decode_object,
 };
-use ityv_ledger::{FrameStream, check_anchor, check_board};
+use ityv_ledger::{FrameStream, check_board};
 use ityv_state::{
     Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport, Step, evaluate, out_of,
 };
@@ -171,15 +171,13 @@ pub struct Verification {
     pub json: String,
 }
 
+/// What the bundle says the caller brings: its current time and the board
+/// deadline. The anchor deadline is the verifier's, from the ledger's
+/// timestamp tokens (ADR-0039).
 fn publications(b: &Bundle<'_>) -> Publications {
     let p = &b.publications;
-    let receipts: Vec<TimeBucket> = p.receipts.iter().map(|r| TimeBucket::new(*r)).collect();
     Publications {
-        anchors: Publication::from_ledger(&check_anchor(
-            TimeBucket::new(p.checkpoint),
-            &receipts,
-            TimeBucket::new(p.now),
-        )),
+        now: TimeBucket::new(p.now),
         board: Publication::from_ledger(&check_board(
             TimeBucket::new(p.close),
             p.published.map(TimeBucket::new),
@@ -471,7 +469,7 @@ pub fn unit_statuses(
                     Outcome::NotRun
                 },
             )
-            .with_anchors(publications.anchors)
+            .with_anchors(report.checkpoints().anchor_deadline(publications.now))
             .with_board(publications.board)
             .with_holds(holds);
             UnitStatus {
@@ -527,7 +525,10 @@ fn write_report(
     }
     j.end_array();
     j.object("publications");
-    j.str("anchors", &publication_name(pubs.anchors));
+    j.str(
+        "anchors",
+        &publication_name(report.checkpoints().anchor_deadline(pubs.now)),
+    );
     j.str("board", &publication_name(pubs.board));
     j.end_object();
     j.object("ledger");

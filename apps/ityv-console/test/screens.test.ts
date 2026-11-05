@@ -242,9 +242,12 @@ test("a slot refuses a value of another kind", () => {
 });
 
 test("every hold code of ityv-state has a Korean explanation", () => {
-  for (let code = 0; code <= 71; code++) {
+  // ityv-state's HoldReason runs 0..=76 (76 ContestedCheckinInvalid, ADR-0040).
+  for (let code = 0; code <= 76; code++) {
     expect(typeof HOLDS[code]?.ko).toBe("string");
+    expect(HOLDS[code]?.ko.length).toBeGreaterThan(10);
   }
+  expect(HOLDS[77]).toBeUndefined();
   expect(Object.keys(STRINGS).length).toBeGreaterThan(80);
   void (null as unknown as StringId);
 });

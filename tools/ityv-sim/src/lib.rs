@@ -19,6 +19,7 @@
 //! | [`plan`] | The ledger plan of a whole election |
 //! | [`mod@ledger`] | Steps laid down as frames with witness checkpoints |
 //! | [`scenarios`] | The named scenarios and their expected outcomes |
+//! | [`tsa`] | Two simulated timestamp authorities and their RFC 3161 tokens |
 //! | [`bundle`] | The development bundle encoder |
 //! | [`meta`] | `index.json` |
 //!
@@ -42,10 +43,11 @@ pub mod meta;
 pub mod plan;
 pub mod scenarios;
 pub mod spec;
+pub mod tsa;
 pub mod util;
 
 use ityv_encoding::TimeBucket;
-use ityv_ledger::{check_anchor, check_board};
+use ityv_ledger::check_board;
 use ityv_state::{HoldReason, Publication, Status};
 use ityv_verify::{
     AuditInput, BeaconObservation, Publications, Report, VerifiedGenesis, verify_genesis,
@@ -56,17 +58,15 @@ use crate::ledger::{Ledger, lay_down};
 use crate::scenarios::Scenario;
 use crate::util::{leak, leak_slice};
 
-/// The publication deadlines of `scenario`, as `ityv-ledger` judges them.
+/// What the caller of the verifier brings for `scenario`: its current
+/// time and the board deadline as `ityv-ledger` judges it. The anchor
+/// deadline is the verifier's own, from the timestamp tokens on the
+/// ledger (ADR-0039).
 #[must_use]
 pub fn publications(scenario: &Scenario) -> Publications {
     let p = &scenario.publications;
-    let receipts: Vec<TimeBucket> = p.receipts.iter().map(|r| TimeBucket::new(*r)).collect();
     Publications {
-        anchors: Publication::from_ledger(&check_anchor(
-            TimeBucket::new(p.checkpoint),
-            &receipts,
-            TimeBucket::new(p.now),
-        )),
+        now: TimeBucket::new(p.now),
         board: Publication::from_ledger(&check_board(
             TimeBucket::new(p.close),
             p.published.map(TimeBucket::new),

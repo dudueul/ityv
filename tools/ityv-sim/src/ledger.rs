@@ -3,14 +3,16 @@
 //!
 //! A scenario is a list of [`Step`]s. Most are events; checkpoints are
 //! steps too, signed when the plan is laid down because their roots
-//! depend on every frame before them. An attack is a change to the list
+//! depend on every frame before them, and followed by the timestamp
+//! records of the simulated authorities (ADR-0039, [`crate::tsa`]). An attack is a change to the list
 //! (an event removed, repeated, moved, replaced) or a step kind that
 //! produces a deliberately wrong frame.
 
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     CheckpointBody, CheckpointParts, Hash512, KeysetId, LedgerFrame, LedgerId, SCHEMA_BOX_CLOSE,
-    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SchemaId, Seq, TimeBucket, TreeSize,
+    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_TIMESTAMP_RECORD, SchemaId, Seq,
+    TimeBucket, TreeSize,
 };
 use ityv_ledger::{
     SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry, root_of_leaves,
@@ -37,10 +39,14 @@ pub enum Step {
         filed: Option<Hash512>,
     },
     /// A witness checkpoint over every frame so far, in time bucket
-    /// `bucket`.
+    /// `bucket`, followed by the tokens of the first `stamps` simulated
+    /// timestamp authorities (the government's, then the other), a minute
+    /// into the bucket. Two anchor it (VC-115).
     Checkpoint {
         /// The witnesses' time bucket.
         bucket: u64,
+        /// How many authorities stamp it (0 to 2).
+        stamps: usize,
     },
     /// A second checkpoint under the previous checkpoint's sequence
     /// number over fewer frames: a rollback the witnesses signed (a fork
@@ -102,6 +108,7 @@ struct Book<'e> {
     last: Option<(u64, Hash512, u64)>,
     previous: Option<(u64, Hash512)>,
     bucket: Option<u64>,
+    serial: u64,
 }
 
 impl Book<'_> {
@@ -164,6 +171,24 @@ impl Book<'_> {
         self.bucket = Some(bucket);
         self.push(SCHEMA_SIGNED_CHECKPOINT, event, event);
     }
+
+    /// The tokens of the first `stamps` authorities over the last event (a
+    /// checkpoint in bucket `bucket`).
+    fn stamp(&mut self, stamps: usize, bucket: u64) {
+        let target = object_hash(self.events.last().unwrap());
+        for a in crate::tsa::AUTHORITIES.iter().take(stamps) {
+            self.serial += 1;
+            let record = crate::tsa::record(
+                self.election.election_id(),
+                *a,
+                SCHEMA_SIGNED_CHECKPOINT,
+                &target,
+                bucket,
+                self.serial,
+            );
+            self.push(SCHEMA_TIMESTAMP_RECORD, record, record);
+        }
+    }
 }
 
 /// Lays down `steps` over `election`'s genesis: the frame stream and the
@@ -181,6 +206,7 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
         last: None,
         previous: None,
         bucket: None,
+        serial: 0,
     };
     for step in steps {
         match step {
@@ -195,12 +221,13 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
                     book.disputes.push(*f);
                 }
             }
-            Step::Checkpoint { bucket } => {
+            Step::Checkpoint { bucket, stamps } => {
                 let (seq, previous) = book
                     .last
                     .map_or((1, Hash512::ZERO), |(seq, hash, _)| (seq + 1, hash));
                 let size = book.frames.len() as u64;
                 book.checkpoint(seq, previous, size, *bucket, 0);
+                book.stamp(*stamps, *bucket);
             }
             Step::ForkCheckpoint { bucket, dropped } => {
                 let (seq, _, size) = book.last.unwrap();

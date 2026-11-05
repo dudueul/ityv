@@ -258,9 +258,12 @@ impl Audit {
         self.commit_with(self.dice, self.t.commit);
     }
 
-    /// A checkpoint in bucket `bucket`.
+    /// A checkpoint in bucket `bucket`, stamped by both simulated
+    /// timestamp authorities a minute into the bucket: the binding
+    /// checkpoint needs those tokens, recorded before the seed and before
+    /// the beacon's publication bucket (ADR-0039 8).
     pub fn checkpoint(&mut self, bucket: u64) {
-        self.push(Step::Checkpoint { bucket });
+        self.push(Step::Checkpoint { bucket, stamps: 2 });
     }
 
     /// The binding checkpoint's hash: the first checkpoint after the

@@ -45,12 +45,14 @@ pub enum Group {
 }
 
 /// What the caller observed outside the ledger (the inputs of
-/// `ityv_ledger::check_anchor` and `check_board`).
+/// `ityv_ledger::check_board`, and its current time).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Publications {
     /// The latest checkpoint's time bucket.
     pub checkpoint: u64,
-    /// Buckets in which anchor receipts arrived.
+    /// Buckets in which anchor receipts arrived. Kept in the bundle for
+    /// the console; the verifier reads the timestamp tokens on the ledger
+    /// instead (ADR-0039).
     pub receipts: Vec<u64>,
     /// The close of voting (last close bucket).
     pub close: u64,
@@ -165,7 +167,7 @@ fn last_checkpoint_bucket(steps: &[Step]) -> u64 {
         .iter()
         .rev()
         .find_map(|s| match s {
-            Step::Checkpoint { bucket } | Step::ForkCheckpoint { bucket, .. } => Some(*bucket),
+            Step::Checkpoint { bucket, .. } | Step::ForkCheckpoint { bucket, .. } => Some(*bucket),
             Step::Event { .. } => None,
         })
         .unwrap_or(0)
@@ -637,7 +639,7 @@ fn quick_scenarios() -> Vec<Scenario> {
         Group::Normal,
         (
             "빠른 시연: 앵커 대기",
-            "깨끗한 선거와 같은 장부. 다만 마지막 체크포인트의 외부 앵커 영수증이 아직 하나뿐이고 기한은 남았다.",
+            "깨끗한 선거와 같은 장부. 다만 마지막 체크포인트의 시점확인 토큰이 아직 정부 운영 기관 하나의 것뿐이고 기한은 남았다.",
             "UNVERIFIED. 앵커가 충족되기 전에는 어떤 단계가 통과해도 사다리를 오르지 않는다.",
         ),
         expected(Status::Unverified, &[]),
@@ -645,6 +647,14 @@ fn quick_scenarios() -> Vec<Scenario> {
     );
     s.publications.receipts = vec![s.publications.checkpoint];
     s.publications.now = s.publications.checkpoint + 1;
+    if let Some(Step::Checkpoint { stamps, .. }) = s
+        .steps
+        .iter_mut()
+        .rev()
+        .find(|step| matches!(step, Step::Checkpoint { .. }))
+    {
+        *stamps = 1;
+    }
     out.push(s);
 
     // --- 공격·장애 -------------------------------------------------------
