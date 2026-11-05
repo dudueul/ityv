@@ -372,8 +372,9 @@ export function sorterScreen(i: SorterInput): ScreenModel {
 // ---------------------------------------------------------------------
 // §5 station gateway.
 
-/** The gateway screen: a fixture throughout (no UplinkSession on the
- * ledger yet), every value drawn as demo. */
+/** The gateway screen: a fixture throughout (the gateway's live counters
+ * are on no ledger; the sessions it published are in the dashboard's
+ * connectivity card), every value drawn as demo. */
 export function gatewayScreen(g: GatewayFixture, slot: number, minutesLeft: number, lineUp: boolean): ScreenModel {
   return {
     blocks: [

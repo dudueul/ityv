@@ -57,7 +57,7 @@ export const STEPS: Record<string, string> = {
   Participation: "6. 참여 장부",
   Tally: "7. 집계",
   Audit: "8. 감사 (표본 대조)",
-  Connectivity: "11. 연결 (아직 구현 안 됨)",
+  Connectivity: "11. 연결 (모든 투표소 게이트웨이의 마지막 세션)",
   Software: "12. 소프트웨어 (아직 구현 안 됨)",
 };
 
@@ -229,7 +229,114 @@ export const HOLDS: Record<number, { name: string; ko: string }> = {
   75: { name: "RollCustodyMismatch", ko: "보관 기관이 다시 계산해 서명한 값(항목 root와 수, 인원수 표, 출처 root, 명부 가명 root)이 명부 상태와 다르다. 그 영수증은 정족수에 세지 않고, 분쟁에서 보관 사본을 대조한다." },
   76: { name: "ContestedCheckinInvalid", ko: "열람 권한이 있는 검증기에 넘긴, 장부에 프레임이 있는 이의 투표 기록이 검증되지 않는다: 다른 선거의 것이거나, genesis에 없는 투표소나 유닛의 것이거나, 그 유닛과 정당마다 그 유닛의 모듈 하나가 한 서명이 아니다. 공개 검증기에는 이의 투표 기록의 프레임 수만 보인다." },
   77: { name: "ContestedLabelReused", ko: "열람 권한이 있는 검증기에 넘긴 이의 투표 기록에서 한 봉투 라벨이 서로 다른 기록 둘 이상에 쓰였다. 어느 봉투가 어느 기록인지 알 수 없으므로 그 라벨의 봉투는 모두 개표에서 빠진다. 라벨은 무작위 값이라 장치나 내부자의 잘못이다. 공개 검증기에는 이의 투표 기록의 프레임 수만 보인다." },
+  79: { name: "ConnectivityManifest", ko: "genesis가 고정한 연결 목록이 한 방향 규칙을 어긴다: TCB 장치(해석 유닛, 커밋먼트 유닛, 카운터·가명 유닛, 챔버 모듈)에 들어오는 경로나 무선, 허용되지 않은 양방향, 보내기만 하지 않는 탭, 사전투표 단말 밖의 명부 조회, 모양이 다른 프레임 링크, 빠진 장치 종류. 선언된 경로는 그 종류의 모든 장치에 걸리므로 장부 전체의 전자 층을 보류한다." },
+  80: { name: "UplinkSessionRefused", ko: "게이트웨이 세션을 받을 수 없거나 세션이 자기 프레임 기록과 어긋난다: 등록된 게이트웨이의 서명이 아님, 등록되지 않은 참관인의 캡처 서명, 번호·앞 세션 해시·창 순서, final 뒤의 세션, 그 투표소의 링크가 아님, 기록 없음·남는 기록·두 번째 기록, 다시 계산한 사슬 head·프레임 수·흐름 끝·빠진 슬롯 수가 다름, 어느 창도 덮지 않은 빈틈. 그 투표소의 모든 투표함을 보류한다." },
+  81: { name: "UplinkFrameInvalid", ko: "장치의 프레임이 규칙을 어겼다: 프레임 키 서명이 아님, 슬롯당 수를 넘는 번호, 한 슬롯에 두 종류, 세션 창 밖, 개시 전이나 마감 뒤의 일반 프레임, 재전송 뒤의 일반 프레임, 흐름 오프셋의 건너뜀, 데이터 뒤 채움이 0이 아님(채움 증명 실패), 공개 객체로 다시 만든 덩어리와 다른 잎." },
+  82: { name: "UplinkObjectInvalid", ko: "장치가 보낸 객체가 규칙을 어겼다: 보낼 수 없는 종류(확인 카운터, 참관인 확인 수가 아닌 입회 이벤트 등), 겹침, 받기 전에 적힌 객체, 객체가 아닌 바이트, 장부와 다른 길이, 닫힌 배치 밖이나 해시 순서가 아닌 기록, 기록 바로 뒤가 아닌 share 패키지, 장부에 없는 객체." },
+  83: { name: "UplinkObjectOutside", ko: "게이트웨이가 final 세션을 보낸 뒤에도, 장부의 장치 서명 이벤트(투함 기록, 배치 증명, 검증 공개, 진행 기록, 참여 집합)가 그 장치 링크의 받은 프레임 어디에도 없다. 숨은 경로로 장부에 들어왔거나 프레임이 사라졌다(VC-080)." },
+  84: { name: "ConnectivityIncident", ko: "연결 사건(선언되지 않은 연결, 들어오는 경로나 무선, 일정 밖 프레임, 정규가 아닌 바이트, 캡처·통신사 기록 불일치, 명부 회선 시간 밖 통신, 설명 안 되는 송신, 분해·무선 점검 발견)이 그 투표함·투표소·선거 전체의 전자 층을 보류한다. 종이 결과는 바뀌지 않고, 커밋먼트 유닛이 걸리면 그 투표함을 종이와 전수 대조한다(VC-083)." },
+  85: { name: "ConnectivityIncidentRefused", ko: "연결 사건을 받을 수 없다: 사무원 둘과 서로 다른 조직의 참관인 둘, 또는 위원회와 서로 다른 조직의 참관인 둘의 등록된 서명이 아니거나, 투표함이 그 투표소의 것이 아니다. 누가 무엇을 주장했는지 확인할 수 없으므로 장부 전체를 보류한다." },
   78: { name: "RollIncomplete", ko: "선거인명부가 치러진 선거와 맞지 않는다. 기원의 마지막 상태에 있는 선거일 투표소에 주민 명부 발췌가 없거나(동결 뒤에 더한 투표소), 투표가 끝난 뒤(선거일 투표소에 참여 집합, 참관인 최종 확인 수, 투표함 마감 가운데 하나가 처음 나타난 뒤)에 명부 수정이 기록되었다. 선거인을 확인한 명부는 투표 마감 때의 명부이고 그 뒤의 수정은 그것을 바꾸지 못한다." },
+};
+
+/** The device classes of the connectivity manifest (ityv-encoding
+ * `DeviceClass`). */
+export const DEVICE_CLASSES: Record<string, string> = {
+  InterpretationUnit: "해석 유닛",
+  CommitmentUnit: "커밋먼트 유닛(스캐너)",
+  CheckinUnit: "카운터·가명 유닛",
+  ChamberModule: "챔버 모듈",
+  IdTerminalElectionDay: "선거일 신원 확인 단말",
+  IdTerminalEarlyVoting: "사전투표 신원 확인 단말",
+  Gateway: "투표소 게이트웨이",
+  Tap: "관찰 탭",
+  LedgerCollector: "장부 수집",
+  BoardPublisher: "공개원장 공표",
+  Witness: "증인",
+  TrusteeReceiver: "신뢰기관 수신",
+  ReceiptReader: "수령 확인 판독기",
+  ImprintReader: "각인 판독기",
+  Printer: "인쇄기",
+};
+
+/** The manifest rules (ityv-verify `ManifestProblem`, VC-077). */
+export const MANIFEST_PROBLEMS: Record<string, string> = {
+  Uncovered: "목록에 없는 장치 종류",
+  TcbInbound: "TCB 장치에 들어오는 경로",
+  TcbWireless: "TCB 장치의 무선",
+  TerminalConnected: "선거일 신원 확인 단말의 연결",
+  TwoWay: "허용되지 않은 양방향(사전투표 단말은 선거 전용회선, 사전투표 기간, 시스템 밖 상대만)",
+  TapNotSendOnly: "보내기만 하지 않는 탭",
+  RollLookup: "사전투표 단말 밖의 명부 조회",
+  FrameLinkCount: "커밋먼트 유닛·카운터 유닛의 프레임 링크가 하나가 아님",
+  FrameLinkShape: "프레임 링크가 내보내기만, 광 송신, 게이트웨이 상대, 개시–마감 일정이 아님",
+  FrameLinkCarries: "프레임 링크가 그 장치가 보낼 수 없는 것을 나름",
+  FramesElsewhere: "다른 장치 종류의 프레임",
+};
+
+/** Why a session or frame log was not taken or disagrees (ityv-verify
+ * `SessionProblem`, VC-080). */
+export const SESSION_PROBLEMS: Record<string, string> = {
+  Gateway: "등록된 게이트웨이의 서명이 아님",
+  Observer: "등록되지 않은 참관인이거나 캡처 서명이 맞지 않음",
+  Order: "세션 번호가 다음 번호가 아님",
+  Previous: "앞 세션 본문 해시가 아님",
+  Window: "창이 앞 세션보다 뒤가 아님",
+  AfterFinal: "final 세션 뒤의 세션",
+  Link: "그 투표소의 장치 링크가 아님",
+  LogMissing: "프레임이 있는 링크의 기록이 없음",
+  LogUnlisted: "세션이 적지 않은 링크나 다른 게이트웨이의 기록",
+  LogRepeated: "한 세션·링크의 두 번째 기록",
+  LogDangling: "어느 세션도 받지 않는 기록",
+  ChainHead: "다시 계산한 사슬 head가 다름(그 기록의 프레임은 받지 않음)",
+  Frames: "일반 프레임 수가 기록과 다름",
+  CatchupFrames: "따라잡기 프레임 수가 기록과 다름",
+  StreamEnd: "흐름 끝이 기록과 다름",
+  MissingSlots: "빠진 슬롯 수가 기록에서 다시 센 값과 다름",
+  UndeclaredGap: "어느 창도 덮지 않은 빈틈",
+};
+
+/** A frame's or object's broken rule (ityv-verify `LinkProblem`, VC-078,
+ * VC-079). */
+export const LINK_PROBLEMS: Record<string, string> = {
+  Signature: "프레임 키의 서명이 아님",
+  Index: "슬롯당 수를 넘는 번호",
+  Shape: "한 슬롯에 두 종류의 프레임",
+  Window: "세션 창 밖의 프레임",
+  BeforeOpening: "개시 전 프레임",
+  AfterClose: "마감 뒤의 일반·따라잡기 프레임",
+  KindOrder: "재전송 뒤의 일반 프레임",
+  Offset: "흐름 오프셋이 이어지지 않음",
+  Fill: "데이터 뒤 채움이 0이 아님(채움 증명 실패)",
+  Chunk: "공개 객체로 다시 만든 덩어리와 다른 잎",
+  Kind: "그 장치가 보낼 수 없는 종류",
+  Overlap: "앞 객체와 겹침",
+  Early: "받기 전에 적힌 객체",
+  NotObject: "어느 객체에도 속하지 않는 바이트",
+  Length: "장부와 다른 길이",
+  Batch: "닫힌 배치 밖이나 해시 순서가 아닌 기록",
+  Package: "기록 바로 뒤가 아닌 share 패키지",
+  NotOnLedger: "장부에 없는 객체",
+};
+
+/** What a connectivity incident records (ityv-encoding `IncidentKind`). */
+export const INCIDENT_KINDS: Record<string, string> = {
+  UndeclaredConnection: "선언되지 않은 연결",
+  InboundOrRadio: "들어오는 경로나 무선",
+  FrameOffSchedule: "일정 밖의 프레임",
+  NonCanonicalBytes: "정규가 아닌 바이트",
+  CaptureMismatch: "참관인 캡처와 불일치",
+  CarrierMismatch: "통신사 기록과 불일치",
+  RollLineOutsideWindow: "운영 시간 밖의 명부 회선 통신",
+  UnexplainedTransmission: "설명되지 않는 송신",
+  TeardownFinding: "분해 표본 발견",
+  RadioCheckFinding: "무선 점검 발견",
+};
+
+/** Why an incident was not taken (ityv-verify `IncidentProblem`). */
+export const INCIDENT_PROBLEMS: Record<string, string> = {
+  Signers: "등록된 서명자 조합이 아님",
+  Subject: "투표함이 그 투표소의 것이 아님",
 };
 
 /** Korean name of the alarm kinds. */

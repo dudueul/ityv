@@ -4,9 +4,12 @@
 //! A scenario is a list of [`Step`]s. Most are events; checkpoints are
 //! steps too, signed when the plan is laid down because their roots
 //! depend on every frame before them, and followed by the timestamp
-//! records of the simulated authorities (ADR-0039, [`crate::tsa`]). An attack is a change to the list
-//! (an event removed, repeated, moved, replaced) or a step kind that
-//! produces a deliberately wrong frame.
+//! records of the simulated authorities (ADR-0039, [`crate::tsa`]). A
+//! station gateway's session is a step too ([`Step::Uplink`]): its frame
+//! logs and session are built when the plan is laid down, from the device
+//! events laid down before it ([`crate::uplink`]). An attack is a change to
+//! the list (an event removed, repeated, moved, replaced), a step kind that
+//! produces a deliberately wrong frame, or a fault on a session.
 
 use ityv_crypto::object_hash;
 use ityv_encoding::{
@@ -70,6 +73,9 @@ pub enum Step {
         /// Frames dropped from the previous checkpoint's tree.
         dropped: u64,
     },
+    /// A station gateway's session over a window: the frame logs of its
+    /// links, then the session (ADR-0041).
+    Uplink(crate::uplink::Window),
 }
 
 impl Step {
@@ -89,7 +95,10 @@ impl Step {
     pub const fn event_bytes(&self) -> Option<&'static [u8]> {
         match self {
             Self::Event { event, .. } => Some(event),
-            Self::Checkpoint { .. } | Self::Stamp { .. } | Self::ForkCheckpoint { .. } => None,
+            Self::Checkpoint { .. }
+            | Self::Stamp { .. }
+            | Self::ForkCheckpoint { .. }
+            | Self::Uplink(_) => None,
         }
     }
 }
@@ -242,6 +251,19 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
         serial: 0,
         checkpoint_event: None,
     };
+    let withheld = steps
+        .iter()
+        .flat_map(|s| match s {
+            Step::Uplink(w) => w.faults.as_slice(),
+            Step::Event { .. }
+            | Step::Checkpoint { .. }
+            | Step::Stamp { .. }
+            | Step::ForkCheckpoint { .. } => &[],
+        })
+        .filter_map(crate::uplink::Fault::withheld)
+        .map(|h| h.0)
+        .collect();
+    let mut gateways = crate::uplink::Gateways::new(election, withheld);
     for step in steps {
         match step {
             Step::Event {
@@ -250,6 +272,7 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
                 published,
                 filed,
             } => {
+                gateways.observe(event);
                 book.push(*schema, event, published.unwrap_or(event));
                 if let Some(f) = filed {
                     book.disputes.push(*f);
@@ -268,6 +291,11 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
                 let (seq, _, size) = book.last.unwrap();
                 let previous = book.previous.map_or(Hash512::ZERO, |(_, h)| h);
                 book.checkpoint(seq, previous, size - dropped, *bucket, 1);
+            }
+            Step::Uplink(window) => {
+                for (schema, event) in gateways.session(window) {
+                    book.push(schema, event, event);
+                }
             }
         }
     }

@@ -16,7 +16,7 @@
 // simulator's fixture data and is labelled so; the viewer can verify
 // without it.
 
-import type { AuditRecord, AuditReport, Hold, IndexElection, IndexScenario, Int, Report, RollCustody, SimIndex, StationProgress, StyleAuditReport, Token } from "./data";
+import type { AuditRecord, AuditReport, Hold, IndexElection, IndexScenario, Int, Report, RollCustody, SimIndex, StationProgress, StyleAuditReport, Token, UplinkStation } from "./data";
 import { bucketTime, intNum, intText, slotDay, slotTime } from "./data";
 import { el, icon, rungIcon } from "./render";
 import { Cancelled, MAX_BUNDLE_BYTES, VerifierClient, loadBundle, parsePin, wasmSha256 } from "./verifier";
@@ -25,16 +25,22 @@ import {
   AUDIT_EVENTS,
   AUDIT_REFUSALS,
   COMPARISON_CODES,
+  DEVICE_CLASSES,
   HOLDS,
   HOLD_MEANS,
   HOLD_WORD,
+  INCIDENT_KINDS,
+  INCIDENT_PROBLEMS,
   LADDER,
   LEGAL_MEANS,
   LEGAL_WORD,
+  LINK_PROBLEMS,
+  MANIFEST_PROBLEMS,
   NOT_REACHABLE,
   OUTCOMES,
   PHASES,
   ROLL_REASONS,
+  SESSION_PROBLEMS,
   STAGES,
   STEPS,
   TSA_KINDS,
@@ -1313,6 +1319,99 @@ function rollCard(r: Report): HTMLElement | null {
   );
 }
 
+/** One station's row: its gateway's sessions, its links' frames and
+ * objects, what was found. */
+function uplinkRows(s: UplinkStation): HTMLElement[] {
+  const window = s.firstSlot === null || s.lastSlot === null ? "-" : `${slotTime(s.firstSlot)}–${slotTime(s.lastSlot)} (${slotDay(s.firstSlot)}일째)`;
+  const head = el(
+    "tr",
+    {},
+    el("th", {}, s.station, el("span", { class: "muted" }, ` ${s.gateway ?? "게이트웨이 없음"}`)),
+    el("td", { class: "num" }, intText(s.sessions)),
+    el("td", {}, window),
+    el("td", {}, s.finalSession === null ? "아직 없음" : `프레임 ${intText(s.finalSession)}`),
+    el("td", { class: "num" }, intText(s.captures)),
+    el("td", { class: "num" }, intText(s.wanBytes)),
+    el("td", { class: `oc oc-${s.holds.length ? "FAILED" : s.finalSession === null ? "NOT_RUN" : "PASSED"}` }, icon(s.holds.length ? "warn" : s.finalSession === null ? "wait" : "ok"), s.holds.length ? ` ${holdList(s.holds).textContent}` : s.finalSession === null ? " 대기" : " 통과"),
+  );
+  const links = s.links.map((l) =>
+    el(
+      "tr",
+      { class: "sub" },
+      el("td", {}, `${l.kind === "box" ? "스캐너" : "카운터·가명 유닛"} ${l.device}`, el("span", { class: "muted" }, ` 링크 ${l.link.split(" ").slice(0, 2).join(" ")}`)),
+      el("td", { class: "num" }, `${intText(l.frames)} + ${intText(l.catchupFrames)}`),
+      el("td", {}, l.firstSlot === null || l.lastSlot === null ? "-" : `${slotTime(l.firstSlot)}–${slotTime(l.lastSlot)}`),
+      el("td", {}, `객체 ${intText(l.objects)} · 장부 이벤트 포함 ${intText(l.included)}`),
+      el("td", { class: "num" }, intText(l.missingSlots)),
+      el("td", { class: "num" }, `${intText(l.checkedChunks)} / ${intText(l.opaqueChunks)}`),
+      el(
+        "td",
+        {},
+        l.findings.length
+          ? `${l.findings.length}건: ${[...new Set(l.findings.map((f) => LINK_PROBLEMS[f.problem] ?? f.problem))].join(", ")}`
+          : "없음",
+      ),
+    ),
+  );
+  return [head, ...links];
+}
+
+function connectivityCard(r: Report): HTMLElement | null {
+  const c = r.connectivity;
+  if (!c) return null;
+  const rows = c.stations.flatMap(uplinkRows);
+  const warnings: string[] = [
+    ...c.manifest.map((m) => `연결 목록: ${DEVICE_CLASSES[m.class] ?? m.class}${m.port === null ? "" : ` 포트 ${m.port}`} — ${MANIFEST_PROBLEMS[m.problem] ?? m.problem}`),
+    ...c.stations.flatMap((s) => s.findings.map((f) => `${s.station} 세션 ${intText(f.session)} (프레임 ${intText(f.seq)}): ${SESSION_PROBLEMS[f.problem] ?? f.problem}`)),
+    ...c.stations.flatMap((s) => s.outside.map((o) => `${s.station}: 프레임 ${intText(o.seq)}의 장치 이벤트(스키마 ${intText(o.schema)}, ${o.fingerprint.split(" ").slice(0, 2).join(" ")})가 그 장치의 받은 프레임 어디에도 없다`)),
+    ...c.stations.filter((s) => intNum(s.pendingLogs) > 0).map((s) => `${s.station}: 아직 어느 세션도 받지 않은 기록 ${intText(s.pendingLogs)}개`),
+  ];
+  const incidents = c.incidents.map((i) =>
+    el(
+      "li",
+      {},
+      icon(i.refused ? "stop" : "warn"),
+      ` 프레임 ${intText(i.seq)} ${INCIDENT_KINDS[i.kind] ?? i.kind} · ${i.station ?? "선거 전체"}${i.box ? ` ${i.box}` : ""} · 슬롯 ${slotTime(i.fromSlot)}–${slotTime(i.toSlot)}`,
+      i.refused
+        ? ` · 받지 않음: ${INCIDENT_PROBLEMS[i.refused] ?? i.refused}`
+        : ` · 전자 층 보류: ${i.boxes.join(", ") || "-"}${i.fullComparison.length ? ` · 종이 전수 대조: ${i.fullComparison.map((f) => `${f.box} ${f.compared ? "대조함" : "아직"}`).join(", ")}` : ""}`,
+    ),
+  );
+  return el(
+    "section",
+    { class: "card wide", "data-testid": "connectivity" },
+    el(
+      "h2",
+      {},
+      "연결 감사",
+      el("span", { class: "muted" }, ` 투표소 ${c.stations.length}곳 · ${c.complete ? "모든 게이트웨이의 final 세션을 받았다" : "final 세션이 없는 게이트웨이가 있다"}${c.holds.length ? ` · 보류 ${holdList(c.holds).textContent}` : ""}`),
+    ),
+    rows.length === 0
+      ? el("p", { class: "muted" }, "투표소가 없다.")
+      : el(
+          "div",
+          { class: "scroll" },
+          el(
+            "table",
+            {},
+            el(
+              "thead",
+              {},
+              el("tr", {}, el("th", {}, "투표소 / 링크"), el("th", { class: "num" }, "세션 / 프레임(일반 + 따라잡기)"), el("th", {}, "창"), el("th", {}, "final / 객체"), el("th", { class: "num" }, "캡처 서명 / 빠진 슬롯"), el("th", { class: "num" }, "바깥 회선 바이트 / 확인한·봉인 덩어리"), el("th", {}, "판정")),
+            ),
+            el("tbody", { "data-testid": "connectivity-rows" }, ...rows),
+          ),
+        ),
+    warnings.length ? el("p", { class: "warnline", "data-testid": "connectivity-findings" }, icon("warn"), warnings.join(" · ")) : null,
+    incidents.length ? el("ul", { "data-testid": "connectivity-incidents" }, ...incidents) : null,
+    el(
+      "p",
+      { class: "muted" },
+      "검증기는 genesis가 고정한 연결 목록의 한 방향 규칙(VC-077), 게이트웨이 세션의 서명·순서·사슬(장치가 서명한 151바이트 머리마다 SHA3-512 사슬을 다시 계산), 프레임의 서명·슬롯 모양·오프셋·0 채움 증명(VC-078), 장치가 보낸 객체의 종류·순서·길이(VC-079), final 세션 뒤 장부의 모든 장치 이벤트가 받은 프레임 안에 있는지(VC-080), 연결 사건(VC-083)을 확인한다. 1 MiB 프레임 자체와 봉인된 share 패키지는 공표되지 않으므로, 참관인 캡처 대조(VC-081)와 통신사 기록 대조는 장부 밖 입력이 필요하고 결과는 연결 사건으로 장부에 들어온다. 연결 목록이 실제 하드웨어인지는 분해 표본과 무선 점검(VC-082)이 확인한다.",
+    ),
+  );
+}
+
 function checkpointsCard(r: Report): HTMLElement {
   const c = r.checkpoints;
   return el(
@@ -1555,7 +1654,7 @@ function draw(root: HTMLElement): void {
     if (res.scenario) parts.push(expectedCard(res.scenario, r));
     parts.push(pinCard(r), holdsCard(r), stagesCard(r));
     if (r.genesis?.ok) {
-      parts.push(unitsCard(r, election), auditCard(r, election), progressCard(r, election), boxesCard(r, election), rollCard(r), checkpointsCard(r), refusedCard(r), disputesCard(r), lookupCard(res));
+      parts.push(unitsCard(r, election), auditCard(r, election), progressCard(r, election), boxesCard(r, election), rollCard(r), connectivityCard(r), checkpointsCard(r), refusedCard(r), disputesCard(r), lookupCard(res));
     } else {
       parts.push(
         el("section", { class: "card warnline" }, icon("stop"), `genesis를 받지 못했다: ${r.genesis?.error ?? ""}. genesis는 전부 아니면 전무이므로 그 위의 어떤 단계도 진행하지 않았다.`),

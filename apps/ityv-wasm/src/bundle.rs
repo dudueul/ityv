@@ -7,10 +7,11 @@ use ityv_verify::{AmendableSets, AmendmentInput, FixedSets, GenesisInput};
 
 /// The magic bytes.
 pub const MAGIC: &[u8; 8] = b"ITYVSIMB";
-/// The only version this reader takes: 3, with the timestamp and roll
-/// authority sets (genesis sets 12 and 13) and the optional beacon
-/// observation section (version 2 had either, on two branches).
-pub const VERSION: u16 = 3;
+/// The only version this reader takes: 4, with the connectivity manifest
+/// after the signed genesis (ADR-0041), the timestamp and roll authority
+/// sets (genesis sets 12 and 13) and the optional beacon observation
+/// section.
+pub const VERSION: u16 = 4;
 
 /// Why a bundle could not be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +110,7 @@ pub struct Bundle<'a> {
     /// The genesis pin.
     pub pin: Hash512,
     signed: &'a [u8],
+    manifest: &'a [u8],
     sets: Sets<'a>,
     styles: Vec<&'a [u8]>,
     trustees: Vec<&'a [u8]>,
@@ -132,6 +134,7 @@ impl Bundle<'_> {
     pub fn genesis(&self) -> GenesisInput<'_> {
         GenesisInput {
             signed: self.signed,
+            connectivity: self.manifest,
             sets: self.sets.view(),
             fixed: FixedSets {
                 ballot_styles: &self.styles,
@@ -318,13 +321,22 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
             }
             0x0003 => {
                 let signed = s.blob()?;
+                let manifest = s.blob()?;
                 let sets = s.sets()?;
                 let styles = s.list()?;
                 let trustees = s.list()?;
                 let witnesses = s.list()?;
                 let timestamps = s.list()?;
                 let rolls = s.list()?;
-                genesis = Some((signed, sets, styles, trustees, witnesses, timestamps, rolls));
+                genesis = Some((
+                    (signed, manifest),
+                    sets,
+                    styles,
+                    trustees,
+                    witnesses,
+                    timestamps,
+                    rolls,
+                ));
             }
             0x0004 => {
                 let n = s.u32()?;
@@ -348,12 +360,13 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
         s.end()?;
     }
     c.end()?;
-    let (signed, sets, styles, trustees, witnesses, timestamps, rolls) =
+    let ((signed, manifest), sets, styles, trustees, witnesses, timestamps, rolls) =
         genesis.ok_or(BundleError::Missing)?;
     Ok(Bundle {
         name: name.ok_or(BundleError::Missing)?,
         pin: pin.ok_or(BundleError::Missing)?,
         signed,
+        manifest,
         sets,
         styles,
         trustees,

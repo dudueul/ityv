@@ -123,6 +123,63 @@ export interface RollCustody {
   effective: boolean;
 }
 
+/** One link of a station: a box's scanner or the station's check-in unit
+ * (ADR-0041). */
+export interface UplinkLink {
+  kind: "box" | "unit";
+  device: string;
+  link: string;
+  frames: Int;
+  catchupFrames: Int;
+  dataFrames: Int;
+  missingSlots: Int;
+  firstSlot: Int | null;
+  lastSlot: Int | null;
+  streamEnd: Int;
+  objects: Int;
+  included: Int;
+  checkedChunks: Int;
+  opaqueChunks: Int;
+  findings: { seq: Int; slot: Int | null; index: Int | null; streamOffset: Int; problem: string; hold: string }[];
+}
+
+/** One station's gateway sessions as the verifier took them. */
+export interface UplinkStation {
+  station: string;
+  gateway: string | null;
+  sessions: Int;
+  finalSession: Int | null;
+  captures: Int;
+  wanBytes: Int;
+  firstSlot: Int | null;
+  lastSlot: Int | null;
+  pendingLogs: Int;
+  findings: { seq: Int; session: Int; link: string | null; problem: string }[];
+  links: UplinkLink[];
+  outside: { seq: Int; schema: Int; fingerprint: string }[];
+  holds: Hold[];
+}
+
+/** The connectivity audit (verifier stage 11, ADR-0022, ADR-0041). */
+export interface ConnectivityReport {
+  complete: boolean;
+  manifest: { class: string; port: string | null; problem: string }[];
+  stations: UplinkStation[];
+  incidents: {
+    seq: Int;
+    kind: string;
+    station: string | null;
+    box: string | null;
+    fromSlot: Int;
+    toSlot: Int;
+    commitmentUnit: boolean;
+    refused: string | null;
+    boxes: string[];
+    fullComparison: { box: string; compared: boolean }[];
+  }[];
+  holds: Hold[];
+}
+
 export interface RollReport {
   complete: boolean;
   quorum: Int;
@@ -256,6 +313,7 @@ export interface Report {
     timestamps: { tokens: Int; unanswered: Int; refusals: { frame: Int; authority: string; problem: string }[] };
   };
   roll?: RollReport;
+  connectivity?: ConnectivityReport;
   boxes?: BoxReport[];
   units?: UnitReport[];
   refused?: { seq: Int; schema: string | null; stage: string; reason: string }[];
@@ -380,8 +438,10 @@ export function fp16(grouped32: string): string {
 
 // ---------------------------------------------------------------------
 // Demonstration fixtures (labelled as such on screen). The ledger has no
-// DeviceAttestation or UplinkSession events yet (verifier stages 11–12
-// are not implemented), so these two screens use fixed demo values.
+// DeviceAttestation events yet (verifier stage 12 is not implemented),
+// and the gateway's own screen shows its live counters, which no ledger
+// carries; these two screens use fixed demo values. The gateway's
+// sessions as the verifier took them are in the connectivity card.
 
 export type AttestReason = "sig" | "nonce" | "fp" | "build" | "timeout";
 

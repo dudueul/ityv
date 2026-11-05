@@ -393,7 +393,7 @@ export async function renderDevices(
     }
     case "gateway": {
       model = gatewayScreen(GATEWAY_FIXTURE, 3 * 144 + 108, 7, p.state === "up");
-      notes = ["빗금 친 값은 모두 시연 자료(고정값)다. 장부에 아직 UplinkSession 이벤트가 없다(검증기 11단계 미구현). 슬롯당 프레임 수는 PROTOCOL §5.8의 값이다. '들어오는 경로 없음'은 고정 문구다."];
+      notes = ["빗금 친 값은 모두 시연 자료(고정값)다. 게이트웨이 화면은 장치의 실시간 계수를 보이고, 그것은 장부에 없다. 장부에 실린 세션과 프레임 기록을 검증기가 읽은 값은 대시보드의 '연결 감사' 카드에 있다(검증기 11단계). 슬롯당 프레임 수는 PROTOCOL §5.8의 기준값이다. '들어오는 경로 없음'은 고정 문구다."];
       break;
     }
     case "observer-attest": {

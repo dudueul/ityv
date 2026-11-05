@@ -154,6 +154,9 @@ pub struct ElectionSpec {
     /// 10-minute slots from opening to close, both included (73 for
     /// 06:00–18:00).
     pub slots: u64,
+    /// Whether the connectivity manifest gives the scanner's frame link a
+    /// receiving direction too (the attack on VC-077, ADR-0041).
+    pub two_way_uplink: bool,
 }
 
 impl ElectionSpec {
