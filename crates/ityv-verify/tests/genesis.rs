@@ -1365,13 +1365,33 @@ fn refuses_a_roll_authority_set_that_breaks_a_rule() {
     for id in [roll::C_JUD, roll::C_INT] {
         assert_eq!(verify(&without(id)), Err(whole(Rule::RollCustodians)));
     }
-    // Three custodians make a quorum of three; two do not.
-    let mut d = without(roll::C_IVC);
-    d.rolls
-        .retain(|a| a.kind != K::CustodianParty || a.authority_id.as_bytes() == roll::C_PA);
+    // Three custodians make a quorum of three: the court administration,
+    // the Ministry and the committee, no party.
+    let mut d = base.clone();
+    d.rolls.retain(|a| a.kind != K::CustodianParty);
     assert_eq!(verify(&d), Ok(()));
-    d.rolls.retain(|a| a.authority_id.as_bytes() != roll::C_PA);
-    assert_eq!(verify(&d), Err(whole(Rule::RollCustodians)));
+    // The committee is one of them (exactly one each of kinds 11, 12, 13).
+    assert_eq!(
+        verify(&without(roll::C_IVC)),
+        Err(whole(Rule::RollCustodians))
+    );
+    // A second custodian of the court administration's, the Ministry's or
+    // the committee's kind, of another organisation: refused, or it could
+    // stand in for the real one (the second review's proof of concept: a
+    // party registered as the court administration met the quorum
+    // without the court administration's receipt).
+    for kind in [
+        K::CustodianJudiciary,
+        K::CustodianInterior,
+        K::CustodianCommittee,
+    ] {
+        let mut d = base.clone();
+        assert_eq!(d.rolls[5].authority_id.as_bytes(), roll::C_PB);
+        d.rolls[5].kind = kind;
+        assert_eq!(verify(&d), Err(whole(Rule::RollCustodians)), "{kind:?}");
+    }
+    // Two parties are fine.
+    assert_eq!(verify(&base), Ok(()));
 
     // No district head, no snapshot, two snapshots.
     for d in [without(roll::GU), without(roll::SNAPSHOT)] {

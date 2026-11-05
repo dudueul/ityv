@@ -129,9 +129,9 @@ pub enum Rule {
     /// The roll's custodians cannot confirm a roll: two custodians of one
     /// organisation, compared as names (ASCII case and the separators
     /// `._:-` aside; one would count twice), fewer custodians than the
-    /// custody quorum, or no custodian of the court administration or of
-    /// the Ministry of the Interior (ADR-0033 decision 2, VC-108,
-    /// ADR-0040).
+    /// custody quorum, or not exactly one custodian each of the court
+    /// administration, the Ministry of the Interior and the committee
+    /// (ADR-0033 decision 2, VC-108, ADR-0040).
     RollCustodians,
     /// The roll's sources cannot give a roll: no district head for the
     /// resident extracts, or not exactly one source of the national

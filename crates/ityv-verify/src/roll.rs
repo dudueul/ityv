@@ -145,8 +145,9 @@ pub fn roll_entry_included(
 /// Checks the genesis's roll authorities (set 13) against its custody
 /// quorum `quorum` (ADR-0040): no two custodians of one organisation, at
 /// least `quorum` custodians with the court administration and the
-/// Ministry of the Interior among them, a district head and exactly one
-/// source of the national snapshot. Otherwise no roll could ever take
+/// Ministry of the Interior among them, exactly one custodian each of
+/// the court administration, the Ministry and the committee, a district
+/// head and exactly one source of the national snapshot. Otherwise no roll could ever take
 /// effect, or one organisation would count twice. The keys are checked
 /// with every other key of the genesis (valid, no shared half).
 ///
@@ -186,6 +187,22 @@ pub(crate) fn check_authorities(
         ));
     }
     let count = |kind| kinds.iter().filter(|k| **k == kind).count();
+    // One court administration, one Ministry, one committee: a second
+    // entry of one of those kinds (another organisation calling itself
+    // the court administration) would stand in for it in the quorum
+    // (`custody_quorum` asks for each kind, not for an authority).
+    let branches = [
+        RollAuthorityKind::CustodianJudiciary,
+        RollAuthorityKind::CustodianInterior,
+        RollAuthorityKind::CustodianCommittee,
+    ];
+    if branches.iter().any(|kind| count(*kind) != 1) {
+        return Err(Error::set(
+            state,
+            EntrySet::RollAuthorities,
+            Rule::RollCustodians,
+        ));
+    }
     if count(RollAuthorityKind::ResidentExtract) == 0
         || count(RollAuthorityKind::ResidentSnapshot) != 1
     {
