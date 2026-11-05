@@ -265,6 +265,16 @@ fn a_manifest_round_trips_and_finds_each_classs_frame_link() {
     second.port = ident(b"uplink-2", 32);
     let two = manifest_of(&[scanner_entry(), second, gateway_entry()]);
     assert_eq!(two.frame_link(DeviceClass::CommitmentUnit), None);
+    // A port of the class that sends no frames is not its frame link.
+    let mut quiet = scanner_entry();
+    quiet.port = ident(b"service", 32);
+    quiet.frames_per_slot = 0;
+    quiet.catchup_frames_per_slot = 0;
+    let with_quiet = manifest_of(&[quiet, scanner_entry(), gateway_entry()]);
+    assert_eq!(
+        with_quiet.frame_link(DeviceClass::CommitmentUnit),
+        Some(scanner_entry())
+    );
     assert!(scanner_entry().sends_frames());
     assert!(!gateway_entry().sends_frames());
     assert_eq!(scanner_entry().key(), (2, b"uplink".as_slice()));
@@ -1158,8 +1168,14 @@ fn an_incident_round_trips_and_follows_its_rules() {
     let mut p = incident_parts();
     p.from_slot = 166;
     assert_eq!(err(&p), ErrorKind::InvariantViolation);
+    // One slot: the interval may start where it ends, in the constructor
+    // and in the decoder.
     p.from_slot = 165;
-    assert!(ConnectivityIncidentBody::new(&p).is_ok());
+    let one = ConnectivityIncidentBody::new(&p).unwrap();
+    let bytes = encode_to_vec(SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_VERSION_1, &one);
+    let back: ConnectivityIncidentBody<'_> =
+        decode_object(SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_VERSION_1, &bytes).unwrap();
+    assert_eq!(back, one);
     let mut p = incident_parts();
     p.evidence_hash = Hash512::ZERO;
     assert_eq!(err(&p), ErrorKind::InvalidPreviousHash);

@@ -389,11 +389,16 @@ impl ManifestEntry<'_> {
     }
 }
 
+/// The fixed-width fields of a manifest entry: class, direction, medium,
+/// peer class and schedule (one byte each), the two frame counts (two
+/// each) and `carries` (four).
+const ENTRY_FIXED_LEN: usize = 13;
+
 impl Encode for ManifestEntry<'_> {
     fn encoded_len(&self) -> usize {
         ident_len(&self.port)
             .saturating_add(ident_len(&self.counterpart))
-            .saturating_add(1 + 1 + 1 + 1 + 1 + 2 + 2 + 4)
+            .saturating_add(ENTRY_FIXED_LEN)
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
