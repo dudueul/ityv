@@ -70,9 +70,10 @@ exclude_re = [
     # between their frames agree (crates/ityv-verify/src/roll.rs,
     # `Work::subject`).
     "replace < with <= in Work<'_, 'a>::subject",
-    # Equivalent: an amendment and the participation set that marks the
-    # poll close are two ledger events, which never share a frame, so `<`
-    # and `<=` (`>` and `>=`) between their frames agree; each comparison
+    # Equivalent: an amendment and the event that marks the poll close (a
+    # participation set, a final observer count or a box close) are two
+    # ledger events, which never share a frame, so `<` and `<=` (`>` and
+    # `>=`) between their frames agree; each comparison
     # carries a comment saying so (crates/ityv-verify/src/roll.rs:
     # `RollStage::roll`, `settle_close`).
     "replace < with <= in RollStage<'a>::roll",
