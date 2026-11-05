@@ -580,6 +580,8 @@ fn a_clean_audit_reaches_paper_audited() {
     assert_eq!(device.records, 3);
     assert_eq!(device.compared, 2);
     assert_eq!(device.codes, [2, 0, 0, 0, 0, 0, 0]);
+    // Matches hold nothing, at the device as at the style.
+    assert_eq!(device.holds, HoldSet::empty());
     assert!(device.followed_up());
     assert_eq!(style.units.len(), 1);
     assert_eq!(audit.station_marks().len(), 1);
