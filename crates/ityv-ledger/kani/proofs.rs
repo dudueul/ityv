@@ -45,8 +45,7 @@ use crate::merkle::{
 };
 use crate::policy::{MAX_WITNESSES, QuorumProfile};
 use crate::publication::{
-    ANCHOR_WINDOW, BOARD_WINDOW, REQUIRED_ANCHORS, Status, anchor_deadline, board_deadline,
-    check_anchor,
+    ANCHOR_WINDOW, BOARD_WINDOW, Status, anchor_deadline, board_deadline, check_board,
 };
 
 /// A cheap node function for the tree algorithms. Only the first eight
@@ -262,7 +261,8 @@ fn quorum_profile_rule_matches_its_definition() {
 }
 
 /// Deadline arithmetic never panics and overflows exactly at the top of
-/// the bucket range; the anchor check counts receipts correctly.
+/// the bucket range; the board check is satisfied, pending or breached
+/// exactly as the publication and the current bucket say.
 #[kani::proof]
 #[kani::unwind(8)]
 fn deadlines_are_total_and_exact() {
@@ -274,25 +274,20 @@ fn deadlines_are_total_and_exact() {
     }
     let board = board_deadline(TimeBucket::new(bucket));
     assert_eq!(board.is_ok(), bucket.checked_add(BOARD_WINDOW).is_some());
-    let r1: u64 = kani::any();
-    let r2: u64 = kani::any();
-    let r3: u64 = kani::any();
+    let published: Option<u64> = kani::any();
     let now: u64 = kani::any();
-    kani::assume(bucket <= u64::MAX - ANCHOR_WINDOW);
-    let receipts = [
-        TimeBucket::new(r1),
-        TimeBucket::new(r2),
-        TimeBucket::new(r3),
-    ];
-    let deadline = bucket + ANCHOR_WINDOW;
-    let timely = (r1 <= deadline) as usize + (r2 <= deadline) as usize + (r3 <= deadline) as usize;
-    let result = check_anchor(TimeBucket::new(bucket), &receipts, TimeBucket::new(now));
-    if timely >= REQUIRED_ANCHORS {
-        assert_eq!(result.unwrap(), Status::Satisfied);
-    } else if now > deadline {
-        assert!(result.is_err());
-    } else {
-        assert_eq!(result.unwrap(), Status::Pending);
+    kani::assume(bucket <= u64::MAX - BOARD_WINDOW);
+    let deadline = bucket + BOARD_WINDOW;
+    let result = check_board(
+        TimeBucket::new(bucket),
+        published.map(TimeBucket::new),
+        TimeBucket::new(now),
+    );
+    match published {
+        Some(p) if p <= deadline => assert_eq!(result.unwrap(), Status::Satisfied),
+        Some(_) => assert!(result.is_err()),
+        None if now > deadline => assert!(result.is_err()),
+        None => assert_eq!(result.unwrap(), Status::Pending),
     }
 }
 

@@ -1,31 +1,41 @@
-//! Publication deadlines (PROTOCOL.md §5.5, ADR-0016 §7).
+//! Publication deadlines (PROTOCOL.md §5.5, ADR-0016 §7, ADR-0039 7).
 //!
 //! Time in the TCB is a fifteen-minute bucket index, never a wall clock. A
-//! checkpoint must be received and receipted by at least [`REQUIRED_ANCHORS`]
-//! designated public verifiers within [`ANCHOR_WINDOW`] buckets (one hour),
+//! checkpoint must be anchored by timestamp tokens within [`ANCHOR_WINDOW`]
+//! buckets after its own (one hour; the verifier decides that from the
+//! tokens on the ledger, `ityv-verify`'s `CheckpointChain::anchor_deadline`),
 //! and the whole board must be published within [`BOARD_WINDOW`] buckets
 //! (24 hours) of the close of voting. The caller supplies every time; this
-//! module only does the bounded arithmetic and the comparison.
+//! module only does the bounded arithmetic and the board comparison.
+//!
+//! An earlier rule counted the receipts of three designated public
+//! verifiers, supplied by the caller. Since ADR-0039 the verifier counts
+//! signed timestamp tokens instead, and that rule and its count are gone:
+//! a caller's receipt list could only have made the status read as more
+//! anchored than the ledger shows.
 
 use ityv_encoding::TimeBucket;
 
 use crate::error::Error;
 
-/// Buckets allowed between a checkpoint and its third anchor receipt.
+/// Buckets after a checkpoint's own within which timestamp tokens anchor
+/// it (VC-115): a token anchors it when its latest instant is in bucket
+/// `checkpoint + ANCHOR_WINDOW` at the latest.
 pub const ANCHOR_WINDOW: u64 = 4;
 /// Buckets allowed between the close of voting and board publication.
 pub const BOARD_WINDOW: u64 = 96;
-/// Designated public verifiers whose receipts anchor a checkpoint.
-pub const REQUIRED_ANCHORS: usize = 3;
 
 /// A missed publication deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Breach {
-    /// Fewer anchor receipts than required by the deadline.
+    /// The last valid checkpoint's anchor window passed without timestamp
+    /// tokens of both authority kinds (a government-run and a
+    /// non-government authority of two operators; VC-115, ADR-0039 7).
     AnchorsShort {
-        /// Receipts received by the deadline.
+        /// The authority kinds present among the tokens within the
+        /// window, 0 to 2.
         have: usize,
-        /// Receipts required.
+        /// The kinds required: 2.
         need: usize,
     },
     /// The board was not published by the deadline.
@@ -90,33 +100,6 @@ pub fn anchor_deadline(checkpoint: TimeBucket) -> Result<TimeBucket, Error> {
 /// [`Error::Overflow`].
 pub fn board_deadline(close: TimeBucket) -> Result<TimeBucket, Error> {
     add(close, BOARD_WINDOW)
-}
-
-/// Checks the anchor rule for a checkpoint proposed in `checkpoint`, given
-/// the buckets of the receipts received so far and the current bucket:
-/// [`REQUIRED_ANCHORS`] receipts no later than the deadline. Receipts after
-/// the deadline do not count.
-///
-/// # Errors
-/// [`Error::Breach`] with [`Breach::AnchorsShort`] once the deadline has
-/// passed with fewer timely receipts than required, [`Error::Overflow`].
-pub fn check_anchor(
-    checkpoint: TimeBucket,
-    receipts: &[TimeBucket],
-    now: TimeBucket,
-) -> Result<Status, Error> {
-    let deadline = anchor_deadline(checkpoint)?;
-    let have = receipts.iter().filter(|r| **r <= deadline).count();
-    if have >= REQUIRED_ANCHORS {
-        Ok(Status::Satisfied)
-    } else if now > deadline {
-        Err(Error::Breach(Breach::AnchorsShort {
-            have,
-            need: REQUIRED_ANCHORS,
-        }))
-    } else {
-        Ok(Status::Pending)
-    }
 }
 
 /// Checks the board publication rule for an election closed in `close`.
