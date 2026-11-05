@@ -1209,6 +1209,54 @@ fn an_incident_needs_registered_people_and_a_box_of_its_station() {
     assert_eq!(box_holds(&r), only(HoldReason::ConnectivityIncidentRefused));
 }
 
+#[test]
+fn an_object_may_span_two_frames() {
+    // The scanner's first object starts in slot 150's frame and ends in
+    // slot 151's.
+    let mut links = honest_links();
+    let len = stream_len(&links[SCANNER]) as usize;
+    let data = links[SCANNER].frames[0].data.clone();
+    let cut = 1000usize;
+    assert!(cut < usize::try_from(day().links[SCANNER].objects[0].len).unwrap());
+    reseal(&mut links[SCANNER], 150, |f| {
+        f.data = data[..cut].to_vec();
+        f.payload_len = cut as u32;
+    });
+    reseal(&mut links[SCANNER], 151, |f| {
+        f.data = data[cut..].to_vec();
+        f.payload_len = (len - cut) as u32;
+        f.stream_offset = cut as u64;
+    });
+    let r = verify(Plan::new(ST, links.clone()).events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    let b = link_report(&r, scanner());
+    assert_eq!((b.data_frames, b.objects, b.included), (2, 5, 5));
+    assert_eq!(b.opaque_chunks, 0);
+    assert!(station(&r).outside.is_empty());
+    assert_eq!(r.connectivity().holds(), HoldSet::empty());
+    // A capture of both frames puts the object together again; of one, the
+    // object is not whole and is not judged.
+    let c = compare_capture(
+        election_world().genesis,
+        r.index(),
+        &capture_of(&links, &[150, 151]),
+    );
+    assert!(c.agrees(), "{:?}", c.findings);
+    assert_eq!((c.matched, c.objects_matched), (2, 5));
+    let c = compare_capture(
+        election_world().genesis,
+        r.index(),
+        &capture_of(&links, &[151]),
+    );
+    assert!(c.agrees(), "{:?}", c.findings);
+    assert_eq!(c.objects_matched, 4);
+}
+
 // ---------------------------------------------------------------------------
 // The manifest (VC-077).
 

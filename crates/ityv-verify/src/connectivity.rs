@@ -1548,10 +1548,7 @@ fn fully_compared(audit: &AuditStage<'_>, box_id: &[u8]) -> bool {
         .flat_map(|s| s.devices.iter())
         .filter(|d| d.box_id.as_bytes() == box_id)
         .collect();
-    !devices.is_empty()
-        && devices
-            .iter()
-            .all(|d| d.records > 0 && d.compared == d.records)
+    !devices.is_empty() && devices.iter().all(|d| d.compared == d.records)
 }
 
 /// Reads one incident (VC-083).
@@ -1568,6 +1565,9 @@ fn incident<'a>(
     let parts = *body.parts();
     let state = index.state_at(seq);
     let signed = people_signed(genesis, state, event);
+    // The box is at that station (in some state). The index already
+    // refuses an event naming a station or box no state has (§14 3), and
+    // the decoder a box without its station.
     let subject_ok = match (parts.station_id, parts.box_id) {
         (Some(s), Some(b)) => (0..genesis.state_count()).any(|k| {
             genesis
