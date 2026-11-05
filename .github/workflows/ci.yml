@@ -133,8 +133,8 @@ jobs:
     # spread evenly instead of landing in one consecutive slice, and
     # ityv-verify has eight shards of about three hours. On a1de409 those
     # took 2.7 to 4.0 hours (27.6 runner-hours) and ityv-encoding's three
-    # 2.4 to 3.5 (9.4). The connectivity audit (ADR-0041) adds 417
-    # ityv-verify mutants (1,593 to 2,010: the connectivity stage and the
+    # 2.4 to 3.5 (9.4). The connectivity audit (ADR-0041) adds 415
+    # ityv-verify mutants (1,593 to 2,008: the connectivity stage and the
     # capture and carrier tools) and makes each one dearer (the rebuild of
     # the crate and its test binaries without incremental compilation 48 to
     # 58 s, the whole test run 33 to 36 s, on one 4-core machine): about

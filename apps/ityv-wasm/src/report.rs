@@ -385,6 +385,11 @@ pub struct UnitStatus {
     pub status: StatusReport,
 }
 
+/// `Passed` when the unit reached a step, else `NotRun`.
+const fn reached(ok: bool) -> Outcome {
+    if ok { Outcome::Passed } else { Outcome::NotRun }
+}
+
 /// The status of every tally unit of `report`: the ledger's evidence with
 /// box completeness (the unit has boxes and every one is closed), the
 /// connectivity step (every station of its boxes has its gateway's final
@@ -460,37 +465,12 @@ pub fn unit_statuses(
             ]
             .iter()
             .fold(Evidence::new(scopes), |e, s| e.with_step(*s, ev.step(*s)))
-            .with_step(
-                Step::BoxCompleteness,
-                if closed {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
-            )
-            .with_step(
-                Step::Connectivity,
-                if connected {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
-            )
-            .with_step(
-                Step::Tally,
-                if u.passed() {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
-            )
+            .with_step(Step::BoxCompleteness, reached(closed))
+            .with_step(Step::Connectivity, reached(connected))
+            .with_step(Step::Tally, reached(u.passed()))
             .with_step(
                 Step::Audit,
-                if style_concluded(report, u.ballot_style_id.as_bytes()) {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
+                reached(style_concluded(report, u.ballot_style_id.as_bytes())),
             )
             .with_anchors(report.checkpoints().anchor_deadline(publications.now))
             .with_board(publications.board)
