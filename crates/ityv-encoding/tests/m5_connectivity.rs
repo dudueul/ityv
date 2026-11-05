@@ -1343,3 +1343,127 @@ fn the_patterned_helpers_are_what_the_vectors_assume() {
     let p: [u8; 4] = patterned(1);
     assert_eq!(p, [1, 2, 3, 4]);
 }
+
+#[test]
+fn an_incident_is_signed_on_site_or_by_the_committee_with_two_observers() {
+    use ityv_encoding::{
+        EventRole, EventSig, PURPOSE_CONNECTIVITY_INCIDENT, SCHEMA_VERSION_WITNESSED,
+        SCHEMA_WITNESSED_EVENT, WitnessedEvent, roles_satisfied,
+    };
+    let sig = |id: &'static [u8], role: EventRole, org: &'static [u8]| EventSig {
+        signer_id: SignerId::new(id).unwrap(),
+        role,
+        org_id: OrgId::new(org).unwrap(),
+        sig: &SIG_A,
+    };
+    let clerk_1 = sig(b"clerk-1", EventRole::Clerk, b"ORG-ST");
+    let clerk_2 = sig(b"clerk-2", EventRole::Clerk, b"ORG-ST");
+    let committee = sig(b"committee", EventRole::Committee, b"IVC");
+    let obs_a = sig(b"obs-a", EventRole::Observer, b"PARTY-A");
+    let obs_b = sig(b"obs-b", EventRole::Observer, b"PARTY-B");
+    let obs_c = sig(b"obs-c", EventRole::Observer, b"PARTY-A");
+    let auditor = sig(b"aud-1", EventRole::Auditor, b"AUDIT-A");
+    let s = SCHEMA_CONNECTIVITY_INCIDENT_BODY;
+    let ok = |who: &[EventSig<'static>]| roles_satisfied(s, || who.iter().copied());
+    assert!(ok(&[clerk_1, clerk_2, obs_a, obs_b]));
+    assert!(ok(&[committee, obs_a, obs_b]));
+    // One clerk, one organisation, the committee without two
+    // organisations, another role.
+    assert!(!ok(&[clerk_1, obs_a, obs_b]));
+    assert!(!ok(&[clerk_1, clerk_2, obs_a, obs_c]));
+    assert!(!ok(&[committee, obs_a, obs_c]));
+    assert!(!ok(&[committee, auditor, obs_a, obs_b]));
+    assert!(!ok(&[obs_a, obs_b]));
+
+    // In its envelope: round trip, purpose, and the body's own rule at its
+    // place in the envelope.
+    let body = leak(encode_to_vec(
+        s,
+        SCHEMA_VERSION_1,
+        &ConnectivityIncidentBody::new(&incident_parts()).unwrap(),
+    ));
+    let event = WitnessedEvent::new(body, &[clerk_1, clerk_2, obs_a, obs_b]).unwrap();
+    assert_eq!(event.purpose(), PURPOSE_CONNECTIVITY_INCIDENT);
+    assert_eq!(event.body_schema(), s);
+    let bytes = encode_to_vec(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_WITNESSED, &event);
+    let back: WitnessedEvent<'_> =
+        decode_object(SCHEMA_WITNESSED_EVENT, SCHEMA_VERSION_WITNESSED, &bytes).unwrap();
+    assert_eq!(back, event);
+    assert_eq!(
+        back.body::<ConnectivityIncidentBody<'_>>(s)
+            .unwrap()
+            .parts(),
+        &incident_parts()
+    );
+    assert_eq!(
+        WitnessedEvent::new(body, &[clerk_1, obs_a, obs_b])
+            .unwrap_err()
+            .kind(),
+        ErrorKind::InvariantViolation
+    );
+    let kind_at = HEADER_LEN + ident_len(E) + 1 + ident_len(ST) + 1 + ident_len(BOX);
+    let mut bad = body.to_vec();
+    bad[kind_at] = 0;
+    assert_eq!(
+        WitnessedEvent::new(leak(bad), &[clerk_1, clerk_2, obs_a, obs_b])
+            .unwrap_err()
+            .kind(),
+        ErrorKind::ValueOutOfRange
+    );
+}
+
+#[test]
+fn the_constants_are_the_specs() {
+    use ityv_encoding::{
+        CARRY_CHECKIN, CARRY_LINK, CARRY_ROLL, CHUNK_LEN, FRAME_KEY_LEN, MAX_LOG_FRAMES,
+        MAX_LOG_LEAVES, MAX_LOG_OBJECTS, MAX_MANIFEST_ENTRIES, MAX_PORT_LEN, MAX_SESSION_SLOTS,
+        MIN_OBJECT_LEN, PAYLOAD_CHUNKS, PURPOSE_CONNECTIVITY_INCIDENT, PURPOSE_UPLINK_CAPTURE,
+        PURPOSE_UPLINK_FRAME, PURPOSE_UPLINK_SESSION, SCHEMA_GENESIS_BOX, SCHEMA_STATION_ENTRY,
+        SCHEMA_VERSION_DEVICE_ENTRY, SLOT_MINUTES,
+    };
+    assert_eq!(FRAME_BODY_LEN, 1_048_576);
+    assert_eq!(MAX_PAYLOAD_LEN, 1_048_425);
+    assert_eq!((CHUNK_LEN, PAYLOAD_CHUNKS), (4096, 256));
+    assert_eq!(CHUNK_LEN * PAYLOAD_CHUNKS, FRAME_BODY_LEN);
+    assert_eq!((SLOT_MINUTES, MAX_SESSION_SLOTS), (10, 6));
+    assert_eq!(MAX_FRAMES_PER_SLOT, 64);
+    assert_eq!(
+        (MAX_MANIFEST_ENTRIES, MAX_PORT_LEN, FRAME_KEY_LEN),
+        (256, 32, 32)
+    );
+    assert_eq!(
+        (MAX_SESSION_LINKS, MAX_SESSION_BODY_LEN, MAX_CAPTURE_SIGS),
+        (16, 4096, 4)
+    );
+    assert_eq!(
+        (MAX_LOG_FRAMES, MAX_LOG_LEAVES, MAX_LOG_OBJECTS),
+        (384, 98_304, 65_536)
+    );
+    assert_eq!(MIN_OBJECT_LEN as usize, HEADER_LEN);
+    assert_eq!(
+        [
+            CARRY_PUBLIC,
+            CARRY_SEALED,
+            CARRY_CHECKIN,
+            CARRY_LINK,
+            CARRY_LEDGER,
+            CARRY_ROLL,
+            CARRY_SESSION
+        ],
+        [1, 2, 4, 8, 16, 32, 64]
+    );
+    assert_eq!(CARRIES_MASK, 0x7F);
+    assert_eq!(PURPOSE_UPLINK_FRAME, b"uplink-frame");
+    assert_eq!(PURPOSE_UPLINK_SESSION, b"uplink-session");
+    assert_eq!(PURPOSE_UPLINK_CAPTURE, b"uplink-capture");
+    assert_eq!(PURPOSE_CONNECTIVITY_INCIDENT, b"connectivity-incident");
+    // The device entries that carry the frame keys are version 2.
+    assert_eq!(SCHEMA_VERSION_DEVICE_ENTRY, 2);
+    assert_eq!(schema_version(SCHEMA_GENESIS_BOX), 2);
+    assert_eq!(schema_version(SCHEMA_STATION_ENTRY), 2);
+    // A log holds up to 98,304 leaves: 384 full frames.
+    let most = std::vec![0u8; MAX_LOG_LEAVES * 64];
+    assert_eq!(LogLeaves::new(&most).map(|l| l.len()), Some(MAX_LOG_LEAVES));
+    let over = std::vec![0u8; (MAX_LOG_LEAVES + 1) * 64];
+    assert_eq!(LogLeaves::new(&over), None);
+}
