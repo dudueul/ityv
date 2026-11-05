@@ -405,6 +405,149 @@ fn every_record_that_cannot_be_taken_is_listed_and_holds() {
     assert!(chain(&book).holds().is_empty());
 }
 
+#[test]
+fn a_record_without_a_token_names_an_earlier_stamped_event() {
+    // The note that an authority did not answer is checked against its
+    // target as a token would be (PROTOCOL.md §5.5, ADR-0039 4): no such
+    // event, a witnessed kind that is never stamped (VC-117), an event
+    // recorded only later. Each is refused and holds.
+    let mut book = Book::new(world());
+    book.checkpoint_bare_at(B);
+    let checkpoint = last(&book);
+    let ghost = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-GOV-1",
+            SCHEMA_SIGNED_CHECKPOINT,
+            Hash512([0x77; 64]),
+            None,
+        ),
+    );
+    let (_, filed) = filing(DisputeType::Other, B1, Hash512([0x31; 64]), 0x32);
+    book.w(filed);
+    let unstamped_kind = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-GOV-1",
+            SCHEMA_WITNESSED_EVENT,
+            object_hash(filed),
+            None,
+        ),
+    );
+    let decided = decision(Hash512([0x41; 64]), TallyEffect::NoEffect);
+    let before_target = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-FREE-1",
+            SCHEMA_WITNESSED_EVENT,
+            object_hash(decided),
+            None,
+        ),
+    );
+    book.w(decided);
+    // The checkpoint under another schema.
+    let wrong_schema = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-FREE-1",
+            SCHEMA_SIGNED_GENESIS,
+            object_hash(checkpoint),
+            None,
+        ),
+    );
+    // An authority the genesis does not pin is refused first.
+    let unknown = push(
+        &mut book,
+        record_for(
+            election(),
+            "TSA-UNKNOWN",
+            SCHEMA_SIGNED_CHECKPOINT,
+            object_hash(checkpoint),
+            None,
+        ),
+    );
+    // The same notes over events that are stamped and earlier are notes.
+    let answered_not = [
+        push(
+            &mut book,
+            record_for(
+                election(),
+                "TSA-GOV-1",
+                SCHEMA_SIGNED_CHECKPOINT,
+                object_hash(checkpoint),
+                None,
+            ),
+        ),
+        push(
+            &mut book,
+            record_for(
+                election(),
+                "TSA-GOV-2",
+                SCHEMA_WITNESSED_EVENT,
+                object_hash(decided),
+                None,
+            ),
+        ),
+    ];
+    let c = chain(&book);
+    let got: Vec<(u64, TimestampProblem)> = c
+        .timestamps()
+        .refusals()
+        .iter()
+        .map(|r| (r.frame.get(), r.problem))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (ghost, TimestampProblem::Target),
+            (unstamped_kind, TimestampProblem::Target),
+            (before_target, TimestampProblem::Target),
+            (wrong_schema, TimestampProblem::Target),
+            (unknown, TimestampProblem::Authority),
+        ]
+    );
+    let notes: Vec<u64> = c
+        .timestamps()
+        .unanswered()
+        .iter()
+        .map(|u| u.frame.get())
+        .collect();
+    assert_eq!(notes, answered_not);
+    assert!(c.timestamps().tokens().is_empty());
+    assert_eq!(c.holds(), HoldSetOf::one(HoldReason::TimestampInvalid));
+    // The notes alone hold nothing.
+    let mut book = Book::new(world());
+    book.checkpoint_bare_at(B);
+    let checkpoint = last(&book);
+    book.w(decided);
+    for (authority, schema, target) in [
+        (
+            "TSA-GOV-1",
+            SCHEMA_SIGNED_CHECKPOINT,
+            object_hash(checkpoint),
+        ),
+        ("TSA-FREE-1", SCHEMA_WITNESSED_EVENT, object_hash(decided)),
+        (
+            "TSA-GOV-2",
+            SCHEMA_SIGNED_GENESIS,
+            object_hash(book.ledger.events[0]),
+        ),
+    ] {
+        push(
+            &mut book,
+            record_for(election(), authority, schema, target, None),
+        );
+    }
+    let c = chain(&book);
+    assert!(c.timestamps().refusals().is_empty());
+    assert_eq!(c.timestamps().unanswered().len(), 3);
+    assert!(c.holds().is_empty());
+}
+
 /// `HoldSet` with one reason.
 struct HoldSetOf;
 

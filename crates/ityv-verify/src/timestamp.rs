@@ -17,8 +17,9 @@
 //! token verifies (`ityv_tsa::verify_token`) under one of the authority's
 //! pins over the imprint SHA-512 of the stamped event's object hash
 //! (ADR-0034 §3). A record without a token is the operator's note that the
-//! authority did not answer: listed, not a hold. A record that cannot be
-//! taken is listed and holds the ledger ([`HoldReason::TimestampInvalid`]).
+//! authority did not answer: listed, not a hold, once its authority and
+//! target pass the same checks. A record that cannot be taken is listed
+//! and holds the ledger ([`HoldReason::TimestampInvalid`]).
 //!
 //! The time of a taken token is the latest instant its authority's
 //! assertion allows: `genTime` plus the token's accuracy, or plus the
@@ -363,6 +364,14 @@ impl<'a> TimestampStage<'a> {
     }
 }
 
+/// Whether `schema` is one a timestamp record can name: a signed
+/// checkpoint, a signed genesis or amendment, or a witnessed event.
+fn stamped_schema(schema: SchemaId) -> bool {
+    schema == SCHEMA_SIGNED_CHECKPOINT
+        || schema == SCHEMA_SIGNED_GENESIS
+        || schema == SCHEMA_WITNESSED_EVENT
+}
+
 /// Whether `event` is of a kind that is stamped (ADR-0034 §2, VC-117): a
 /// signed checkpoint, a signed genesis or amendment, or a witnessed legal
 /// decision, roll freeze or custody receipt (ADR-0040).
@@ -441,8 +450,13 @@ pub fn verify_timestamps<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
 ) -> TimestampStage<'a> {
-    let events: BTreeMap<[u8; 64], &IndexedEvent<'a>> =
-        index.events().iter().map(|e| (e.hash.0, e)).collect();
+    // Only events of the three schemas a record can name (VC-117).
+    let events: BTreeMap<[u8; 64], &IndexedEvent<'a>> = index
+        .events()
+        .iter()
+        .filter(|e| stamped_schema(e.schema))
+        .map(|e| (e.hash.0, e))
+        .collect();
     let mut stage = TimestampStage {
         tokens: Vec::new(),
         by_target: BTreeMap::new(),
@@ -478,19 +492,21 @@ pub fn verify_timestamps<'a>(
             stage.refusals.push(refuse(TimestampProblem::Authority));
             continue;
         };
+        // The target first, with or without a token: a note that the
+        // authority did not answer names an event as a token would.
+        let target = events.get(&p.target_hash.0).filter(|t| {
+            t.schema == p.target_schema && t.seq.get() < event.seq.get() && stamped_kind(t)
+        });
+        let Some(target) = target else {
+            stage.refusals.push(refuse(TimestampProblem::Target));
+            continue;
+        };
         let Some(token) = p.token else {
             stage.unanswered.push(Unanswered {
                 frame: event.seq,
                 authority: p.authority_id,
                 target: p.target_hash,
             });
-            continue;
-        };
-        let target = events.get(&p.target_hash.0).filter(|t| {
-            t.schema == p.target_schema && t.seq.get() < event.seq.get() && stamped_kind(t)
-        });
-        let Some(target) = target else {
-            stage.refusals.push(refuse(TimestampProblem::Target));
             continue;
         };
         let imprint = Imprint::of(DigestAlgorithm::Sha512, p.target_hash.as_bytes());
