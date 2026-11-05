@@ -93,6 +93,15 @@ pub enum DayEvent {
         /// Slot offset from opening.
         at: u64,
     },
+    /// The scanner of box `index` reads every `every`-th ballot that marks
+    /// a candidate as `UNREADABLE` (a faint mark): the paper is a valid
+    /// vote for that candidate. A ballot-level audit finds these as code 3.
+    Faint {
+        /// Box index at the station.
+        index: usize,
+        /// Every how many such ballots.
+        every: usize,
+    },
     /// The scanner of box `index` is out from slot offset `from` to `to`
     /// (exclusive): its ballots go through the emergency slot without a
     /// record, and the station's alarms stop until close.

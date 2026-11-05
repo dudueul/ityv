@@ -11,7 +11,7 @@
 | `config` | genesis에서 호스트가 만드는 선거 구성: 투표양식(최대 4,096개, ID 오름차순, 이진 탐색), 모듈(챔버당 하나, 최대 7개; 정당 챔버 P1…Pn(2 ≤ n ≤ 4)은 자체 모듈만 쓰고 위임하지 않으며 n 밖의 정당 챔버는 모듈도 구성원도 없음, J·A·C는 자체 또는 중립 위임, N은 없음)과 모듈 공개키(Ed25519 기록 키, 하이브리드 배치 키), 신뢰기관 명부, 접근구조, `VOTER_CODE`. 투표함 단위 패드 소비 `b`를 검증 시 고정한다 | ADR-0017 §2, §12, 개정 1·10·16·17, ADR-0019 |
 | `link` | 해석 유닛 링크 `Interpretation`(0x0101)과 방문 끝 알림 `VisitEnd`(0x0104), 현장 증명 도전값 `AttestChallenge`(0x0105), 모듈 링크 `ModuleIssue`(0x0103), 봉인 저널 `JournalEntry`(0x0014, 종류 1–9), 방문 결정 다이제스트 `visit_digest` | ENCODING.md §8.19, ADR-0021 |
 | `port` | 호스트 trait `ModulePort`(발급 `issue(k)`, 패드 봉인, 기록 서명, 배치 구간 확인 `check_batch`, 배치 서명, 현장 증명 진술 `attest`)·`JournalSink`(내구 추가와 미뤄 쓰기)·`JournalSource`(재개 시 읽기)·`StagingPort`(방문의 기록·share 패키지 보관), 모듈의 서명 규칙 `module_may_sign_batch`(VC-021)·`module_may_sign_record`(카운터당 본문 하나, VC-068) | ADR-0017 §3, §7–§8, 개정 6·11·18 |
-| `rng` | SHA3-512 카운터 모드 생성기 `DeviceRng`(표 생성기: 장치 시드와 모든 모듈의 비공개 기여로 시드, 작업 영역 안에서 재시드; 서명 생성기: 장치 시드) | ADR-0017 §12 |
+| `rng` | SHA3-512 카운터 모드 생성기 `DeviceRng`(표 생성기: 장치 시드와 모든 모듈의 비공개 기여로 시드, 작업 영역 안에서 재시드; 서명 생성기: 장치 시드) | `rng.rs` 모듈 문서(이 생성기를 정한 ADR은 없다) |
 | `ballot` | 표 작업 영역 `BallotWork`, 위치별 typestate `Interpreted → Issued → Committed → Built → bind`, share 패키지·투함 기록 | PROTOCOL.md §7.3 1–5단계, §9, 개정 3–5·18 |
 | `visit` | 방문 작업 영역 `VisitWork`, 방문 typestate `ReadyVisit → DecidedVisit → ProcessedVisit`, 결정과 저널, 각인 명령, 확인 공개, 라벨 스티커, 슬립, 방문 포기 | PROTOCOL.md §7.3 6–11단계, §7.7, §8, ADR-0021, 개정 18 |
 | `boxstate` | `OpenBox`: 카운터 최고값, 저널 사슬, 배치 마감(`BatchAttest`), 스캔 카운터 본문, 고장 고정, 마감(`BoxCloseBody` + 장치 서명 + VC-038 판정 + 투표함에 묶인 토큰), `ClosedBox` | PROTOCOL.md §7.2.1, §7.8, §10.2, 개정 5–9·19·22 |

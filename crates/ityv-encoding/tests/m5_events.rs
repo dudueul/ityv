@@ -679,9 +679,19 @@ fn witnessed_event_vectors() {
     let mut b = bytes.clone();
     b[c1_role_at] = EventRole::Observer.code();
     v.push(invalid("one clerk", b, "InvariantViolation", sigs_at));
+    // Version 3 (ADR-0036): role 10 is the auditor, who signs no box
+    // opening; role 11 is no role.
     let mut b = bytes.clone();
-    b[c1_role_at] = 10;
-    v.push(invalid("role 10", b, "ValueOutOfRange", c1_role_at));
+    b[c1_role_at] = EventRole::Auditor.code();
+    v.push(invalid(
+        "auditor on a box opening (version 3)",
+        b,
+        "InvariantViolation",
+        sigs_at,
+    ));
+    let mut b = bytes.clone();
+    b[c1_role_at] = 11;
+    v.push(invalid("role 11", b, "ValueOutOfRange", c1_role_at));
     let mut b = bytes.clone();
     b[c1_role_at] = EventRole::Commission.code();
     v.push(invalid(
@@ -946,12 +956,13 @@ fn genesis_entries() {
         (3, RosterRole::Custodian),
         (4, RosterRole::Authority),
         (5, RosterRole::Chair),
+        (6, RosterRole::Auditor),
     ] {
         assert_eq!(RosterRole::from_code(code), Some(role));
         assert_eq!(role.code(), code);
     }
     assert_eq!(RosterRole::from_code(0), None);
-    assert_eq!(RosterRole::from_code(6), None);
+    assert_eq!(RosterRole::from_code(7), None);
     let _ = patterned::<1>(0);
 }
 
@@ -971,7 +982,7 @@ fn every_role_code() {
     for code in 0u8..=255 {
         match EventRole::from_code(code) {
             Some(role) => assert_eq!(role.code(), code),
-            None => assert!(code == 0 || code > 9),
+            None => assert!(code == 0 || code > 10),
         }
     }
 }

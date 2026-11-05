@@ -24,12 +24,12 @@ export const LADDER = [
   {
     word: "CRYPTO_TALLY_VERIFIED",
     means: "그 위에 참여 장부와 모든 단위의 집계(범위, 합계 열기, 종이 보고 대조)가 통과했다.",
-    not: "종이 표본 감사가 끝났다는 뜻도, 법적으로 확정되었다는 뜻도 아니다. 현재 검증기가 줄 수 있는 가장 높은 상태다.",
+    not: "종이 표본 감사가 끝났다는 뜻도, 법적으로 확정되었다는 뜻도 아니다.",
   },
   {
     word: "PAPER_AUDITED",
-    means: "그 위에 표본 감사의 종이 대조가 규칙대로 끝났다.",
-    not: "법적 확정이 아니다. 현재 검증기에는 감사 단계(§14 8항)가 없어 이 상태에 닿지 않는다.",
+    means: "그 위에 투표양식마다 표본 감사(동결, 약정, 시드, 표본, 종이 대조, 확대, 수검표)가 끝났다는 것을 검증기가 장부와 호출자가 본 비콘 공표에서 계산했다.",
+    not: "법적 확정이 아니다. 선언된 표본 크기와 상한이 위험 한도 공식에서 나온 값인지, 비콘 값과 주사위 기록이 사실인지, 감사인의 판정이 옳은지는 검증 범위 밖이다(ADR-0036 한계).",
   },
 ] as const;
 
@@ -41,9 +41,10 @@ export const HOLD_MEANS =
 export const LEGAL_MEANS =
   "기계가 판정하는 상태가 아니다(VC-049). 이 콘솔은 분쟁에 붙은 법적 결정 참조(LegalDecisionRef)의 건수만 보이며 그 내용은 보이지도 확인하지도 않는다.";
 
-/** What no bundle reaches in this base, said on every ladder. */
+/** What no bundle reaches, and what PAPER_AUDITED needs, said on every
+ * ladder. */
 export const NOT_REACHABLE =
-  "PAPER_AUDITED: 이 기반의 검증기에는 감사 단계(PROTOCOL §14 8항)가 아직 구현되지 않아 어떤 번들도 닿지 않는다. LEGAL_CERTIFIED: 기계가 닿는 상태가 아니다. 지금 줄 수 있는 가장 높은 상태는 CRYPTO_TALLY_VERIFIED다.";
+  "LEGAL_CERTIFIED: 기계가 닿는 상태가 아니다(VC-049). PAPER_AUDITED에는 감사까지 실린 장부와 호출자가 본 비콘 공표가 함께 있어야 닿는다. 이 콘솔이 넘기는 비콘 관찰은 시뮬레이터가 만든 시연용 고정 자료다.";
 
 /** The verifier's steps as `verify_ledger` hands them to the status rule. */
 export const STEPS: Record<string, string> = {
@@ -55,7 +56,7 @@ export const STEPS: Record<string, string> = {
   Records: "5. 투함 기록",
   Participation: "6. 참여 장부",
   Tally: "7. 집계",
-  Audit: "8. 감사 (아직 구현 안 됨)",
+  Audit: "8. 감사 (표본 대조)",
   Connectivity: "11. 연결 (아직 구현 안 됨)",
   Software: "12. 소프트웨어 (아직 구현 안 됨)",
 };
@@ -76,6 +77,57 @@ export const STAGES: Record<string, string> = {
   participation: "참여 장부",
   tally: "집계",
   disputes: "분쟁",
+  audit: "감사",
+};
+
+/** The audit events (ityv-verify `AuditEvent`). */
+export const AUDIT_EVENTS: Record<string, string> = {
+  Freeze: "동결",
+  Commit: "약정",
+  Seed: "시드",
+  Opening: "열기 흔적",
+  Comparison: "대조",
+  Finding: "발견",
+  HandCount: "수검표",
+};
+
+/** Why the audit stage refused an event (ityv-verify `AuditRefusal`). */
+export const AUDIT_REFUSALS: Record<string, string> = {
+  Signature: "서명이 맞지 않거나 등록된 역할·조직이 아니다",
+  Capability: "법적 승인에 그 날의 권한(RLA, OBSERVER_ACCESS)이 없다",
+  Subject: "감사에 없는 대상(투표양식, 단위, 기록, 장치)",
+  Premature: "너무 이르다(앞서야 할 이벤트가 아직 없다)",
+  Checkpoint: "고정 체크포인트(약정을 덮는 첫 체크포인트)가 아니다",
+  Beacon: "비콘 지정·회차가 다르거나, 관찰한 비콘 값과 다르다",
+  Late: "늦다: 비콘 값을 알 수 있게 된 뒤에 입력이 고정되었다",
+  Backdated: "고정 체크포인트가 그것이 덮는 약정보다 이르다",
+  Rule: "상한이 표본 크기 이상인 라운드(모든 표본이 통과한다)",
+  Election: "다른 선거",
+  Commit: "약정과 다른 주사위 기록",
+  Freezes: "동결 root가 받아들인 동결과 다르다",
+  Recompute: "다시 계산한 시드와 다르다",
+  NotCalled: "감사가 부르지 않은 기록의 열기(선택을 드러낸다)",
+  Opening: "받아들인 열기가 아닌 열기를 적었다",
+  Repeated: "이미 받은 본문의 반복",
+  Conflict: "같은 대상에 다른 본문(충돌)",
+};
+
+/** The comparison reason codes 0–6 (PROTOCOL §12.3). */
+export const COMPARISON_CODES: string[] = [
+  "0 일치",
+  "1 다른 후보",
+  "2 후보 → 종이는 무효",
+  "3 판독 불가 → 종이는 유효",
+  "4 공백 → 종이는 유효",
+  "5 투표지 없음",
+  "6 각인 불일치",
+];
+
+/** The phase of a style's audit (ityv-state `AuditPhase`). */
+export const PHASES: Record<string, string> = {
+  Sampling: "표본 대조 중",
+  Concluded: "종료",
+  HandCount: "수검표",
 };
 
 /** Hold reasons by code (ityv-state `HoldReason`), with a Korean
@@ -142,6 +194,17 @@ export const HOLDS: Record<number, { name: string; ko: string }> = {
   58: { name: "TallyEffectRefused", ko: "집계 효과가 있는 법적 결정을 적용할 수 없다." },
   59: { name: "ReceiptResolutionRefused", ko: "관외 수령 대조를 받을 수 없다." },
   60: { name: "LateCloseAfterScope", ko: "집계 범위가 그 투표양식을 고정한 뒤에 늦은 마감이 실렸다." },
+  61: { name: "AuditFreezeRefused", ko: "감사 동결을 받을 수 없다: 서명, RLA 권한, 모르는 투표양식, 그 투표양식의 집계 범위보다 이름, 두 번째 동결, 표본을 모두 통과시키는 상한." },
+  62: { name: "AuditFrameMismatch", ko: "동결의 표본 프레임(기록 수나 정렬 집합 root)이 집계 단계가 다시 계산한 포함 기록과 다르다. 그 투표양식은 표본을 뽑지 않는다." },
+  63: { name: "AuditSeedRefused", ko: "감사 시드를 받을 수 없다: 서명, 권한, 약정보다 이름, 고정 체크포인트가 아님, 고정 체크포인트가 약정보다 이르거나 비콘 공표보다 3구간 넘게 앞서지 않음, 약정과 다른 주사위 기록·회차, 다시 계산한 시드나 관찰한 비콘 값과 다름, 두 번째 시드." },
+  64: { name: "SampleOpeningRefused", ko: "표본 열기 흔적을 받을 수 없다: 신뢰기관 정족수, 시드 날의 OBSERVER_ACCESS, 시드보다 이름, 감사가 부르지 않은 기록(지금 라운드의 표본도 전수 대조 장치의 기록도 아님), 같은 기록의 두 번째 열기." },
+  65: { name: "SampleOpeningMismatch", ko: "열람 권한이 있는 검증기에 넘긴 제한 열기가 그 기록의 커밋먼트를 열지 못한다." },
+  66: { name: "SampleComparisonRefused", ko: "표본 대조를 받을 수 없다: 감사인·참관인 서명, 앞 프레임에 그 기록의 열기 흔적이 없음, 다른 열기를 적음, 기록의 투표함이 아닌 장치, 같은 기록의 두 번째 대조." },
+  67: { name: "AuditCustody", ko: "대조에서 각인된 cast id의 투표지가 없거나(코드 5) 두 장이거나 각인이 기록과 다르다(코드 6). 그 투표함의 보관을 조사한다." },
+  68: { name: "AuditFindingRefused", ko: "감사 발견을 받을 수 없다: 서명, 그 투표양식의 투표함이 아닌 장치, 같은 발견의 반복." },
+  69: { name: "HandCountRefused", ko: "수검표 보고를 받을 수 없다: 그 단위 위원장·참관인의 서명, 모르는 단위나 다른 후보 수, 감사가 수검표를 부르기 전, 두 번째 수검표." },
+  70: { name: "AuditCommitRefused", ko: "감사 약정을 받을 수 없다: 서명, 모든 동결보다 이름, 동결과 다른 비콘 지정·회차, 받아들인 동결과 다른 동결 root, 관찰한 비콘 공표 이후의 시각, 두 번째 약정." },
+  71: { name: "AuditSampleFailed", ko: "시드에서 그 투표양식의 표본을 뽑지 못했다. 일어나지 않을 일이지만 조용히 미완으로 두지 않는다." },
 };
 
 /** Korean name of the alarm kinds. */

@@ -18,6 +18,7 @@
 //! | [`custody`] | Custody chain and seal changes | §10.3, VC-040 |
 //! | [`issuance`] | Issuance and participation identities | `FAILURE_CASES.md` §0 |
 //! | [`tally`] | Tally-scope and aggregate-opening gates, trustee quorum, paper comparison | §11.1, §11.2, §11.5, VC-057, VC-063, VC-075 |
+//! | [`audit`] | Audit gates, audit signers, the escalation rule, the reason-code follow-ups, hand counts | §12, VC-045..047, VC-074 |
 //! | [`dispute`] | Dispute life cycle | §13, VC-048, VC-049 |
 //! | [`status`] | The verifier status vocabulary | §14, VC-049, VC-050 |
 //! | [`progress`] | Progress streams, alarms, observer counts and device swaps | §6.2, §6.3, §7.10, VC-102, VC-103 |
@@ -65,6 +66,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod audit;
 pub mod auth;
 pub mod boxes;
 pub mod close;
@@ -86,6 +88,11 @@ pub mod tally;
 #[path = "../kani/proofs.rs"]
 mod proofs;
 
+pub use audit::{
+    AuditPhase, FollowUp, HandCount, RoundCount, SeedReadiness, admit_audit_commit,
+    admit_audit_finding, admit_audit_freeze, admit_audit_seed, admit_sample_opening, audit_phase,
+    check_audit_signers, follow_up,
+};
 pub use auth::{
     Authorization, BallotMark, Cap, CryptoTallyAid, DeployAuth, ObserverAccess, PURPOSE_LEGAL_AUTH,
     PublicBoard, Rla, ScopeMarker, StageGate, TrusteeBody, VoterCode, authorize, check_scope_rules,

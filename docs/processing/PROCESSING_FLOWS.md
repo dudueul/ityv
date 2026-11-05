@@ -155,10 +155,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     F[AuditManifestFreeze: 포함 집합 root, 규칙] --> D[주사위 추첨 영상 해시]
-    D --> S[AuditSeed = H(dice ‖ beacon ‖ final checkpoint)]
-    B[공개 난수 비콘 회차] --> S
-    C[최종 체크포인트 해시] --> S
-    S --> SAM[SHAKE256 스트림 → 포함 기록 인덱스 표본, 누구나 재계산 VC-046]
+    D --> K[AuditCommit: 주사위 해시, 비콘 지정, 동결 root — 비콘 공표 전]
+    K --> C[고정 체크포인트: 약정을 덮는 첫 유효 체크포인트 — 비콘 공표 전]
+    C --> S[AuditSeed = H(dice ‖ beacon ‖ binding checkpoint)]
+    B[공개 난수 비콘 회차 공표] --> S
+    S --> SAM[SHA3-512 카운터 흐름 → 포함 기록 인덱스 표본, 누구나 재계산 VC-046]
     SAM --> OPEN[정족수: SampleOpening (t, cast_id, r_j) 비공개 열람, 공개는 해시]
     OPEN --> FIND[감사인 2조직: 투표함 개봉, cast_id 판독으로 종이 찾기]
     FIND --> CMP[SampleComparison 사유 코드 0–6]

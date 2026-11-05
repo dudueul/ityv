@@ -6,8 +6,11 @@
 // from the shown report and survives the self-test's redraws; the
 // self-test stops on navigation; the voter app's answer does not depend on
 // the self-test; an unknown device state falls back with a notice; the
-// status badge shows no check until an outside pin is used; malformed URL
-// escapes get 400; the built page works under its CSP.
+// status badge shows no check until an outside pin is used; the audit card
+// shows the seed's inputs, the binding checkpoint's time against the
+// beacon publication (labelled fixture data) and each style's rounds and
+// draws, and verifying without the beacon observation stays at the tally;
+// malformed URL escapes get 400; the built page works under its CSP.
 //
 // Usage: node scripts/races.cjs
 //   ITYV_CONSOLE_URL  a running dev console (default: starts `bun server.ts`)
@@ -300,8 +303,49 @@ run = function (ex, data) {
     });
     check("a wrong outside pin holds, without a check", (await page.$("[data-testid=status] .icon-ok")) === null);
     const ladder = await page.textContent(".hero");
-    check("the ladder says what no bundle reaches", ladder.includes("감사 단계") && ladder.includes("아직 구현되지 않아"));
+    check(
+      "the ladder says what no machine reaches and what PAPER_AUDITED needs",
+      ladder.includes("LEGAL_CERTIFIED: 기계가 닿는 상태가 아니다") && ladder.includes("비콘 공표") && ladder.includes("고정 자료"),
+    );
     check("badge: no page errors", errors.length === 0, errors.join(" | "));
+    await page.close();
+  }
+
+  // 5b. The audit card.
+  {
+    const word = (page) => page.evaluate(() => document.querySelector("[data-testid=status] .status")?.dataset.status ?? "");
+    const { page, errors } = await open(browser, base, "#/dashboard?scenario=audit-clean");
+    await waitStatus(page);
+    check("an audited ledger reaches PAPER_AUDITED", (await word(page)) === "PAPER_AUDITED", await word(page));
+    const card = await page.textContent("[data-testid=audit]");
+    check("the audit card labels the beacon observation as fixture data", (await page.$("[data-testid=beacon-fixture]")) !== null && card.includes("시연용 고정 자료"));
+    const timing = await page.$$eval("[data-testid=audit-timing] li", (xs) => xs.map((x) => !!x.querySelector(".icon-ok")));
+    check("the binding checkpoint precedes the publication by the margin", timing.length === 3 && timing.every(Boolean), JSON.stringify(timing));
+    check("the timeline is drawn", (await page.$("[data-testid=audit] svg.timeline")) !== null);
+    const styles = await page.$$eval("[data-testid=audit] .style-audit", (xs) => xs.map((x) => x.dataset.style));
+    check("every style has its audit", styles.length === 2, styles.join(","));
+    const heads = await page.$$eval("[data-testid=audit] .style-audit table thead", (xs) => xs.map((x) => x.textContent));
+    check(
+      "the drawn records show public information only",
+      heads.some((h) => h.includes("추적코드")) && heads.every((h) => !h.includes("cast id") && !h.includes("난수") && !h.includes("선택지")),
+    );
+    await page.click("input[data-action=beacon]");
+    await page.waitForFunction(() => (document.querySelector("[data-testid=status] .status")?.dataset.status ?? "") === "CRYPTO_TALLY_VERIFIED", null, { timeout: 60000 });
+    check("without the beacon observation the ledger stays at the tally", (await word(page)) === "CRYPTO_TALLY_VERIFIED");
+    check("without the observation the card says so", (await page.textContent("[data-testid=audit]")).includes("비콘 관찰 없이 검증했다"));
+    await page.click("input[data-action=beacon]");
+    await page.waitForFunction(() => (document.querySelector("[data-testid=status] .status")?.dataset.status ?? "") === "PAPER_AUDITED", null, { timeout: 60000 });
+    check("with it again PAPER_AUDITED", (await word(page)) === "PAPER_AUDITED");
+    await page.goto(`${base}#/dashboard?scenario=audit-escalation`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("audit-escalation"), null, { timeout: 60000 });
+    const rounds = await page.$$eval("[data-testid=audit-rounds] tbody tr", (xs) => xs.map((x) => x.textContent));
+    check("an escalation shows the first round exceeded and the second concluded", rounds.some((r) => r.includes("상한 넘음")) && rounds.some((r) => r.includes("종료")), rounds.join(" | "));
+    await page.goto(`${base}#/dashboard?scenario=attack-seed-grinding`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("attack-seed-grinding"), null, { timeout: 60000 });
+    const late = await page.$$eval("[data-testid=audit-timing] li", (xs) => xs.map((x) => !!x.querySelector(".icon-ok")));
+    check("a binding checkpoint two buckets before the publication fails the margin", late.length === 3 && late[2] === false, JSON.stringify(late));
+    check("the grinding seed is refused as late", (await page.textContent("[data-testid=audit-refused]")).includes("Late"));
+    check("audit: no page errors", errors.length === 0, errors.join(" | "));
     await page.close();
   }
 

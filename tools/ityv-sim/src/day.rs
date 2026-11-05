@@ -307,6 +307,7 @@ pub fn simulate(election: &ElectionSpec, station: &StationSpec) -> Day {
                     after_slot: bucket_slots(bucket).1,
                 });
             }
+            DayEvent::Faint { .. } => {}
             DayEvent::Fallback { index, from, to } => {
                 let from_slot = open_slot + from;
                 let to_slot = open_slot + to;
@@ -322,6 +323,17 @@ pub fn simulate(election: &ElectionSpec, station: &StationSpec) -> Day {
     }
 
     let weights: Vec<u64> = station.boxes.iter().map(|b| b.share).collect();
+    // Faint marks: per box, every how many candidate ballots the scanner
+    // reads as UNREADABLE, and how many it has seen.
+    let faint: Vec<Option<usize>> = (0..boxes)
+        .map(|b| {
+            station.events.iter().find_map(|e| match *e {
+                DayEvent::Faint { index, every } if index == b => Some(every),
+                _ => None,
+            })
+        })
+        .collect();
+    let mut faint_seen = vec![0usize; boxes];
     let mut rows: Vec<Row> = Vec::new();
     let mut casts: Vec<Vec<Cast>> = vec![Vec::new(); boxes];
     let mut paper_only: Vec<Vec<Mark>> = vec![Vec::new(); boxes];
@@ -395,7 +407,14 @@ pub fn simulate(election: &ElectionSpec, station: &StationSpec) -> Day {
                     paper_only[p.index].push(p.mark);
                 } else {
                     sheets_in[p.index] += 1;
-                    casts[p.index].push(Cast { slot, mark: p.mark });
+                    let mut mark = p.mark;
+                    if let (Some(every), Mark::Candidate(c)) = (faint[p.index], mark) {
+                        faint_seen[p.index] += 1;
+                        if faint_seen[p.index].is_multiple_of(every) {
+                            mark = Mark::Ambiguous(Some(c));
+                        }
+                    }
+                    casts[p.index].push(Cast { slot, mark });
                 }
             } else {
                 still.push(p);

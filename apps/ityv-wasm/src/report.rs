@@ -6,9 +6,10 @@
 //! through TCB code:
 //!
 //! * the status of each tally unit: the verifier's evidence with box
-//!   completeness and tally narrowed to the unit, and the ledger's whole
-//!   hold set minus only the holds that are attributable to other units'
-//!   boxes alone, handed to `ityv_state::status::evaluate`;
+//!   completeness, tally and audit narrowed to the unit (the audit of its
+//!   ballot style), and the ledger's whole hold set minus only the holds
+//!   that are attributable to other units' boxes, tallies or style audits
+//!   alone, handed to `ityv_state::status::evaluate`;
 //! * each station's progress series: the counts of the ticks the
 //!   progress stage took, `out` from `ityv_state::out_of`;
 //! * each record's inclusion in the first verified checkpoint covering
@@ -35,11 +36,13 @@ use ityv_state::{
     Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport, Step, evaluate, out_of,
 };
 use ityv_verify::{
-    BoxProgressReport, BoxRecords, BoxReport, IndexedEvent, Publications, Report,
-    StationProgressReport, TallyEvent, UnitTally, VerifiedGenesis, verify_genesis, verify_ledger,
+    AuditInput, BeaconObservation, BoxProgressReport, BoxRecords, BoxReport, IndexedEvent,
+    Publications, Report, StationProgressReport, UnitTally, VerifiedGenesis, verify_genesis,
+    verify_ledger_with,
 };
 
-use crate::bundle::{Bundle, decode};
+use crate::audit::{refusal_rows, refused_holds, style_concluded, style_holds, write_audit};
+use crate::bundle::{BeaconInput, Bundle, decode};
 use crate::inclusion::Tree;
 use crate::json::Json;
 
@@ -117,7 +120,7 @@ pub fn fingerprint_of(bytes: &[u8]) -> String {
     fingerprint(&h.finish())
 }
 
-fn holds_json(j: &mut Json, key: &str, holds: HoldSet) {
+pub(crate) fn holds_json(j: &mut Json, key: &str, holds: HoldSet) {
     j.array(key);
     for h in holds.iter() {
         j.begin_object();
@@ -161,22 +164,6 @@ const fn step_name(s: Step) -> &'static str {
     }
 }
 
-/// The hold a refused tally event puts on the ledger: a copy of
-/// `ityv_verify::tally::refusal_hold`, which is private (follow-up:
-/// expose it; `tools/ityv-sim/tests` pins this copy to the verifier's
-/// observable outcome for every refusal the scenarios produce).
-#[must_use]
-pub const fn tally_refusal_hold(event: TallyEvent) -> HoldReason {
-    match event {
-        TallyEvent::Receipt => HoldReason::ReceiptResolutionRefused,
-        TallyEvent::Decision => HoldReason::TallyEffectRefused,
-        TallyEvent::Scope => HoldReason::TallyScopeRefused,
-        TallyEvent::Opening => HoldReason::AggregateRefused,
-        TallyEvent::Paper => HoldReason::PaperCountRefused,
-        TallyEvent::LateClose => HoldReason::LateCloseAfterScope,
-    }
-}
-
 /// The report and the bundle's identity.
 #[derive(Debug)]
 pub struct Verification {
@@ -202,10 +189,13 @@ fn publications(b: &Bundle<'_>) -> Publications {
 }
 
 /// Verifies `bytes` (a development bundle) with the bundle's pin, or with
-/// `pin` when the caller gives one, and writes the report. Never panics on
-/// any input (`tools/ityv-sim/tests` runs it over mutated bundles).
+/// `pin` when the caller gives one, and writes the report. With `beacon`,
+/// the bundle's beacon observation (fixture data), if it has one, is
+/// handed to the verifier's audit stage as the caller's observation;
+/// without it the audit cannot conclude. Never panics on any input
+/// (`tools/ityv-sim/tests` runs it over mutated bundles).
 #[must_use]
-pub fn verify(bytes: &[u8], pin: Option<Hash512>) -> Verification {
+pub fn verify(bytes: &[u8], pin: Option<Hash512>, beacon: bool) -> Verification {
     let mut j = Json::new();
     j.begin_object();
     j.str("format", "ityv-console-report/2");
@@ -251,13 +241,23 @@ pub fn verify(bytes: &[u8], pin: Option<Hash512>) -> Verification {
             return Verification { json: j.finish() };
         }
     };
-    let report = verify_ledger(
+    let observation = bundle.beacon.filter(|_| beacon);
+    let input = AuditInput {
+        beacon: observation.map(|b| BeaconObservation {
+            round: b.round,
+            output: b.output,
+            published: TimeBucket::new(b.published),
+        }),
+        openings: &[],
+    };
+    let report = verify_ledger_with(
         &genesis,
         bundle.frames,
         &bundle.events,
         publications(&bundle),
+        &input,
     );
-    write_report(&mut j, &genesis, &bundle, &report);
+    write_report(&mut j, &genesis, &bundle, &report, observation);
     j.end_object();
     Verification { json: j.finish() }
 }
@@ -324,7 +324,7 @@ impl<'r, 'a> Lookup<'r, 'a> {
 
     /// The holds on the whole ledger, not on one box or unit: the index's
     /// ledger holds, the authorization, checkpoints, participation,
-    /// disputes and refused tally events, and every hold of a box or
+    /// disputes, refused tally and audit events, and every hold of a box or
     /// station the genesis's last state does not have (an amendment
     /// removed it).
     #[must_use]
@@ -334,7 +334,7 @@ impl<'r, 'a> Lookup<'r, 'a> {
             .tally()
             .refused()
             .iter()
-            .fold(HoldSet::empty(), |h, x| h.with(tally_refusal_hold(x.event)));
+            .fold(HoldSet::empty(), |h, x| h.with(x.event.hold()));
         let removed_boxes = self
             .boxes
             .keys()
@@ -353,6 +353,7 @@ impl<'r, 'a> Lookup<'r, 'a> {
             .union(r.participation().holds())
             .union(r.disputes().holds())
             .union(tally)
+            .union(refused_holds(r))
             .union(removed_boxes)
             .union(removed_stations)
     }
@@ -384,9 +385,10 @@ pub struct UnitStatus {
 }
 
 /// The status of every tally unit of `report`: the ledger's evidence with
-/// box completeness (the unit has boxes and every one is closed) and the
-/// tally narrowed to the unit, and the ledger's whole hold set minus the
-/// reasons that only boxes or tallies of other units carry.
+/// box completeness (the unit has boxes and every one is closed), the
+/// tally and the audit (its ballot style's audit concluded) narrowed to the
+/// unit, and the ledger's whole hold set minus the reasons that only boxes,
+/// tallies or style audits of other units carry.
 #[must_use]
 pub fn unit_statuses(
     genesis: &VerifiedGenesis<'_>,
@@ -405,9 +407,10 @@ pub fn unit_statuses(
         .iter()
         .map(|u| {
             let boxes = unit_boxes(genesis, u);
-            let holds = boxes
-                .iter()
-                .fold(u.holds, |h, id| h.union(look.box_holds(id)));
+            let own = u
+                .holds
+                .union(style_holds(report, u.ballot_style_id.as_bytes()));
+            let holds = boxes.iter().fold(own, |h, id| h.union(look.box_holds(id)));
             (boxes, holds)
         })
         .collect();
@@ -460,6 +463,14 @@ pub fn unit_statuses(
                     Outcome::NotRun
                 },
             )
+            .with_step(
+                Step::Audit,
+                if style_concluded(report, u.ballot_style_id.as_bytes()) {
+                    Outcome::Passed
+                } else {
+                    Outcome::NotRun
+                },
+            )
             .with_anchors(publications.anchors)
             .with_board(publications.board)
             .with_holds(holds);
@@ -473,7 +484,7 @@ pub fn unit_statuses(
         .collect()
 }
 
-fn text(bytes: &[u8]) -> String {
+pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
@@ -482,6 +493,7 @@ fn write_report(
     genesis: &VerifiedGenesis<'_>,
     bundle: &Bundle<'_>,
     report: &Report<'_>,
+    observation: Option<BeaconInput<'_>>,
 ) {
     let status = report.status();
     let pubs = publications(bundle);
@@ -536,6 +548,7 @@ fn write_report(
     write_progress(j, genesis, &look);
     write_participation(j, report);
     write_disputes(j, report);
+    write_audit(j, report, observation, bundle.beacon.is_some());
     write_records(j, report);
 }
 
@@ -768,6 +781,9 @@ fn write_refused(j: &mut Json, bundle: &Bundle<'_>, report: &Report<'_>) {
     }
     for s in report.disputes().refused() {
         list.push((s.get(), "disputes", "Refused".to_owned()));
+    }
+    for (seq, reason) in refusal_rows(report) {
+        list.push((seq, "audit", reason));
     }
     list.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
     list.dedup();

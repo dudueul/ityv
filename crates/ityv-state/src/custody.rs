@@ -173,7 +173,8 @@ impl<'a> CustodyChain<'a> {
                 | EventRole::Committee
                 | EventRole::Authority
                 | EventRole::Device
-                | EventRole::Chair => return Err(Error::NotRegistered),
+                | EventRole::Chair
+                | EventRole::Auditor => return Err(Error::NotRegistered),
             };
             if s.signer_id.as_bytes() != id.as_bytes() || s.org_id.as_bytes() != org.as_bytes() {
                 return Err(Error::NotRegistered);

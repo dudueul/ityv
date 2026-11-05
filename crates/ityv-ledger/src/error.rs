@@ -3,6 +3,8 @@
 //! Errors carry no heap data and no secrets: a position, a count or a
 //! classification, never the bytes that failed.
 
+use ityv_encoding::Seq;
+
 use crate::publication::Breach;
 
 /// Which diversity dimension of the witness policy was short.
@@ -61,6 +63,27 @@ pub enum Error {
     LedgerMismatch,
     /// A checkpoint claims fewer leaves than its predecessor.
     TreeShrank,
+    /// A checkpoint's time bucket is below its predecessor's (VC-012).
+    TimeWentBack,
+    /// A checkpoint's time bucket is outside the witness's clock window
+    /// (`WITNESS_TIME_TOLERANCE`, VC-012).
+    TimeOutOfWindow,
+    /// A published checkpoint is timed past what an honest quorum could
+    /// have attested by the adopting witness's clock (`now +
+    /// CLOCK_ERROR_BUCKETS`): an alarm for the host.
+    TimeAhead,
+    /// The witness's memory is empty: a witness whose memory was lost or
+    /// rolled back cannot adopt; it counts in `f` for the election.
+    NoMemory,
+    /// Split view (VC-065): the published checkpoint after sequence number
+    /// `seq` builds on another body than the one this witness signed or
+    /// adopted there. The evidence is the witness's own body at `seq` (its
+    /// memory, unchanged, keeps that body's hash) and the quorum-signed
+    /// successor, whose previous hash names the other body.
+    SplitView {
+        /// The sequence number of the two bodies.
+        seq: Seq,
+    },
     /// A checkpoint is bound to a different genesis.
     GenesisMismatch,
     /// A checkpoint root does not equal its recomputation.
@@ -150,6 +173,13 @@ impl core::fmt::Display for Error {
             Self::ElectionMismatch => f.write_str("election identifier differs"),
             Self::LedgerMismatch => f.write_str("election, ledger or key-set identifier differs"),
             Self::TreeShrank => f.write_str("tree size decreased"),
+            Self::TimeWentBack => f.write_str("time bucket decreased"),
+            Self::TimeOutOfWindow => f.write_str("time bucket outside the witness's clock window"),
+            Self::TimeAhead => f.write_str("time bucket past what an honest quorum could attest"),
+            Self::NoMemory => f.write_str("the witness memory is empty"),
+            Self::SplitView { seq } => {
+                write!(f, "split view at checkpoint {}", seq.get())
+            }
             Self::GenesisMismatch => f.write_str("genesis hash differs"),
             Self::RootMismatch(root) => write!(f, "{root:?} root does not match"),
             Self::TornTail { offset } => write!(f, "torn tail at offset {offset}"),

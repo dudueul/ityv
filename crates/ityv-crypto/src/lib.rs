@@ -13,6 +13,7 @@
 //! | [`orproof`] | 1-of-(m+2) OR proof of representation | PROTOCOL.md §7.5 |
 //! | [`shares`] | chamber access structure, linear secret sharing | PROTOCOL.md §9.2 |
 //! | [`otmac`], [`pad`] | Poly1305 one-time MAC, one-time pad XOR | PROTOCOL.md §9.3, §9.4 |
+//! | [`sample`] | audit seed, the public sample stream, uniform draws by rejection | PROTOCOL.md §12.1, §12.2 |
 //!
 //! Properties that hold by construction:
 //!
@@ -62,6 +63,7 @@ pub mod kem;
 pub mod orproof;
 pub mod otmac;
 pub mod pad;
+pub mod sample;
 pub mod scalar;
 pub mod shares;
 pub mod sig;
@@ -93,6 +95,7 @@ pub use otmac::{
     OneTimeKey, Tag as OneTimeTag, tag as one_time_tag, verify_tag as verify_one_time_tag,
 };
 pub use pad::xor_in_place;
+pub use sample::{SampleStream, accept_limit, audit_seed, beacon_value};
 pub use scalar::Scalar;
 pub use shares::{
     AccessStructure, CHAMBER_COUNT, Chamber, MAX_MEMBERS, MAX_PARTIES, MIN_PARTIES, MemberId,

@@ -45,10 +45,11 @@ pub mod verified;
 mod proofs;
 
 pub use checkpoint::{
-    LastSigned, MAX_BODY_LEN, MAX_SIGNATURES, MAX_WITNESS_ID_LEN, SCHEMA_SIGNED_CHECKPOINT,
-    SCHEMA_WITNESS_MEMORY, SIGNATURE_LEN, Signable, Signatures, SignedCheckpoint,
-    SignedCheckpointParts, Successor, WitnessMemory, WitnessSignatureEntry, WitnessSignatureRef,
-    validate_successor,
+    CLOCK_ERROR_BUCKETS, LastSigned, MAX_BODY_LEN, MAX_SIGNATURES, MAX_WITNESS_ID_LEN,
+    SCHEMA_SIGNED_CHECKPOINT, SCHEMA_VERSION_WITNESS_MEMORY, SCHEMA_WITNESS_MEMORY, SIGNATURE_LEN,
+    Signable, Signatures, SignedCheckpoint, SignedCheckpointParts, SplitEvidence, Successor,
+    WITNESS_TIME_TOLERANCE, WitnessMemory, WitnessSet, WitnessSignatureEntry, WitnessSignatureRef,
+    validate_successor, witness_time_ok,
 };
 pub use error::{Dimension, Error, Root};
 pub use frame::{

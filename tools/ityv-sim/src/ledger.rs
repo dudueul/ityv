@@ -10,8 +10,7 @@
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     CheckpointBody, CheckpointParts, Hash512, KeysetId, LedgerFrame, LedgerId, SCHEMA_BOX_CLOSE,
-    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_VERSION_1, SchemaId, Seq, TimeBucket,
-    TreeSize,
+    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SchemaId, Seq, TimeBucket, TreeSize,
 };
 use ityv_ledger::{
     SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry, root_of_leaves,
@@ -85,6 +84,9 @@ pub struct Ledger {
     pub events: Vec<&'static [u8]>,
     /// The last checkpoint's time bucket, if any.
     pub last_checkpoint_bucket: Option<u64>,
+    /// The last checkpoint's body hash (what an audit seed names as its
+    /// binding checkpoint), if any.
+    pub last_checkpoint_hash: Option<Hash512>,
     /// Frames.
     pub size: u64,
 }
@@ -112,7 +114,7 @@ impl Book<'_> {
             schema,
             object_hash(event),
         );
-        let bytes = object(SCHEMA_LEDGER_FRAME, SCHEMA_VERSION_1, &frame);
+        let bytes = object(SCHEMA_LEDGER_FRAME, &frame);
         let hash = object_hash(bytes);
         self.prev = hash;
         self.stream
@@ -147,7 +149,7 @@ impl Book<'_> {
             time_bucket: TimeBucket::new(bucket),
         })
         .unwrap();
-        let body = object(SCHEMA_CHECKPOINT_BODY, SCHEMA_VERSION_1, &body);
+        let body = object(SCHEMA_CHECKPOINT_BODY, &body);
         let entries: Vec<WitnessSignatureEntry<'static>> = SIGNERS
             .iter()
             .map(|&i| WitnessSignatureEntry {
@@ -156,7 +158,7 @@ impl Book<'_> {
             })
             .collect();
         let signed = SignedCheckpointParts::new(body, leak_slice(entries)).unwrap();
-        let event = object(SCHEMA_SIGNED_CHECKPOINT, SCHEMA_VERSION_1, &signed);
+        let event = object(SCHEMA_SIGNED_CHECKPOINT, &signed);
         self.previous = self.last.map(|(s, h, _)| (s, h));
         self.last = Some((seq, object_hash(body), size));
         self.bucket = Some(bucket);
@@ -212,5 +214,6 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
         frames: book.stream,
         events: book.events,
         last_checkpoint_bucket: book.bucket,
+        last_checkpoint_hash: book.last.map(|(_, h, _)| h),
     }
 }

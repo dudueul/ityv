@@ -249,7 +249,10 @@ where
                     distinct = distinct.saturating_add(1);
                 }
             }
-            RosterRole::Custodian | RosterRole::Authority | RosterRole::Chair => {
+            RosterRole::Custodian
+            | RosterRole::Authority
+            | RosterRole::Chair
+            | RosterRole::Auditor => {
                 return Err(Error::NotRegistered);
             }
         }
@@ -272,7 +275,8 @@ const fn witness_role(role: EventRole) -> Option<RosterRole> {
         | EventRole::Receiver
         | EventRole::Authority
         | EventRole::Device
-        | EventRole::Chair => None,
+        | EventRole::Chair
+        | EventRole::Auditor => None,
     }
 }
 

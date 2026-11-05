@@ -23,7 +23,7 @@ use ityv_sim::scenarios::{Scenario, Set, scenarios};
 use ityv_sim::util::{Dice, leak_str};
 use ityv_sim::{bundle, genesis, ledger, publications, verify};
 use ityv_state::{HoldReason, Status};
-use ityv_verify::TallyEvent;
+use ityv_verify::{AuditEvent, TallyEvent};
 
 // ---------------------------------------------------------------------
 // A minimal JSON validator (no dependency): the whole text is one value.
@@ -121,7 +121,9 @@ fn valid_json(text: &str) -> bool {
 
 /// Runs the wrapper over `bytes`; it must return, with valid JSON.
 fn wrap(bytes: &[u8]) -> String {
-    let out = catch_unwind(AssertUnwindSafe(|| ityv_wasm::verify(bytes, None).json));
+    let out = catch_unwind(AssertUnwindSafe(|| {
+        ityv_wasm::verify(bytes, None, true).json
+    }));
     let json =
         out.unwrap_or_else(|_| panic!("ityv_wasm::verify panicked on {} bytes", bytes.len()));
     assert!(
@@ -234,7 +236,7 @@ fn counts_whose_sum_overflows_are_reported_not_trapped() {
     let l = ledger(&s);
     let direct = ityv_sim::outcome(&verify(&s, l));
     assert_eq!(direct.0, Status::HoldReview);
-    let v = ityv_wasm::verify(&bundle::encode(&s, l), None);
+    let v = ityv_wasm::verify(&bundle::encode(&s, l), None, true);
     assert!(valid_json(&v.json));
     assert_eq!(v.status(), Some(direct.0.name()));
     assert!(v.json.contains("\"overflow\":true"));
@@ -273,7 +275,7 @@ fn one_box_at_u64_max_is_reported_not_trapped() {
     assert!(replaced > 0);
     let l = ledger(&s);
     let direct = ityv_sim::outcome(&verify(&s, l));
-    let v = ityv_wasm::verify(&bundle::encode(&s, l), None);
+    let v = ityv_wasm::verify(&bundle::encode(&s, l), None, true);
     assert!(valid_json(&v.json));
     assert_eq!(v.status(), Some(direct.0.name()));
     assert!(v.json.contains("\"overflow\":true"));
@@ -298,15 +300,30 @@ fn a_unit_reads_better_than_the_ledger_only_when_every_hold_is_elsewhere() {
                 s.name
             );
             assert!(!u.boxes.is_empty(), "{}: a unit without boxes", s.name);
+            // A unit reads PAPER_AUDITED only when its own style's audit
+            // concluded.
+            if u.status.status() == Status::PaperAudited {
+                let audit = report.audit();
+                assert!(
+                    audit.style(&u.style).is_some_and(|st| audit.concluded(st)),
+                    "{}: unit audited without its style's audit",
+                    s.name
+                );
+            }
             if ledger_status.status() == Status::HoldReview
                 && u.status.status() != Status::HoldReview
             {
                 exercised += 1;
-                // A unit's own reasons: its boxes' and its tally's.
+                // A unit's own reasons: its boxes', its tally's and its
+                // ballot style's audit's.
                 let tallies = report.tally().units();
                 let carries = |k: usize, r: HoldReason| {
                     tallies[k].holds.contains(r)
                         || units[k].boxes.iter().any(|b| look.box_holds(b).contains(r))
+                        || report
+                            .audit()
+                            .style(&units[k].style)
+                            .is_some_and(|st| st.holds.contains(r))
                 };
                 for r in ledger_status.holds().iter() {
                     let elsewhere = (0..units.len()).filter(|k| *k != i).any(|k| carries(k, r));
@@ -328,13 +345,17 @@ fn a_unit_reads_better_than_the_ledger_only_when_every_hold_is_elsewhere() {
     );
 }
 
+/// The console attributes a refused tally or audit event's hold to the
+/// whole ledger through the verifier's own mapping (`TallyEvent::hold`,
+/// `AuditEvent::hold`); every refusal the scenarios produce is held so.
 #[test]
-fn the_copied_tally_refusal_mapping_matches_the_verifier() {
-    let mut seen: Vec<TallyEvent> = Vec::new();
+fn refused_events_hold_what_the_verifier_maps_them_to() {
+    let mut tally: Vec<TallyEvent> = Vec::new();
+    let mut audit: Vec<AuditEvent> = Vec::new();
     for s in scenarios(Set::Quick) {
         let report = verify(&s, ledger(&s));
         for r in report.tally().refused() {
-            let hold = ityv_wasm::tally_refusal_hold(r.event);
+            let hold = r.event.hold();
             assert!(
                 report.status().holds().contains(hold),
                 "{}: {:?} refused but {hold:?} not held",
@@ -342,8 +363,21 @@ fn the_copied_tally_refusal_mapping_matches_the_verifier() {
                 r.event
             );
             assert!(report.tally().holds().contains(hold));
-            if !seen.contains(&r.event) {
-                seen.push(r.event);
+            if !tally.contains(&r.event) {
+                tally.push(r.event);
+            }
+        }
+        for r in report.audit().refused() {
+            let hold = r.event.hold();
+            assert!(
+                report.status().holds().contains(hold),
+                "{}: {:?} refused but {hold:?} not held",
+                s.name,
+                r.event
+            );
+            assert!(report.audit().holds().contains(hold));
+            if !audit.contains(&r.event) {
+                audit.push(r.event);
             }
         }
     }
@@ -353,7 +387,15 @@ fn the_copied_tally_refusal_mapping_matches_the_verifier() {
         TallyEvent::LateClose,
         TallyEvent::Receipt,
     ] {
-        assert!(seen.contains(&kind), "no scenario refuses a {kind:?}");
+        assert!(tally.contains(&kind), "no scenario refuses a {kind:?}");
+    }
+    for kind in [
+        AuditEvent::Commit,
+        AuditEvent::Seed,
+        AuditEvent::Opening,
+        AuditEvent::Comparison,
+    ] {
+        assert!(audit.contains(&kind), "no scenario refuses a {kind:?}");
     }
 }
 

@@ -32,11 +32,14 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Fetch pinned tla2tools.jar
-        # Official TLA+ tools release v1.8.0. The checksum pins the exact
-        # artifact; cross-check it against the release page before trusting it.
+        # Official TLA+ tools stable release v1.7.4 (manifest X-Git-Tag v1.7.4,
+        # revision 5a47802). Do not use the v1.8.0 tag: it is the rolling
+        # pre-release, re-uploaded with each nightly build, so no checksum
+        # can pin it. The checksum pins the exact artifact; cross-check it
+        # against the release page before trusting it.
         run: |
-          curl -sSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
-          echo "011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd  tla2tools.jar" | sha256sum -c -
+          curl -sSL --fail -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tla2tools.jar" | sha256sum -c -
       - name: Model check LedgerWitness
         working-directory: docs/models
         run: |

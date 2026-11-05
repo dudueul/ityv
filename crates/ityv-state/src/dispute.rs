@@ -102,7 +102,8 @@ fn check_bodies(signed: &Signed<'_>, genesis: &Genesis<'_>) -> Result<(), Error>
         | EventRole::Receiver
         | EventRole::Authority
         | EventRole::Device
-        | EventRole::Chair => Err(Error::NotRegistered),
+        | EventRole::Chair
+        | EventRole::Auditor => Err(Error::NotRegistered),
     })
 }
 

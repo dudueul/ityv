@@ -1,6 +1,8 @@
-//! `WitnessedEvent` (schema `0x0028`), version 1: one human-signed ledger
+//! `WitnessedEvent` (schema `0x0028`), version 3: one human-signed ledger
 //! event, the body object bytes with the signatures of the people the
-//! event names (ENCODING.md §8.42).
+//! event names (ENCODING.md §8.42). Version 2 added the district
+//! commission chair (role 9) and the paper count (ADR-0035); version 3 the
+//! auditor (role 10) and the audit bodies (ADR-0036).
 //!
 //! Field order: `body`, `sigs`. The body is a complete object of one of
 //! the schemas in [`WITNESSED_BODY_SCHEMAS`]; each signature is a hybrid
@@ -15,6 +17,10 @@ use crate::envelope::{Header, decode as decode_object};
 use crate::error::{Error, Kind};
 use crate::primitives::{OrgId, SchemaId, SignerId};
 use crate::reader::Reader;
+use crate::schema::audit::{
+    AuditCommitBody, AuditFindingBody, AuditManifestFreezeBody, AuditSeedBody, HandCountReportBody,
+    SampleComparisonBody,
+};
 use crate::schema::checkin::{BoxUnitSwapBody, CheckinUnitSwapBody, ObserverCountAttestBody};
 use crate::schema::events::{
     BoxOpenedBody, CustodyHandoffBody, DisputeEventBody, FallbackBody, ImprintAuditBody,
@@ -24,12 +30,13 @@ use crate::schema::progress::ProgressCheckBody;
 use crate::schema::tally::PaperCountReportBody;
 use crate::schema::util::{HYBRID_SIG_LEN, ascending_by, read_fixed};
 use crate::schema::{
-    SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
-    SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
-    SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
-    SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
-    SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_SEAL_CHANGE_BODY,
-    SCHEMA_VERSION_1,
+    SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
+    SCHEMA_AUDIT_SEED_BODY, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
+    SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_DISPUTE_EVENT_BODY,
+    SCHEMA_FALLBACK_BODY, SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_IMPRINT_AUDIT_BODY,
+    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_DECISION_REF_BODY,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PROGRESS_CHECK_BODY,
+    SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SEAL_CHANGE_BODY, SCHEMA_VERSION_1,
 };
 use crate::writer::Writer;
 
@@ -45,8 +52,11 @@ pub const MIN_EVENT_CLERKS: usize = 2;
 /// Observer organisations a clerk-and-observer event needs.
 pub const MIN_EVENT_OBSERVER_ORGS: usize = 2;
 
+/// Auditor organisations an audit comparison or finding needs.
+pub const MIN_EVENT_AUDITOR_ORGS: usize = 2;
+
 /// The body schemas a `WitnessedEvent` may carry.
-pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 14] = [
+pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 20] = [
     SCHEMA_CUSTODY_HANDOFF_BODY,
     SCHEMA_DISPUTE_EVENT_BODY,
     SCHEMA_LEGAL_DECISION_REF_BODY,
@@ -61,6 +71,12 @@ pub const WITNESSED_BODY_SCHEMAS: [SchemaId; 14] = [
     SCHEMA_CHECKIN_UNIT_SWAP_BODY,
     SCHEMA_BOX_UNIT_SWAP_BODY,
     SCHEMA_PAPER_COUNT_REPORT_BODY,
+    SCHEMA_AUDIT_SEED_BODY,
+    SCHEMA_AUDIT_FREEZE_BODY,
+    SCHEMA_SAMPLE_COMPARISON_BODY,
+    SCHEMA_AUDIT_FINDING_BODY,
+    SCHEMA_HAND_COUNT_REPORT_BODY,
+    SCHEMA_AUDIT_COMMIT_BODY,
 ];
 
 /// The signature purpose of a body schema (PROTOCOL.md Appendix B), or
@@ -82,6 +98,12 @@ pub fn purpose_of(schema: SchemaId) -> Option<&'static [u8]> {
         0x0040 => b"checkin-swap",
         0x0041 => b"box-swap",
         0x0046 => b"paper-count",
+        0x000D => b"audit-seed",
+        0x0048 => b"audit-freeze",
+        0x004B => b"sample-comparison",
+        0x004C => b"audit-finding",
+        0x004D => b"hand-count",
+        0x004E => b"audit-commit",
         _ => return None,
     };
     Some(purpose)
@@ -110,6 +132,9 @@ pub enum EventRole {
     /// The chair of a district election commission (구·시·군 선관위
     /// 위원장), who reports the paper count of a reporting unit.
     Chair = 9,
+    /// An auditor who compares a sampled record with its paper (version
+    /// 3, ADR-0036).
+    Auditor = 10,
 }
 
 impl EventRole {
@@ -132,6 +157,7 @@ impl EventRole {
             7 => Some(Self::Authority),
             8 => Some(Self::Device),
             9 => Some(Self::Chair),
+            10 => Some(Self::Auditor),
             _ => None,
         }
     }
@@ -180,7 +206,8 @@ where
             | EventRole::Receiver
             | EventRole::Authority
             | EventRole::Device
-            | EventRole::Chair) => {
+            | EventRole::Chair
+            | EventRole::Auditor) => {
                 if Some(role) != extra {
                     return false;
                 }
@@ -195,7 +222,9 @@ where
 
 /// Observers of two or more organisations and, when `extra` is given,
 /// exactly one signer in that role, nothing else (`ObserverCountAttest`
-/// without, `PaperCountReport` with the chair; VC-016, VC-075).
+/// without, `PaperCountReport` and `HandCountReport` with the chair,
+/// `AuditManifestFreeze` and `AuditSeed` with the committee; VC-016,
+/// VC-075).
 fn observers_with<'a, F, I>(sigs: F, extra: Option<EventRole>) -> bool
 where
     F: Fn() -> I,
@@ -222,6 +251,49 @@ where
     distinct >= MIN_EVENT_OBSERVER_ORGS && extra_ok
 }
 
+/// Adds the organisation of `s` to the first `*distinct` slots of `orgs`
+/// unless it is there.
+fn note_org<'a>(
+    orgs: &mut [Option<&'a [u8]>; MAX_EVENT_SIGS],
+    distinct: &mut usize,
+    org: &'a [u8],
+) {
+    if !orgs.iter().take(*distinct).flatten().any(|o| *o == org) {
+        if let Some(slot) = orgs.get_mut(*distinct) {
+            *slot = Some(org);
+        }
+        *distinct = distinct.saturating_add(1);
+    }
+}
+
+/// Auditors of two or more organisations and observers of two or more
+/// organisations, nothing else (`SampleComparison`, `AuditFinding`;
+/// PROTOCOL.md §12.3).
+fn auditors_and_observers<'a, F, I>(sigs: F) -> bool
+where
+    F: Fn() -> I,
+    I: Iterator<Item = EventSig<'a>>,
+{
+    let mut auditors: [Option<&[u8]>; MAX_EVENT_SIGS] = [None; MAX_EVENT_SIGS];
+    let mut observers: [Option<&[u8]>; MAX_EVENT_SIGS] = [None; MAX_EVENT_SIGS];
+    let (mut a, mut o) = (0usize, 0usize);
+    for s in sigs() {
+        match s.role {
+            EventRole::Auditor => note_org(&mut auditors, &mut a, s.org_id.as_bytes()),
+            EventRole::Observer => note_org(&mut observers, &mut o, s.org_id.as_bytes()),
+            EventRole::Clerk
+            | EventRole::Commission
+            | EventRole::Committee
+            | EventRole::Sender
+            | EventRole::Receiver
+            | EventRole::Authority
+            | EventRole::Device
+            | EventRole::Chair => return false,
+        }
+    }
+    a >= MIN_EVENT_AUDITOR_ORGS && o >= MIN_EVENT_OBSERVER_ORGS
+}
+
 fn exactly<'a, F, I>(sigs: F, roles: &[EventRole]) -> bool
 where
     F: Fn() -> I,
@@ -240,8 +312,14 @@ where
 ///   nothing else;
 /// * `ObserverCountAttest`: observers of two or more organisations,
 ///   nothing else;
-/// * `PaperCountReport`: the chair of the district commission once,
-///   observers of two or more organisations, nothing else;
+/// * `PaperCountReport`, `HandCountReport`: the chair of the district
+///   commission once, observers of two or more organisations, nothing
+///   else;
+/// * `AuditManifestFreeze`, `AuditCommit`, `AuditSeed`: the committee
+///   once, observers of two or more organisations, nothing else;
+/// * `SampleComparison`, `AuditFinding`: auditors of two or more
+///   organisations and observers of two or more organisations, nothing
+///   else;
 /// * `CustodyHandoff`: exactly one sender and one receiver;
 /// * `DisputeEvent`: exactly the commission and the committee;
 /// * `LegalDecisionRef`: exactly one authority.
@@ -254,7 +332,9 @@ where
         0x0029 => clerks_and_observers(sigs, Some(EventRole::Device)),
         0x002A..=0x002E | 0x0032 | 0x0040 | 0x0041 => clerks_and_observers(sigs, None),
         0x003F => observers_with(sigs, None),
-        0x0046 => observers_with(sigs, Some(EventRole::Chair)),
+        0x0046 | 0x004D => observers_with(sigs, Some(EventRole::Chair)),
+        0x000D | 0x0048 | 0x004E => observers_with(sigs, Some(EventRole::Committee)),
+        0x004B | 0x004C => auditors_and_observers(sigs),
         0x0008 => exactly(sigs, &[EventRole::Sender, EventRole::Receiver]),
         0x000E => exactly(sigs, &[EventRole::Commission, EventRole::Committee]),
         0x000F => exactly(sigs, &[EventRole::Authority]),
@@ -280,6 +360,12 @@ fn validate_body(schema: SchemaId, bytes: &[u8]) -> Result<(), Error> {
         0x0040 => decode_object::<CheckinUnitSwapBody<'_>>(schema, v, bytes).map(drop),
         0x0041 => decode_object::<BoxUnitSwapBody<'_>>(schema, v, bytes).map(drop),
         0x0046 => decode_object::<PaperCountReportBody<'_>>(schema, v, bytes).map(drop),
+        0x000D => decode_object::<AuditSeedBody<'_>>(schema, v, bytes).map(drop),
+        0x0048 => decode_object::<AuditManifestFreezeBody<'_>>(schema, v, bytes).map(drop),
+        0x004B => decode_object::<SampleComparisonBody<'_>>(schema, v, bytes).map(drop),
+        0x004C => decode_object::<AuditFindingBody<'_>>(schema, v, bytes).map(drop),
+        0x004D => decode_object::<HandCountReportBody<'_>>(schema, v, bytes).map(drop),
+        0x004E => decode_object::<AuditCommitBody<'_>>(schema, v, bytes).map(drop),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }

@@ -19,8 +19,8 @@ mod common;
 use common::{decode_exact, encode_to_vec, rng};
 use ityv_crypto::{
     AccessStructure, Bases, CastId, Chamber, ChunkIndex, DIGIT_BITS, MAX_CHUNKS, MemberId, Opening,
-    OptionCount, OptionIndex, Purpose, Scalar, Threshold, commit, decode_digits, is_qualified,
-    packed_value, reconstruct, signing_digest, split, verify_opening, xor_in_place,
+    OptionCount, OptionIndex, Purpose, Scalar, Threshold, accept_limit, commit, decode_digits,
+    is_qualified, packed_value, reconstruct, signing_digest, split, verify_opening, xor_in_place,
 };
 use ityv_encoding::Token192;
 use proptest::prelude::*;
@@ -36,6 +36,21 @@ fn pow2(exponent: u32) -> Scalar {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// The sample stream's rejection limit (PROTOCOL.md §12.2): the
+    /// accepted words `0..=limit` are a whole number of runs of `bound`
+    /// (no modulo bias) and one more run would not fit in 64 bits. Checked
+    /// in 128 bits, over the whole range and near the powers of two.
+    #[test]
+    fn the_sample_limit_leaves_whole_runs(wide in 1u64.., shift in 0u32..64, delta in 0u64..3) {
+        let near = (1u64 << shift).saturating_add(delta).saturating_sub(1).max(1);
+        for bound in [wide, near] {
+            let limit = u128::from(accept_limit(bound).unwrap());
+            let bound = u128::from(bound);
+            prop_assert_eq!((limit + 1) % bound, 0);
+            prop_assert!(limit + 1 + bound > 1 << 64);
+        }
+    }
 
     #[test]
     fn xor_is_an_involution(data in prop::collection::vec(any::<u8>(), 0..64)) {

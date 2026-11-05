@@ -1,9 +1,12 @@
-//! The tally (PROTOCOL.md §10.6, §11; ENCODING.md §8.61–§8.65), version
-//! 1: `TallyScopeBody` (schema `0x0043`), `AggregateOpeningBody`
-//! (`0x0044`), `ReceiptResolutionBody` (`0x0047`), the trustee-quorum
-//! envelope `QuorumSigned` (`0x0045`) that carries any of the three with the
-//! signatures of the trustees who made it, and `PaperCountReportBody`
-//! (`0x0046`), the body of a [`crate::WitnessedEvent`] (ADR-0035).
+//! The tally (PROTOCOL.md §10.6, §11; ENCODING.md §8.61–§8.65): version 1
+//! of `TallyScopeBody` (schema `0x0043`), `AggregateOpeningBody`
+//! (`0x0044`), `ReceiptResolutionBody` (`0x0047`) and
+//! `PaperCountReportBody` (`0x0046`), the body of a
+//! [`crate::WitnessedEvent`] (ADR-0035); and version 2 of the
+//! trustee-quorum envelope `QuorumSigned` (`0x0045`), which carries any of
+//! the three or a sample opening reference (`0x004A`, ADR-0036) with the
+//! signatures of the trustees who made it. Version 1 of `QuorumSigned` did
+//! not admit the sample opening reference.
 //!
 //! `TallyScopeBody` field order: `election_id`, `ballot_style_id`,
 //! `reporting_unit_id`, `included_count` (at most [`MAX_TALLY_COUNT`]),
@@ -25,12 +28,13 @@
 //! `CAST_NOT_RECEIVED`), `time_bucket`.
 //!
 //! `QuorumSigned`: `body` (a complete `TallyScopeBody`,
-//! `AggregateOpeningBody` or `ReceiptResolutionBody` object of at most
-//! [`MAX_QUORUM_BODY_LEN`] bytes),
+//! `AggregateOpeningBody`, `ReceiptResolutionBody` or
+//! `SampleOpeningRefBody` object of at most [`MAX_QUORUM_BODY_LEN`]
+//! bytes),
 //! `sigs` (one to [`MAX_QUORUM_SIGS`] entries of `trustee_id ‖ sig`,
 //! strictly ascending by trustee). Every signature is a hybrid signature,
-//! purpose `tally-scope`, `aggregate-opening` or `receipt-resolution` by
-//! the body's schema, over the quorum message `body_hash ‖ trustees`
+//! purpose `tally-scope`, `aggregate-opening`, `receipt-resolution` or
+//! `sample-opening` by the body's schema, over the quorum message `body_hash ‖ trustees`
 //! ([`write_quorum_message`]): the body's object hash (ENCODING.md §4) and
 //! the participating trustees in the envelope's order, so that no one can
 //! re-wrap the body with another set of participants without their
@@ -57,10 +61,11 @@ use crate::primitives::{
     TimeBucket, TrusteeId,
 };
 use crate::reader::Reader;
+use crate::schema::audit::{PURPOSE_SAMPLE_OPENING, SampleOpeningRefBody};
 use crate::schema::util::{HYBRID_SIG_LEN, MAX_CHUNKS, ascending_by, read_fixed};
 use crate::schema::{
-    SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_TALLY_SCOPE_BODY,
-    SCHEMA_VERSION_1,
+    SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY,
+    SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1,
 };
 use crate::writer::Writer;
 
@@ -772,6 +777,9 @@ pub enum QuorumKind {
     AggregateOpening,
     /// A `ReceiptResolutionBody` (`0x0047`), purpose `receipt-resolution`.
     ReceiptResolution,
+    /// A `SampleOpeningRefBody` (`0x004A`), purpose `sample-opening`
+    /// (version 2, ADR-0036).
+    SampleOpening,
 }
 
 impl QuorumKind {
@@ -782,6 +790,7 @@ impl QuorumKind {
             Self::TallyScope => PURPOSE_TALLY_SCOPE,
             Self::AggregateOpening => PURPOSE_AGGREGATE_OPENING,
             Self::ReceiptResolution => PURPOSE_RECEIPT_RESOLUTION,
+            Self::SampleOpening => PURPOSE_SAMPLE_OPENING,
         }
     }
 }
@@ -845,15 +854,22 @@ fn classify(bytes: &[u8]) -> Result<QuorumKind, Error> {
             bytes,
         )
         .map(|_| QuorumKind::ReceiptResolution),
+        SCHEMA_SAMPLE_OPENING_REF_BODY => decode_object::<SampleOpeningRefBody<'_>>(
+            SCHEMA_SAMPLE_OPENING_REF_BODY,
+            SCHEMA_VERSION_1,
+            bytes,
+        )
+        .map(|_| QuorumKind::SampleOpening),
         _ => Err(Error::new(Kind::SchemaMismatch, 4)),
     }
 }
 
 /// An event a quorum of trustees signs: a tally scope, an aggregate
-/// opening or a receipt resolution, with each participating member's
-/// signature (PROTOCOL.md §10.6, §11.1, §11.2; Appendix A "정족수").
+/// opening, a receipt resolution or a sample opening reference, with each
+/// participating member's signature (PROTOCOL.md §10.6, §11.1, §11.2,
+/// §12.3; Appendix A "정족수").
 ///
-/// Rules: the body is a complete object of one of the three schemas (its own
+/// Rules: the body is a complete object of one of the four schemas (its own
 /// errors, rebased; `SchemaMismatch` for another schema, `LengthExceedsMax`
 /// for a longer body); one to [`MAX_QUORUM_SIGS`] signatures
 /// (`InvariantViolation` for none, `CountExceedsMax` for more), strictly
@@ -935,6 +951,17 @@ impl<'a> QuorumSigned<'a> {
     pub fn receipt_resolution(&self) -> Option<ReceiptResolutionBody<'a>> {
         decode_object(
             SCHEMA_RECEIPT_RESOLUTION_BODY,
+            SCHEMA_VERSION_1,
+            self.body_bytes,
+        )
+        .ok()
+    }
+
+    /// The sample opening reference, if it carries one.
+    #[must_use]
+    pub fn sample_opening_ref(&self) -> Option<SampleOpeningRefBody<'a>> {
+        decode_object(
+            SCHEMA_SAMPLE_OPENING_REF_BODY,
             SCHEMA_VERSION_1,
             self.body_bytes,
         )
@@ -1126,59 +1153,73 @@ impl<'a> PaperCountReportBody<'a> {
     }
 }
 
+/// The encoded length of the paper count fields `p` (shared with the hand
+/// count report, `crate::HandCountReportBody`).
+pub(crate) fn paper_count_len(p: &PaperCountParts<'_>) -> usize {
+    p.election_id
+        .encoded_len()
+        .saturating_add(p.reporting_unit_id.encoded_len())
+        .saturating_add(p.ballot_style_id.encoded_len())
+        .saturating_add(4)
+        .saturating_add(p.votes.len().saturating_mul(8))
+        .saturating_add(16)
+}
+
+/// Writes the paper count fields `p`.
+pub(crate) fn encode_paper_count(p: &PaperCountParts<'_>, w: &mut Writer<'_>) -> Result<(), Error> {
+    p.election_id.encode(w)?;
+    p.reporting_unit_id.encode(w)?;
+    p.ballot_style_id.encode(w)?;
+    w.write_count(p.votes.len(), MAX_CANDIDATES)?;
+    for v in p.votes.as_slice() {
+        w.write_u64(*v)?;
+    }
+    w.write_u64(p.invalid)?;
+    p.time_bucket.encode(w)
+}
+
+/// Reads paper count fields under the rules of [`PaperCountReportBody`].
+pub(crate) fn decode_paper_count<'a>(r: &mut Reader<'a>) -> Result<PaperCountParts<'a>, Error> {
+    let election_id = ElectionId::decode(r)?;
+    let reporting_unit_id = ReportingUnitId::decode(r)?;
+    let ballot_style_id = BallotStyleId::decode(r)?;
+    let count_at = r.position();
+    let count = r.read_count(MAX_CANDIDATES)?;
+    if count == 0 {
+        return Err(invalid(count_at));
+    }
+    let mut items = [0u64; MAX_CANDIDATES];
+    for slot in items.iter_mut().take(count) {
+        *slot = read_tally_count(r)?;
+    }
+    let votes = PaperVotes {
+        items,
+        count: u8::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, count_at))?,
+    };
+    Ok(PaperCountParts {
+        election_id,
+        reporting_unit_id,
+        ballot_style_id,
+        votes,
+        invalid: read_tally_count(r)?,
+        time_bucket: TimeBucket::decode(r)?,
+    })
+}
+
 impl Encode for PaperCountReportBody<'_> {
     fn encoded_len(&self) -> usize {
-        let p = &self.parts;
-        p.election_id
-            .encoded_len()
-            .saturating_add(p.reporting_unit_id.encoded_len())
-            .saturating_add(p.ballot_style_id.encoded_len())
-            .saturating_add(4)
-            .saturating_add(p.votes.len().saturating_mul(8))
-            .saturating_add(16)
+        paper_count_len(&self.parts)
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
-        let p = &self.parts;
-        p.election_id.encode(w)?;
-        p.reporting_unit_id.encode(w)?;
-        p.ballot_style_id.encode(w)?;
-        w.write_count(p.votes.len(), MAX_CANDIDATES)?;
-        for v in p.votes.as_slice() {
-            w.write_u64(*v)?;
-        }
-        w.write_u64(p.invalid)?;
-        p.time_bucket.encode(w)
+        encode_paper_count(&self.parts, w)
     }
 }
 
 impl<'a> Decode<'a> for PaperCountReportBody<'a> {
     fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
-        let election_id = ElectionId::decode(r)?;
-        let reporting_unit_id = ReportingUnitId::decode(r)?;
-        let ballot_style_id = BallotStyleId::decode(r)?;
-        let count_at = r.position();
-        let count = r.read_count(MAX_CANDIDATES)?;
-        if count == 0 {
-            return Err(invalid(count_at));
-        }
-        let mut items = [0u64; MAX_CANDIDATES];
-        for slot in items.iter_mut().take(count) {
-            *slot = read_tally_count(r)?;
-        }
-        let votes = PaperVotes {
-            items,
-            count: u8::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, count_at))?,
-        };
         Ok(Self {
-            parts: PaperCountParts {
-                election_id,
-                reporting_unit_id,
-                ballot_style_id,
-                votes,
-                invalid: read_tally_count(r)?,
-                time_bucket: TimeBucket::decode(r)?,
-            },
+            parts: decode_paper_count(r)?,
         })
     }
 }

@@ -35,7 +35,7 @@ use ityv_crypto::{
     AccessStructure, CHAMBER_COUNT, HybridSigned, Threshold, Verified, is_qualified,
 };
 use ityv_encoding::{
-    ChamberThreshold, ElectionId, EventRole, MAX_QUORUM_MESSAGE_LEN, MAX_QUORUM_SIGS,
+    ChamberThreshold, ElectionId, EventRole, EventSig, MAX_QUORUM_MESSAGE_LEN, MAX_QUORUM_SIGS,
     PaperCountParts, PaperCountReportBody, QuorumSigned, ReportingUnitEntry, RosterRole,
     SCHEMA_PAPER_COUNT_REPORT_BODY, TimeBucket, TrusteeEntry, Writer, expected_chamber,
 };
@@ -44,7 +44,7 @@ use crate::auth::{Cap, CryptoTallyAid};
 use crate::close::{RosterEntry, roster_key};
 use crate::error::Error;
 use crate::genesis::{Entry, one_head};
-use crate::sig::{Signed, check_event, check_pairs};
+use crate::sig::{Key, Signed, check_event, check_pairs};
 
 /// Buckets after the last box close during which a late batch close may
 /// still attest records (24 hours, PROTOCOL.md §7.2.1).
@@ -297,40 +297,7 @@ impl<'a> PaperCount<'a> {
             .event
             .body(SCHEMA_PAPER_COUNT_REPORT_BODY)
             .map_err(|_| Error::Decode)?;
-        let u = unit.get();
-        if u.unit_id().as_bytes() != body.parts().reporting_unit_id.as_bytes() {
-            return Err(Error::Mismatch);
-        }
-        if roster.iter().any(|r| r.head() != unit.head()) {
-            return Err(Error::StaleEntry);
-        }
-        let commission = u.commission_org();
-        check_event(signed, |s| {
-            let role = match s.role {
-                EventRole::Chair if s.org_id.as_bytes() == commission.as_bytes() => {
-                    RosterRole::Chair
-                }
-                EventRole::Observer => RosterRole::Observer,
-                EventRole::Chair
-                | EventRole::Clerk
-                | EventRole::Commission
-                | EventRole::Committee
-                | EventRole::Sender
-                | EventRole::Receiver
-                | EventRole::Authority
-                | EventRole::Device => return Err(Error::NotRegistered),
-            };
-            roster_key(roster, s.signer_id, role, s.org_id)?;
-            keys.iter()
-                .map(Entry::get)
-                .find(|k| {
-                    k.signer_id.as_bytes() == s.signer_id.as_bytes()
-                        && k.role == role
-                        && k.org_id.as_bytes() == s.org_id.as_bytes()
-                })
-                .map(|k| k.key)
-                .ok_or(Error::NotRegistered)
-        })?;
+        check_chair_report(signed, roster, keys, unit, body.parts())?;
         Ok(Self {
             parts: *body.parts(),
         })
@@ -341,6 +308,61 @@ impl<'a> PaperCount<'a> {
     pub const fn parts(&self) -> &PaperCountParts<'a> {
         &self.parts
     }
+}
+
+/// The key `keys` holds for the signer `s` names in `role`: the entry
+/// whose key signed, of the state in force or an earlier one, registered
+/// for the same signer, role and organisation.
+pub(crate) fn signing_key<'k>(
+    keys: &'k [RosterEntry<'_>],
+    s: &EventSig<'_>,
+    role: RosterRole,
+) -> Result<&'k Key, Error> {
+    keys.iter()
+        .map(Entry::get)
+        .find(|k| {
+            k.signer_id.as_bytes() == s.signer_id.as_bytes()
+                && k.role == role
+                && k.org_id.as_bytes() == s.org_id.as_bytes()
+        })
+        .map(|k| k.key)
+        .ok_or(Error::NotRegistered)
+}
+
+/// The chair-and-observers check of a paper count or a hand count report
+/// `parts` of the unit `unit` ([`PaperCount::check`]).
+pub(crate) fn check_chair_report(
+    signed: &Signed<'_>,
+    roster: &[RosterEntry<'_>],
+    keys: &[RosterEntry<'_>],
+    unit: &Entry<ReportingUnitEntry<'_>>,
+    parts: &PaperCountParts<'_>,
+) -> Result<(), Error> {
+    let u = unit.get();
+    if u.unit_id().as_bytes() != parts.reporting_unit_id.as_bytes() {
+        return Err(Error::Mismatch);
+    }
+    if roster.iter().any(|r| r.head() != unit.head()) {
+        return Err(Error::StaleEntry);
+    }
+    let commission = u.commission_org();
+    check_event(signed, |s| {
+        let role = match s.role {
+            EventRole::Chair if s.org_id.as_bytes() == commission.as_bytes() => RosterRole::Chair,
+            EventRole::Observer => RosterRole::Observer,
+            EventRole::Chair
+            | EventRole::Clerk
+            | EventRole::Commission
+            | EventRole::Committee
+            | EventRole::Sender
+            | EventRole::Receiver
+            | EventRole::Authority
+            | EventRole::Device
+            | EventRole::Auditor => return Err(Error::NotRegistered),
+        };
+        roster_key(roster, s.signer_id, role, s.org_id)?;
+        signing_key(keys, s, role)
+    })
 }
 
 /// What the cryptographic tally gives for one ballot style in one

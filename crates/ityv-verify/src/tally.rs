@@ -385,7 +385,7 @@ impl<'a> TallyStage<'a> {
             .fold(HoldSet::empty(), |h, u| h.union(u.holds));
         self.refused
             .iter()
-            .fold(units, |h, r| h.with(refusal_hold(r.event)))
+            .fold(units, |h, r| h.with(r.event.hold()))
     }
 
     /// Whether every unit has its scope, openings and paper count.
@@ -401,15 +401,21 @@ impl<'a> TallyStage<'a> {
     }
 }
 
-/// The hold of a refused event.
-const fn refusal_hold(event: TallyEvent) -> HoldReason {
-    match event {
-        TallyEvent::Receipt => HoldReason::ReceiptResolutionRefused,
-        TallyEvent::Decision => HoldReason::TallyEffectRefused,
-        TallyEvent::Scope => HoldReason::TallyScopeRefused,
-        TallyEvent::Opening => HoldReason::AggregateRefused,
-        TallyEvent::Paper => HoldReason::PaperCountRefused,
-        TallyEvent::LateClose => HoldReason::LateCloseAfterScope,
+impl TallyEvent {
+    /// The hold a refused event of this kind puts on the ledger:
+    /// [`TallyStage::holds`] carries it once per kind refused. Public so
+    /// that a reader of the report (the verification console) can tell
+    /// which of the ledger's holds come from refused tally events.
+    #[must_use]
+    pub const fn hold(self) -> HoldReason {
+        match self {
+            Self::Receipt => HoldReason::ReceiptResolutionRefused,
+            Self::Decision => HoldReason::TallyEffectRefused,
+            Self::Scope => HoldReason::TallyScopeRefused,
+            Self::Opening => HoldReason::AggregateRefused,
+            Self::Paper => HoldReason::PaperCountRefused,
+            Self::LateClose => HoldReason::LateCloseAfterScope,
+        }
     }
 }
 
@@ -526,7 +532,10 @@ impl BoxInfo<'_> {
 }
 
 /// The accepted event at frame `seq`.
-fn event_at<'s, 'a>(index: &'s LedgerIndex<'a>, seq: Seq) -> Option<&'s IndexedEvent<'a>> {
+pub(crate) fn event_at<'s, 'a>(
+    index: &'s LedgerIndex<'a>,
+    seq: Seq,
+) -> Option<&'s IndexedEvent<'a>> {
     let events = index.events();
     let at = events
         .binary_search_by_key(&seq.get(), |e| e.seq.get())
@@ -609,14 +618,29 @@ fn box_info<'a>(
 }
 
 /// The trustees of the genesis and the access structure of its chambers.
-struct Trustees<'a> {
+pub(crate) struct Trustees<'a> {
     entries: Vec<Entry<TrusteeEntry<'a>>>,
     structure: Option<AccessStructure>,
 }
 
+impl<'a> Trustees<'a> {
+    /// The trustees of `genesis`, proved, and the access structure of its
+    /// chambers.
+    pub(crate) fn of(genesis: &VerifiedGenesis<'a>) -> Self {
+        let body = genesis.genesis().body();
+        Self {
+            entries: genesis
+                .trustees()
+                .filter_map(|t| genesis.trustee_entry(t.trustee_id.as_bytes()))
+                .collect(),
+            structure: access_structure(body.parties().count(), body.chambers()),
+        }
+    }
+}
+
 impl Trustees<'_> {
     /// Whether a qualified quorum of trustees signed `q`.
-    fn signed(&self, q: &QuorumSigned<'_>) -> bool {
+    pub(crate) fn signed(&self, q: &QuorumSigned<'_>) -> bool {
         let Some(structure) = self.structure.as_ref() else {
             return false;
         };
@@ -665,9 +689,9 @@ impl<'a> Ctx<'_, 'a> {
     /// The witnesses' time at frame `at`: the time bucket of the last valid
     /// checkpoint recorded before it (0 if none), as PROTOCOL.md §11.1
     /// says. Trustees and clerks declare their own buckets; the late-close
-    /// window is measured in this one (VC-057). The chain does not require
-    /// buckets to grow, so an earlier checkpoint's later bucket does not
-    /// count.
+    /// window is measured in this one (VC-057). The witnesses attest it
+    /// within their clock tolerance and the chain's buckets never decrease
+    /// (VC-012), so the last checkpoint's bucket is also the latest.
     fn witness_time(&self, at: Seq) -> TimeBucket {
         self.checkpoints
             .iter()
@@ -720,6 +744,8 @@ fn events<'a>(index: &LedgerIndex<'a>) -> Events<'a> {
                         out.openings.push((e.seq, q, *b.parts()));
                     }
                 }
+                // The audit stage reads the sample opening references.
+                QuorumKind::SampleOpening => {}
             }
         } else if e.schema == SCHEMA_WITNESSED_EVENT
             && let Some(w) = decode::<WitnessedEvent<'a>>(e.schema, bytes)
@@ -1420,18 +1446,11 @@ pub fn verify_tally<'a>(
     records: &RecordStage<'a>,
     disputes: &DisputeStage<'a>,
 ) -> TallyStage<'a> {
-    let body = genesis.genesis().body();
     let ctx = Ctx {
         genesis,
         index,
         authority,
-        trustees: Trustees {
-            entries: genesis
-                .trustees()
-                .filter_map(|t| genesis.trustee_entry(t.trustee_id.as_bytes()))
-                .collect(),
-            structure: access_structure(body.parties().count(), body.chambers()),
-        },
+        trustees: Trustees::of(genesis),
         checkpoints: checkpoints
             .checkpoints()
             .iter()

@@ -7,8 +7,9 @@ use ityv_verify::{AmendableSets, AmendmentInput, FixedSets, GenesisInput};
 
 /// The magic bytes.
 pub const MAGIC: &[u8; 8] = b"ITYVSIMB";
-/// The only version this reader takes.
-pub const VERSION: u16 = 1;
+/// The only version this reader takes (2: with the optional beacon
+/// observation section).
+pub const VERSION: u16 = 2;
 
 /// Why a bundle could not be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,19 @@ pub struct PublicationInput {
     pub published: Option<u64>,
     /// The current bucket.
     pub now: u64,
+}
+
+/// The beacon publication the bundle carries for an audited ledger
+/// (fixture data of the simulator): what the console hands the verifier as
+/// its observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BeaconInput<'a> {
+    /// The round.
+    pub round: u64,
+    /// The time bucket of its publication.
+    pub published: u64,
+    /// Its published output.
+    pub output: &'a [u8],
 }
 
 /// The eight amendable sets, owned as slices into the bundle.
@@ -104,6 +118,8 @@ pub struct Bundle<'a> {
     pub events: Vec<&'a [u8]>,
     /// The publication inputs.
     pub publications: PublicationInput,
+    /// The beacon observation, if the bundle has one.
+    pub beacon: Option<BeaconInput<'a>>,
 }
 
 impl Bundle<'_> {
@@ -214,6 +230,37 @@ impl<'a> Cursor<'a> {
         })
     }
 
+    fn publications(&mut self) -> Result<PublicationInput, BundleError> {
+        let checkpoint = self.u64()?;
+        let n = self.u32()?;
+        if n > self.bytes.len() / 8 {
+            return Err(BundleError::Truncated);
+        }
+        let receipts = (0..n).map(|_| self.u64()).collect::<Result<Vec<_>, _>>()?;
+        let close = self.u64()?;
+        let has = self.u8()?;
+        let published = self.u64()?;
+        let now = self.u64()?;
+        Ok(PublicationInput {
+            checkpoint,
+            receipts,
+            close,
+            published: (has == 1).then_some(published),
+            now,
+        })
+    }
+
+    fn beacon(&mut self) -> Result<BeaconInput<'a>, BundleError> {
+        let round = self.u64()?;
+        let published = self.u64()?;
+        let output = self.blob()?;
+        Ok(BeaconInput {
+            round,
+            published,
+            output,
+        })
+    }
+
     fn end(&self) -> Result<(), BundleError> {
         if self.bytes.is_empty() {
             Ok(())
@@ -244,6 +291,7 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
     let mut frames = None;
     let mut events = None;
     let mut publications = None;
+    let mut beacon = None;
     for _ in 0..count {
         let tag = c.u16()?;
         if tag <= last {
@@ -285,25 +333,8 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
                 s.bytes = &[];
             }
             0x0006 => events = Some(s.list()?),
-            0x0007 => {
-                let checkpoint = s.u64()?;
-                let n = s.u32()?;
-                if n > s.bytes.len() / 8 {
-                    return Err(BundleError::Truncated);
-                }
-                let receipts = (0..n).map(|_| s.u64()).collect::<Result<Vec<_>, _>>()?;
-                let close = s.u64()?;
-                let has = s.u8()?;
-                let published = s.u64()?;
-                let now = s.u64()?;
-                publications = Some(PublicationInput {
-                    checkpoint,
-                    receipts,
-                    close,
-                    published: (has == 1).then_some(published),
-                    now,
-                });
-            }
+            0x0007 => publications = Some(s.publications()?),
+            0x0008 => beacon = Some(s.beacon()?),
             _ => return Err(BundleError::Section),
         }
         s.end()?;
@@ -322,5 +353,6 @@ pub fn decode(bytes: &[u8]) -> Result<Bundle<'_>, BundleError> {
         frames: frames.ok_or(BundleError::Missing)?,
         events: events.ok_or(BundleError::Missing)?,
         publications: publications.ok_or(BundleError::Missing)?,
+        beacon,
     })
 }

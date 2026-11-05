@@ -9,13 +9,22 @@
 // from one result object. A scenario's metadata (expectation, injected
 // text, names, demo tracking codes) is attached to a report only when the
 // report's bundle hash is the one index.json records for it.
+//
+// The audit card shows only public information: the drawn records'
+// tracking codes, boxes and comparisons, never a restricted opening (no
+// bundle holds one). The beacon observation the verifier is handed is the
+// simulator's fixture data and is labelled so; the viewer can verify
+// without it.
 
-import type { Hold, IndexElection, IndexScenario, Report, SimIndex, StationProgress } from "./data";
-import { intNum, intText, slotDay, slotTime } from "./data";
+import type { AuditRecord, AuditReport, Hold, IndexElection, IndexScenario, Report, SimIndex, StationProgress, StyleAuditReport } from "./data";
+import { bucketTime, intNum, intText, slotDay, slotTime } from "./data";
 import { el, icon, rungIcon } from "./render";
 import { Cancelled, MAX_BUNDLE_BYTES, VerifierClient, loadBundle, parsePin, wasmSha256 } from "./verifier";
 import {
   ALARMS,
+  AUDIT_EVENTS,
+  AUDIT_REFUSALS,
+  COMPARISON_CODES,
   HOLDS,
   HOLD_MEANS,
   HOLD_WORD,
@@ -24,6 +33,7 @@ import {
   LEGAL_WORD,
   NOT_REACHABLE,
   OUTCOMES,
+  PHASES,
   STAGES,
   STEPS,
 } from "./vocab";
@@ -38,6 +48,10 @@ interface Result {
   elapsed: number;
   /** A copy of the bytes, to verify again under another pin. */
   bytes: ArrayBuffer;
+  /** The pin given from outside, if any. */
+  pin?: Uint8Array;
+  /** Whether the bundle's beacon observation was handed to the verifier. */
+  beacon: boolean;
 }
 
 interface SelfTestRow {
@@ -60,6 +74,8 @@ interface State {
   lookup: { code: string; out: string };
   selftest: { rows: SelfTestRow[]; running: boolean; stopped: boolean; ticket: number } | null;
   wasm: string | null;
+  /** Hand the verifier the bundle's beacon observation (fixture data). */
+  beacon: boolean;
 }
 
 const st: State = {
@@ -74,6 +90,7 @@ const st: State = {
   lookup: { code: "", out: "" },
   selftest: null,
   wasm: null,
+  beacon: true,
 };
 
 /** The dashboard's verifier and the self-test's, separate workers. */
@@ -172,7 +189,8 @@ function scenarioOf(hash: string): IndexScenario | null {
 async function verifyInto(ticket: number, fileName: string, bytes: ArrayBuffer, pin?: Uint8Array): Promise<void> {
   const copy = bytes.slice(0);
   const start = performance.now();
-  const report = await client.verify(bytes, pin);
+  const beacon = st.beacon;
+  const report = await client.verify(bytes, pin, beacon);
   if (ticket !== st.ticket) return;
   st.result = {
     ticket,
@@ -181,6 +199,8 @@ async function verifyInto(ticket: number, fileName: string, bytes: ArrayBuffer, 
     report,
     elapsed: performance.now() - start,
     bytes: copy,
+    pin,
+    beacon,
   };
   st.busy = null;
   st.pending = null;
@@ -224,6 +244,23 @@ async function repin(pinText: string): Promise<void> {
   const ticket = begin("다른 핀으로 검증 중…");
   try {
     await verifyInto(ticket, prev.fileName, prev.bytes.slice(0), pin);
+  } catch (e) {
+    fail(ticket, e);
+  }
+}
+
+/** Verifies the shown bundle again, with or without its beacon
+ * observation, under the same pin. */
+async function setBeacon(on: boolean): Promise<void> {
+  st.beacon = on;
+  const prev = st.result;
+  if (!prev) {
+    rerender();
+    return;
+  }
+  const ticket = begin(on ? "비콘 관찰을 넘겨 다시 검증 중…" : "비콘 관찰 없이 다시 검증 중…");
+  try {
+    await verifyInto(ticket, prev.fileName, prev.bytes.slice(0), prev.pin);
   } catch (e) {
     fail(ticket, e);
   }
@@ -447,7 +484,11 @@ function expectedCard(s: IndexScenario, r: Report): HTMLElement {
         el("tr", {}, el("th", {}, "실제(WASM 검증기)"), el("td", {}, r.status ?? "-"), el("td", {}, holdList(r.holds ?? []))),
       ),
     ),
-    ok ? null : el("p", { class: "warnline" }, icon("warn"), "시뮬레이터의 기대와 검증기의 판정이 다르다. 어느 쪽이 틀렸는지 확인해야 한다."),
+    ok
+      ? null
+      : r.audit?.bundleHasObservation && r.audit.observation === null
+        ? el("p", { class: "warnline" }, icon("info"), "기대는 비콘 관찰을 넘긴 검증의 값이다. 지금은 비콘 관찰 없이 검증했으므로 감사가 끝날 수 없다.")
+        : el("p", { class: "warnline" }, icon("warn"), "시뮬레이터의 기대와 검증기의 판정이 다르다. 어느 쪽이 틀렸는지 확인해야 한다."),
   );
 }
 
@@ -801,6 +842,359 @@ function progressCard(r: Report, election: IndexElection | null): HTMLElement | 
   );
 }
 
+/** The first 16 hex digits of a tracking code, in groups of four. */
+function code16(hex: string): string {
+  return hex.slice(0, 16).replace(/(.{4})/g, "$1 ").trim();
+}
+
+function phaseText(s: StyleAuditReport): string {
+  if (!s.phase) return s.freeze === null ? "동결 없음" : "표본 없음";
+  const word = PHASES[s.phase.kind] ?? s.phase.kind;
+  return s.phase.round === null ? word : `${word} (${intNum(s.phase.round) + 1}라운드)`;
+}
+
+/** The binding checkpoint's time against the beacon publication, drawn:
+ * the commit, the binding checkpoint, the last bucket the rule allows
+ * (`published − margin`) and the publication. */
+function timeline(a: AuditReport): HTMLElement | null {
+  const c = a.commit;
+  const o = a.observation;
+  if (!c?.binding || !o) return null;
+  const C = intNum(c.bucket);
+  const B = intNum(c.binding.bucket);
+  const P = intNum(o.published);
+  const limit = P - intNum(a.margin);
+  const lo = Math.min(C, B) - 1;
+  const hi = P + 1;
+  const W = 720;
+  const H = 96;
+  const L = 24;
+  const R = 24;
+  const x = (b: number) => L + ((b - lo) * (W - L - R)) / Math.max(1, hi - lo);
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("class", "chart timeline");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `약정 구간 ${C}, 고정 체크포인트 구간 ${B}, 허용 한계 ${limit}, 비콘 공표 구간 ${P}`);
+  const add = (tag: string, attrs: Record<string, string>, text?: string) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text) e.textContent = text;
+    svg.append(e);
+    return e;
+  };
+  // Buckets after the limit: an honest witness could still sign there
+  // after the publication.
+  add("rect", { x: String(x(limit + 0.5)), y: "30", width: String(x(hi) - x(limit + 0.5)), height: "28", class: "late-zone" });
+  add("line", { x1: String(L), x2: String(W - R), y1: "44", y2: "44", class: "grid" });
+  for (let b = lo; b <= hi; b++) add("line", { x1: String(x(b)), x2: String(x(b)), y1: "40", y2: "48", class: "grid" });
+  const mark = (b: number, label: string, cls: string, y: number) => {
+    add("circle", { cx: String(x(b)), cy: "44", r: "6", class: cls });
+    add("text", { x: String(x(b)), y: String(y), class: "axis", "text-anchor": "middle" }, label);
+  };
+  mark(C, `약정 ${C}`, "pt-commit", 18);
+  mark(B, `고정 ${B}`, "pt-binding", B === C ? 86 : 18);
+  add("line", { x1: String(x(limit)), x2: String(x(limit)), y1: "26", y2: "62", class: "limit" });
+  add("text", { x: String(x(limit)), y: "76", class: "axis", "text-anchor": "middle" }, `한계 P − ${intText(a.margin)} = ${limit}`);
+  mark(P, `공표 P = ${P}`, "pt-published", 18);
+  return el("div", { class: "chartwrap" }, svg);
+}
+
+function seedInputs(a: AuditReport): HTMLElement {
+  const o = a.observation;
+  const c = a.commit;
+  const s = a.seed;
+  const toggle = el("input", { type: "checkbox", "data-action": "beacon", "aria-label": "비콘 관찰을 검증기에 넘김" });
+  toggle.checked = st.beacon;
+  toggle.addEventListener("change", () => void setBeacon(toggle.checked));
+  const rows: HTMLElement[] = [];
+  const row = (k: string, ...v: (string | Node)[]) => rows.push(el("tr", {}, el("th", {}, k), el("td", {}, ...v)));
+  if (o) {
+    row("비콘 관찰", `회차 ${intText(o.round)} · 공표 구간 ${intText(o.published)} (${bucketTime(o.published)})`);
+    row("공표 출력", el("code", { class: "fp" }, o.outputText ?? o.outputHex));
+    row("비콘 값", o.beaconValue ? el("code", { class: "fp" }, o.beaconValue) : "-", " (지정 문서·회차·출력의 라벨 붙은 SHA3-512)");
+  } else {
+    row("비콘 관찰", a.bundleHasObservation ? "넘기지 않음" : "번들에 없음");
+  }
+  if (c) {
+    row("감사 약정", `프레임 ${intText(c.seq)} · 구간 ${intText(c.bucket)} (${bucketTime(c.bucket)}) · 회차 ${intText(c.beaconRound)}`);
+    row("주사위 기록", el("code", { class: "fp" }, c.dice));
+    row("비콘 지정", el("code", { class: "fp" }, c.beaconSource));
+    row(
+      "고정 체크포인트",
+      c.binding
+        ? el("span", {}, `순번 ${intText(c.binding.seq)} · 프레임 ${intText(c.binding.frame)} · 구간 ${intText(c.binding.bucket)} (${bucketTime(c.binding.bucket)}) · 지문 `, el("code", {}, c.binding.fingerprint))
+        : "약정을 덮는 유효한 체크포인트가 없다",
+    );
+  } else {
+    row("감사 약정", "받아들인 약정 없음");
+  }
+  row(
+    "시드",
+    s
+      ? el("span", {}, `프레임 ${intText(s.seq)} · 지문 `, el("code", {}, s.seed), s.beaconConfirmed ? " · 관찰한 비콘 값과 같음" : " · 관찰한 비콘 값으로 확인하지 못함")
+      : "받아들인 시드 없음",
+  );
+  const timing: HTMLElement[] = [];
+  if (c?.binding && o) {
+    const B = intNum(c.binding.bucket);
+    const C = intNum(c.bucket);
+    const P = intNum(o.published);
+    const m = intNum(a.margin);
+    const check = (ok: boolean, text: string) => el("li", {}, icon(ok ? "ok" : "fail"), ` ${text}`);
+    timing.push(
+      el(
+        "ul",
+        { class: "checks", "data-testid": "audit-timing" },
+        check(C < P, `약정 구간 ${C} < 공표 구간 ${P}`),
+        check(B >= C, `고정 체크포인트 구간 ${B} ≥ 약정 구간 ${C}`),
+        check(B + m <= P, `고정 체크포인트 구간 ${B} ≤ 공표 구간 − ${m} = ${P - m} (여유 ${P - B}구간)`),
+      ),
+      el(
+        "p",
+        { class: "muted" },
+        `한계 ${m}구간 = 증인의 시각 허용 1 + 정직한 시계 오차 1 + 1. 공표 뒤에 서명하는 정직한 증인은 P − 2보다 이른 구간에 서명할 수 없으므로, 고정 체크포인트가 P − ${m} 이하이면 비콘 값을 알기 전에 서명된 것이다(ADR-0036 4항). 위 대조는 표시용이며 판정은 검증기의 시드 수락·거부다.`,
+      ),
+    );
+  }
+  return el(
+    "div",
+    {},
+    a.bundleHasObservation
+      ? el("label", { class: "datapick" }, toggle, " 비콘 관찰(시연용 고정 자료)을 검증기에 넘김")
+      : null,
+    o
+      ? el(
+          "p",
+          { class: "warnline", "data-testid": "beacon-fixture" },
+          icon("warn"),
+          "시연용 고정 자료: 이 비콘 관찰(회차, 출력, 공표 구간)은 시뮬레이터가 번들에 넣은 값이다. 검증기는 비콘을 직접 받지 못하므로 호출자가 본 공표를 넘긴다. 실제 검증에서는 지정된 비콘의 공표를 직접 확인해 넣어야 한다.",
+        )
+      : a.bundleHasObservation
+        ? el("p", { class: "warnline" }, icon("info"), "비콘 관찰 없이 검증했다. 시드를 비콘 값으로 확인할 수 없으므로 감사가 끝나지 않고, PAPER_AUDITED에 닿지 않는다(보류는 아니다).")
+        : null,
+    el("div", { class: "scroll" }, el("table", { class: "kv" }, el("tbody", {}, ...rows))),
+    timeline(a),
+    ...timing,
+  );
+}
+
+function recordRows(list: AuditRecord[], withPosition: boolean): HTMLElement {
+  return el(
+    "div",
+    { class: "scroll" },
+    el(
+      "table",
+      {},
+      el(
+        "thead",
+        {},
+        el(
+          "tr",
+          {},
+          withPosition ? el("th", { class: "num" }, "순서") : null,
+          el("th", {}, "추적코드 (앞 16자)"),
+          el("th", {}, "투표함"),
+          el("th", { class: "num" }, "열기 흔적"),
+          el("th", {}, "종이 대조"),
+          el("th", {}, "재구성"),
+        ),
+      ),
+      el(
+        "tbody",
+        {},
+        ...list.map((x) =>
+          el(
+            "tr",
+            { class: x.comparison && x.comparison.code !== 0 ? "diff" : "" },
+            withPosition ? el("td", { class: "num" }, String(intNum(x.position ?? 0) + 1)) : null,
+            el("td", {}, el("code", {}, code16(x.code))),
+            el("td", {}, el("code", {}, x.box ?? "-")),
+            el("td", { class: "num" }, x.opened === null ? "-" : `프레임 ${intText(x.opened)}`),
+            el("td", {}, x.comparison ? `${COMPARISON_CODES[x.comparison.code] ?? x.comparison.name}${x.comparison.transferMark ? " · 잉크 묻음" : ""}` : "-"),
+            el("td", { class: "small" }, x.reconstruction === "NotSupplied" ? "제공 안 됨(공개 검증)" : (x.reconstruction ?? "-")),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+function styleAudit(s: StyleAuditReport, election: IndexElection | null): HTMLElement {
+  const current = s.phase?.kind === "Sampling" ? intNum(s.phase.round ?? 0) : -1;
+  return el(
+    "div",
+    { class: "style-audit", "data-style": s.style },
+    el(
+      "h3",
+      {},
+      `${label(election, "style", s.style)} `,
+      el("span", { class: `flag ${s.concluded ? "ok" : s.holds.length ? "bad" : ""}`, "data-testid": "audit-phase" }, icon(s.concluded ? "ok" : "wait"), ` ${phaseText(s)}${s.concluded ? " · 감사 끝" : " · 끝나지 않음"}`),
+    ),
+    el(
+      "p",
+      { class: "muted" },
+      `표본 프레임 ${intText(s.frameCount)}개 기록(${s.units.map((u) => label(election, "unit", u)).join(", ")}) · 동결 프레임 ${s.freeze === null ? "없음" : intText(s.freeze)}${s.rule ? ` · 위험 한도 ${(intNum(s.rule.riskLimitPpm) / 10000).toFixed(1)}% · 비콘 회차 ${intText(s.rule.beaconRound)}` : ""}`,
+      s.frameRoot ? el("span", {}, " · 프레임 root 지문 ", el("code", {}, s.frameRoot)) : null,
+    ),
+    s.frameProblems.length
+      ? el("p", { class: "warnline" }, icon("warn"), `동결의 프레임이 장부와 다르다: ${s.frameProblems.join(", ")}. 표본을 뽑지 않는다.`)
+      : null,
+    s.rounds.length
+      ? el(
+          "div",
+          { class: "scroll" },
+          el(
+            "table",
+            { "data-testid": "audit-rounds" },
+            el(
+              "thead",
+              {},
+              el(
+                "tr",
+                {},
+                el("th", { class: "num" }, "라운드"),
+                el("th", { class: "num" }, "누적 표본"),
+                el("th", { class: "num" }, "불일치 상한"),
+                el("th", { class: "num" }, "대조"),
+                el("th", { class: "num" }, "불일치"),
+                el("th", {}, "상태"),
+              ),
+            ),
+            el(
+              "tbody",
+              {},
+              ...s.rounds.map((r, i) => {
+                const over = intNum(r.nonzero) > intNum(r.threshold);
+                const state = over
+                  ? "상한 넘음 → 확대"
+                  : s.phase?.kind === "Concluded" && intNum(s.phase.round ?? -1) === i
+                    ? "상한 안 · 종료"
+                    : current === i
+                      ? "대조 중"
+                      : "";
+                return el(
+                  "tr",
+                  { class: over ? "diff" : "" },
+                  el("td", { class: "num" }, String(i + 1)),
+                  el("td", { class: "num" }, `${intText(r.drawn)}${intNum(r.drawn) < intNum(r.size) ? ` (선언 ${intText(r.size)})` : ""}`),
+                  el("td", { class: "num" }, intText(r.threshold)),
+                  el("td", { class: "num" }, intText(r.compared)),
+                  el("td", { class: "num" }, intText(r.nonzero)),
+                  el("td", {}, state),
+                );
+              }),
+            ),
+          ),
+        )
+      : null,
+    s.sample.length ? el("h4", {}, `뽑힌 기록 ${s.sample.length}개 (뽑힌 순서)`) : null,
+    s.sample.length ? recordRows(s.sample, true) : null,
+    s.fullComparison.length ? el("h4", {}, `전수 대조로 연 기록 ${s.fullComparison.length}개`) : null,
+    s.fullComparison.length ? recordRows(s.fullComparison, false) : null,
+    s.devices.length
+      ? el(
+          "div",
+          { class: "scroll" },
+          el(
+            "table",
+            {},
+            el(
+              "thead",
+              {},
+              el(
+                "tr",
+                {},
+                el("th", {}, "장치(투표함)"),
+                el("th", { class: "num" }, "기록"),
+                el("th", { class: "num" }, "대조"),
+                el("th", {}, "코드 0–6별 대조 수"),
+                el("th", {}, "전수 대조"),
+                el("th", {}, "발견"),
+                el("th", {}, "보류"),
+              ),
+            ),
+            el(
+              "tbody",
+              {},
+              ...s.devices.map((d) =>
+                el(
+                  "tr",
+                  {},
+                  el("td", {}, el("code", {}, d.box)),
+                  el("td", { class: "num" }, intText(d.records)),
+                  el("td", { class: "num" }, intText(d.compared)),
+                  el("td", { class: "small" }, d.codes.map(intText).join(" · ")),
+                  el("td", {}, d.fullComparisonFrom === null ? "-" : `프레임 ${intText(d.fullComparisonFrom)}부터${d.followedUp ? " · 끝" : " · 진행 중"}`),
+                  el("td", {}, d.findings.length ? d.findings.map((f) => `프레임 ${intText(f)}`).join(", ") : "-"),
+                  el("td", { class: "small" }, holdList(d.holds)),
+                ),
+              ),
+            ),
+          ),
+        )
+      : null,
+    s.handCounts.length || s.phase?.kind === "HandCount"
+      ? el(
+          "p",
+          {},
+          el("strong", {}, "수검표: "),
+          s.handCounts.length ? s.handCounts.map((h) => `${label(election, "unit", h.unit)} 프레임 ${intText(h.seq)}`).join(", ") : "아직 없음",
+          " · 수검표가 법적 결과이며 검증기는 그것을 기계 합계와 비교하지 않는다.",
+        )
+      : null,
+    s.holds.length ? el("p", { class: "warnline" }, icon("warn"), "이 투표양식의 보류: ", holdList(s.holds)) : null,
+  );
+}
+
+function auditCard(r: Report, election: IndexElection | null): HTMLElement | null {
+  const a = r.audit;
+  if (!a) return null;
+  const any = a.commit !== null || a.seed !== null || a.refused.length > 0 || a.styles.some((s) => s.freeze !== null);
+  const card = el(
+    "section",
+    { class: "card wide", "data-testid": "audit" },
+    el("h2", {}, "감사", el("span", { class: "muted" }, a.passed ? " 모든 투표양식 끝" : ` ${a.styles.filter((s) => s.concluded).length}/${a.styles.length} 투표양식 끝`)),
+  );
+  if (!any) {
+    card.append(el("p", { class: "muted" }, "이 장부에는 감사 이벤트(동결, 약정, 시드, 열기 흔적, 대조)가 없다. PAPER_AUDITED에는 모든 투표양식의 감사가 끝나야 닿는다."));
+    return card;
+  }
+  card.append(
+    el("h3", {}, "시드의 입력과 고정 체크포인트"),
+    seedInputs(a),
+    ...a.styles.map((s) => styleAudit(s, election)),
+    el(
+      "p",
+      { class: "muted" },
+      "표본은 공개 정보다: 누구나 장부의 시드에서 같은 기록을 다시 뽑는다(VC-046). 열린 값(선택, cast id, 난수)은 제한 등급이라 번들에도 이 화면에도 없다. 공개 검증자에게 재구성은 '제공 안 됨'이며 열기 흔적의 존재와 서명만 확인한다(§14 8항). 선언된 표본 크기가 위험 한도 공식에서 나온 값인지는 검증하지 않는다.",
+    ),
+  );
+  if (a.refused.length) {
+    card.append(
+      el("h3", {}, "받지 않은 감사 이벤트"),
+      el(
+        "div",
+        { class: "scroll" },
+        el(
+          "table",
+          { "data-testid": "audit-refused" },
+          el("thead", {}, el("tr", {}, el("th", { class: "num" }, "프레임"), el("th", {}, "이벤트"), el("th", {}, "이유"))),
+          el(
+            "tbody",
+            {},
+            ...a.refused.map((x) =>
+              el("tr", {}, el("td", { class: "num" }, intText(x.seq)), el("td", {}, AUDIT_EVENTS[x.event] ?? x.event), el("td", {}, el("code", {}, x.refusal), ` ${AUDIT_REFUSALS[x.refusal] ?? ""}`)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  return card;
+}
+
 function checkpointsCard(r: Report): HTMLElement {
   const c = r.checkpoints;
   return el(
@@ -1024,7 +1418,7 @@ function draw(root: HTMLElement): void {
     if (res.scenario) parts.push(expectedCard(res.scenario, r));
     parts.push(pinCard(r), holdsCard(r), stagesCard(r));
     if (r.genesis?.ok) {
-      parts.push(unitsCard(r, election), progressCard(r, election), boxesCard(r, election), checkpointsCard(r), refusedCard(r), disputesCard(r), lookupCard(res));
+      parts.push(unitsCard(r, election), auditCard(r, election), progressCard(r, election), boxesCard(r, election), checkpointsCard(r), refusedCard(r), disputesCard(r), lookupCard(res));
     } else {
       parts.push(
         el("section", { class: "card warnline" }, icon("stop"), `genesis를 받지 못했다: ${r.genesis?.error ?? ""}. genesis는 전부 아니면 전무이므로 그 위의 어떤 단계도 진행하지 않았다.`),

@@ -19,6 +19,7 @@
 //! | [`progress`] | Voting progress record: device streams in slot order, device swaps, station alarms and on-site checks, close comparisons | §7.10, ADR-0027, VC-102, VC-103, VC-106 |
 //! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
 //! | [`tally`] | 7. Tally: receipt resolutions, legal tally effects, tally scopes recomputed, aggregate openings against the commitments, paper counts per reporting unit | §10.6, §11, §14 7, VC-024, VC-042..044, VC-057, VC-063, VC-075, VC-099 |
+//! | [`audit`] | 8. Audit: freezes against the recomputed frames, the commit, the seed recomputed against the binding checkpoint and the observed beacon, the sample redrawn, opening references and comparisons, restricted openings reconstructed, escalation, full comparisons, findings, hand counts | §12, §14 8, VC-045..047, VC-059, VC-074 |
 //! | [`report`] | Every stage over one ledger and the status ladder | §14 (end), VC-049, VC-050 |
 //! | [`error`] | Refusals of the genesis stage | — |
 //!
@@ -36,10 +37,11 @@
 //!   left out, reported as a [`index::Finding`], and puts the box it
 //!   belongs to (or the whole ledger) under `HOLD_REVIEW`.
 //!
-//! What this crate does **not** do yet (ROADMAP M5): the audit,
-//! split-view, connectivity and software stages (8, 10–12); so the
-//! highest status [`report::verify_ledger`] gives is
-//! `CRYPTO_TALLY_VERIFIED`.
+//! What this crate does **not** do yet (ROADMAP M5): the split-view,
+//! connectivity and software stages (10–12). The highest status
+//! [`report::verify_ledger_with`] gives is `PAPER_AUDITED`, and only with
+//! the beacon value the caller observed; [`report::verify_ledger`], which
+//! has none, stops at `CRYPTO_TALLY_VERIFIED`.
 #![no_std]
 #![forbid(unsafe_code)]
 
@@ -48,6 +50,7 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod audit;
 pub mod authority;
 pub mod boxes;
 pub mod checkpoint;
@@ -70,11 +73,16 @@ pub mod tally;
 #[path = "../kani/proofs.rs"]
 mod proofs;
 
+pub use audit::{
+    AuditEvent, AuditInput, AuditRefusal, AuditRefused, AuditStage, AuditedRecord,
+    BeaconObservation, CommitTaken, Comparison, DeclaredRule, DeviceAudit, FrameProblem,
+    Reconstruction, Reconstructions, SeedTaken, StyleAudit, draw_sample, verify_audit,
+};
 pub use authority::{AuthorityStage, authorize_ledger};
 pub use boxes::{BoxRefusal, BoxReport, BoxStage, Phase, Refusal, verify_boxes};
 pub use checkpoint::{
     CheckpointChain, CheckpointFinding, CheckpointFindingKind, VerifiedCheckpoint,
-    verify_checkpoints,
+    verify_checkpoints, witness_entries, witness_set,
 };
 pub use disputes::{Decision, DisputeEntry, DisputeStage, verify_disputes};
 pub use error::{Error, Reference, Rule};
@@ -96,7 +104,7 @@ pub use records::{
     AcceptedRecord, BatchFinding, BatchProblem, BoxRecords, RecordRefusal, RecordStage,
     RejectedRecord, verify_records,
 };
-pub use report::{Publications, Report, verify_ledger};
+pub use report::{Publications, Report, verify_ledger, verify_ledger_with};
 pub use tally::{
     ChunkOpening, ExpectedExclusion, OpeningOutcome, ScopeProblem, TallyEvent, TallyRefusal,
     TallyRefused, TallyStage, UnitTally, verify_tally,

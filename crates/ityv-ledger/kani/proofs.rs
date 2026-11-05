@@ -313,3 +313,17 @@ fn stream_parser_is_total_on_short_inputs() {
     }
     assert!(stream.next_record().is_none());
 }
+
+/// The witness's time rule (PROTOCOL.md §5.4, VC-012): a bucket is
+/// signable exactly when it is the clock's bucket or one below it, and not
+/// below the last signed bucket; it never panics, at bucket 0 or 2^64 − 1.
+#[kani::proof]
+fn witness_time_rule_is_exact() {
+    let now: u64 = kani::any();
+    let bucket: u64 = kani::any();
+    let last: Option<u64> = kani::any();
+    let ok = crate::checkpoint::witness_time_ok(now, bucket, last);
+    let in_window = bucket == now || (now > 0 && bucket == now - 1);
+    let monotone = last.is_none_or(|l| bucket >= l);
+    assert_eq!(ok, in_window && monotone);
+}

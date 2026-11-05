@@ -1,8 +1,8 @@
 # ADR-0011: 감사, 공개 난수, 분쟁
 
-> English summary: Ballot-level comparison risk-limiting audit with record-first sampling: draw records from the board with public randomness, trustees open only those, auditors find the paper by cast id and compare. No public token tags exist, so no coercion channel is created. Initial risk limit recommendation 1% for national contests with escalation to full hand count; the hand count is the legal result. Seed = SHA3-512(dice ceremony transcript || public beacon round || final checkpoint hash) after the manifest is frozen. Tracking-code slips carry a hybrid device signature so inclusion disputes split into system failure (valid signature, record missing: HOLD the box) and forged slip (reject). Disputes are limited to inclusion because of receipt-freeness. Intake is joint NEC + Independent Verification Committee; outcomes are appended to the ledger; a failed pre-cast challenge quarantines the scanner and triggers 100% audit of its records.
+> English summary: Ballot-level comparison risk-limiting audit with record-first sampling: draw records from the board with public randomness, trustees open only those, auditors find the paper by cast id and compare. No public token tags exist, so no coercion channel is created. Initial risk limit recommendation 1% for national contests with escalation to full hand count; the hand count is the legal result. Seed = SHA3-512(dice ceremony transcript || public beacon round || binding checkpoint hash); ADR-0036 replaced the final checkpoint with the binding checkpoint (the first checkpoint covering the audit commit, witnessed before the beacon round is published), so that no input can be chosen once the beacon is known. Tracking-code slips carry a hybrid device signature so inclusion disputes split into system failure (valid signature, record missing: HOLD the box) and forged slip (reject). Disputes are limited to inclusion because of receipt-freeness. Intake is joint NEC + Independent Verification Committee; outcomes are appended to the ledger; a failed pre-cast challenge quarantines the scanner and triggers 100% audit of its records.
 
-- 상태: 채택
+- 상태: 채택 (난수 부분은 ADR-0036이 갱신)
 - 날짜: 2026-10-30
 - 관련: ADR-0005, ADR-0006, ADR-0012; 위협 TH-47, TH-50, ST-37..41, V7-061..070
 
@@ -17,6 +17,8 @@
 
 ### 난수
 시드 = `SHA3-512("ityv:seed:v1" ‖ 주사위 추첨 기록 해시 ‖ 공개 분산 난수 비콘 회차 값 ‖ 최종 체크포인트 해시)`. 추첨은 정당 참관 아래 공개 기록하고, 명세와 추출 규칙은 시드 생성 전에 동결·게시한다. 누구나 표본을 재계산할 수 있다.
+
+> ADR-0036이 갱신: 위 "최종 체크포인트"는 **고정 체크포인트**(감사 약정 `AuditCommit`을 덮는 첫 유효 체크포인트로, 증인이 자기 시계로 확인해 서명한 시각 구간이 비콘 회차의 공표보다 앞선 것)로 바뀌었다. 주사위 추첨 기록 해시, 비콘 출처와 회차, 동결된 명세는 회차 값이 공표되기 전에 약정으로 장부에 고정한다. 회차 값을 본 뒤에는 어느 입력도 고를 수 없게 하기 위해서다. 정확한 바이트 배치는 PROTOCOL §12.1이다.
 
 ### 분쟁
 1. 슬립은 추적코드, 투표소 ID, 시간 구간과 커밋먼트 유닛의 하이브리드 서명을 담는다.

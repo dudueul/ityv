@@ -158,16 +158,17 @@ fn regression() -> BTreeMap<String, String> {
         &[],
         &[],
         &Hash512([7; 64]),
+        ityv_encoding::TimeBucket::new(10),
     );
     let token = token.unwrap();
     assert_eq!(token.get().body_bytes(), body_bytes.as_slice());
-    let mut persisted = [0u8; 16 + 208];
+    let mut persisted = [0u8; 16 + 216];
     let used = memory.to_object(&mut persisted).unwrap();
     out.insert(
         "witness_memory_object_after_seq1".to_string(),
         hex(&persisted[..used]),
     );
-    let mut fresh = [0u8; 16 + 208];
+    let mut fresh = [0u8; 16 + 216];
     let used = WitnessMemory::fresh().to_object(&mut fresh).unwrap();
     out.insert(
         "witness_memory_object_fresh".to_string(),

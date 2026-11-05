@@ -10,8 +10,8 @@ use crate::scenarios::Scenario;
 
 /// The magic bytes.
 pub const MAGIC: &[u8; 8] = b"ITYVSIMB";
-/// The format version.
-pub const VERSION: u16 = 1;
+/// The format version: 2 adds the beacon observation section.
+pub const VERSION: u16 = 2;
 
 /// Section tags, in the order they appear.
 pub mod tag {
@@ -29,6 +29,9 @@ pub mod tag {
     pub const EVENTS: u16 = 0x0006;
     /// The publication deadlines' inputs.
     pub const PUBLICATIONS: u16 = 0x0007;
+    /// The beacon publication observed (fixture data), for an audited
+    /// ledger: round, publication bucket, output.
+    pub const BEACON: u16 = 0x0008;
 }
 
 fn blob(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -105,6 +108,13 @@ pub fn encode(scenario: &Scenario, ledger: &Ledger) -> Vec<u8> {
     pb.extend_from_slice(&p.published.unwrap_or(0).to_be_bytes());
     pb.extend_from_slice(&p.now.to_be_bytes());
     sections.push((tag::PUBLICATIONS, pb));
+    if let Some(b) = &scenario.beacon {
+        let mut bb = Vec::new();
+        bb.extend_from_slice(&b.round.to_be_bytes());
+        bb.extend_from_slice(&b.published.to_be_bytes());
+        blob(&mut bb, b.output);
+        sections.push((tag::BEACON, bb));
+    }
 
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);

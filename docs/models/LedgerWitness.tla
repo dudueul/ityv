@@ -71,6 +71,10 @@ Init ==
   /\ sigs = ByzantineSigs
 
 (* An honest witness signs body b only as the next step of its own chain. *)
+\* The code adds one premise the model abstracts away: the body's time
+\* bucket is within the witness's clock tolerance and not below its last
+\* signed one (PROTOCOL.md §5.4, VC-012). It only removes signatures, so
+\* Agreement and Linear are unaffected.
 HonestSign(w, b) ==
   /\ w \in Honest
   /\ b \in Bodies
@@ -79,7 +83,42 @@ HonestSign(w, b) ==
   /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
   /\ sigs' = sigs \cup { <<w, b>> }
 
-Next == \E w \in Honest, b \in Bodies : HonestSign(w, b)
+(* Catch-up after an outage (WitnessMemory::adopt, PROTOCOL.md §5.4): an
+   honest witness that has signed or adopted something takes a published
+   later body extending its own into its memory, without signing. The
+   guard lastSigned[w] # None is load-bearing: a witness whose memory was
+   lost (reset to None) and then adopted could sign a second body at a
+   sequence number it had already signed, breaking Agreement; such a
+   witness is outside this model and counts in Byzantine (see README). The
+   code also requires the run of bodies after its own to chain by hash,
+   which the prefix relation abstracts. *)
+HonestAdopt(w, b) ==
+  /\ w \in Honest
+  /\ lastSigned[w] # None
+  /\ b \in Published
+  /\ b.seq > lastSigned[w].seq
+  /\ IsPrefix(lastSigned[w].prefix, b.prefix)
+  /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
+  /\ UNCHANGED sigs
+
+(* Past a split view (WitnessMemory::adopt_past_split): the witness's last
+   body did not reach a quorum and another body at the same sequence number
+   did, over a tree extending the witness's own; it takes the published
+   body into its memory without signing, and signs only after it. It never
+   signs a second body at that sequence number. *)
+HonestAdoptPastSplit(w, b) ==
+  /\ w \in Honest
+  /\ lastSigned[w] # None
+  /\ b \in Published
+  /\ b.seq = lastSigned[w].seq
+  /\ b # lastSigned[w]
+  /\ IsPrefix(lastSigned[w].prefix, b.prefix)
+  /\ lastSigned' = [lastSigned EXCEPT ![w] = b]
+  /\ UNCHANGED sigs
+
+Next ==
+  \E w \in Honest, b \in Bodies :
+    HonestSign(w, b) \/ HonestAdopt(w, b) \/ HonestAdoptPastSplit(w, b)
 
 Spec == Init /\ [][Next]_vars
 

@@ -9,7 +9,10 @@
 //!   with the checkpoints anchored in time: `LOG_CONSISTENT`;
 //! * and the completeness of step 4: `SOURCE_COMPLETENESS_CHECKED`;
 //! * and steps 6 and 7: `CRYPTO_TALLY_VERIFIED`;
-//! * and step 8 concluded by its rule: `PAPER_AUDITED`;
+//! * and step 8: `PAPER_AUDITED`. The verifier passes step 8 only when it
+//!   computed, from the ledger, that every ballot style's audit concluded
+//!   under its rule (`ityv-verify`'s audit stage, ADR-0036); there is no
+//!   separate "concluded" flag a caller could set;
 //! * otherwise `UNVERIFIED`, which is also where every report starts
 //!   (ITYV-BEH-014, ITYV-BEH-161).
 //!
@@ -178,7 +181,6 @@ pub struct Evidence {
     anchors: Publication,
     board: Publication,
     holds: HoldSet,
-    audit_concluded: bool,
     receipt_scan: bool,
 }
 
@@ -192,7 +194,6 @@ impl Evidence {
             anchors: Publication::Pending,
             board: Publication::Pending,
             holds: HoldSet::empty(),
-            audit_concluded: false,
             receipt_scan: false,
         }
     }
@@ -246,13 +247,6 @@ impl Evidence {
     #[must_use]
     pub const fn with_split_view(self) -> Self {
         self.with_holds(HoldSet::empty().with(HoldReason::SplitView))
-    }
-
-    /// Records that the audit's sample comparison concluded by its rule.
-    #[must_use]
-    pub const fn with_audit_concluded(mut self) -> Self {
-        self.audit_concluded = true;
-        self
     }
 
     /// Records that the scope includes `RECEIPT_SCAN` boxes (§17).
@@ -333,7 +327,7 @@ pub fn evaluate(evidence: &Evidence) -> StatusReport {
         Status::LogConsistent
     } else if !passed(&[Step::Participation, Step::Tally]) {
         Status::SourceCompletenessChecked
-    } else if !(passed(&[Step::Audit]) && evidence.audit_concluded) {
+    } else if !passed(&[Step::Audit]) {
         Status::CryptoTallyVerified
     } else {
         Status::PaperAudited
@@ -509,26 +503,24 @@ mod tests {
             Status::CryptoTallyVerified
         );
         steps.push(Step::Audit);
+        assert_eq!(evaluate(&passed(&steps)).status(), Status::PaperAudited);
+        // An audit not run (not concluded) stays at the tally.
         assert_eq!(
-            evaluate(&passed(&steps)).status(),
+            evaluate(&passed(&steps).with_step(Step::Audit, Outcome::NotRun)).status(),
             Status::CryptoTallyVerified
-        );
-        assert_eq!(
-            evaluate(&passed(&steps).with_audit_concluded()).status(),
-            Status::PaperAudited
         );
         // Each prerequisite step is needed.
         for missing in LOG {
-            let e = passed(&all_but(missing)).with_audit_concluded();
+            let e = passed(&all_but(missing));
             assert_eq!(evaluate(&e).status(), Status::Unverified, "{missing:?}");
         }
-        let e = passed(&all_but(Step::BoxCompleteness)).with_audit_concluded();
+        let e = passed(&all_but(Step::BoxCompleteness));
         assert_eq!(evaluate(&e).status(), Status::LogConsistent);
         for missing in [Step::Participation, Step::Tally] {
-            let e = passed(&all_but(missing)).with_audit_concluded();
+            let e = passed(&all_but(missing));
             assert_eq!(evaluate(&e).status(), Status::SourceCompletenessChecked);
         }
-        let e = passed(&all_but(Step::Audit)).with_audit_concluded();
+        let e = passed(&all_but(Step::Audit));
         assert_eq!(evaluate(&e).status(), Status::CryptoTallyVerified);
         // Steps 11 and 12 not run do not block the ladder.
         let mut core = LOG.to_vec();
@@ -538,15 +530,12 @@ mod tests {
             Step::Tally,
             Step::Audit,
         ]);
-        assert_eq!(
-            evaluate(&passed(&core).with_audit_concluded()).status(),
-            Status::PaperAudited
-        );
+        assert_eq!(evaluate(&passed(&core)).status(), Status::PaperAudited);
     }
 
     #[test]
     fn anchors_gate_log_consistency() {
-        let all = passed(&Step::ALL).with_audit_concluded();
+        let all = passed(&Step::ALL);
         assert_eq!(evaluate(&all).status(), Status::PaperAudited);
         let pending = all.with_anchors(Publication::Pending);
         assert_eq!(evaluate(&pending).status(), Status::Unverified);
@@ -568,7 +557,7 @@ mod tests {
 
     #[test]
     fn holds_override() {
-        let all = passed(&Step::ALL).with_audit_concluded();
+        let all = passed(&Step::ALL);
         for step in Step::ALL {
             let report = evaluate(&all.with_step(step, Outcome::Failed));
             assert_eq!(report.status(), Status::HoldReview);

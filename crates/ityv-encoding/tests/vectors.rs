@@ -911,8 +911,10 @@ mod tally {
         QuorumSigned, RECEIPT_ENTRY_LEN, ReceiptEntries, ReceiptEntry, ReceiptOutcome,
         ReceiptResolutionBody, ReceiptResolutionParts, ReportingUnitId,
         SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_QUORUM_SIGNED,
-        SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1, Scalar32,
-        TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId, Writer, decode_object,
+        SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_TALLY_SCOPE_BODY,
+        SCHEMA_VERSION_1, SCHEMA_VERSION_QUORUM_SIGNED, SampleOpeningRefBody,
+        SampleOpeningRefParts, Scalar32, TallyScopeBody, TallyScopeParts, TimeBucket, TrusteeId,
+        Writer, decode_object,
     };
     use std::vec::Vec;
 
@@ -1163,7 +1165,7 @@ mod tally {
         let body = leak(body);
         let sigs = [sig(b"T-A", &SIG_A), sig(b"T-J", &SIG_B)];
         let event = QuorumSigned::new(body, &sigs).unwrap();
-        encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &event)
+        encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_QUORUM_SIGNED, &event)
     }
 
     fn paper(votes: &[u64]) -> Vec<u8> {
@@ -1184,8 +1186,20 @@ mod tally {
         let mut h = std::vec![0u8; HEADER_LEN];
         h[0..4].copy_from_slice(b"ITYV");
         h[4..8].copy_from_slice(&SCHEMA_QUORUM_SIGNED.get().to_be_bytes());
-        h[8..10].copy_from_slice(&SCHEMA_VERSION_1.to_be_bytes());
+        h[8..10].copy_from_slice(&SCHEMA_VERSION_QUORUM_SIGNED.to_be_bytes());
         h
+    }
+
+    /// A sample opening reference body (`0x004A`, ADR-0036).
+    fn opening_ref() -> Vec<u8> {
+        let body = SampleOpeningRefBody::new(&SampleOpeningRefParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            record_hash: super::patterned(0x60),
+            opening_hash: super::patterned(0x70),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1, &body)
     }
 
     fn quorum_vectors() -> Vec<Vector> {
@@ -1199,6 +1213,10 @@ mod tally {
             valid(
                 "receipt_resolution_two_trustees",
                 quorum(receipt(&[(0x10, ReceiptOutcome::Received)]))
+            ),
+            valid(
+                "sample_opening_reference_two_trustees_(version_2)",
+                quorum(opening_ref())
             ),
         ];
         let mut b = ok[..count_at].to_vec();
@@ -1324,8 +1342,13 @@ mod tally {
         let content = render("QuorumSigned", SCHEMA_QUORUM_SIGNED, &quorum_vectors());
         check_file("quorum_signed.txt", &content);
         self_check(&content, |b| {
-            let v: QuorumSigned<'_> = decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, b)?;
-            Ok(encode_to_vec(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1, &v))
+            let v: QuorumSigned<'_> =
+                decode_object(SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_QUORUM_SIGNED, b)?;
+            Ok(encode_to_vec(
+                SCHEMA_QUORUM_SIGNED,
+                SCHEMA_VERSION_QUORUM_SIGNED,
+                &v,
+            ))
         });
     }
 
@@ -1366,4 +1389,453 @@ mod tally {
             ))
         });
     }
+}
+
+/// The paper audit (ENCODING.md §8.66–§8.72, ADR-0036).
+mod audit {
+    use super::common::{Vector, check_file, encode_to_vec, ident_len, render, self_check};
+    use ityv_encoding::{
+        AuditCommitBody, AuditCommitParts, AuditFindingBody, AuditFindingParts, AuditFreezeParts,
+        AuditManifestFreezeBody, AuditRound, AuditRounds, AuditSeedBody, AuditSeedParts,
+        BallotStyleId, BoxId, ComparisonCode, ElectionId, HEADER_LEN, HandCountReportBody,
+        MAX_TALLY_COUNT, PaperCountParts, PaperVotes, ReportingUnitId, SCHEMA_AUDIT_COMMIT_BODY,
+        SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_AUDIT_SEED_BODY,
+        SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_SAMPLE_OPENING_BODY,
+        SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1, SampleComparisonBody,
+        SampleComparisonParts, SampleOpeningBody, SampleOpeningParts, SampleOpeningRefBody,
+        SampleOpeningRefParts, Scalar32, Scalars, TimeBucket, Token192, decode_object,
+    };
+    use std::vec::Vec;
+
+    fn e() -> ElectionId<'static> {
+        ElectionId::new(b"KR-2030-PRES").unwrap()
+    }
+
+    fn style() -> BallotStyleId<'static> {
+        BallotStyleId::new(b"S-11-0001").unwrap()
+    }
+
+    fn valid(label: &'static str, bytes: Vec<u8>) -> Vector {
+        Vector {
+            label,
+            bytes,
+            expected: None,
+        }
+    }
+
+    fn invalid(label: &'static str, bytes: Vec<u8>, kind: &'static str, offset: usize) -> Vector {
+        Vector {
+            label,
+            bytes,
+            expected: Some((kind, offset)),
+        }
+    }
+
+    fn fix_len(v: &mut [u8]) {
+        let body_len = u32::try_from(v.len() - HEADER_LEN).unwrap();
+        v[12..16].copy_from_slice(&body_len.to_be_bytes());
+    }
+
+    fn round(sample_size: u64, threshold: u32) -> AuditRound {
+        AuditRound {
+            sample_size,
+            threshold,
+        }
+    }
+
+    fn freeze(rounds: &[AuditRound]) -> Vec<u8> {
+        let body = AuditManifestFreezeBody::new(&AuditFreezeParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            frame_count: 1_000,
+            frame_root: super::patterned(0x10),
+            rule_hash: super::patterned(0x11),
+            risk_limit_ppm: 10_000,
+            beacon_source: super::patterned(0x12),
+            beacon_round: 4_242,
+            rounds: AuditRounds::new(rounds).unwrap(),
+            time_bucket: TimeBucket::new(3_000),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_AUDIT_FREEZE_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    // Offsets: header 16, election 4 + 12, style 4 + 9.
+    const COUNT_AT: usize = HEADER_LEN + 16 + 13;
+    const RULE_AT: usize = COUNT_AT + 8 + 64;
+    const RISK_AT: usize = RULE_AT + 64;
+    const BEACON_AT: usize = RISK_AT + 4;
+    const ROUNDS_AT: usize = BEACON_AT + 64 + 8;
+    const FIRST_ROUND_AT: usize = ROUNDS_AT + 4;
+    const SECOND_ROUND_AT: usize = FIRST_ROUND_AT + 12;
+
+    fn freeze_vectors() -> Vec<Vector> {
+        let ok = freeze(&[round(10, 0), round(40, 2)]);
+        let mut v = std::vec![
+            valid("two_rounds", ok.clone()),
+            valid("one_round", freeze(&[round(1, 0)])),
+        ];
+        let mut b = ok.clone();
+        b[COUNT_AT..COUNT_AT + 8].copy_from_slice(&(MAX_TALLY_COUNT + 1).to_be_bytes());
+        v.push(invalid(
+            "frame_above_2^26_-_1",
+            b,
+            "ValueOutOfRange",
+            COUNT_AT,
+        ));
+        let mut b = ok.clone();
+        b[RULE_AT..RULE_AT + 64].fill(0);
+        v.push(invalid("no_rule", b, "InvalidPreviousHash", RULE_AT));
+        let mut b = ok.clone();
+        b[RISK_AT..RISK_AT + 4].copy_from_slice(&0u32.to_be_bytes());
+        v.push(invalid("risk_limit_0", b, "ValueOutOfRange", RISK_AT));
+        let mut b = ok.clone();
+        b[RISK_AT..RISK_AT + 4].copy_from_slice(&1_000_000u32.to_be_bytes());
+        v.push(invalid("risk_limit_100%", b, "ValueOutOfRange", RISK_AT));
+        let mut b = ok.clone();
+        b[BEACON_AT..BEACON_AT + 64].fill(0);
+        v.push(invalid("no_beacon", b, "InvalidPreviousHash", BEACON_AT));
+        let mut b = ok.clone();
+        b[ROUNDS_AT..ROUNDS_AT + 4].copy_from_slice(&0u32.to_be_bytes());
+        v.push(invalid("no_round", b, "InvariantViolation", ROUNDS_AT));
+        let mut b = ok.clone();
+        b[ROUNDS_AT..ROUNDS_AT + 4].copy_from_slice(&9u32.to_be_bytes());
+        v.push(invalid("nine_rounds", b, "CountExceedsMax", ROUNDS_AT));
+        let mut b = ok.clone();
+        b[FIRST_ROUND_AT..FIRST_ROUND_AT + 8].copy_from_slice(&0u64.to_be_bytes());
+        v.push(invalid(
+            "empty_sample",
+            b,
+            "ValueOutOfRange",
+            FIRST_ROUND_AT,
+        ));
+        let mut b = ok.clone();
+        b[SECOND_ROUND_AT..SECOND_ROUND_AT + 8].copy_from_slice(&10u64.to_be_bytes());
+        v.push(invalid("same_size_twice", b, "Duplicate", SECOND_ROUND_AT));
+        let mut b = ok.clone();
+        b[SECOND_ROUND_AT..SECOND_ROUND_AT + 8].copy_from_slice(&9u64.to_be_bytes());
+        v.push(invalid(
+            "smaller_expansion",
+            b,
+            "NotSorted",
+            SECOND_ROUND_AT,
+        ));
+        let mut b = ok.clone();
+        b[FIRST_ROUND_AT + 8..FIRST_ROUND_AT + 12].copy_from_slice(&10u32.to_be_bytes());
+        v.push(invalid(
+            "threshold_not_below_size",
+            b,
+            "ValueOutOfRange",
+            FIRST_ROUND_AT,
+        ));
+        let mut b = ok;
+        b[FIRST_ROUND_AT + 8..FIRST_ROUND_AT + 12].copy_from_slice(&3u32.to_be_bytes());
+        v.push(invalid(
+            "lower_threshold_later",
+            b,
+            "InvariantViolation",
+            SECOND_ROUND_AT,
+        ));
+        v
+    }
+
+    fn seed() -> Vec<u8> {
+        let body = AuditSeedBody::new(&AuditSeedParts {
+            election_id: e(),
+            dice_hash: super::patterned(0x20),
+            beacon_round: 4_242,
+            beacon_value: super::patterned(0x21),
+            checkpoint_hash: super::patterned(0x22),
+            seed: super::patterned(0x23),
+            time_bucket: TimeBucket::new(3_010),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_AUDIT_SEED_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    const DICE_AT: usize = HEADER_LEN + 16;
+    const CHECKPOINT_AT: usize = DICE_AT + 64 + 8 + 64;
+    const SOURCE_AT: usize = DICE_AT + 64;
+    const FREEZES_AT: usize = SOURCE_AT + 64 + 8;
+
+    fn commit() -> Vec<u8> {
+        let body = AuditCommitBody::new(&AuditCommitParts {
+            election_id: e(),
+            dice_hash: super::patterned(0x20),
+            beacon_source: super::patterned(0x24),
+            beacon_round: 4_242,
+            freezes_root: super::patterned(0x25),
+            time_bucket: TimeBucket::new(3_005),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    fn commit_vectors() -> Vec<Vector> {
+        let ok = commit();
+        let mut v = std::vec![valid("commit", ok.clone())];
+        for (label, at) in [
+            ("no_dice", DICE_AT),
+            ("no_beacon", SOURCE_AT),
+            ("no_freezes", FREEZES_AT),
+        ] {
+            let mut b = ok.clone();
+            b[at..at + 64].fill(0);
+            v.push(invalid(label, b, "InvalidPreviousHash", at));
+        }
+        v
+    }
+
+    fn seed_vectors() -> Vec<Vector> {
+        let ok = seed();
+        let mut v = std::vec![valid("seed", ok.clone())];
+        let mut b = ok.clone();
+        b[DICE_AT..DICE_AT + 64].fill(0);
+        v.push(invalid("no_dice", b, "InvalidPreviousHash", DICE_AT));
+        let mut b = ok;
+        b[CHECKPOINT_AT..CHECKPOINT_AT + 64].fill(0);
+        v.push(invalid(
+            "no_checkpoint",
+            b,
+            "InvalidPreviousHash",
+            CHECKPOINT_AT,
+        ));
+        v
+    }
+
+    fn opening(option: u16, chunks: u8) -> Vec<u8> {
+        let list: Vec<Scalar32> = (0..chunks).map(|i| Scalar32([i + 1; 32])).collect();
+        let rand = Scalars::new(&list).unwrap();
+        let body = SampleOpeningBody::new(&SampleOpeningParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            record_hash: super::patterned(0x30),
+            option_index: option,
+            cast_id: Token192([0x77; 24]),
+            rand: &rand,
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_SAMPLE_OPENING_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    const OPTION_AT: usize = HEADER_LEN + 16 + 13 + 64;
+    const RAND_AT: usize = OPTION_AT + 2 + 24;
+
+    fn opening_vectors() -> Vec<Vector> {
+        let ok = opening(3, 2);
+        let mut v = std::vec![
+            valid("two_chunks", ok.clone()),
+            valid("last_option_eight_chunks", opening(63, 8)),
+        ];
+        let mut b = ok.clone();
+        b[OPTION_AT..OPTION_AT + 2].copy_from_slice(&64u16.to_be_bytes());
+        v.push(invalid("option_64", b, "ValueOutOfRange", OPTION_AT));
+        let mut b = ok[..RAND_AT].to_vec();
+        b.extend_from_slice(&0u32.to_be_bytes());
+        fix_len(&mut b);
+        v.push(invalid("no_randomness", b, "ValueOutOfRange", RAND_AT));
+        let mut b = ok;
+        b[RAND_AT..RAND_AT + 4].copy_from_slice(&9u32.to_be_bytes());
+        v.push(invalid("nine_scalars", b, "CountExceedsMax", RAND_AT));
+        v
+    }
+
+    fn reference() -> Vec<u8> {
+        let body = SampleOpeningRefBody::new(&SampleOpeningRefParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            record_hash: super::patterned(0x30),
+            opening_hash: super::patterned(0x31),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    const REF_OPENING_AT: usize = HEADER_LEN + 16 + 13 + 64;
+
+    fn reference_vectors() -> Vec<Vector> {
+        let ok = reference();
+        let mut b = ok.clone();
+        b[REF_OPENING_AT..REF_OPENING_AT + 64].fill(0);
+        std::vec![
+            valid("reference", ok),
+            invalid("no_opening", b, "InvalidPreviousHash", REF_OPENING_AT),
+        ]
+    }
+
+    fn comparison(code: ComparisonCode, mark: bool) -> Vec<u8> {
+        let body = SampleComparisonBody::new(&SampleComparisonParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            record_hash: super::patterned(0x30),
+            opening_hash: super::patterned(0x31),
+            device_id: BoxId::new(b"BOX-11-0042").unwrap(),
+            code,
+            transfer_mark: mark,
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_SAMPLE_COMPARISON_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    fn comparison_vectors() -> Vec<Vector> {
+        let ok = comparison(ComparisonCode::Match, false);
+        let opening_at = HEADER_LEN + 16 + 13 + 64;
+        let code_at = opening_at + 64 + ident_len(b"BOX-11-0042");
+        let mut v = std::vec![
+            valid("match", ok.clone()),
+            valid(
+                "other_candidate_with_transfer_mark",
+                comparison(ComparisonCode::OtherCandidate, true)
+            ),
+            valid(
+                "imprint_mismatch",
+                comparison(ComparisonCode::ImprintMismatch, false)
+            ),
+        ];
+        let mut b = ok.clone();
+        b[opening_at..opening_at + 64].fill(0);
+        v.push(invalid("no_opening", b, "InvalidPreviousHash", opening_at));
+        let mut b = ok.clone();
+        b[code_at] = 7;
+        v.push(invalid("code_7", b, "ValueOutOfRange", code_at));
+        let mut b = ok;
+        b[code_at + 1] = 2;
+        v.push(invalid("mark_2", b, "InvalidBool", code_at + 1));
+        v
+    }
+
+    fn finding() -> Vec<u8> {
+        let body = AuditFindingBody::new(&AuditFindingParts {
+            election_id: e(),
+            ballot_style_id: style(),
+            device_id: BoxId::new(b"BOX-11-0042").unwrap(),
+            finding_hash: super::patterned(0x40),
+            time_bucket: TimeBucket::new(3_100),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_AUDIT_FINDING_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    fn finding_vectors() -> Vec<Vector> {
+        let ok = finding();
+        let at = HEADER_LEN + 16 + 13 + ident_len(b"BOX-11-0042");
+        let mut b = ok.clone();
+        b[at..at + 64].fill(0);
+        std::vec![
+            valid("finding", ok),
+            invalid("no_document", b, "InvalidPreviousHash", at),
+        ]
+    }
+
+    fn hand_count(votes: &[u64]) -> Vec<u8> {
+        let body = HandCountReportBody::new(&PaperCountParts {
+            election_id: e(),
+            reporting_unit_id: ReportingUnitId::new(b"RU-11-01").unwrap(),
+            ballot_style_id: style(),
+            votes: PaperVotes::new(votes).unwrap(),
+            invalid: 4,
+            time_bucket: TimeBucket::new(3_200),
+        })
+        .unwrap();
+        encode_to_vec(SCHEMA_HAND_COUNT_REPORT_BODY, SCHEMA_VERSION_1, &body)
+    }
+
+    fn hand_count_vectors() -> Vec<Vector> {
+        let ok = hand_count(&[120, 75, 3]);
+        let votes_at = HEADER_LEN + 16 + 12 + 13;
+        let mut v = std::vec![valid("three_candidates", ok.clone())];
+        let mut b = ok.clone();
+        b[votes_at + 4..votes_at + 12].copy_from_slice(&(MAX_TALLY_COUNT + 1).to_be_bytes());
+        v.push(invalid(
+            "votes_above_2^26_-_1",
+            b,
+            "ValueOutOfRange",
+            votes_at + 4,
+        ));
+        let mut b = ok[..votes_at].to_vec();
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&[0u8; 16]);
+        fix_len(&mut b);
+        v.push(invalid("no_candidate", b, "InvariantViolation", votes_at));
+        v
+    }
+
+    macro_rules! audit_file {
+        ($name:ident, $ty:ty, $title:literal, $file:literal, $schema:expr, $vectors:expr) => {
+            #[test]
+            fn $name() {
+                let content = render($title, $schema, &$vectors);
+                check_file($file, &content);
+                self_check(&content, |b| {
+                    let v: $ty = decode_object($schema, SCHEMA_VERSION_1, b)?;
+                    Ok(encode_to_vec($schema, SCHEMA_VERSION_1, &v))
+                });
+            }
+        };
+    }
+
+    audit_file!(
+        freeze_vectors_are_current_and_self_consistent,
+        AuditManifestFreezeBody<'_>,
+        "AuditManifestFreezeBody",
+        "audit_manifest_freeze_body.txt",
+        SCHEMA_AUDIT_FREEZE_BODY,
+        freeze_vectors()
+    );
+    audit_file!(
+        seed_vectors_are_current_and_self_consistent,
+        AuditSeedBody<'_>,
+        "AuditSeedBody",
+        "audit_seed_body.txt",
+        SCHEMA_AUDIT_SEED_BODY,
+        seed_vectors()
+    );
+    audit_file!(
+        commit_vectors_are_current_and_self_consistent,
+        AuditCommitBody<'_>,
+        "AuditCommitBody",
+        "audit_commit_body.txt",
+        SCHEMA_AUDIT_COMMIT_BODY,
+        commit_vectors()
+    );
+    audit_file!(
+        opening_vectors_are_current_and_self_consistent,
+        SampleOpeningBody<'_>,
+        "SampleOpeningBody",
+        "sample_opening_body.txt",
+        SCHEMA_SAMPLE_OPENING_BODY,
+        opening_vectors()
+    );
+    audit_file!(
+        reference_vectors_are_current_and_self_consistent,
+        SampleOpeningRefBody<'_>,
+        "SampleOpeningRefBody",
+        "sample_opening_ref_body.txt",
+        SCHEMA_SAMPLE_OPENING_REF_BODY,
+        reference_vectors()
+    );
+    audit_file!(
+        comparison_vectors_are_current_and_self_consistent,
+        SampleComparisonBody<'_>,
+        "SampleComparisonBody",
+        "sample_comparison_body.txt",
+        SCHEMA_SAMPLE_COMPARISON_BODY,
+        comparison_vectors()
+    );
+    audit_file!(
+        finding_vectors_are_current_and_self_consistent,
+        AuditFindingBody<'_>,
+        "AuditFindingBody",
+        "audit_finding_body.txt",
+        SCHEMA_AUDIT_FINDING_BODY,
+        finding_vectors()
+    );
+    audit_file!(
+        hand_count_vectors_are_current_and_self_consistent,
+        HandCountReportBody<'_>,
+        "HandCountReportBody",
+        "hand_count_report_body.txt",
+        SCHEMA_HAND_COUNT_REPORT_BODY,
+        hand_count_vectors()
+    );
 }

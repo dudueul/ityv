@@ -18,7 +18,7 @@ use common::{
     roster_entries, signed_checkpoint_object, witnesses,
 };
 use ityv_crypto::{PURPOSE_CHECKPOINT, sign_hybrid};
-use ityv_encoding::{Encode, ErrorKind, Hash512, Ident, Seq};
+use ityv_encoding::{Encode, ErrorKind, Hash512, Ident, Seq, TimeBucket};
 use ityv_ledger::{
     ConsistencyProof, EMPTY_ROOT, Error, Root, SCHEMA_SIGNED_CHECKPOINT, SignedCheckpoint,
     SignedCheckpointParts, WitnessMemory, WitnessSignatureEntry, consistency_proof, root_of_leaves,
@@ -155,6 +155,7 @@ fn signed_checkpoint_rejects_unsorted_duplicate_and_bad_bodies() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn successor_validation_checks_every_field() {
     let ls = leaves(4);
     let r2 = root_of_leaves(&ls.as_slice(), 2).unwrap();
@@ -220,6 +221,21 @@ fn successor_validation_checks_every_field() {
         validate_successor(Some((&first, &first_hash)), &wrong_prev, &GENESIS).unwrap_err(),
         Error::PreviousHashMismatch
     );
+    // Time going back: a checkpoint below its predecessor's bucket; the
+    // same bucket again is fine.
+    let back = body_object(&body_parts(
+        2, 4, r4, first_hash, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 0,
+    ));
+    let back = decode_body(&back);
+    assert_eq!(
+        validate_successor(Some((&first, &first_hash)), &back, &GENESIS).unwrap_err(),
+        Error::TimeWentBack
+    );
+    let same_time = body_object(&body_parts(
+        2, 4, r4, first_hash, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 1,
+    ));
+    let same_time = decode_body(&same_time);
+    assert!(validate_successor(Some((&first, &first_hash)), &same_time, &GENESIS).is_ok());
     // Shrinking tree.
     let shrink = body_object(&body_parts(
         2, 1, r2, first_hash, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 2,
@@ -265,7 +281,9 @@ fn successor_validation_checks_every_field() {
 }
 
 /// Runs `may_sign` on a memory and asserts that it fails with `expected`,
-/// returning the memory, which must be unchanged.
+/// returning the memory, which must be unchanged. Every input of
+/// `may_sign` is an argument, the witness's clock `now` among them.
+#[allow(clippy::too_many_arguments)]
 fn refuse(
     memory: WitnessMemory,
     body: &[u8],
@@ -273,10 +291,11 @@ fn refuse(
     close: &[Hash512],
     disputes: &[Hash512],
     genesis: &Hash512,
+    now: TimeBucket,
     expected: &Error,
 ) -> WitnessMemory {
     let before = WitnessMemory::from_last(memory.last().copied());
-    let (result, memory) = memory.may_sign(body, proof, close, disputes, genesis);
+    let (result, memory) = memory.may_sign(body, proof, close, disputes, genesis, now);
     assert_eq!(result.unwrap_err(), *expected);
     assert_eq!(memory, before, "a refused body leaves the memory unchanged");
     memory
@@ -307,8 +326,24 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         1,
     ));
     let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
-    let memory = refuse(memory, &b1, &p36, &[], &[], &GENESIS, &Error::ProofInvalid);
-    let (t1, memory) = memory.may_sign(&b1, &ConsistencyProof::EMPTY, &[], &[], &GENESIS);
+    let memory = refuse(
+        memory,
+        &b1,
+        &p36,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(1),
+        &Error::ProofInvalid,
+    );
+    let (t1, memory) = memory.may_sign(
+        &b1,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(1),
+    );
     let t1 = t1.unwrap();
     assert_eq!(t1.get().body_bytes(), b1.as_slice());
     assert_eq!(*t1.get().body_hash(), ityv_crypto::object_hash(&b1));
@@ -324,9 +359,9 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
     let ids1 = *last.ids_hash();
 
     // The memory survives persistence as a complete object.
-    let mut buf = [0u8; 16 + 208];
+    let mut buf = [0u8; 16 + 216];
     let used = memory.to_object(&mut buf).unwrap();
-    assert_eq!(used, 16 + 208);
+    assert_eq!(used, 16 + 216);
     let back = WitnessMemory::from_object(&buf[..used]).unwrap();
     assert_eq!(back, memory);
 
@@ -349,6 +384,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &[],
         &[],
         &GENESIS,
+        TimeBucket::new(2),
         &Error::SequenceGap,
     );
 
@@ -372,9 +408,10 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(2),
         &Error::ProofInvalid,
     );
-    let (t2, memory) = memory.may_sign(&b2, &p36, &close_set, &[], &GENESIS);
+    let (t2, memory) = memory.may_sign(&b2, &p36, &close_set, &[], &GENESIS, TimeBucket::new(2));
     let t2 = t2.unwrap();
     assert_eq!(t2.get().box_close_hashes(), &close_set[..]);
     let memory = refuse(
@@ -384,6 +421,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::SequenceGap,
     );
     assert_eq!(*memory.last().unwrap().ids_hash(), ids1);
@@ -405,6 +443,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::SequenceGap,
     );
     // Wrong previous hash.
@@ -418,6 +457,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::PreviousHashMismatch,
     );
     // A changed ledger identifier.
@@ -431,6 +471,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::LedgerMismatch,
     );
     let mut parts = body_parts(3, 8, r8, h2, close_root, EMPTY_ROOT, GENESIS, 3);
@@ -443,6 +484,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::LedgerMismatch,
     );
     let mut parts = body_parts(3, 8, r8, h2, close_root, EMPTY_ROOT, GENESIS, 3);
@@ -455,6 +497,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::LedgerMismatch,
     );
     // Shrinking tree.
@@ -468,6 +511,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::TreeShrank,
     );
     // Wrong genesis.
@@ -478,6 +522,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &Hash512([8; 64]),
+        TimeBucket::new(3),
         &Error::GenesisMismatch,
     );
     // Wrong box-close root (set differs) and wrong dispute root.
@@ -488,6 +533,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &[leaf_input(11)],
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::RootMismatch(Root::BoxClose),
     );
     let memory = refuse(
@@ -497,6 +543,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[leaf_input(1)],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::RootMismatch(Root::Dispute),
     );
     // Unsorted set input is rejected before any comparison.
@@ -507,6 +554,7 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &[leaf_input(12), leaf_input(11)],
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::NotSorted,
     );
     // Invalid consistency proof.
@@ -517,13 +565,15 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
         &close_set,
         &[],
         &GENESIS,
+        TimeBucket::new(3),
         &Error::ProofInvalid,
     );
     // Not a body at all.
-    let (junk, memory) = memory.may_sign(b"junk", &p68, &close_set, &[], &GENESIS);
+    let (junk, memory) =
+        memory.may_sign(b"junk", &p68, &close_set, &[], &GENESIS, TimeBucket::new(3));
     assert!(matches!(junk.unwrap_err(), Error::Encoding(_)));
     // The good one.
-    let (t3, memory) = memory.may_sign(&good3, &p68, &close_set, &[], &GENESIS);
+    let (t3, memory) = memory.may_sign(&good3, &p68, &close_set, &[], &GENESIS, TimeBucket::new(3));
     let t3 = t3.unwrap();
     assert_eq!(t3.get().body().parts().checkpoint_seq.get(), 3);
     assert_eq!(memory.last().unwrap().seq().get(), 3);
@@ -532,7 +582,14 @@ fn witness_memory_signs_a_chain_and_refuses_every_deviation() {
     let same = body_object(&body_parts(
         4, 8, r8, h3, close_root, EMPTY_ROOT, GENESIS, 4,
     ));
-    let (t4, memory) = memory.may_sign(&same, &ConsistencyProof::EMPTY, &close_set, &[], &GENESIS);
+    let (t4, memory) = memory.may_sign(
+        &same,
+        &ConsistencyProof::EMPTY,
+        &close_set,
+        &[],
+        &GENESIS,
+        TimeBucket::new(4),
+    );
     assert_eq!(t4.unwrap().get().body().parts().checkpoint_seq.get(), 4);
     // A persisted memory rebuilt from parts behaves the same.
     let rebuilt = WitnessMemory::from_last(memory.last().copied());
@@ -556,8 +613,14 @@ fn maximum_length_identifiers_pass_through_the_witness_rule() {
     parts.ledger_id = ityv_encoding::LedgerId::new(&long).unwrap();
     parts.keyset_id = ityv_encoding::KeysetId::new(&long).unwrap();
     let body = body_object(&parts);
-    let (token, memory) =
-        WitnessMemory::fresh().may_sign(&body, &ConsistencyProof::EMPTY, &[], &[], &GENESIS);
+    let (token, memory) = WitnessMemory::fresh().may_sign(
+        &body,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(1),
+    );
     assert_eq!(token.unwrap().get().body_bytes(), body.as_slice());
     let ids = *memory.last().unwrap().ids_hash();
     // The same triple hashes the same; a different one does not.
@@ -566,7 +629,14 @@ fn maximum_length_identifiers_pass_through_the_witness_rule() {
     other.previous_checkpoint_hash = ityv_crypto::object_hash(&body);
     other.time_bucket = ityv_encoding::TimeBucket::new(2);
     let body2 = body_object(&other);
-    let (token, memory) = memory.may_sign(&body2, &ConsistencyProof::EMPTY, &[], &[], &GENESIS);
+    let (token, memory) = memory.may_sign(
+        &body2,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(2),
+    );
     assert!(token.is_ok());
     assert_eq!(*memory.last().unwrap().ids_hash(), ids);
 }
@@ -574,14 +644,14 @@ fn maximum_length_identifiers_pass_through_the_witness_rule() {
 #[test]
 fn witness_memory_object_accepts_the_size_boundary() {
     // last_seq 1, tree_size exactly 2^40, arbitrary hashes.
-    let mut buf = [0u8; 224];
+    let mut buf = [0u8; 232];
     buf[..4].copy_from_slice(b"ITYV");
     buf[4..8].copy_from_slice(&0x0011u32.to_be_bytes());
-    buf[8..10].copy_from_slice(&1u16.to_be_bytes());
-    buf[12..16].copy_from_slice(&208u32.to_be_bytes());
+    buf[8..10].copy_from_slice(&2u16.to_be_bytes());
+    buf[12..16].copy_from_slice(&216u32.to_be_bytes());
     buf[16..24].copy_from_slice(&1u64.to_be_bytes());
     buf[24..32].copy_from_slice(&(1u64 << 40).to_be_bytes());
-    for b in &mut buf[32..224] {
+    for b in &mut buf[32..232] {
         *b = 7;
     }
     let memory = WitnessMemory::from_object(&buf).unwrap();
@@ -595,9 +665,10 @@ fn witness_memory_object_accepts_the_size_boundary() {
 
 #[test]
 fn witness_memory_object_rejects_garbage_and_inconsistent_fields() {
-    let mut buf = [0u8; 16 + 208];
+    let mut buf = [0u8; 16 + 216];
     let used = WitnessMemory::fresh().to_object(&mut buf).unwrap();
-    assert_eq!(used, 224);
+    assert_eq!(used, 232);
+    assert_eq!(&buf[8..10], &2u16.to_be_bytes());
     assert_eq!(
         WitnessMemory::from_object(&buf).unwrap(),
         WitnessMemory::fresh()
@@ -615,10 +686,20 @@ fn witness_memory_object_rejects_garbage_and_inconsistent_fields() {
         WitnessMemory::from_object(&wrong_schema).unwrap_err(),
         Error::Encoding(e) if e.kind() == ErrorKind::SchemaMismatch
     ));
-    assert!(WitnessMemory::from_object(&buf[..223]).is_err());
+    assert!(WitnessMemory::from_object(&buf[..231]).is_err());
+    // The version 1 layout is no longer read.
+    let mut v1 = buf;
+    v1[8..10].copy_from_slice(&1u16.to_be_bytes());
+    assert!(WitnessMemory::from_object(&v1).is_err());
     // last_seq 0 with any one non-zero field: tree_size, root_hash,
-    // body_hash, ids_hash.
-    for byte in [16 + 15, 16 + 16 + 5, 16 + 16 + 64 + 5, 16 + 16 + 128 + 63] {
+    // body_hash, ids_hash, time_bucket.
+    for byte in [
+        16 + 15,
+        16 + 16 + 5,
+        16 + 16 + 64 + 5,
+        16 + 16 + 128 + 63,
+        16 + 16 + 192 + 7,
+    ] {
         let mut inconsistent = buf;
         inconsistent[byte] = 1;
         assert!(
@@ -649,8 +730,14 @@ fn witness_memory_object_rejects_garbage_and_inconsistent_fields() {
             GENESIS,
             1,
         ));
-        let (token, memory) =
-            WitnessMemory::fresh().may_sign(&body, &ConsistencyProof::EMPTY, &[], &[], &GENESIS);
+        let (token, memory) = WitnessMemory::fresh().may_sign(
+            &body,
+            &ConsistencyProof::EMPTY,
+            &[],
+            &[],
+            &GENESIS,
+            TimeBucket::new(1),
+        );
         let _ = token.unwrap();
         memory
     };
@@ -659,4 +746,566 @@ fn witness_memory_object_rejects_garbage_and_inconsistent_fields() {
     assert_eq!(back, last);
     assert_ne!(back, WitnessMemory::fresh());
     assert_eq!(back.last().unwrap().seq().get(), 1);
+}
+
+/// The witness attests the time (VC-012): it signs a checkpoint only if
+/// its bucket is at most `WITNESS_TIME_TOLERANCE` below the witness's clock
+/// and not after it, and not below the last signed checkpoint's bucket; the
+/// memory keeps that bucket across a restart.
+#[test]
+fn witness_memory_signs_only_the_time_of_its_own_clock() {
+    let body_at = |seq: u64, previous: Hash512, bucket: u64| {
+        body_object(&body_parts(
+            seq, 0, EMPTY_ROOT, previous, EMPTY_ROOT, EMPTY_ROOT, GENESIS, bucket,
+        ))
+    };
+    let b1 = body_at(1, Hash512::ZERO, 100);
+    // Too old (two buckets behind the clock), from the future.
+    for now in [102u64, 99, 0] {
+        let memory = refuse(
+            WitnessMemory::fresh(),
+            &b1,
+            &ConsistencyProof::EMPTY,
+            &[],
+            &[],
+            &GENESIS,
+            TimeBucket::new(now),
+            &Error::TimeOutOfWindow,
+        );
+        assert!(memory.last().is_none());
+    }
+    // At the clock, and one bucket behind it.
+    for now in [100u64, 101] {
+        let (token, _) = WitnessMemory::fresh().may_sign(
+            &b1,
+            &ConsistencyProof::EMPTY,
+            &[],
+            &[],
+            &GENESIS,
+            TimeBucket::new(now),
+        );
+        assert!(token.is_ok(), "{now}");
+    }
+    let (token, memory) = WitnessMemory::fresh().may_sign(
+        &b1,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(101),
+    );
+    assert!(token.is_ok());
+    assert_eq!(memory.last().unwrap().time_bucket().get(), 100);
+    // The memory persists the bucket.
+    let mut buf = [0u8; 16 + 216];
+    let used = memory.to_object(&mut buf).unwrap();
+    let memory = WitnessMemory::from_object(&buf[..used]).unwrap();
+    assert_eq!(memory.last().unwrap().time_bucket().get(), 100);
+    // A successor below the last signed bucket is refused even inside the
+    // clock window (a clock set back); the same bucket again is signed.
+    let h1 = ityv_crypto::object_hash(&b1);
+    let earlier = body_at(2, h1, 99);
+    let memory = refuse(
+        memory,
+        &earlier,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(99),
+        &Error::TimeWentBack,
+    );
+    let again = body_at(2, h1, 100);
+    let (token, memory) = memory.may_sign(
+        &again,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(100),
+    );
+    assert!(token.is_ok());
+    assert_eq!(memory.last().unwrap().seq().get(), 2);
+    // The window saturates at bucket 0.
+    let first = body_at(1, Hash512::ZERO, 0);
+    let (token, _) = WitnessMemory::fresh().may_sign(
+        &first,
+        &ConsistencyProof::EMPTY,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(0),
+    );
+    assert!(token.is_ok());
+    assert_eq!(ityv_ledger::WITNESS_TIME_TOLERANCE, 1);
+    assert_eq!(ityv_ledger::SCHEMA_VERSION_WITNESS_MEMORY, 2);
+}
+
+/// A checkpoint over `ls[..size]` at `seq` after `previous`, time bucket
+/// `bucket`: the body and the object signed by witnesses `signers` of `ws`.
+fn checkpoint_by(
+    ws: &[common::Witness],
+    signers: &[usize],
+    ls: &[Hash512],
+    seq: u64,
+    size: u64,
+    previous: Hash512,
+    bucket: u64,
+) -> (Vec<u8>, Vec<u8>) {
+    let root = root_of_leaves(&ls, size).unwrap();
+    let body = body_object(&body_parts(
+        seq, size, root, previous, EMPTY_ROOT, EMPTY_ROOT, GENESIS, bucket,
+    ));
+    let signed = signed_checkpoint_object(ws, signers, &body);
+    (body, signed)
+}
+
+const QUORUM: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+/// The genesis witness set of the tests' ledger: 13 witnesses, 13/9/4.
+fn witness_set<'a>(
+    entries: &'a [ityv_ledger::WitnessEntry<'a>],
+    genesis: Hash512,
+    ledger: &'static [u8],
+) -> ityv_ledger::WitnessSet<'a> {
+    ityv_ledger::WitnessSet::new(
+        genesis,
+        (
+            common::election(),
+            ityv_encoding::LedgerId::new(ledger).unwrap(),
+            ityv_encoding::KeysetId::new(common::KEYSET).unwrap(),
+        ),
+        ityv_ledger::Roster::new(entries).unwrap(),
+        ityv_ledger::QuorumProfile::DEFAULT_13_9_4,
+        ityv_ledger::DiversityPolicy::DEFAULT,
+    )
+    .unwrap()
+}
+
+/// Catch-up after an outage (PROTOCOL §5.4): a witness that missed
+/// checkpoints can neither sign them later (their time is past) nor the
+/// next one (a sequence gap). It adopts the run of published checkpoints it
+/// missed, without signing them, then signs the next.
+#[test]
+fn a_witness_back_from_an_outage_adopts_the_run_it_missed() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let (t1, memory) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    assert!(t1.is_ok());
+    let h1 = ityv_crypto::object_hash(&b1);
+    // Away while checkpoints 2 and 3 are published.
+    let (b2, s2) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let (_, s3) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, ityv_crypto::object_hash(&b2), 103);
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let p38 = consistency_proof(&ls.as_slice(), 3, 8).unwrap();
+    let memory = refuse(
+        memory,
+        &b2,
+        &p36,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(104),
+        &Error::TimeOutOfWindow,
+    );
+    let h3 = ityv_crypto::object_hash(decode_signed(&s3).body_bytes());
+    let (b4, _) = checkpoint_by(&ws, &QUORUM, &ls, 4, 8, h3, 104);
+    let memory = refuse(
+        memory,
+        &b4,
+        &empty,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(104),
+        &Error::SequenceGap,
+    );
+    // One checkpoint, then the rest of the run.
+    let run2 = [decode_signed(&s2)];
+    let before = WitnessMemory::from_last(memory.last().copied());
+    let (r, one) = before.adopt(&set, &run2, &p36, TimeBucket::new(104));
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(one.last().unwrap().seq().get(), 2);
+    assert_eq!(
+        *one.last().unwrap().body_hash(),
+        ityv_crypto::object_hash(&b2)
+    );
+    let run = [decode_signed(&s2), decode_signed(&s3)];
+    let (r, memory) = memory.adopt(&set, &run, &p38, TimeBucket::new(104));
+    assert!(r.is_ok(), "{r:?}");
+    let last = memory.last().unwrap();
+    assert_eq!(
+        (
+            last.seq().get(),
+            last.tree_size().get(),
+            last.time_bucket().get()
+        ),
+        (3, 8, 103)
+    );
+    assert_eq!(*last.body_hash(), h3);
+    assert_eq!(
+        *last.root_hash(),
+        root_of_leaves(&ls.as_slice(), 8).unwrap()
+    );
+    let (t4, memory) = memory.may_sign(&b4, &empty, &[], &[], &GENESIS, TimeBucket::new(104));
+    assert!(t4.is_ok());
+    assert_eq!(memory.last().unwrap().seq().get(), 4);
+}
+
+/// Every rule of adoption (PROTOCOL §5.4): a refused adoption leaves the
+/// memory unchanged.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn adoption_refuses_what_an_honest_quorum_did_not_publish_after_this_witness() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let signed_1 = || {
+        WitnessMemory::fresh()
+            .may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100))
+            .1
+    };
+    let (_, s2) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let run2 = [decode_signed(&s2)];
+    let now = TimeBucket::new(101);
+    let check = |memory: WitnessMemory,
+                 set: &ityv_ledger::WitnessSet<'_>,
+                 run: &[SignedCheckpoint<'_>],
+                 proof: &ConsistencyProof,
+                 now: TimeBucket| {
+        let before = WitnessMemory::from_last(memory.last().copied());
+        let (r, after) = memory.adopt(set, run, proof, now);
+        if r.is_err() {
+            assert_eq!(after, before, "a refused adoption changes nothing");
+        }
+        r
+    };
+    // No adoption from an empty memory: a witness that lost its memory, or
+    // never had one, counts in f.
+    assert_eq!(
+        check(WitnessMemory::fresh(), &set, &run2, &p36, now),
+        Err(Error::NoMemory)
+    );
+    // An empty run, a run that skips a checkpoint, a run with a break.
+    assert_eq!(
+        check(signed_1(), &set, &[], &p36, now),
+        Err(Error::SequenceGap)
+    );
+    let (_, s3) = checkpoint_by(&ws, &QUORUM, &ls, 3, 6, h1, 101);
+    let skip = [decode_signed(&s3)];
+    assert_eq!(
+        check(signed_1(), &set, &skip, &p36, now),
+        Err(Error::SequenceGap)
+    );
+    let broken = [decode_signed(&s2), decode_signed(&s3)];
+    assert_eq!(
+        check(signed_1(), &set, &broken, &p36, now),
+        Err(Error::PreviousHashMismatch)
+    );
+    // Not the witness set's quorum: eight signers, or a roster of one.
+    let (_, short) = checkpoint_by(&ws, &QUORUM[..8], &ls, 2, 6, h1, 101);
+    assert!(matches!(
+        check(signed_1(), &set, &[decode_signed(&short)], &p36, now),
+        Err(Error::QuorumShort { .. })
+    ));
+    let stranger = witnesses(14);
+    let (_, foreign) = checkpoint_by(&stranger[13..], &[0], &ls, 2, 6, h1, 101);
+    assert!(check(signed_1(), &set, &[decode_signed(&foreign)], &p36, now).is_err());
+    // Another genesis or ledger than the set's.
+    let other_genesis = witness_set(&entries, Hash512([8; 64]), common::LEDGER);
+    assert_eq!(
+        check(signed_1(), &other_genesis, &run2, &p36, now),
+        Err(Error::GenesisMismatch)
+    );
+    let other_ledger = witness_set(&entries, GENESIS, b"OTHER");
+    assert_eq!(
+        check(signed_1(), &other_ledger, &run2, &p36, now),
+        Err(Error::LedgerMismatch)
+    );
+    // Timed past what an honest quorum could attest by this clock: one
+    // bucket ahead is possible (two honest clocks a bucket apart), two are
+    // not.
+    assert_eq!(
+        check(signed_1(), &set, &run2, &p36, TimeBucket::new(99)),
+        Err(Error::TimeAhead)
+    );
+    assert!(check(signed_1(), &set, &run2, &p36, TimeBucket::new(100)).is_ok());
+    // Time going back from the last one, a smaller tree, no proof.
+    let (_, back) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 99);
+    assert_eq!(
+        check(signed_1(), &set, &[decode_signed(&back)], &p36, now),
+        Err(Error::TimeWentBack)
+    );
+    let (_, small) = checkpoint_by(&ws, &QUORUM, &ls, 2, 2, h1, 101);
+    assert_eq!(
+        check(signed_1(), &set, &[decode_signed(&small)], &empty, now),
+        Err(Error::TreeShrank)
+    );
+    assert_eq!(
+        check(signed_1(), &set, &run2, &empty, now),
+        Err(Error::ProofInvalid)
+    );
+    // The same tree and the same bucket are adopted: neither has to grow.
+    let (_, same) = checkpoint_by(&ws, &QUORUM, &ls, 2, 3, h1, 100);
+    assert!(check(signed_1(), &set, &[decode_signed(&same)], &empty, now).is_ok());
+    assert_eq!(ityv_ledger::CLOCK_ERROR_BUCKETS, 1);
+    assert_eq!(*set.genesis_hash(), GENESIS);
+}
+
+/// A split view (VC-065): the witness signed X at seq 2, the published
+/// chain has Y there and Z after it. Adopting Z reports the split view
+/// instead of following the other branch; the evidence is the witness's X
+/// and the quorum-signed Z naming Y.
+#[test]
+fn adoption_reports_a_split_view() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let p68 = consistency_proof(&ls.as_slice(), 6, 8).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let (_, memory) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    let (x, _) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let (tx, memory) = memory.may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101));
+    assert!(tx.is_ok());
+    let (y, _) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 102);
+    let (_, z) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, ityv_crypto::object_hash(&y), 102);
+    let run = [decode_signed(&z)];
+    let (r, memory) = memory.adopt(&set, &run, &p68, TimeBucket::new(103));
+    assert_eq!(
+        r,
+        Err(Error::SplitView {
+            seq: Seq::new(2).unwrap()
+        })
+    );
+    assert_eq!(
+        *memory.last().unwrap().body_hash(),
+        ityv_crypto::object_hash(&x)
+    );
+    assert_ne!(
+        run[0].body().parts().previous_checkpoint_hash,
+        *memory.last().unwrap().body_hash()
+    );
+}
+
+/// A split view where only the body differs (PROTOCOL §5.4): this witness
+/// signed X at seq 2, which did not reach a quorum; the operator re-proposed
+/// Y there, which did, and Z follows. adopt reports the split (also for a
+/// run starting at Y, or one whose later checkpoint would be refused);
+/// `adopt_past_split`, given the run from Y, returns the evidence and takes
+/// the witness back without signing at seq 2, and the witness signs after
+/// Z.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_witness_past_a_split_view_rejoins_with_the_evidence() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let p68 = consistency_proof(&ls.as_slice(), 6, 8).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let (_, memory) =
+        WitnessMemory::fresh().may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100));
+    // X: signed by this witness only.
+    let (x, _) = checkpoint_by(&ws, &[0], &ls, 2, 6, h1, 101);
+    let (tx, memory) = memory.may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101));
+    assert!(tx.is_ok());
+    let hx = ityv_crypto::object_hash(&x);
+    // Y re-proposed at seq 2 and published, Z after it.
+    let (y, sy) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 103);
+    let hy = ityv_crypto::object_hash(&y);
+    let (z, sz) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, hy, 103);
+    let hz = ityv_crypto::object_hash(&z);
+    let now = TimeBucket::new(103);
+    let split = Err(Error::SplitView {
+        seq: Seq::new(2).unwrap(),
+    });
+    let (r, memory) = memory.adopt(&set, &[decode_signed(&sz)], &p68, now);
+    assert_eq!(r, split);
+    let (r, memory) = memory.adopt(&set, &[decode_signed(&sy), decode_signed(&sz)], &p68, now);
+    assert_eq!(r, split);
+    // A later checkpoint that would be refused does not hide the split.
+    let (_, ahead) = checkpoint_by(&ws, &QUORUM, &ls, 4, 8, hz, 110);
+    let (_, short) = checkpoint_by(&ws, &QUORUM[..8], &ls, 4, 8, hz, 103);
+    for later in [&ahead, &short] {
+        let run = [decode_signed(&sz), decode_signed(later)];
+        let (r, _) = WitnessMemory::from_last(memory.last().copied()).adopt(&set, &run, &p68, now);
+        assert_eq!(r, split);
+    }
+    assert_eq!(*memory.last().unwrap().body_hash(), hx);
+    // Past the split: the evidence, then the memory at Z.
+    let run = [decode_signed(&sy), decode_signed(&sz)];
+    let (r, memory) = memory.adopt_past_split(&set, &run, &p68, now);
+    assert_eq!(
+        r,
+        Ok(ityv_ledger::SplitEvidence {
+            seq: Seq::new(2).unwrap(),
+            signed: hx,
+            published: hy,
+        })
+    );
+    let last = memory.last().unwrap();
+    assert_eq!((last.seq().get(), *last.body_hash()), (3, hz));
+    assert_eq!(last.time_bucket().get(), 103);
+    // It never signs at seq 2 again; it signs after Z.
+    let memory = refuse(
+        memory,
+        &x,
+        &p36,
+        &[],
+        &[],
+        &GENESIS,
+        TimeBucket::new(103),
+        &Error::SequenceGap,
+    );
+    let (b4, _) = checkpoint_by(&ws, &QUORUM, &ls, 4, 8, hz, 103);
+    let (t4, memory) = memory.may_sign(&b4, &empty, &[], &[], &GENESIS, TimeBucket::new(103));
+    assert!(t4.is_ok());
+    assert_eq!(memory.last().unwrap().seq().get(), 4);
+    // The run may also end at Y itself.
+    let (_, at_x) = WitnessMemory::fresh()
+        .may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100))
+        .1
+        .may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101));
+    let (r, at_y) = at_x.adopt_past_split(&set, &[decode_signed(&sy)], &empty, now);
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(*at_y.last().unwrap().body_hash(), hy);
+}
+
+/// `adopt_past_split` refuses what is not a body-only split: a content fork
+/// (the trees are not consistent) stays refused, and the witness counts in
+/// f; so does a run not starting at the witness's sequence number, its own
+/// body, an empty memory or run, a time going back, a smaller tree, a
+/// broken run, a short quorum, a checkpoint ahead of the clock.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn adopting_past_a_split_refuses_a_content_fork_and_the_rest() {
+    let ws = witnesses(13);
+    let entries = roster_entries(&ws);
+    let set = witness_set(&entries, GENESIS, common::LEDGER);
+    let ls = leaves(8);
+    let other = common::random_leaves(9, 8);
+    let empty = ConsistencyProof::EMPTY;
+    let p36 = consistency_proof(&ls.as_slice(), 3, 6).unwrap();
+    let (b1, _) = checkpoint_by(&ws, &QUORUM, &ls, 1, 3, Hash512::ZERO, 100);
+    let h1 = ityv_crypto::object_hash(&b1);
+    let (x, sx) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 101);
+    let at_x = || {
+        WitnessMemory::fresh()
+            .may_sign(&b1, &empty, &[], &[], &GENESIS, TimeBucket::new(100))
+            .1
+            .may_sign(&x, &p36, &[], &[], &GENESIS, TimeBucket::new(101))
+            .1
+    };
+    let now = TimeBucket::new(103);
+    let check = |memory: WitnessMemory, run: &[SignedCheckpoint<'_>], proof: &ConsistencyProof| {
+        let before = WitnessMemory::from_last(memory.last().copied());
+        let (r, after) = memory.adopt_past_split(&set, run, proof, now);
+        if r.is_err() {
+            assert_eq!(after, before, "a refused adoption changes nothing");
+        }
+        r.map(|_| ())
+    };
+    // A content fork: Y at seq 2 over other leaves.
+    let root = root_of_leaves(&other.as_slice(), 6).unwrap();
+    let forked = body_object(&body_parts(
+        2, 6, root, h1, EMPTY_ROOT, EMPTY_ROOT, GENESIS, 103,
+    ));
+    let forked = signed_checkpoint_object(&ws, &QUORUM, &forked);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&forked)], &empty),
+        Err(Error::ProofInvalid)
+    );
+    // Not a split, or not from the witness's sequence number.
+    assert_eq!(
+        check(at_x(), &[decode_signed(&sx)], &empty),
+        Err(Error::SequenceGap)
+    );
+    let (y, sy) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 103);
+    let (_, sz) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, ityv_crypto::object_hash(&y), 103);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&sz)], &empty),
+        Err(Error::SequenceGap)
+    );
+    assert_eq!(check(at_x(), &[], &empty), Err(Error::SequenceGap));
+    assert_eq!(
+        check(WitnessMemory::fresh(), &[decode_signed(&sy)], &empty),
+        Err(Error::NoMemory)
+    );
+    // Time going back, a smaller tree, a broken run, a short quorum, ahead
+    // of the clock.
+    let (_, back) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 100);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&back)], &empty),
+        Err(Error::TimeWentBack)
+    );
+    let (_, small) = checkpoint_by(&ws, &QUORUM, &ls, 2, 3, h1, 103);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&small)], &empty),
+        Err(Error::TreeShrank)
+    );
+    let (_, stray) = checkpoint_by(&ws, &QUORUM, &ls, 3, 8, h1, 103);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&sy), decode_signed(&stray)], &empty),
+        Err(Error::PreviousHashMismatch)
+    );
+    let (_, short) = checkpoint_by(&ws, &QUORUM[..8], &ls, 2, 6, h1, 103);
+    assert!(matches!(
+        check(at_x(), &[decode_signed(&short)], &empty),
+        Err(Error::QuorumShort { .. })
+    ));
+    let (_, short_later) = checkpoint_by(
+        &ws,
+        &QUORUM[..8],
+        &ls,
+        3,
+        8,
+        ityv_crypto::object_hash(&y),
+        103,
+    );
+    assert!(matches!(
+        check(
+            at_x(),
+            &[decode_signed(&sy), decode_signed(&short_later)],
+            &empty
+        ),
+        Err(Error::QuorumShort { .. })
+    ));
+    let (_, ahead) = checkpoint_by(&ws, &QUORUM, &ls, 2, 6, h1, 105);
+    assert_eq!(
+        check(at_x(), &[decode_signed(&ahead)], &empty),
+        Err(Error::TimeAhead)
+    );
+    // Another body over the same tree in the same bucket (another dispute
+    // root): neither tree nor time has to grow.
+    let root6 = root_of_leaves(&ls.as_slice(), 6).unwrap();
+    let same = body_object(&body_parts(
+        2,
+        6,
+        root6,
+        h1,
+        EMPTY_ROOT,
+        Hash512([5; 64]),
+        GENESIS,
+        101,
+    ));
+    let same = signed_checkpoint_object(&ws, &QUORUM, &same);
+    assert!(check(at_x(), &[decode_signed(&same)], &empty).is_ok());
 }

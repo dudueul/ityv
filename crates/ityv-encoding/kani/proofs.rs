@@ -443,6 +443,7 @@ fn record_count_range_is_exact() {
 }
 
 use crate::primitives::{OrgId, SignerId};
+use crate::schema::audit::{AuditRound, AuditRounds, ComparisonCode};
 use crate::schema::checkin::ObserverCountKind;
 use crate::schema::events::{
     CustodyHandoffBody, CustodyHandoffParts, DisputeAction, DisputeEventBody, DisputeEventParts,
@@ -481,7 +482,7 @@ static ORG_B: OrgId<'static> = match OrgId::new(b"B") {
 fn event_codes_are_exact() {
     let code: u8 = kani::any();
     let role = EventRole::from_code(code);
-    assert_eq!(role.is_some(), (1..=9).contains(&code));
+    assert_eq!(role.is_some(), (1..=10).contains(&code));
     if let Some(r) = role {
         assert_eq!(r.code(), code);
     }
@@ -510,7 +511,7 @@ fn event_codes_are_exact() {
             CaptureProfile::from_code(code).map(CaptureProfile::code),
             1..=3,
         ),
-        (RosterRole::from_code(code).map(RosterRole::code), 1..=5),
+        (RosterRole::from_code(code).map(RosterRole::code), 1..=6),
         (StationKind::from_code(code).map(StationKind::code), 1..=3),
         (
             AmendmentReason::from_code(code).map(AmendmentReason::code),
@@ -527,6 +528,10 @@ fn event_codes_are_exact() {
         (
             ReceiptOutcome::from_code(code).map(ReceiptOutcome::code),
             1..=5,
+        ),
+        (
+            ComparisonCode::from_code(code).map(ComparisonCode::code),
+            0..=6,
         ),
     ];
     for (decoded, range) in checks {
@@ -884,4 +889,38 @@ fn observer_count_round_trip() {
     let decoded: Result<ObserverCountAttestBody<'_>, _> =
         decode(SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_VERSION_1, bytes);
     assert_eq!(decoded, Ok(body));
+}
+
+/// Two rounds of a sampling rule are accepted exactly when each size is in
+/// `1..=2^26 − 1` with its threshold below it, the second size is above
+/// the first and the second threshold is not below the first (ADR-0036);
+/// one round alone exactly when its size is in range and its threshold
+/// below it.
+#[kani::proof]
+#[kani::unwind(4)]
+fn audit_round_rules_are_exact() {
+    let first = AuditRound {
+        sample_size: kani::any(),
+        threshold: kani::any(),
+    };
+    let second = AuditRound {
+        sample_size: kani::any(),
+        threshold: kani::any(),
+    };
+    let in_range = |r: AuditRound| {
+        r.sample_size >= 1 && r.sample_size <= 67_108_863 && u64::from(r.threshold) < r.sample_size
+    };
+    assert_eq!(AuditRounds::new(&[first]).is_some(), in_range(first));
+    let expected = in_range(first)
+        && in_range(second)
+        && second.sample_size > first.sample_size
+        && second.threshold >= first.threshold;
+    let built = AuditRounds::new(&[first, second]);
+    assert_eq!(built.is_some(), expected);
+    if let Some(r) = built {
+        assert_eq!(r.count(), 2);
+        assert_eq!(r.get(0), Some(first));
+        assert_eq!(r.get(1), Some(second));
+        assert_eq!(r.get(2), None);
+    }
 }

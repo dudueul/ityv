@@ -1,4 +1,5 @@
-//! The unit's deterministic random generator (ADR-0017 §12).
+//! The unit's deterministic random generator. No ADR specifies it; this
+//! module documentation does.
 //!
 //! The unit never opens an operating-system randomness source. Every
 //! ballot's randomness comes from a SHA3-512 counter-mode generator seeded

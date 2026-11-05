@@ -8,6 +8,7 @@
 //! (ADR-0017 §2).
 
 pub mod attestation;
+pub mod audit;
 pub mod authorization;
 pub mod batch_attest;
 pub mod box_close;
@@ -34,18 +35,25 @@ use crate::primitives::SchemaId;
 /// not name.
 pub const SCHEMA_VERSION_1: u16 = 1;
 
-/// The current version of `WitnessedEvent` (`0x0028`): version 2 admits
-/// the event role 9, the district commission chair (ADR-0035). Version 1
-/// did not.
-pub const SCHEMA_VERSION_WITNESSED: u16 = 2;
+/// The current version of `WitnessedEvent` (`0x0028`): version 3 admits
+/// the event role 10, the auditor, and the audit bodies `0x000D`,
+/// `0x0048`, `0x004B`, `0x004C`, `0x004D`, `0x004E` (ADR-0036). Version 2 admitted
+/// the event role 9, the district commission chair (ADR-0035); version 1
+/// neither.
+pub const SCHEMA_VERSION_WITNESSED: u16 = 3;
 
-/// The current version of `RosterSigner` (`0x003A`): version 2 admits the
-/// roster role 5, the district commission chair (ADR-0035).
-pub const SCHEMA_VERSION_ROSTER_SIGNER: u16 = 2;
+/// The current version of `RosterSigner` (`0x003A`): version 3 admits the
+/// roster role 6, the auditor (ADR-0036). Version 2 admitted the roster
+/// role 5, the district commission chair (ADR-0035).
+pub const SCHEMA_VERSION_ROSTER_SIGNER: u16 = 3;
 
 /// The current version of `ReportingUnitEntry` (`0x0038`): version 2
 /// adds the commission that reports the unit's paper count (ADR-0035).
 pub const SCHEMA_VERSION_REPORTING_UNIT: u16 = 2;
+
+/// The current version of `QuorumSigned` (`0x0045`): version 2 admits the
+/// sample opening reference `0x004A` as a body (ADR-0036).
+pub const SCHEMA_VERSION_QUORUM_SIGNED: u16 = 2;
 
 /// The current version of schema `schema`, the only one this crate
 /// encodes and decodes (ENCODING.md §3: a change of shape takes a new
@@ -57,6 +65,7 @@ pub const fn schema_version(schema: SchemaId) -> u16 {
         0x0028 => SCHEMA_VERSION_WITNESSED,
         0x0038 => SCHEMA_VERSION_REPORTING_UNIT,
         0x003A => SCHEMA_VERSION_ROSTER_SIGNER,
+        0x0045 => SCHEMA_VERSION_QUORUM_SIGNED,
         _ => SCHEMA_VERSION_1,
     }
 }
@@ -87,6 +96,9 @@ pub const SCHEMA_SLIP: SchemaId = SchemaId::new(0x000A);
 
 /// `SharePackage` (ENCODING.md §8.10, `0x000B`).
 pub const SCHEMA_SHARE_PACKAGE: SchemaId = SchemaId::new(0x000B);
+
+/// `AuditSeedBody` (ENCODING.md §8.67, `0x000D`).
+pub const SCHEMA_AUDIT_SEED_BODY: SchemaId = SchemaId::new(0x000D);
 
 /// `BatchAttestBody` (ENCODING.md §8.12, `0x0012`).
 pub const SCHEMA_BATCH_ATTEST_BODY: SchemaId = SchemaId::new(0x0012);
@@ -237,3 +249,25 @@ pub const SCHEMA_PAPER_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x0046);
 
 /// `ReceiptResolutionBody` (ENCODING.md §8.65, `0x0047`).
 pub const SCHEMA_RECEIPT_RESOLUTION_BODY: SchemaId = SchemaId::new(0x0047);
+
+/// `AuditManifestFreezeBody` (ENCODING.md §8.66, `0x0048`).
+pub const SCHEMA_AUDIT_FREEZE_BODY: SchemaId = SchemaId::new(0x0048);
+
+/// `SampleOpeningBody` (ENCODING.md §8.68, `0x0049`): restricted, never a
+/// ledger event.
+pub const SCHEMA_SAMPLE_OPENING_BODY: SchemaId = SchemaId::new(0x0049);
+
+/// `SampleOpeningRefBody` (ENCODING.md §8.69, `0x004A`).
+pub const SCHEMA_SAMPLE_OPENING_REF_BODY: SchemaId = SchemaId::new(0x004A);
+
+/// `SampleComparisonBody` (ENCODING.md §8.70, `0x004B`).
+pub const SCHEMA_SAMPLE_COMPARISON_BODY: SchemaId = SchemaId::new(0x004B);
+
+/// `AuditFindingBody` (ENCODING.md §8.71, `0x004C`).
+pub const SCHEMA_AUDIT_FINDING_BODY: SchemaId = SchemaId::new(0x004C);
+
+/// `HandCountReportBody` (ENCODING.md §8.72, `0x004D`).
+pub const SCHEMA_HAND_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x004D);
+
+/// `AuditCommitBody` (ENCODING.md §8.73, `0x004E`).
+pub const SCHEMA_AUDIT_COMMIT_BODY: SchemaId = SchemaId::new(0x004E);
