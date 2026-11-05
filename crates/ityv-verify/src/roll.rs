@@ -298,10 +298,12 @@ pub enum RollRefusal {
     /// fact without its source (VC-107).
     Incomplete,
     /// The freeze's entry count is not one the extracts taken before it
-    /// can give: above the resident extracts' sum plus the overseas lists'
+    /// can give: above the precinct extracts' sum plus the overseas lists'
     /// entries, or below that sum less the entries of every removal list
-    /// (deaths, disqualifications, overseas and loss of nationality). The
-    /// exact count is the custodians' to recompute (VC-107).
+    /// (deaths, disqualifications, overseas and loss of nationality). A
+    /// precinct extract lists every elector of the precinct (foreign
+    /// electors of a local election included, `RollSourceKind::Residents`).
+    /// The exact count is the custodians' to recompute (VC-107).
     Count,
     /// A receipt answers no freeze or amendment taken in an earlier
     /// frame, or names a sources root for an amendment or none for the
@@ -1046,10 +1048,13 @@ fn contested_valid(
 }
 
 /// Whether the merge of `extracts` can give a roll of `entries`: at most
-/// the resident extracts' sum plus the overseas lists' entries (which may
+/// the precinct extracts' sum plus the overseas lists' entries (which may
 /// add), at least that sum less every removal list's entries (deaths,
-/// disqualifications, overseas and loss of nationality). The snapshot is
-/// the Ministry's national cross-check, not a count of the roll.
+/// disqualifications, overseas and loss of nationality). A precinct
+/// extract lists every elector the district head compiles for the
+/// precinct, foreign electors of a local election included, so they are
+/// in the sum. The snapshot is the Ministry's national cross-check, not a
+/// count of the roll.
 fn merge_allows(extracts: &[TakenExtract<'_>], entries: u64) -> bool {
     let sum = |kinds: &[RollSourceKind]| {
         extracts

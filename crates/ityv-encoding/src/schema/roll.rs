@@ -71,8 +71,9 @@ fn read_code<T>(r: &mut Reader<'_>, from: impl Fn(u8) -> Option<T>) -> Result<T,
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum RollAuthorityKind {
-    /// A district head (구·시·군의 장): the resident registration extract
-    /// of each precinct, and the decisions on objections to it.
+    /// A district head (구·시·군의 장): the extract of each precinct (every
+    /// elector it compiles for the precinct, [`RollSourceKind::Residents`]),
+    /// and the decisions on objections to it.
     ResidentExtract = 1,
     /// The Ministry of the Interior (행정안전부): the hash of the national
     /// resident registration snapshot at the reference time.
@@ -191,7 +192,11 @@ impl<'a> GenesisEntry<'a> for RollAuthorityEntry<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum RollSourceKind {
-    /// The resident registration extract of one precinct.
+    /// The extract of one precinct: every elector the district head
+    /// (구·시·군의 장) compiles for it under the Public Official Election
+    /// Act §37 ①, which for a local election includes the foreign electors
+    /// in the alien register (§15 ② 3), not only those in the resident
+    /// register (ADR-0033 decision 1).
     Residents = 1,
     /// The national resident registration snapshot.
     Snapshot = 2,

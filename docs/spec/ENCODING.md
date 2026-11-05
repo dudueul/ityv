@@ -1161,7 +1161,7 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 |---|---|---|---|
 | 1 | `election_id` | `Ident<64>` | |
 | 2 | `authority_id` | `Ident<64>` | 서명하는 출처 기관 |
-| 3 | `kind` | `u8` | 1 투표구의 주민등록 추출, 2 전국 주민등록 스냅숏, 3 사망, 4 선거권 제한, 5 재외선거인·국적 상실. 그 밖은 `ValueOutOfRange` |
+| 3 | `kind` | `u8` | 1 투표구의 주민등록 추출(구·시·군의 장이 공직선거법 제37조①에 따라 그 투표구에 대해 작성하는 선거권자 전부, 지방선거에서는 외국인등록대장의 외국인 선거권자 포함), 2 전국 주민등록 스냅숏, 3 사망, 4 선거권 제한, 5 재외선거인·국적 상실. 그 밖은 `ValueOutOfRange` |
 | 4 | `precinct` | `Option<Ident<64>>` | 투표구(genesis의 선거일 투표소). 종류 1에만 있고 그 밖에는 없다(어기면 `InvariantViolation`, 위치는 이 필드) |
 | 5 | `reference_day` | `u64` | 기준일(유닉스 기원 이후의 날 수) |
 | 6 | `entry_count` | `u64` | 항목 수 |
