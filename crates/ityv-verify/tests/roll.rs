@@ -1164,11 +1164,24 @@ fn a_check_in_is_absent_only_against_every_contested_frame_s_body() {
         assert_eq!(findings_of(&one), [ContestedFinding::Undetermined]);
         assert_eq!(one.holds(), HoldSet::empty());
     }
+    // Every frame's body is in but ST-1's participation set is not: still
+    // undetermined, since either pseudonym may be in the set to come.
+    let other = labelled(8, 0x4E, 1);
+    let mut early = Book::new(election_world());
+    for c in [first, other] {
+        early.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    assert_eq!(
+        findings_of(&run_with(&early, &[first, other])),
+        [
+            ContestedFinding::Undetermined,
+            ContestedFinding::Undetermined
+        ]
+    );
     // Another voter's envelope beside it: undetermined until every frame's
     // body is in, then absent.
     let mut book = Book::new(election_world());
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
-    let other = labelled(8, 0x4E, 1);
     for c in [first, other] {
         book.push(SCHEMA_CONTESTED_CHECKIN, c);
     }
