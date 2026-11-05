@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ityv 검증 콘솔</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">ityv 검증 콘솔 <span class="proto">개발용 시제품 · 실선거 사용 불가</span></div>
+      <nav aria-label="쪽">
+        <a href="#/dashboard" data-route="dashboard">검증 대시보드</a>
+        <a href="#/devices/scanner-voter" data-route="devices">기기 화면 시제품</a>
+      </nav>
+    </header>
+    <main id="main"><p class="busy">불러오는 중…</p></main>
+    <footer class="foot">
+      모든 이름·장소·정당·후보는 가상이다. 콘솔은 읽기만 하며 장치에 명령하지 않는다(ADR-0022, ADR-0038).
+      상태 어휘: UNVERIFIED · LOG_CONSISTENT · SOURCE_COMPLETENESS_CHECKED · CRYPTO_TALLY_VERIFIED · PAPER_AUDITED · HOLD_REVIEW · LEGAL_CERTIFIED
+    </footer>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

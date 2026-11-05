@@ -1,0 +1,152 @@
+// The verification console's vocabulary: the status ladder, what each
+// status does not mean, the verifier's stages and the hold reasons in
+// Korean. The status and holds themselves always come from the WASM
+// verifier; this module only names them.
+
+/** The ladder, lowest first (PROTOCOL §14). `HOLD_REVIEW` is beside it,
+ * `LEGAL_CERTIFIED` is never reached by a machine (VC-049). */
+export const LADDER = [
+  {
+    word: "UNVERIFIED",
+    means: "검증을 시작하지 않았거나, 체크포인트·앵커가 아직 장부를 덮지 않았다.",
+    not: "장부가 틀렸다는 뜻이 아니다. 아직 아무것도 확인되지 않았다는 뜻이다.",
+  },
+  {
+    word: "LOG_CONSISTENT",
+    means: "genesis, 체크포인트 사슬, 프레임과 이벤트, 투표함 불변식, 투함 기록이 통과하고 앵커가 충족되었다.",
+    not: "모든 투표함이 마감되었거나, 집계가 맞거나, 종이와 대조되었다는 뜻이 아니다.",
+  },
+  {
+    word: "SOURCE_COMPLETENESS_CHECKED",
+    means: "그 위에 genesis의 모든 예상 투표함이 마감되었다.",
+    not: "참여 장부나 집계가 확인되었다는 뜻이 아니다.",
+  },
+  {
+    word: "CRYPTO_TALLY_VERIFIED",
+    means: "그 위에 참여 장부와 모든 단위의 집계(범위, 합계 열기, 종이 보고 대조)가 통과했다.",
+    not: "종이 표본 감사가 끝났다는 뜻도, 법적으로 확정되었다는 뜻도 아니다. 현재 검증기가 줄 수 있는 가장 높은 상태다.",
+  },
+  {
+    word: "PAPER_AUDITED",
+    means: "그 위에 표본 감사의 종이 대조가 규칙대로 끝났다.",
+    not: "법적 확정이 아니다. 현재 검증기에는 감사 단계(§14 8항)가 없어 이 상태에 닿지 않는다.",
+  },
+] as const;
+
+export const HOLD_WORD = "HOLD_REVIEW";
+export const LEGAL_WORD = "LEGAL_CERTIFIED";
+
+export const HOLD_MEANS =
+  "어떤 단계가 실패했거나, 보류 사유가 하나라도 있다. 사람이 원인을 확인해야 한다는 뜻이며 그 자체로 부정의 증거는 아니다.";
+export const LEGAL_MEANS =
+  "기계가 판정하는 상태가 아니다(VC-049). 이 콘솔은 분쟁에 붙은 법적 결정 참조(LegalDecisionRef)의 건수만 보이며 그 내용은 보이지도 확인하지도 않는다.";
+
+/** What no bundle reaches in this base, said on every ladder. */
+export const NOT_REACHABLE =
+  "PAPER_AUDITED: 이 기반의 검증기에는 감사 단계(PROTOCOL §14 8항)가 아직 구현되지 않아 어떤 번들도 닿지 않는다. LEGAL_CERTIFIED: 기계가 닿는 상태가 아니다. 지금 줄 수 있는 가장 높은 상태는 CRYPTO_TALLY_VERIFIED다.";
+
+/** The verifier's steps as `verify_ledger` hands them to the status rule. */
+export const STEPS: Record<string, string> = {
+  Genesis: "1. genesis (핀·서명·집합)",
+  Checkpoints: "2. 체크포인트 사슬",
+  Frames: "3. 프레임과 이벤트",
+  BoxInvariants: "4. 투표함 불변식",
+  BoxCompleteness: "4. 투표함 완전성 (모두 마감)",
+  Records: "5. 투함 기록",
+  Participation: "6. 참여 장부",
+  Tally: "7. 집계",
+  Audit: "8. 감사 (아직 구현 안 됨)",
+  Connectivity: "11. 연결 (아직 구현 안 됨)",
+  Software: "12. 소프트웨어 (아직 구현 안 됨)",
+};
+
+export const OUTCOMES: Record<string, string> = {
+  PASSED: "통과",
+  FAILED: "실패",
+  NOT_RUN: "실행 안 됨",
+};
+
+export const STAGES: Record<string, string> = {
+  frames: "프레임 색인",
+  checkpoints: "체크포인트",
+  authority: "법적 승인",
+  boxes: "투표함",
+  records: "투함 기록",
+  progress: "진행 기록",
+  participation: "참여 장부",
+  tally: "집계",
+  disputes: "분쟁",
+};
+
+/** Hold reasons by code (ityv-state `HoldReason`), with a Korean
+ * explanation of what the verifier found. */
+export const HOLDS: Record<number, { name: string; ko: string }> = {
+  0: { name: "PaperRecordMismatch", ko: "투표소 투표함의 종이 수가 기록 수와 기록 없는 투표지 수의 합과 다르다." },
+  1: { name: "AttestedMismatch", ko: "배치가 증명한 기록 수가 기록 수보다 많거나, 열린 배치가 없는데 다르다." },
+  2: { name: "SpoilEnvelopeMismatch", ko: "검증 폐기·격리 봉투 수가 검증 폐기와 격리 수의 합과 다르다." },
+  3: { name: "ModuleCounterGap", ko: "모듈의 마지막 카운터가 기록·검증 폐기·격리 수의 합과 다르거나, 마감 때 모듈이 개시 때와 다르다." },
+  4: { name: "OpenBatches", ko: "마감 때 아직 닫히지 않은 배치가 있다(늦은 배치 마감이 모든 기록을 증명하면 풀린다)." },
+  5: { name: "VisitBounds", ko: "방문 수 ≤ 기록 수 ≤ 8 × 방문 수가 성립하지 않는다." },
+  6: { name: "FallbackUndeclared", ko: "기록 없는 투표지가 있는데 비상 투입 선언(FallbackDeclared)이 없다." },
+  7: { name: "ObservedCountMismatch", ko: "마감에 적힌 수가 장부에서 본 그 투표함의 기록·검증 공개·배치 수와 다르다." },
+  8: { name: "ManualClose", ko: "장치 서명 없이 사람 서명만으로 마감했다(같은 수의 늦은 마감이 오면 풀린다)." },
+  9: { name: "LateCloseDiffers", ko: "늦은 마감의 사람 수가 수동 마감과 다르다." },
+  10: { name: "SealMismatch", ko: "개시 때 봉인 번호가 맞지 않았다." },
+  11: { name: "OpeningNonZero", ko: "개시 때 투표함이 비어 있지 않았다." },
+  12: { name: "AbsenteePaperNonZero", ko: "관외 투표함의 종이 수가 0이 아니다." },
+  13: { name: "StickerVisitMismatch", ko: "관외 투표함의 스티커 수가 방문 수와 다르다(투표소 투표함은 0이어야 한다)." },
+  14: { name: "EnvelopeMismatch", ko: "관외 투표함의 봉투 수가 교부한 봉투에서 빈 봉투를 뺀 수와 다르다." },
+  15: { name: "IssuanceMissing", ko: "관외 투표함을 봉투 수와 대조할 교부 수 없이 마감했다." },
+  16: { name: "CustodyCountMismatch", ko: "인계 기록의 수가 마감과 다르다." },
+  17: { name: "CustodySealUnexplained", ko: "인계 중 봉인 값이 봉인 변경 기록 없이 바뀌었다." },
+  18: { name: "CustodyIncomplete", ko: "투표함이 인계 사슬을 다 갖추지 못한 채 개표소에 닿았다." },
+  19: { name: "ImprintAudit", ko: "개표소 각인 판독에서 각인 없는 투표지나 같은 각인이 나왔다." },
+  20: { name: "IssuanceMismatch", ko: "교부 등식(교부 = 기록 + 기록 없음 + 검증 폐기 + 격리 + 훼손 + 반납)이 성립하지 않는다." },
+  21: { name: "ParticipationMismatch", ko: "확인 인원이 교부와 맞지 않는다." },
+  22: { name: "LegalDecisionPending", ko: "법적 판정을 기다리는 기록이 있다(훼손 도착, 다른 선거구)." },
+  23: { name: "StepFailed", ko: "검증 단계 하나가 실패했다." },
+  24: { name: "OpenDispute", ko: "해결되지 않은 분쟁이 있다." },
+  25: { name: "SplitView", ko: "분기 증거가 있다(사람마다 다른 공개원장)." },
+  26: { name: "PublicationLate", ko: "공개원장이 기한(투표 마감 뒤 96구간) 안에 공표되지 않았다." },
+  27: { name: "BoxUnderReview", ko: "보류 중인 투표함이 상태에 기여한다." },
+  28: { name: "SealBroken", ko: "봉인 변경 기록이 봉인이 깨진 채 발견되었다고 적었다." },
+  29: { name: "IssuanceStockMismatch", ko: "용지 재고 등식(받은 용지 = 교부 + 미사용 + 인쇄 손지)이 성립하지 않는다." },
+  30: { name: "ProgressUnresolved", ko: "진행 경보가 해소되지 않았다: 현장 확인이 늦거나 없거나 '설명 안 됨'이었다. 마감까지 교부 번호 대조를 한다." },
+  31: { name: "CarryOut", ko: "진행 경보 뒤 현장 확인이 투표지 반출을 확인했다." },
+  32: { name: "ProgressStream", ko: "장치의 진행 기록이 규칙을 어겼다: 누계 감소, 빠지거나 두 번인 슬롯, 개시 전·마감 뒤 기록, 마감 수와 다른 마지막 기록." },
+  33: { name: "EventReplayed", ko: "이미 실린 이벤트가 다시 실렸다. 뒤의 프레임은 무효다." },
+  34: { name: "RecordAfterClose", ko: "투표함 마감 프레임 뒤에 그 투표함의 기록이 실렸다. 그 기록은 무효다." },
+  35: { name: "LedgerUnchecked", ko: "받을 수 없는 프레임이 있다: 사슬 끊김, 이벤트 없음, 정규가 아님, 모르는 스키마, 다른 선거, 모르는 투표함·투표소, 핀이 아닌 genesis." },
+  36: { name: "CheckpointInvalid", ko: "체크포인트가 올바른 후속이 아니거나, 다양한 증인 정족수의 서명이 아니거나, 장부와 다른 root를 적었다. 사슬이 거기서 끝난다." },
+  37: { name: "CloseMissing", ko: "예상 투표함에 마감이 없거나 첫 마감이 둘 이상이다(완전성)." },
+  38: { name: "BoxEventRefused", ko: "투표함 상태 기계가 이벤트를 받지 않았다: 등록된 서명자와 맞지 않는 서명, 순서 위반, 권한 없음." },
+  39: { name: "AuthorizationMissing", ko: "장부에 유효한 법적 승인이 없어 권한이 필요한 단계가 진행되지 않는다." },
+  40: { name: "AuthorizationInvalid", ko: "받을 수 없는 법적 승인 객체가 장부에 있다." },
+  41: { name: "AmendmentMissing", ko: "검증기가 적용한 genesis 변경이 장부에 없거나 순서가 바뀌었다." },
+  42: { name: "RecordRejected", ko: "투함 기록이 거부되었다: 투표양식, 정형성 증명, 기록 서명, 모듈, 같은 카운터." },
+  43: { name: "BatchInvalid", ko: "배치 증명이 성립하지 않는다: 서명, 모듈, 배치 번호, 카운터 구간, 구성원 수나 root." },
+  44: { name: "RecordSetMismatch", ko: "마감의 기록 집합 root가 받아들여진 기록의 root와 다르다." },
+  45: { name: "DisputeRefused", ko: "받을 수 없는 분쟁 이벤트가 있다." },
+  46: { name: "ChallengeRejected", ko: "검증 공개(ChallengeOpening)를 받을 수 없다." },
+  47: { name: "OpeningMismatch", ko: "장치가 서명한 검증 공개가 그 기록을 재구성하지 못한다. 장치 결함이다." },
+  48: { name: "ParticipationSetInvalid", ko: "참여 집합을 받을 수 없다." },
+  49: { name: "DuplicatePseudonym", ko: "같은 가명이 두 번 이상 나왔다. 중복 확인 조사 대상이다." },
+  50: { name: "KeyProvisioningInvalid", ko: "모듈 발급 기록이나 정당 열쇠 절차 기록을 받을 수 없다." },
+  51: { name: "StationCountRefused", ko: "투표소의 교부 수나 참관인 확인 수를 받을 수 없다(서명, 역할, 조직)." },
+  52: { name: "TallyScopeRefused", ko: "집계 범위를 받을 수 없다: 정족수, 권한, 대상, 너무 이름(수령 대조·마감 창), 충돌." },
+  53: { name: "TallyScopeMismatch", ko: "신뢰기관의 집계 범위가 장부에서 다시 계산한 범위와 다르다." },
+  54: { name: "AggregateRefused", ko: "합계 열기를 받을 수 없다: 정족수, 권한, 범위 없음, 체크포인트 전, 반복." },
+  55: { name: "AggregateMismatch", ko: "합계 열기가 포함 기록 커밋먼트의 실제 합을 열지 못한다." },
+  56: { name: "PaperCountRefused", ko: "종이 계수 보고를 받을 수 없다." },
+  57: { name: "PaperCountMismatch", ko: "단위의 종이 수가 확인된 기계 수보다 적거나 총수가 다르다. 그 자체로 부정의 증거는 아니며 감사가 원인을 찾는다." },
+  58: { name: "TallyEffectRefused", ko: "집계 효과가 있는 법적 결정을 적용할 수 없다." },
+  59: { name: "ReceiptResolutionRefused", ko: "관외 수령 대조를 받을 수 없다." },
+  60: { name: "LateCloseAfterScope", ko: "집계 범위가 그 투표양식을 고정한 뒤에 늦은 마감이 실렸다." },
+};
+
+/** Korean name of the alarm kinds. */
+export const ALARMS: Record<string, string> = {
+  Floor: "바닥 경보",
+  Negative: "음수 경보",
+  High: "과다 경보",
+};
