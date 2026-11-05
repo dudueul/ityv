@@ -378,7 +378,7 @@ run = function (ex, data) {
     const rollText = (await page.textContent("[data-testid=roll]").catch(() => "")) ?? "";
     check(
       "the roll card names the poll close and lists no late amendment or missing extract",
-      rollText.includes("마감은 선거일 투표소의 첫 참여 집합, 프레임") && (await page.$("[data-testid=roll-incomplete]")) === null,
+      rollText.includes("마감은 선거일 투표소에 처음 나타난 마감") && (await page.$("[data-testid=roll-incomplete]")) === null,
       rollText.slice(-240),
     );
     await page.goto(`${base}#/dashboard?scenario=fault-roll-amendment-short`);

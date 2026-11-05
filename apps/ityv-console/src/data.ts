@@ -132,7 +132,7 @@ export interface RollReport {
   refused: { seq: Int; event: string; refusal: string }[];
   mismatches: { seq: Int; custodian: string }[];
   contestedFrames: Int;
-  /** The frame of the first participation set of an election-day station. */
+  /** The frame of the first close at an election-day station (set, final count or box close). */
   pollClose: Int | null;
   /** Amendments recorded after the poll close (hold 78). */
   lateAmendments: Int[];

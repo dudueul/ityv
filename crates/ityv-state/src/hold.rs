@@ -350,9 +350,10 @@ pub enum HoldReason {
     /// The roll does not match the election as it ran: an election-day
     /// station of the genesis's last state has no resident extract (a
     /// station added after the freeze), or an amendment was recorded after
-    /// voting closed (after the first accepted participation set of an
-    /// election-day station), which must not change the roll the voters
-    /// were checked against (§6.1, ADR-0040).
+    /// voting closed (after the first close the ledger shows at an
+    /// election-day station: its participation set, its observers' final
+    /// count or one of its boxes' close), which must not change the roll
+    /// the voters were checked against (§6.1, ADR-0040).
     RollIncomplete = 78,
 }
 

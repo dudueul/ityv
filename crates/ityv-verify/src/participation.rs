@@ -191,6 +191,9 @@ pub struct StationParticipation<'a> {
     pub count: Option<u32>,
     /// The observers' final check-in count (the last final count taken).
     pub observers: Option<u64>,
+    /// The frame of its first final observer count taken: the station's
+    /// check-in had closed by then.
+    pub first_final: Option<Seq>,
     /// The frame of its last issuance count taken.
     pub issuance: Option<Seq>,
     /// Whether every box of the station has a close.
@@ -718,6 +721,8 @@ fn set_signatures(
 struct Counts {
     /// The last final observer count: frame and total.
     observers: Option<(Seq, u64)>,
+    /// The frame of the first final observer count.
+    first_final: Option<Seq>,
     /// The frame of the last issuance count.
     issuance: Option<Seq>,
     /// Whether one of the station's counts was not taken.
@@ -771,7 +776,10 @@ fn station_counts<'a>(ctx: &Ctx<'_, 'a>) -> (BTreeMap<&'a [u8], Counts>, Vec<Cou
         let station = counts.entry(station_id.as_bytes()).or_default();
         match taken {
             Some(Taken::Issuance) => station.issuance = Some(e.seq),
-            Some(Taken::Final(total)) => station.observers = Some((e.seq, total)),
+            Some(Taken::Final(total)) => {
+                station.observers = Some((e.seq, total));
+                station.first_final = station.first_final.or(Some(e.seq));
+            }
             Some(Taken::Periodic) => {}
             None => {
                 station.refused = true;
@@ -873,6 +881,7 @@ fn station_report<'a>(
         set: set.map(|(seq, _)| seq),
         count: set.map(|(_, count)| count),
         observers: counts.observers.map(|(_, total)| total),
+        first_final: counts.first_final,
         issuance: counts.issuance,
         closed: totals.is_some(),
         holds,

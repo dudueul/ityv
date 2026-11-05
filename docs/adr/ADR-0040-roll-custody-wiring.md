@@ -42,7 +42,7 @@ ADR-0033은 명부의 사실마다 출처 기관이 서명하고, 명부를 서�
    - **변경**: 선관위·위원회·사유의 출처 기관 서명(`admit_amendment`, VC-111). 동결 뒤, 다음 번호, 앞 본문 해시 사슬이어야 한다(`Chain`).
    - **효력**: 상태(동결, 변경마다)는 값이 같은 영수증의 서로 다른 보관 기관이 genesis의 `custody_quorum` 이상이고 법원행정처와 행정안전부를 포함하며(`ityv_state::custody_quorum`, VC-108), 그 가운데 하나 이상이 명부 가명 root를 실었을 때 효력이 있다(VC-109). 변경 뒤의 명부 가명 root도 보관 기관이 계산해야 부분집합 검사(§6.5)가 선관위의 값에 기대지 않는다. 단계는 동결과 모든 변경이 효력이 있고 genesis 마지막 상태의 모든 선거일 투표소에 주민등록 추출이 있을 때 완전하다.
    - **마지막 상태의 투표소**: 동결은 그 프레임에 시행 중인 상태의 선거일 투표소를 보지만, 동결 뒤의 genesis 개정이 선거일 투표소를 더하거나 사전투표소를 선거일 투표소로 바꿀 수 있다. 그 투표소에는 추출이 없고 동결 뒤에는 추출을 받지 않으므로, 단계는 genesis 마지막 상태로 다시 보아 추출이 없는 선거일 투표소를 남기고(`RollStage::missing_extracts`) 장부를 보류한다(`RollIncomplete`, 78). 그 투표소의 선거권자는 출처가 서명한 명부에 없다.
-   - **투표 마감과 늦은 변경**: 투표가 끝난 때는 장부에서 genesis 마지막 상태의 선거일 투표소 가운데 처음 받아들여진 참여 집합의 프레임이다(`RollStage::poll_close`, 참여 집합은 투표 종료 뒤에만 공개된다, §6.5). 그 뒤에 기록된 변경도 받아 사슬과 효력을 판정하지만(`RollStage::late_amendments`) 개인 확인이 비교할 명부(`RollStage::roll`)는 마감 앞의 마지막 변경이나 동결이고, 늦은 변경은 장부를 보류한다(`RollIncomplete`). 선거인은 마감 때의 명부로 확인되었으므로 그 뒤의 변경이 그 명부를 바꾸면 확인과 명부가 어긋난다. 참여 집합이 아직 없으면 마감을 모르므로 모든 변경이 명부에 든다.
+   - **투표 마감과 늦은 변경**: 투표가 끝난 때는 장부에서 genesis 마지막 상태의 선거일 투표소에 처음 나타난 마감이다(`RollStage::poll_close`): 받아들여진 참여 집합(투표 종료 뒤에만 공개된다, §6.5), 받아들여진 참관인 최종 확인 수, 그 투표소 투표함의 마감(투표함의 첫 `BoxClose` 프레임, 색인이 그 뒤의 기록을 받지 않는 곳, VC-101) 가운데 가장 이른 프레임이다. 참여 집합만 보면 운영자가 투표함이 닫힌 뒤 참여 집합을 싣기 전에 변경을 기록해 그 변경을 마감 앞으로 둘 수 있다(최종 리뷰 F5). 장치 교체 기록(`BoxUnitSwap`, `CheckinUnitSwap`)은 마감이 아니다. 그 뒤에 기록된 변경도 받아 사슬과 효력을 판정하지만(`RollStage::late_amendments`) 개인 확인이 비교할 명부(`RollStage::roll`)는 마감 앞의 마지막 변경이나 동결이고, 늦은 변경은 장부를 보류한다(`RollIncomplete`). 선거인은 마감 때의 명부로 확인되었으므로 그 뒤의 변경이 그 명부를 바꾸면 확인과 명부가 어긋난다. 마감이 아직 장부에 없으면 마감을 모르므로 모든 변경이 명부에 든다. `verify_roll`의 참여 단계는 같은 장부에서 만든 것이어야 하고(`verify_ledger_full`이 그렇게 만든다), 함수는 그것을 확인하지 않는다.
    - 같은 대상의 같은 본문(다른 서명 바이트)은 반복(`Repeated`), 다른 본문은 충돌(`Conflict`)이다. 같은 객체를 다시 실은 프레임은 색인이 거부한다(VC-101).
 
 5. **보류와 완전성.** 받을 수 없는 명부 사건은 모두 목록에 남고 장부 전체를 보류한다(`RollEventRefused`, 74). 값이 다른 영수증도 보류다(`RollCustodyMismatch`, 75). 추출이 없는 마지막 상태의 선거일 투표소와 투표 마감 뒤의 변경도 보류다(`RollIncomplete`, 78). 늦게 오는 것이 아니라 다시 올 수 없는 것이기 때문이다. 효력 있는 동결이나 변경이 아직 없는 것은 보류가 아니라 완전성 미달이다. 14절의 "아직 없는 것은 완전성 미달"과 같고, 명부는 투표 전에 정해지지만 장부는 그 뒤에도 자란다.
@@ -63,7 +63,7 @@ ADR-0033은 명부의 사실마다 출처 기관이 서명하고, 명부를 서�
 
 9. **시점확인.** 동결과 보관 영수증은 ADR-0039의 시점확인 대상이다(ADR-0034 2항, 개정안 15 제278조의7 ①). 그 `WitnessedEvent`를 가리키는 `TimestampRecord`를 받는다. 추출과 변경은 대상이 아니다(`TimestampProblem::Target`). 토큰이 있어야 효력이 있다는 규칙은 두지 않는다(아래 한계).
 
-10. **API.** `ityv-encoding`: 위 스키마, `RollState`, 코드들, `MIN_CUSTODY_QUORUM`, purpose 상수. `ityv-state`: `admit_extract`, `admit_freeze`, `admit_receipt`, `admit_amendment`, `custody_quorum`, 보류 74–78. `ityv-verify`: `verify_roll`, `RollStage`과 그 보고형(`roll`, `poll_close`, `late_amendments`, `missing_extracts` 포함), `RollInput`, `verify_ledger_full`, `Report::roll`, `ParticipationStage::pseudonym_station`, `VerifiedGenesis::roll_authorities`·`roll_authority`·`roll_authority_entry`.
+10. **API.** `ityv-encoding`: 위 스키마, `RollState`, 코드들, `MIN_CUSTODY_QUORUM`, purpose 상수. `ityv-state`: `admit_extract`, `admit_freeze`, `admit_receipt`, `admit_amendment`, `custody_quorum`, 보류 74–78. `ityv-verify`: `verify_roll`, `RollStage`과 그 보고형(`roll`, `poll_close`, `late_amendments`, `missing_extracts` 포함), `RollInput`, `verify_ledger_full`, `Report::roll`, `ParticipationStage::pseudonym_station`, `StationParticipation::first_final`, `VerifiedGenesis::roll_authorities`·`roll_authority`·`roll_authority_entry`.
 
 ## 결과
 

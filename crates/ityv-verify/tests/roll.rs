@@ -29,7 +29,7 @@ use common::{election, leak, module_signing, object, sign_seeded, unit_signing};
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     ContestedCheckin, ContestedMessage, ElectionId, EventRole, Hash512, ModuleId,
-    ParticipationModuleSig, RollAmendmentReason, RollSourceKind, RollState,
+    ParticipationModuleSig, RollAmendmentReason, RollSourceKind, RollState, SCHEMA_BOX_CLOSE,
     SCHEMA_CONTESTED_CHECKIN, SCHEMA_PARTICIPATION_SET, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1,
     StationId, StationKind, Token192, UnitId,
 };
@@ -680,6 +680,86 @@ fn an_amendment_after_the_poll_close_is_recorded_and_holds_and_the_roll_is_the_c
         assert_eq!(stage.complete(), receipts);
         assert_eq!(stage.holds(), only(HoldReason::RollIncomplete));
     }
+}
+
+#[test]
+fn the_poll_close_is_the_first_close_of_an_election_day_station() {
+    // The final review's F5: BOX-1 (ST-1's box) closed, then the operator
+    // recorded a death amendment and its receipts, then ST-1's
+    // participation set. The close was the set's frame, so the amendment
+    // was in time and changed the roll, with no hold.
+    let (bodies, events) = sources_of_st1();
+    let body = freeze_of(&bodies);
+    let frozen = merged(0x40, &bodies);
+    let death = roll::amendment(1, body, RollAmendmentReason::Death, DEATHS, state(0x50));
+    let mut base = events.to_vec();
+    base.push(ev(body, &[NEC, IVC]));
+    for (i, c) in CONFIRMING.iter().enumerate() {
+        base.push(agreeing(c, body, &bodies, i == 0));
+    }
+    let amendment = |book: &mut Book| {
+        let seq = book.w(ev(death, &[NEC, IVC, by(DEATHS)]));
+        for (i, c) in CONFIRMING.iter().enumerate() {
+            let r = roll::receipt(c, death, state(0x50), None, i == 0);
+            book.w(ev(r, &[by(c)]));
+        }
+        seq
+    };
+    let box_close = || world::close(world::B1, 0, 0, 0, &[]);
+    let mut book = book_of(election_world(), &base);
+    let closed = book.push(SCHEMA_BOX_CLOSE, box_close());
+    let late = amendment(&mut book);
+    let set = book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    assert!(closed < late && late < set);
+    let stage = run(&book);
+    assert_eq!(
+        stage.poll_close().map(ityv_encoding::Seq::get),
+        Some(closed)
+    );
+    assert_eq!(
+        stage
+            .late_amendments()
+            .iter()
+            .map(|s| s.get())
+            .collect::<Vec<_>>(),
+        [late]
+    );
+    assert_eq!(stage.roll(), Some(&frozen));
+    assert_eq!(stage.holds(), only(HoldReason::RollIncomplete));
+    // Recorded before the box closed, the amendment is in time.
+    let mut book = book_of(election_world(), &base);
+    amendment(&mut book);
+    let closed = book.push(SCHEMA_BOX_CLOSE, box_close());
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    let stage = run(&book);
+    assert_eq!(
+        stage.poll_close().map(ityv_encoding::Seq::get),
+        Some(closed)
+    );
+    assert!(stage.late_amendments().is_empty());
+    assert_eq!(stage.roll(), Some(&state(0x50)));
+    assert_eq!(stage.holds(), HoldSet::empty());
+    // The observers' final check-in count closes the station too.
+    let mut book = book_of(election_world(), &base);
+    let mut counted = 0;
+    for (schema, e) in world::station_record(3) {
+        counted = book.push(schema, e);
+    }
+    let late = amendment(&mut book);
+    let stage = run(&book);
+    assert_eq!(
+        stage.poll_close().map(ityv_encoding::Seq::get),
+        Some(counted)
+    );
+    assert_eq!(
+        stage
+            .late_amendments()
+            .iter()
+            .map(|s| s.get())
+            .collect::<Vec<_>>(),
+        [late]
+    );
+    assert_eq!(stage.holds(), only(HoldReason::RollIncomplete));
 }
 
 #[test]

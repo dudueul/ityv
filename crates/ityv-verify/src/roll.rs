@@ -15,9 +15,11 @@
 //!   commission and the committee. It merges the extracts taken before it
 //!   (VC-107): its sources root and count are those of their bodies'
 //!   object hashes, every election-day station of the state in force has
-//!   its resident extract, and the national snapshot is among them. Which
-//!   entries the merge gives is recomputed by the custodians, who hold the
-//!   extracts.
+//!   its resident extract, and the national snapshot is among them. Its
+//!   entry count is one the extracts can give: at least the resident
+//!   extracts' sum less every removal list, at most that sum plus the
+//!   overseas list. Which entries the merge gives is recomputed by the
+//!   custodians, who hold the extracts.
 //! * **Custody receipts** (`RollCustodyReceiptBody`), each signed by the
 //!   custodian it names, answering the freeze or an amendment taken in an
 //!   earlier frame, once per custodian and subject. A receipt for the
@@ -38,8 +40,13 @@
 //! among them (`ityv_state::custody_quorum`, VC-108), and one of those
 //! receipts gives the pseudonym root, which the custodian computed
 //! (VC-109). The stage is complete when the freeze and every amendment
-//! took effect; the participation step of the status ladder waits for it
-//! (§14 6). Its legal effect is that alone: without it the electronic
+//! took effect and every election-day station of the genesis's last state
+//! has its resident extract; the participation step of the status ladder
+//! waits for it (§14 6). The roll the individual check compares with
+//! (VC-110) is the one in force at the poll close, the first close the
+//! ledger shows at an election-day station ([`RollStage::poll_close`]); an
+//! amendment after it, or an election-day station without an extract,
+//! holds the ledger (`RollIncomplete`). Its legal effect is that alone: without it the electronic
 //! verification status is not confirmed (`LEGAL_ANNEX.md` amendment 14, §44-3
 //! ④ and ⑤); whether the roll is lawful is not the verifier's to say.
 //!
@@ -100,7 +107,7 @@ use ityv_encoding::{
     AuthorityId, CheckinUnit, ContestedCheckin, EntrySet, EventRole, HYBRID_VK_LEN, Hash512, OrgId,
     PSEUDONYM_LEN, PURPOSE_CONTESTED_CHECKIN, RollAmendmentBody, RollAmendmentReason,
     RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody, RollFreezeBody,
-    RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_CONTESTED_CHECKIN,
+    RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_BOX_CLOSE, SCHEMA_CONTESTED_CHECKIN,
     SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
     SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_WITNESSED_EVENT, Seq, StationEntry, StationId,
     StationKind, WitnessedEvent, decode_object, schema_version,
@@ -453,8 +460,13 @@ pub struct RollStage<'a> {
 
 impl<'a> RollStage<'a> {
     /// The frame at which voting had closed, as the ledger shows it: the
-    /// first accepted participation set of an election-day station of the
-    /// genesis's last state. `None` while there is none.
+    /// earliest, among the election-day stations of the genesis's last
+    /// state, of an accepted participation set, a first final observer
+    /// count taken, and the close of one of their boxes (the box's first
+    /// `BoxClose` frame, after which the index takes no record of it,
+    /// VC-101). `None` while there is none. An amendment the operator
+    /// records between a box's close and the station's participation set
+    /// is after the close.
     #[must_use]
     pub const fn poll_close(&self) -> Option<Seq> {
         self.close
@@ -513,9 +525,9 @@ impl<'a> RollStage<'a> {
     /// (`RollIncomplete`) and keep the stage from [`RollStage::complete`].
     #[must_use]
     pub fn roll(&self) -> Option<&RollState> {
-        // An amendment and the participation set that marks the close are
-        // two ledger events, which never share a frame, so `<` and `<=`
-        // between their frames agree.
+        // An amendment and the event that marks the close are two ledger
+        // events, which never share a frame, so `<` and `<=` between their
+        // frames agree.
         let in_time: Vec<&TakenAmendment<'a>> = self
             .amendments
             .iter()
@@ -1147,19 +1159,22 @@ fn settle_contested<'a>(reports: &mut [(ContestedReport<'a>, Option<Message<'a>>
 
 /// Settles `stage` against the genesis's last state: every election-day
 /// station needs its resident extract once there is a freeze (a station
-/// added after the freeze has none), and the first participation set of
-/// such a station marks the poll close, after which an amendment is late.
+/// added after the freeze has none), and the first close of such a station
+/// (its participation set, its first final observer count, or the close
+/// of one of its boxes) marks the poll close, after which an amendment is
+/// late.
 fn settle_close<'a>(
     genesis: &VerifiedGenesis<'a>,
+    index: &LedgerIndex<'a>,
     participation: &ParticipationStage<'a>,
     stage: &mut RollStage<'a>,
 ) {
     let last = genesis.state_count().saturating_sub(1);
-    let election_day: Vec<StationId<'a>> = genesis
+    let stations: Vec<&StationEntry<'a>> = genesis
         .stations_at(last)
         .filter(|s| s.kind() == StationKind::ElectionDay)
-        .map(StationEntry::station_id)
         .collect();
+    let election_day: Vec<StationId<'a>> = stations.iter().map(|s| s.station_id()).collect();
     if stage.freeze.is_some() {
         stage.missing = election_day
             .iter()
@@ -1173,7 +1188,7 @@ fn settle_close<'a>(
             .copied()
             .collect();
     }
-    stage.close = participation
+    let counted = participation
         .stations()
         .iter()
         .filter(|s| {
@@ -1181,10 +1196,17 @@ fn settle_close<'a>(
                 .iter()
                 .any(|d| d.as_bytes() == s.station_id.as_bytes())
         })
-        .filter_map(|s| s.set)
-        .min_by_key(|seq| seq.get());
-    // An amendment and the participation set that marks the close never
-    // share a frame (a frame carries one event), so `>` and `>=` agree.
+        .flat_map(|s| [s.set, s.first_final])
+        .flatten();
+    let closed = stations.iter().flat_map(|s| s.boxes()).filter_map(|b| {
+        index
+            .box_events(b.as_bytes())
+            .find(|e| e.schema == SCHEMA_BOX_CLOSE)
+            .map(|e| e.seq)
+    });
+    stage.close = counted.chain(closed).min_by_key(|seq| seq.get());
+    // An amendment and the event that marks the close never share a
+    // frame (a frame carries one event), so `>` and `>=` agree.
     stage.late = stage
         .amendments
         .iter()
@@ -1196,6 +1218,11 @@ fn settle_close<'a>(
 /// Verifies the roll of `index` against `genesis` (module documentation),
 /// with the participation stage's accepted sets for the contested
 /// check-ins a verifier with access supplies in `input`.
+///
+/// `participation` must be the stage built from this `index` and
+/// `genesis` (as [`crate::verify_ledger_full`] builds it): its sets and
+/// counts give the poll close and the contested findings, and this
+/// function does not check that they come from the same ledger.
 #[must_use]
 pub fn verify_roll<'a>(
     genesis: &VerifiedGenesis<'a>,
@@ -1250,7 +1277,7 @@ pub fn verify_roll<'a>(
     for a in &mut stage.amendments {
         settle(&mut a.custody);
     }
-    settle_close(genesis, participation, stage);
+    settle_close(genesis, index, participation, stage);
 
     let frames: BTreeMap<[u8; 64], Seq> = index
         .events()
