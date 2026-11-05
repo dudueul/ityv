@@ -160,12 +160,23 @@ fn h(seed: u8) -> Hash512 {
 }
 
 /// An extract body by source `authority` of `kind` (with `precinct` for
-/// residents), its root drawn from `seed`.
+/// residents), its root drawn from `seed`, listing `1000 + seed` entries.
 pub fn extract(
     authority: &'static [u8],
     kind: RollSourceKind,
     precinct: Option<&'static [u8]>,
     seed: u8,
+) -> &'static [u8] {
+    listing(authority, kind, precinct, seed, 1_000 + u64::from(seed))
+}
+
+/// As [`extract`], listing `entries` entries.
+pub fn listing(
+    authority: &'static [u8],
+    kind: RollSourceKind,
+    precinct: Option<&'static [u8]>,
+    seed: u8,
+    entries: u64,
 ) -> &'static [u8] {
     object(
         SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
@@ -176,7 +187,7 @@ pub fn extract(
             kind,
             precinct: precinct.map(|p| StationId::new(p).unwrap()),
             reference_day: Day::new(19_990),
-            entry_count: 1_000 + u64::from(seed),
+            entry_count: entries,
             entries_root: h(seed),
         })
         .unwrap(),
@@ -190,6 +201,29 @@ pub fn state(seed: u8) -> RollState {
         entry_count: 3_000 + u64::from(seed),
         counts_hash: h(seed.wrapping_add(1)),
         pseudonym_root: h(seed.wrapping_add(2)),
+    }
+}
+
+/// `state(seed)` with the entry count the merge of the extract bodies
+/// `extracts` gives: their resident extracts' sum (there is no removal
+/// list in these rolls).
+pub fn merged(seed: u8, extracts: &[&'static [u8]]) -> RollState {
+    let entries = extracts
+        .iter()
+        .map(|b| {
+            ityv_encoding::decode_object::<RollSourceExtractBody<'_>>(
+                SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
+                SCHEMA_VERSION_1,
+                b,
+            )
+            .unwrap()
+        })
+        .filter(|e| e.parts().kind == RollSourceKind::Residents)
+        .map(|e| e.parts().entry_count)
+        .sum();
+    RollState {
+        entry_count: entries,
+        ..state(seed)
     }
 }
 
@@ -285,8 +319,9 @@ pub fn snapshot() -> &'static [u8] {
 pub const CONFIRMING: [&[u8]; 3] = [C_JUD, C_INT, C_IVC];
 
 /// A complete roll for the election-day stations `precincts`: their
-/// resident extracts and the snapshot, the freeze of `state(0x40)` and
-/// the receipts of [`CONFIRMING`], each signed by its authority.
+/// resident extracts and the snapshot, the freeze of their merge
+/// (`merged(0x40, ..)`) and the receipts of [`CONFIRMING`], each signed by
+/// its authority.
 pub fn standard(precincts: &[&'static [u8]]) -> Vec<(SchemaId, &'static [u8])> {
     let mut extracts: Vec<&'static [u8]> = precincts
         .iter()
@@ -301,7 +336,7 @@ pub fn standard(precincts: &[&'static [u8]]) -> Vec<(SchemaId, &'static [u8])> {
             (SCHEMA_WITNESSED_EVENT, witnessed(b, &[by(author)], None))
         })
         .collect();
-    let s = state(0x40);
+    let s = merged(0x40, &extracts);
     let (root, count) = sources(&extracts);
     let body = freeze(s, (root, count));
     events.push((SCHEMA_WITNESSED_EVENT, witnessed(body, &[NEC, IVC], None)));

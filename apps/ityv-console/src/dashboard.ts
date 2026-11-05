@@ -1270,7 +1270,7 @@ function rollCard(r: Report): HTMLElement | null {
   return el(
     "section",
     { class: "card wide", "data-testid": "roll" },
-    el("h2", {}, "선거인명부 보관", el("span", { class: "muted" }, ` 보관 정족수 ${intText(roll.quorum)} · 출처 추출 ${intText(roll.extracts)}개 · ${roll.complete ? "동결과 모든 변경에 효력이 있다" : "효력이 없는 명부 상태가 있다"}`)),
+    el("h2", {}, "선거인명부 보관", el("span", { class: "muted" }, ` 보관 정족수 ${intText(roll.quorum)} · 출처 추출 ${intText(roll.extracts)}개 · ${roll.complete ? "동결과 모든 변경에 효력이 있다" : "효력이 없는 명부 상태나 빠진 발췌가 있다"}`)),
     rows.length === 0
       ? el("p", { class: "muted" }, "받아들인 명부 동결이 없다. 14절 6단계는 동결과 모든 변경이 효력이 있어야 통과한다.")
       : el(
@@ -1294,10 +1294,21 @@ function rollCard(r: Report): HTMLElement | null {
           ].join(", "),
         )
       : null,
+    roll.lateAmendments.length || roll.missingExtracts.length
+      ? el(
+          "p",
+          { class: "warnline", "data-testid": "roll-incomplete" },
+          icon("warn"),
+          [
+            ...roll.lateAmendments.map((s) => `프레임 ${intText(s)}의 변경은 투표 마감 뒤에 기록되었다`),
+            ...roll.missingExtracts.map((s) => `선거일 투표소 ${s}의 주민 명부 발췌가 없다`),
+          ].join(", "),
+        )
+      : null,
     el(
       "p",
       { class: "muted" },
-      `상태는 값이 같은 서로 다른 보관 기관의 영수증이 정족수 이상이고 그 가운데 법원행정처와 행정안전부가 있으며 하나가 명부 가명 root를 실었을 때 효력이 있다(VC-108, VC-109). 동결 뒤의 변경은 사유의 출처 기관이 서명한다(VC-111). 이의 투표 기록은 제한 등급이라 공개 장부에는 프레임만 있다(${intText(roll.contestedFrames)}개).`,
+      `상태는 값이 같은 서로 다른 보관 기관의 영수증이 정족수 이상이고 그 가운데 법원행정처와 행정안전부가 있으며 하나가 명부 가명 root를 실었을 때 효력이 있다(VC-108, VC-109). 동결 뒤의 변경은 사유의 출처 기관이 서명한다(VC-111). 개인 확인(VC-110)은 투표 마감 때의 명부와 비교한다(${roll.pollClose === null ? "선거일 투표소의 참여 집합이 아직 없어 마감 프레임을 모른다" : `마감은 선거일 투표소의 첫 참여 집합, 프레임 ${intText(roll.pollClose)}`}). 이의 투표 기록은 제한 등급이라 공개 장부에는 프레임만 있다(${intText(roll.contestedFrames)}개).`,
     ),
   );
 }

@@ -193,36 +193,44 @@ pub(crate) fn world() -> &'static World {
 pub(crate) fn amended_world() -> &'static (World, &'static [u8]) {
     static WORLD: OnceLock<&'static (World, &'static [u8])> = OnceLock::new();
     WORLD.get_or_init(|| {
-        let d = draft();
-        let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
-        let built = leak(sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
-            p.legal_authorization_hash = object_hash(body);
-        }));
-        let mut next = d.clone();
-        for r in &mut next.roster {
-            if r.signer_id.as_bytes() == b"obs-a" {
-                r.key = common::registered(ROSTER_BASE + 40);
+        leak(amend(|next| {
+            for r in &mut next.roster {
+                if r.signer_id.as_bytes() == b"obs-a" {
+                    r.key = common::registered(ROSTER_BASE + 40);
+                }
             }
-        }
-        next.units[0] = ReportingUnitEntry::new(
-            ReportingUnitId::new(RU1).unwrap(),
-            1,
-            OrgId::new(b"NEC-X").unwrap(),
-        )
-        .unwrap();
-        next.appointments = next.referenced_appointments();
-        let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
-        let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
-        leak((
-            World {
-                genesis,
-                pin: built.pin,
-                signed: built.signed,
-                authorization,
-            },
-            amendment.signed,
-        ))
+            next.units[0] = ReportingUnitEntry::new(
+                ReportingUnitId::new(RU1).unwrap(),
+                1,
+                OrgId::new(b"NEC-X").unwrap(),
+            )
+            .unwrap();
+        }))
     })
+}
+
+/// As [`world`], with one amendment that `change` makes to its draft;
+/// with the signed amendment.
+pub(crate) fn amend(change: impl FnOnce(&mut Draft)) -> (World, &'static [u8]) {
+    let d = draft();
+    let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
+    let built = leak(sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
+        p.legal_authorization_hash = object_hash(body);
+    }));
+    let mut next = d.clone();
+    change(&mut next);
+    next.appointments = next.referenced_appointments();
+    let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
+    let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+    (
+        World {
+            genesis,
+            pin: built.pin,
+            signed: built.signed,
+            authorization,
+        },
+        amendment.signed,
+    )
 }
 
 /// As [`world`], without `CRYPTO_TALLY_AID`.

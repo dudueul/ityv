@@ -52,4 +52,5 @@ test("the hold table names the timestamp and roll holds", () => {
   expect(HOLDS[75]?.name).toBe("RollCustodyMismatch");
   expect(HOLDS[76]?.name).toBe("ContestedCheckinInvalid");
   expect(HOLDS[77]?.name).toBe("ContestedRepeated");
+  expect(HOLDS[78]?.name).toBe("RollIncomplete");
 });

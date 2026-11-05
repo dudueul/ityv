@@ -344,11 +344,18 @@ pub enum HoldReason {
     /// investigators (§6.2, ADR-0033 decision 6, `LEGAL_ANNEX.md`
     /// amendment 14, §44-5 ②).
     ContestedRepeated = 77,
+    /// The roll does not match the election as it ran: an election-day
+    /// station of the genesis's last state has no resident extract (a
+    /// station added after the freeze), or an amendment was recorded after
+    /// voting closed (after the first accepted participation set of an
+    /// election-day station), which must not change the roll the voters
+    /// were checked against (§6.1, ADR-0040).
+    RollIncomplete = 78,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 78] = [
+    pub const ALL: [Self; 79] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -427,6 +434,7 @@ impl HoldReason {
         Self::RollCustodyMismatch,
         Self::ContestedCheckinInvalid,
         Self::ContestedRepeated,
+        Self::RollIncomplete,
     ];
 
     /// The reason's code.

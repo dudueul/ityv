@@ -1625,11 +1625,9 @@ fn the_participation_step_waits_for_the_roll_and_its_holds_reach_the_status() {
     assert_eq!(report.status().status(), Status::SourceCompletenessChecked);
     // A receipt that disagrees holds the ledger.
     let mut events = roll();
-    let freeze_body = roll::freeze(
-        roll::state(0x40),
-        roll::sources(&[roll::residents(b"ST-1", 0x10), roll::snapshot()]),
-    );
-    let mut other = roll::state(0x40);
+    let st1 = [roll::residents(b"ST-1", 0x10), roll::snapshot()];
+    let freeze_body = roll::freeze(roll::merged(0x40, &st1), roll::sources(&st1));
+    let mut other = roll::merged(0x40, &st1);
     other.entry_count += 1;
     events.push((
         SCHEMA_WITNESSED_EVENT,

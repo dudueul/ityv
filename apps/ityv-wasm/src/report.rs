@@ -647,6 +647,17 @@ fn write_roll(j: &mut Json, genesis: &VerifiedGenesis<'_>, report: &Report<'_>) 
         "contestedFrames",
         u64::try_from(roll.contested_frames()).unwrap_or(u64::MAX),
     );
+    j.opt_num("pollClose", roll.poll_close().map(ityv_encoding::Seq::get));
+    j.array("lateAmendments");
+    for seq in roll.late_amendments() {
+        j.item_num(seq.get());
+    }
+    j.end_array();
+    j.array("missingExtracts");
+    for station in roll.missing_extracts() {
+        j.item_str(&text(station.as_bytes()));
+    }
+    j.end_array();
     holds_json(j, "holds", roll.holds());
     j.end_object();
 }

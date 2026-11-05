@@ -92,8 +92,8 @@ use ityv_encoding::{
     RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody, RollFreezeBody,
     RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_CONTESTED_CHECKIN,
     SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
-    SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_WITNESSED_EVENT, Seq, StationId, StationKind,
-    WitnessedEvent, decode_object, schema_version,
+    SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_WITNESSED_EVENT, Seq, StationEntry, StationId,
+    StationKind, WitnessedEvent, decode_object, schema_version,
 };
 use ityv_ledger::{InclusionProof, sorted_set_root, verify_inclusion};
 use ityv_state::{
@@ -252,6 +252,12 @@ pub enum RollRefusal {
     /// no resident extract, or the national snapshot is missing: a roll
     /// fact without its source (VC-107).
     Incomplete,
+    /// The freeze's entry count is not one the extracts taken before it
+    /// can give: above the resident extracts' sum plus the overseas lists'
+    /// entries, or below that sum less the entries of every removal list
+    /// (deaths, disqualifications, overseas and loss of nationality). The
+    /// exact count is the custodians' to recompute (VC-107).
+    Count,
     /// A receipt answers no freeze or amendment taken in an earlier
     /// frame, or names a sources root for an amendment or none for the
     /// freeze.
@@ -326,6 +332,8 @@ pub struct TakenExtract<'a> {
     pub authority: AuthorityId<'a>,
     /// Its precinct, for a resident extract.
     pub precinct: Option<StationId<'a>>,
+    /// How many entries it lists.
+    pub entries: u64,
 }
 
 /// An amendment taken, with its custody.
@@ -417,10 +425,37 @@ pub struct RollStage<'a> {
     mismatches: Vec<CustodyMismatch<'a>>,
     contested_frames: usize,
     contested: Vec<ContestedReport<'a>>,
+    close: Option<Seq>,
+    late: Vec<Seq>,
+    missing: Vec<StationId<'a>>,
     holds: HoldSet,
 }
 
 impl<'a> RollStage<'a> {
+    /// The frame at which voting had closed, as the ledger shows it: the
+    /// first accepted participation set of an election-day station of the
+    /// genesis's last state. `None` while there is none.
+    #[must_use]
+    pub const fn poll_close(&self) -> Option<Seq> {
+        self.close
+    }
+
+    /// The frames of the amendments recorded after the poll close: taken
+    /// into the chain, holding the ledger (`RollIncomplete`), and left out
+    /// of [`RollStage::roll`].
+    #[must_use]
+    pub fn late_amendments(&self) -> &[Seq] {
+        &self.late
+    }
+
+    /// The election-day stations of the genesis's last state without a
+    /// resident extract (stations added after the freeze), in station
+    /// order: each holds the ledger (`RollIncomplete`).
+    #[must_use]
+    pub fn missing_extracts(&self) -> &[StationId<'a>] {
+        &self.missing
+    }
+
     /// The source extracts taken, in frame order.
     #[must_use]
     pub fn extracts(&self) -> &[TakenExtract<'a>] {
@@ -449,17 +484,25 @@ impl<'a> RollStage<'a> {
             .count()
     }
 
-    /// The roll in force: the last amendment's values, or the freeze's,
-    /// when the freeze and every amendment took effect; else `None`.
+    /// The roll in force when voting closed, which the individual check
+    /// (VC-110) compares with: the last amendment recorded before the poll
+    /// close ([`RollStage::poll_close`]; all of them while it is not known)
+    /// or the freeze, when the freeze and every such amendment took
+    /// effect; else `None`. An amendment after the close does not change
+    /// it, and a missing extract does not withdraw it: both hold
+    /// (`RollIncomplete`) and keep the stage from [`RollStage::complete`].
     #[must_use]
     pub fn roll(&self) -> Option<&RollState> {
-        if !self.complete() {
+        let in_time: Vec<&TakenAmendment<'a>> = self
+            .amendments
+            .iter()
+            .filter(|a| self.close.is_none_or(|c| a.custody.seq.get() < c.get()))
+            .collect();
+        let freeze = self.freeze.as_ref().filter(|f| f.effective)?;
+        if !in_time.iter().all(|a| a.custody.effective) {
             return None;
         }
-        self.amendments
-            .last()
-            .map(|a| &a.custody.state)
-            .or(self.freeze.as_ref().map(|f| &f.state))
+        Some(in_time.last().map_or(&freeze.state, |a| &a.custody.state))
     }
 
     /// The events not taken, in frame order.
@@ -509,11 +552,14 @@ impl<'a> RollStage<'a> {
         counts.into_values().collect()
     }
 
-    /// Whether the freeze and every amendment took effect.
+    /// Whether the freeze and every amendment took effect and every
+    /// election-day station of the genesis's last state has its resident
+    /// extract.
     #[must_use]
     pub fn complete(&self) -> bool {
         self.freeze.as_ref().is_some_and(|f| f.effective)
             && self.amendments.iter().all(|a| a.custody.effective)
+            && self.missing.is_empty()
     }
 
     /// The hold reasons the stage puts on the whole ledger.
@@ -657,6 +703,7 @@ impl<'a> Work<'_, 'a> {
             kind: p.kind,
             authority: p.authority_id,
             precinct: p.precinct,
+            entries: p.entry_count,
         };
         let subject = extract_subject(&taken);
         if let Some(first) = self
@@ -709,6 +756,9 @@ impl<'a> Work<'_, 'a> {
         let count_ok = u32::try_from(hashes.len()).ok() == Some(p.source_count);
         if !count_ok || sorted_set_root(&hashes).ok() != Some(p.sources_root) {
             return Err(RollRefusal::Sources);
+        }
+        if !merge_allows(&self.stage.extracts, p.state.entry_count) {
+            return Err(RollRefusal::Count);
         }
         self.stage.freeze = Some(custody(
             seq,
@@ -932,6 +982,28 @@ fn contested_valid(
         })
 }
 
+/// Whether the merge of `extracts` can give a roll of `entries`: at most
+/// the resident extracts' sum plus the overseas lists' entries (which may
+/// add), at least that sum less every removal list's entries (deaths,
+/// disqualifications, overseas and loss of nationality). The snapshot is
+/// the Ministry's national cross-check, not a count of the roll.
+fn merge_allows(extracts: &[TakenExtract<'_>], entries: u64) -> bool {
+    let sum = |kinds: &[RollSourceKind]| {
+        extracts
+            .iter()
+            .filter(|e| kinds.contains(&e.kind))
+            .fold(0u64, |total, e| total.saturating_add(e.entries))
+    };
+    let residents = sum(&[RollSourceKind::Residents]);
+    let removals = sum(&[
+        RollSourceKind::Deaths,
+        RollSourceKind::Disqualifications,
+        RollSourceKind::Overseas,
+    ]);
+    let additions = sum(&[RollSourceKind::Overseas]);
+    residents.saturating_sub(removals) <= entries && entries <= residents.saturating_add(additions)
+}
+
 /// The message of a verified check-in: its pseudonym and envelope label.
 type MessageKey<'a> = (&'a [u8; PSEUDONYM_LEN], [u8; 24]);
 
@@ -1029,6 +1101,52 @@ fn settle_contested<'a>(reports: &mut [(ContestedReport<'a>, Option<MessageKey<'
     }
 }
 
+/// Settles `stage` against the genesis's last state: every election-day
+/// station needs its resident extract once there is a freeze (a station
+/// added after the freeze has none), and the first participation set of
+/// such a station marks the poll close, after which an amendment is late.
+fn settle_close<'a>(
+    genesis: &VerifiedGenesis<'a>,
+    participation: &ParticipationStage<'a>,
+    stage: &mut RollStage<'a>,
+) {
+    let last = genesis.state_count().saturating_sub(1);
+    let election_day: Vec<StationId<'a>> = genesis
+        .stations_at(last)
+        .filter(|s| s.kind() == StationKind::ElectionDay)
+        .map(StationEntry::station_id)
+        .collect();
+    if stage.freeze.is_some() {
+        stage.missing = election_day
+            .iter()
+            .filter(|station| {
+                !stage.extracts.iter().any(|e| {
+                    e.kind == RollSourceKind::Residents
+                        && e.precinct
+                            .is_some_and(|p| p.as_bytes() == station.as_bytes())
+                })
+            })
+            .copied()
+            .collect();
+    }
+    stage.close = participation
+        .stations()
+        .iter()
+        .filter(|s| {
+            election_day
+                .iter()
+                .any(|d| d.as_bytes() == s.station_id.as_bytes())
+        })
+        .filter_map(|s| s.set)
+        .min_by_key(|seq| seq.get());
+    stage.late = stage
+        .amendments
+        .iter()
+        .map(|a| a.custody.seq)
+        .filter(|seq| stage.close.is_some_and(|c| seq.get() > c.get()))
+        .collect();
+}
+
 /// Verifies the roll of `index` against `genesis` (module documentation),
 /// with the participation stage's accepted sets for the contested
 /// check-ins a verifier with access supplies in `input`.
@@ -1050,6 +1168,9 @@ pub fn verify_roll<'a>(
             mismatches: Vec::new(),
             contested_frames: 0,
             contested: Vec::new(),
+            close: None,
+            late: Vec::new(),
+            missing: Vec::new(),
             holds: HoldSet::empty(),
         },
         receipts: BTreeMap::new(),
@@ -1083,6 +1204,7 @@ pub fn verify_roll<'a>(
     for a in &mut stage.amendments {
         settle(&mut a.custody);
     }
+    settle_close(genesis, participation, stage);
 
     let frames: BTreeMap<[u8; 64], Seq> = index
         .events()
@@ -1119,6 +1241,10 @@ pub fn verify_roll<'a>(
                 )
             }),
             HoldReason::ContestedRepeated,
+        )
+        .with_if(
+            !stage.late.is_empty() || !stage.missing.is_empty(),
+            HoldReason::RollIncomplete,
         );
     work.stage
 }

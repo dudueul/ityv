@@ -4,7 +4,9 @@
 //! contested check-ins, all signed with real hybrid signatures under the
 //! keys the genesis registers (`tests/common/roll.rs`). Every refusal of
 //! the stage, the quorum's number and both branches, the pseudonym root,
-//! a disagreeing receipt, the entry commitment and its inclusion proof.
+//! a disagreeing receipt, the entry count the merge allows, the roll at
+//! the poll close and an amendment after it, a precinct without its
+//! extract, the entry commitment and its inclusion proof.
 // Integration tests: outside the TCB. Assertions use unwrap/expect, so these
 // lints are relaxed for this file only (CONSTITUTION.md §1.1).
 #![allow(
@@ -20,15 +22,16 @@ mod common;
 mod world;
 
 use common::roll::{
-    self, APPEAL, C_INT, C_IVC, C_JUD, C_PA, DEATHS, GU, IVC, NEC, OVERSEAS, SNAPSHOT, Who, by,
-    residents, snapshot, sources, state, witnessed,
+    self, APPEAL, C_INT, C_IVC, C_JUD, C_PA, CONFIRMING, DEATHS, DISQ, GU, IVC, NEC, OVERSEAS,
+    SNAPSHOT, Who, by, merged, residents, snapshot, sources, state, witnessed,
 };
 use common::{election, leak, module_signing, object, sign_seeded, unit_signing};
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     ContestedCheckin, ContestedMessage, ElectionId, EventRole, Hash512, ModuleId,
-    ParticipationModuleSig, RollAmendmentReason, RollSourceKind, SCHEMA_CONTESTED_CHECKIN,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_VERSION_1, StationId, Token192, UnitId,
+    ParticipationModuleSig, RollAmendmentReason, RollSourceKind, RollState,
+    SCHEMA_CONTESTED_CHECKIN, SCHEMA_PARTICIPATION_SET, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1,
+    StationId, StationKind, Token192, UnitId,
 };
 use ityv_ledger::{Accumulator, inclusion_proof};
 use ityv_state::{HoldReason, HoldSet};
@@ -38,7 +41,7 @@ use ityv_verify::{
     verify_roll,
 };
 
-use world::{Book, World, election_world, group, participation, world};
+use world::{Book, World, amend, election_world, group, participation, world};
 
 use RollEvent::{Amendment, Extract, Freeze, Receipt};
 use RollRefusal as R;
@@ -97,9 +100,9 @@ fn sources_of_st1() -> ([&'static [u8]; 2], [&'static [u8]; 2]) {
     )
 }
 
-/// The freeze of `state(0x40)` over `bodies`.
+/// The freeze of the merge of `bodies` (`merged(0x40, bodies)`).
 fn freeze_of(bodies: &[&'static [u8]]) -> &'static [u8] {
-    roll::freeze(state(0x40), sources(bodies))
+    roll::freeze(merged(0x40, bodies), sources(bodies))
 }
 
 /// `custodian`'s receipt agreeing with the freeze `body` over `bodies`.
@@ -112,7 +115,7 @@ fn agreeing(
     let r = roll::receipt(
         custodian,
         body,
-        state(0x40),
+        merged(0x40, bodies),
         Some(sources(bodies).0),
         pseudonyms,
     );
@@ -148,26 +151,24 @@ fn a_merged_roll_confirmed_by_three_custodians_takes_effect() {
         [C_JUD, C_INT, C_IVC]
     );
     assert!(stage.complete());
-    assert_eq!(stage.roll(), Some(&state(0x40)));
+    assert_eq!(
+        stage.roll(),
+        Some(&merged(0x40, &[residents(b"ST-1", 0x10), snapshot()]))
+    );
     assert_eq!(stage.contested_frames(), 0);
     // Other lists (deaths, disqualifications, overseas voters) join the
     // merge when their sources sign them.
     let (bodies, events) = sources_of_st1();
     let lists = [
         roll::extract(DEATHS, RollSourceKind::Deaths, None, 0x21),
-        roll::extract(
-            common::roll::DISQ,
-            RollSourceKind::Disqualifications,
-            None,
-            0x22,
-        ),
+        roll::extract(DISQ, RollSourceKind::Disqualifications, None, 0x22),
         roll::extract(OVERSEAS, RollSourceKind::Overseas, None, 0x23),
     ];
     let all: Vec<&'static [u8]> = bodies.iter().chain(&lists).copied().collect();
     let body = freeze_of(&all);
     let mut list = events.to_vec();
     list.push(ev(lists[0], &[by(DEATHS)]));
-    list.push(ev(lists[1], &[by(common::roll::DISQ)]));
+    list.push(ev(lists[1], &[by(DISQ)]));
     list.push(ev(lists[2], &[by(OVERSEAS)]));
     list.push(ev(body, &[NEC, IVC]));
     for (i, c) in [C_JUD, C_INT, C_PA].iter().enumerate() {
@@ -341,11 +342,91 @@ fn a_freeze_must_merge_the_extracts_taken_before_it() {
 }
 
 #[test]
+fn a_freeze_counts_the_residents_within_what_the_other_lists_remove_or_add() {
+    // The review's I-d: ST-1's residents (1,016 entries) and the snapshot
+    // (1,048, the national cross-check, not a count of the roll); 10
+    // deaths, 7 disqualifications and 5 overseas entries.
+    let (bodies, events) = sources_of_st1();
+    let lists = [
+        (
+            DEATHS,
+            roll::listing(DEATHS, RollSourceKind::Deaths, None, 0x21, 10),
+        ),
+        (
+            DISQ,
+            roll::listing(DISQ, RollSourceKind::Disqualifications, None, 0x22, 7),
+        ),
+        (
+            OVERSEAS,
+            roll::listing(OVERSEAS, RollSourceKind::Overseas, None, 0x23, 5),
+        ),
+    ];
+    let case = |taken: &[(&'static [u8], &'static [u8])], entries: u64| {
+        let mut all = bodies.to_vec();
+        all.extend(taken.iter().map(|(_, b)| *b));
+        let mut list = events.to_vec();
+        list.extend(taken.iter().map(|(who, b)| ev(b, &[by(who)])));
+        let s = RollState {
+            entry_count: entries,
+            ..state(0x40)
+        };
+        list.push(ev(roll::freeze(s, sources(&all)), &[NEC, IVC]));
+        let stage = run(&book_of(world(), &list));
+        assert_eq!(stage.freeze().is_some(), stage.refused().is_empty());
+        refused(&stage)
+    };
+    // At least 1,016 - (10 + 7 + 5) = 994, at most 1,016 + 5 = 1,021.
+    for entries in [994, 1_016, 1_021] {
+        assert_eq!(case(&lists, entries), [], "{entries}");
+    }
+    for entries in [993, 1_022, 1_016 + 1_048, 0, u64::MAX] {
+        assert_eq!(case(&lists, entries), [(8, Freeze, R::Count)], "{entries}");
+    }
+    // Without the lists, the residents' sum exactly.
+    assert_eq!(case(&[], 1_016), []);
+    for entries in [1_015, 1_017] {
+        assert_eq!(case(&[], entries), [(5, Freeze, R::Count)], "{entries}");
+    }
+    // Removals only lower the floor; only the overseas list raises the
+    // ceiling.
+    assert_eq!(case(&lists[..2], 999), []);
+    assert_eq!(case(&lists[..2], 1_017), [(7, Freeze, R::Count)]);
+    assert_eq!(case(&lists[2..], 1_021), []);
+    assert_eq!(case(&lists[2..], 1_011), []);
+    assert_eq!(case(&lists[2..], 1_010), [(6, Freeze, R::Count)]);
+    // A refused freeze holds and leaves room for one.
+    let stage = run(&book_of(
+        world(),
+        &[
+            events[0],
+            events[1],
+            ev(
+                roll::freeze(
+                    RollState {
+                        entry_count: 1_017,
+                        ..state(0x40)
+                    },
+                    sources(&bodies),
+                ),
+                &[NEC, IVC],
+            ),
+            ev(freeze_of(&bodies), &[NEC, IVC]),
+        ],
+    ));
+    assert_eq!(refused(&stage), [(5, Freeze, R::Count)]);
+    assert_eq!(
+        stage.freeze().unwrap().hash,
+        object_hash(freeze_of(&bodies))
+    );
+    assert_eq!(stage.holds(), only(HoldReason::RollEventRefused));
+}
+
+#[test]
 fn a_receipt_answers_a_state_taken_before_it_once_per_custodian() {
     let (bodies, events) = sources_of_st1();
     let body = freeze_of(&bodies);
     let root = sources(&bodies).0;
-    let s = state(0x40);
+    let s = merged(0x40, &bodies);
     let r = |custodian, subject: &'static [u8], sources_root, p| {
         roll::receipt(custodian, subject, s, sources_root, p)
     };
@@ -402,7 +483,7 @@ fn a_receipt_that_disagrees_is_a_custody_mismatch_and_does_not_count() {
     let (bodies, events) = sources_of_st1();
     let body = freeze_of(&bodies);
     let root = sources(&bodies).0;
-    let good = state(0x40);
+    let good = merged(0x40, &bodies);
     let mut variants = Vec::new();
     let mut s = good;
     s.entries_root = Hash512([0x99; 64]);
@@ -532,6 +613,124 @@ fn amendments_chain_from_the_freeze_with_their_source_and_fresh_receipts() {
     );
     assert_eq!(stage.amendments().len(), 1);
     assert_eq!(stage.holds(), only(HoldReason::RollEventRefused));
+}
+
+#[test]
+fn an_amendment_after_the_poll_close_is_recorded_and_holds_and_the_roll_is_the_close_s() {
+    // The review's I-d: the individual check (VC-110) compares with the
+    // roll in force when voting closed, which the first participation set
+    // of an election-day station marks on the ledger.
+    let (bodies, events) = sources_of_st1();
+    let body = freeze_of(&bodies);
+    let frozen = merged(0x40, &bodies);
+    let death = roll::amendment(1, body, RollAmendmentReason::Death, DEATHS, state(0x50));
+    let mut base = events.to_vec();
+    base.push(ev(body, &[NEC, IVC]));
+    for (i, c) in CONFIRMING.iter().enumerate() {
+        base.push(agreeing(c, body, &bodies, i == 0));
+    }
+    let amendment = |book: &mut Book, receipts: bool| {
+        let seq = book.w(ev(death, &[NEC, IVC, by(DEATHS)]));
+        if receipts {
+            for (i, c) in CONFIRMING.iter().enumerate() {
+                let r = roll::receipt(c, death, state(0x50), None, i == 0);
+                book.w(ev(r, &[by(c)]));
+            }
+        }
+        seq
+    };
+    // No participation set: the close is not known and every amendment
+    // counts.
+    let mut book = book_of(election_world(), &base);
+    amendment(&mut book, true);
+    let stage = run(&book);
+    assert_eq!(stage.poll_close(), None);
+    assert_eq!(stage.roll(), Some(&state(0x50)));
+    assert_eq!(stage.holds(), HoldSet::empty());
+    // Before the close: the roll is the amended one.
+    let mut book = book_of(election_world(), &base);
+    amendment(&mut book, true);
+    let close = book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    let stage = run(&book);
+    assert_eq!(stage.poll_close().map(ityv_encoding::Seq::get), Some(close));
+    assert!(stage.late_amendments().is_empty());
+    assert_eq!(stage.roll(), Some(&state(0x50)));
+    assert!(stage.complete());
+    assert_eq!(stage.holds(), HoldSet::empty());
+    // After the close: recorded and confirmed, but the roll stays the
+    // freeze's and the ledger holds.
+    for receipts in [true, false] {
+        let mut book = book_of(election_world(), &base);
+        let close = book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+        let late = amendment(&mut book, receipts);
+        let stage = run(&book);
+        assert_eq!(stage.poll_close().map(ityv_encoding::Seq::get), Some(close));
+        assert_eq!(
+            stage
+                .late_amendments()
+                .iter()
+                .map(|s| s.get())
+                .collect::<Vec<_>>(),
+            [late]
+        );
+        assert_eq!(stage.amendments().len(), 1);
+        assert_eq!(stage.amendments()[0].custody.effective, receipts);
+        assert!(stage.refused().is_empty());
+        assert_eq!(stage.roll(), Some(&frozen));
+        assert_eq!(stage.complete(), receipts);
+        assert_eq!(stage.holds(), only(HoldReason::RollIncomplete));
+    }
+}
+
+#[test]
+fn a_precinct_the_genesis_adds_after_the_freeze_has_no_extract_and_holds() {
+    // The review's I-d: the freeze checks the stations of the state in
+    // force; an amendment that makes ST-2 an election-day station after it
+    // leaves ST-2 without an extract, which no later extract can supply.
+    let (world, genesis_amendment) = leak(amend(|d| {
+        d.stations[1] = common::station(
+            b"ST-2",
+            StationKind::ElectionDay,
+            common::checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+            common::checkin_unit(3, b"U-2B", &[b"M-U2B-P1", b"M-U2B-P2"]),
+            &[b"BOX-3"],
+            &[],
+        );
+    }));
+    let mut book = Book::new(world);
+    for (schema, e) in roll::standard(&[b"ST-1"]) {
+        book.push(schema, e);
+    }
+    book.push(SCHEMA_SIGNED_GENESIS, genesis_amendment);
+    let late = book.w(ev(residents(b"ST-2", 0x11), &[by(GU)]));
+    let stage = run(&book);
+    assert!(stage.freeze().unwrap().effective);
+    assert_eq!(refused(&stage), [(late, Extract, R::AfterFreeze)]);
+    assert_eq!(stage.missing_extracts(), [StationId::new(b"ST-2").unwrap()]);
+    assert!(!stage.complete());
+    assert_eq!(
+        stage.holds(),
+        HoldSet::empty()
+            .with(HoldReason::RollEventRefused)
+            .with(HoldReason::RollIncomplete)
+    );
+    // The same genesis amended before the freeze: the freeze needs ST-2's
+    // extract, and with it nothing is missing.
+    let mut book = Book::new(world);
+    book.push(SCHEMA_SIGNED_GENESIS, genesis_amendment);
+    for (schema, e) in roll::standard(&[b"ST-1", b"ST-2"]) {
+        book.push(schema, e);
+    }
+    let stage = run(&book);
+    assert!(stage.missing_extracts().is_empty());
+    assert!(stage.complete(), "{:?}", stage.refused());
+    assert_eq!(stage.holds(), HoldSet::empty());
+    // No freeze yet: nothing is missing until there is one.
+    let mut book = Book::new(world);
+    book.push(SCHEMA_SIGNED_GENESIS, genesis_amendment);
+    let stage = run(&book);
+    assert!(stage.missing_extracts().is_empty());
+    assert_eq!(stage.holds(), HoldSet::empty());
 }
 
 /// A contested check-in at ST-1 of `pseudonym`, signed by unit `unit`
