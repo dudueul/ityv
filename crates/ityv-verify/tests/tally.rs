@@ -1328,7 +1328,7 @@ fn a_clean_election_reaches_crypto_tally_verified() {
     );
     book.checkpoint();
     let anchored = Publications {
-        anchors: Publication::Satisfied,
+        now: TimeBucket::new(0),
         board: Publication::Pending,
     };
     let report = verify_ledger(
@@ -1468,7 +1468,7 @@ fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
         book.ledger.bytes(),
         &book.ledger.events,
         Publications {
-            anchors: Publication::Satisfied,
+            now: TimeBucket::new(0),
             board: Publication::Pending,
         },
     )

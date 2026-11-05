@@ -65,8 +65,9 @@ use ityv_encoding::{
     SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_CHECK_BODY,
     SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SEAL_CHANGE_BODY,
     SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION,
-    SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody, Seq, SignedGenesis,
-    SignedLegalAuthorization, StationId, WitnessedEvent, decode_object,
+    SCHEMA_TIMESTAMP_RECORD, SCHEMA_WITNESSED_EVENT, ScanCountAttest, SchemaId, SealChangeBody,
+    Seq, SignedGenesis, SignedLegalAuthorization, StationId, TimestampRecord, WitnessedEvent,
+    decode_object,
 };
 use ityv_ledger::{
     ChainHead, ChainState, Error as LedgerError, FrameStream, Record, SCHEMA_SIGNED_CHECKPOINT,
@@ -555,6 +556,11 @@ fn classify<'a>(
             .or_else(|| q.receipt_resolution().map(|r| r.parts().election_id))
             .or_else(|| q.sample_opening_ref().map(|s| s.parts().election_id))?;
         Classified::new(Scope::Election, Role::Other, election)
+    } else if schema == SCHEMA_TIMESTAMP_RECORD {
+        // An authority's token over an earlier event: the checkpoint stage
+        // reads every one (ADR-0039).
+        let t = decode::<TimestampRecord<'a>>(schema, bytes)?;
+        Classified::new(Scope::Election, Role::Other, t.parts().election_id)
     } else if schema == SCHEMA_SIGNED_LEGAL_AUTHORIZATION {
         let a = decode::<SignedLegalAuthorization<'a>>(schema, bytes)?;
         Classified::new(

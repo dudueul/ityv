@@ -86,10 +86,12 @@ assert_eq!(decoded, frame);
 | 0x0032 | `ProgressCheckBody`, `ProgressCheckParts`, `ProgressAlarm`, `ProgressFinding` | §8.47 | `WitnessedEvent`에 실림. 반출 장수는 판정 2에만 |
 | 0x0037 | `StationProgressPolicy` | §8.48 | genesis 항목 객체. 기표소 수와 기준 장수는 1 이상 |
 | 0x0036, 0x0038, 0x003B–0x003E | `StationEntry`, `CheckinUnit`, `ObserverToken`, `StationKind`, `ReportingUnitEntry`, `ModuleEntry`, `BallotStyleEntry`, `TrusteeEntry`, `WitnessRosterEntry`, `EntrySet`, `GenesisEntry` | §8.49–§8.53 | genesis 항목 객체. 예비 유닛은 ID와 키 반쪽이 모두 다름, 투표함 1–8, `k = ⌈(m+2)/9⌉`, 모듈은 `N` 챔버 아님 |
-| 0x0002 | `GenesisBody`, `GenesisParts`, `PartyEntry`, `ChamberThreshold`, `WitnessQuorum`, `SetCommitment` | §8.54 | 버전 6. 두 기관 키 반쪽이 다름, 정족수 프로필, 정당 2–4와 챔버 목록, 증인 수 = `n` |
+| 0x0002 | `GenesisBody`, `GenesisParts`, `PartyEntry`, `ChamberThreshold`, `WitnessQuorum`, `SetCommitment` | §8.54 | 버전 7(집합 12개, ADR-0039). 두 기관 키 반쪽이 다름, 정족수 프로필, 정당 2–4와 챔버 목록, 증인 수 = `n` |
 | 0x0034 | `GenesisAmendmentBody`, `GenesisAmendmentParts`, `AmendmentReason` | §8.55 | 번호 1부터, 해시 0 아님, 바뀔 수 있는 집합 8개만 |
 | 0x0033 | `SignedGenesis`, `GenesisWitnessSig`, `GenesisKind` | §8.56 | 증인 서명 오름차순, genesis는 `q` 이상, 변경은 9 이상 |
 | 0x003F–0x0041 | `ObserverCountAttestBody`, `CheckinUnitSwapBody`, `BoxUnitSwapBody` | §8.57–§8.59 | `WitnessedEvent`에 실림. 참관인만(0x003F), 확인 못 한 교체는 누계 0 |
+| 0x0050 | `TimestampAuthorityEntry`, `TimestampPins`, `PolicyAccuracy`, `TimestampAuthorityKind`, `AuthorityId` | §8.74 | genesis 집합 12(고정). 구분 1·2, 정책 정확도 한 시간 이하, 핀 1–4개(바이트 오름차순, 각 16,952바이트 이하, 내용은 검증기가 `ityv-tsa`로 읽음) |
+| 0x004F | `TimestampRecord`, `TimestampRecordParts` | §8.75 | 대상 스키마는 0x0010·0x0028·0x0033만(VC-117, `timestamp_target_allowed`), 대상 해시 0 아님, 토큰은 없음(응답 없음) 또는 1–16,384바이트 |
 
 0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103·0x0104·0x0105는 `ityv-cunit`가 구현한다(ENCODING §6).
 

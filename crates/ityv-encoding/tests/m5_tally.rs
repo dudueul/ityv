@@ -894,7 +894,7 @@ fn every_schema_has_its_current_version() {
         SCHEMA_VERSION_WITNESSED, schema_version,
     };
     assert_eq!(schema_version(SCHEMA_GENESIS_BODY), SCHEMA_VERSION_GENESIS);
-    assert_eq!(SCHEMA_VERSION_GENESIS, 6);
+    assert_eq!(SCHEMA_VERSION_GENESIS, 7);
     assert_eq!(
         schema_version(SCHEMA_WITNESSED_EVENT),
         SCHEMA_VERSION_WITNESSED

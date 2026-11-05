@@ -45,9 +45,9 @@ pub use envelope::{
 };
 pub use error::{Error, Kind as ErrorKind};
 pub use primitives::{
-    BallotStyleId, BoxId, Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident, KeysetId,
-    LedgerId, ModuleId, ObserverId, OrgId, Point32, ReportingUnitId, RouteId, Scalar32, SchemaId,
-    Seq, SignerId, StationId, TimeBucket, Token192, TreeSize, TrusteeId, UnitId,
+    AuthorityId, BallotStyleId, BoxId, Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident,
+    KeysetId, LedgerId, ModuleId, ObserverId, OrgId, Point32, ReportingUnitId, RouteId, Scalar32,
+    SchemaId, Seq, SignerId, StationId, TimeBucket, Token192, TreeSize, TrusteeId, UnitId,
 };
 pub use reader::Reader;
 pub use schema::attestation::{
@@ -146,6 +146,11 @@ pub use schema::tally::{
     ReceiptEntries, ReceiptEntry, ReceiptOutcome, ReceiptResolutionBody, ReceiptResolutionParts,
     TallyScopeBody, TallyScopeParts, write_quorum_message,
 };
+pub use schema::timestamp::{
+    MAX_PIN_LEN, MAX_POLICY_ACCURACY_MS, MAX_TIMESTAMP_TOKEN_LEN, MAX_TSA_PINS, PolicyAccuracy,
+    TIMESTAMP_TARGET_SCHEMAS, TimestampAuthorityEntry, TimestampAuthorityKind, TimestampPins,
+    TimestampRecord, TimestampRecordParts, timestamp_target_allowed,
+};
 pub use schema::util::{
     Commitments, ED25519_SIG_LEN, HYBRID_SIG_LEN, HYBRID_VK_LEN, MAX_CHUNKS, MAX_MODULES,
     MLDSA87_VK_HALF, ModuleCounter, ModuleCounters, ModuleIds, Scalars, TAG_LEN, keys_share_half,
@@ -176,9 +181,9 @@ pub use schema::{
     SCHEMA_SAMPLE_OPENING_REF_BODY, SCHEMA_SCAN_COUNT_ATTEST, SCHEMA_SCAN_COUNT_ATTEST_BODY,
     SCHEMA_SEAL_CHANGE_BODY, SCHEMA_SHARE_PACKAGE, SCHEMA_SIGNED_GENESIS,
     SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_SLIP, SCHEMA_SLIP_BODY, SCHEMA_STATION_ENTRY,
-    SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_TRUSTEE_ENTRY,
-    SCHEMA_VERSION_1, SCHEMA_VERSION_QUORUM_SIGNED, SCHEMA_VERSION_REPORTING_UNIT,
-    SCHEMA_VERSION_ROSTER_SIGNER, SCHEMA_VERSION_WITNESSED, SCHEMA_WITNESS_ROSTER_ENTRY,
-    SCHEMA_WITNESSED_EVENT, schema_version,
+    SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_TIMESTAMP_AUTHORITY_ENTRY,
+    SCHEMA_TIMESTAMP_RECORD, SCHEMA_TRUSTEE_ENTRY, SCHEMA_VERSION_1, SCHEMA_VERSION_QUORUM_SIGNED,
+    SCHEMA_VERSION_REPORTING_UNIT, SCHEMA_VERSION_ROSTER_SIGNER, SCHEMA_VERSION_WITNESSED,
+    SCHEMA_WITNESS_ROSTER_ENTRY, SCHEMA_WITNESSED_EVENT, schema_version,
 };
 pub use writer::Writer;

@@ -1,4 +1,4 @@
-//! The genesis body (`GenesisBody`, schema `0x0002`, version 6), the
+//! The genesis body (`GenesisBody`, schema `0x0002`, version 7), the
 //! amendment body (`GenesisAmendmentBody`, schema `0x0034`) and their
 //! signed wrapper (`SignedGenesis`, schema `0x0033`) (ADR-0028;
 //! PROTOCOL.md §4.1–§4.3; ENCODING.md §8.54–§8.56).
@@ -12,7 +12,8 @@
 //!
 //! Versions 1–5 of schema `0x0002` were specification drafts that listed
 //! the contents without an encoding; version 6 is the first canonical
-//! encoding.
+//! encoding, with eleven entry sets. Version 7 (ADR-0039) adds the twelfth,
+//! the timestamp authorities; a version 6 body is not a version 7 body.
 
 use core::str;
 
@@ -29,8 +30,9 @@ use crate::schema::util::{
 use crate::schema::{SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_GENESIS_BODY, SCHEMA_VERSION_1};
 use crate::writer::Writer;
 
-/// The version of schema `0x0002` this crate encodes.
-pub const SCHEMA_VERSION_GENESIS: u16 = 6;
+/// The version of schema `0x0002` this crate encodes: 7, twelve entry
+/// sets (ADR-0039).
+pub const SCHEMA_VERSION_GENESIS: u16 = 7;
 
 /// Maximum length of an embedded genesis or amendment body object.
 pub const MAX_GENESIS_BODY_LEN: usize = 16_384;
@@ -283,7 +285,7 @@ fn chamber_valid(index: usize, parties: usize, chamber: ChamberThreshold) -> boo
         && chamber.threshold <= chamber.members
 }
 
-/// The genesis body (schema `0x0002`, version 6).
+/// The genesis body (schema `0x0002`, version 7).
 ///
 /// Rules: the four document hashes are nonzero (`InvalidPreviousHash`);
 /// the two authority keys share no half (`InvariantViolation`, VC-006);
@@ -812,7 +814,7 @@ pub struct GenesisWitnessSig<'a> {
 /// witness signatures, all over exactly the body bytes with the body's
 /// purpose (PROTOCOL.md §4.2, §4.3).
 ///
-/// Rules: the body is a complete `GenesisBody` (version 6) or
+/// Rules: the body is a complete `GenesisBody` (version 7) or
 /// `GenesisAmendmentBody` (`SchemaMismatch` otherwise); the witness
 /// signatures are strictly ascending by `witness_id` (`NotSorted`,
 /// `Duplicate`) and at least the genesis quorum `q`, or nine for an

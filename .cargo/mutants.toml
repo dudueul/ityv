@@ -48,6 +48,16 @@ exclude_re = [
     # false; it exists because `len` needs it (clippy `len_without_is_empty`)
     # (crates/ityv-encoding/src/schema/tally.rs).
     "replace PaperVotes::is_empty -> bool with false",
+    # Equivalent: a timestamp authority has one to four pins (the
+    # constructor and the decoder refuse none), so `TimestampPins::is_empty`
+    # is always false; it exists because `len` needs it (clippy
+    # `len_without_is_empty`) (crates/ityv-encoding/src/schema/timestamp.rs).
+    "replace TimestampPins<'a>::is_empty -> bool with false",
+    # Equivalent: a timestamp record and the event it stamps are two ledger
+    # events, which never share a frame (a frame carries one event; a record
+    # cannot carry its own hash), so `<` and `<=` between their frames agree
+    # (crates/ityv-verify/src/timestamp.rs, `verify_timestamps`).
+    "replace < with <= in verify_timestamps",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)

@@ -59,10 +59,10 @@ use ityv_encoding::{
     SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY,
     SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_TICK,
     SCHEMA_QUORUM_SIGNED, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, Scalar32, SchemaId, Scope, Seq, ShareHolder, SignerId, SignerRole,
-    StationId, StationKind, TallyEffect, TallyScopeBody, TallyScopeParts, TimeBucket, Token192,
-    TreeSize, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
+    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_TIMESTAMP_RECORD,
+    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Scalar32, SchemaId, Scope, Seq, ShareHolder,
+    SignerId, SignerRole, StationId, StationKind, TallyEffect, TallyScopeBody, TallyScopeParts,
+    TimeBucket, Token192, TreeSize, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
 };
 use ityv_encoding::{
     ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_QUORUM_MESSAGE_LEN,
@@ -1060,8 +1060,20 @@ impl Book {
     }
 
     /// A checkpoint over every frame so far, the witnesses' time
-    /// `bucket`.
+    /// `bucket`, anchored: the government's and the non-government
+    /// authority's real tokens a minute into its bucket follow it (the
+    /// returned frame is the checkpoint's).
     pub(crate) fn checkpoint_at(&mut self, bucket: u64) -> u64 {
+        let frame = self.checkpoint_bare_at(bucket);
+        let event = *self.ledger.events.last().unwrap();
+        for record in common::tsa::anchor(SCHEMA_SIGNED_CHECKPOINT, event, bucket) {
+            self.push(SCHEMA_TIMESTAMP_RECORD, record);
+        }
+        frame
+    }
+
+    /// As [`Self::checkpoint_at`], without timestamp tokens.
+    pub(crate) fn checkpoint_bare_at(&mut self, bucket: u64) -> u64 {
         let body = self.checkpoint_body_at(bucket);
         let seq = self.last.map_or(1, |(seq, _)| seq + 1);
         self.last = Some((seq, object_hash(body)));

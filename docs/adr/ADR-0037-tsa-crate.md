@@ -78,4 +78,4 @@ ADR-0034는 RFC 3161 토큰을 엄격한 DER 부분집합으로 읽고 genesis�
 ## 연결되는 검증
 
 - `crates/ityv-tsa/tests/rules.rs`(규칙마다 토큰 하나), `tests/tokens.rs`, `tests/strict.rs`, `tests/proptests.rs`, 모듈 단위 테스트, `kani/proofs.rs`, `fuzz/`; 시험 벡터 `tests/vectors/make.sh`, `tests/vectors/freetsa/fetch.sh`.
-- 남은 일(연결 단계): `TimestampRecord` 스키마와 genesis의 기관 목록(핀 바이트, 운영 주체, 정부 운영 여부), 체크포인트 단계의 역산 금지·앵커 창 판정(VC-114..118, 9의 구간과 기관 단위 계수), `TimestampMismatch`·`TimestampInvalid` 보류.
+- 연결 단계(ADR-0039): `TimestampRecord` 스키마와 genesis의 기관 목록(핀 바이트 1–4개, 운영 주체, 정부 운영 여부, 정책 정확도), 체크포인트 단계의 역산 금지·앵커 창 판정(9의 구간과 기관 단위 계수), `TimestampMismatch`·`TimestampInvalid` 보류. 이 크레이트의 공개 API(`PinnedTsa::from_bytes`, `verify_token`, `Imprint::of`, `VerifiedTimestamp`)만 쓰며 크레이트는 바뀌지 않았다.

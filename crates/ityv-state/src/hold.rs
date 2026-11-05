@@ -304,11 +304,25 @@ pub enum HoldReason {
     /// rejected every word of a draw, or a drawn position is outside the
     /// frame): the audit cannot proceed (§12.2, ADR-0036).
     AuditSampleFailed = 71,
+    /// A timestamp record on the ledger cannot be taken: its authority is
+    /// not one the genesis pins, its token does not verify under any pin of
+    /// that authority over the SHA-512 of the stamped event's object hash,
+    /// or it stamps no earlier event of a kind that is timestamped (a
+    /// checkpoint, the genesis or an amendment, a voter-roll event, a legal
+    /// decision; never a record, check-in counter or progress record) (§5.5,
+    /// ADR-0034 §7, VC-117, ADR-0039).
+    TimestampInvalid = 72,
+    /// A valid token says a checkpoint existed earlier than the time its
+    /// witnesses attest, by more than the honest clock error: the latest
+    /// instant the token allows falls more than `CLOCK_ERROR_BUCKETS`
+    /// buckets before the checkpoint's bucket. The chain ends there (§5.5,
+    /// ADR-0034 §4, VC-116, ADR-0039).
+    TimestampMismatch = 73,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 72] = [
+    pub const ALL: [Self; 74] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -381,6 +395,8 @@ impl HoldReason {
         Self::HandCountRefused,
         Self::AuditCommitRefused,
         Self::AuditSampleFailed,
+        Self::TimestampInvalid,
+        Self::TimestampMismatch,
     ];
 
     /// The reason's code.

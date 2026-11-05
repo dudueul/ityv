@@ -1441,7 +1441,7 @@ pub fn verify_tally<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
     authority: &AuthorityStage<'a>,
-    checkpoints: &CheckpointChain,
+    checkpoints: &CheckpointChain<'_>,
     boxes: &BoxStage<'a>,
     records: &RecordStage<'a>,
     disputes: &DisputeStage<'a>,

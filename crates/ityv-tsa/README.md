@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-ADR-0034의 시점확인 토큰을 검증하는 TCB 크레이트다. DER·CMS 파서와 RSA·ECDSA 검증이 핵심 검증기(`ityv-verify`)의 TCB를 키우지 않도록 따로 두었고(ADR-0034 §6), 다른 워크스페이스 크레이트에 의존하지 않는다. 결정과 이유는 `docs/adr/ADR-0037-tsa-crate.md`에 있다. 장부와의 연결(`TimestampRecord`, genesis의 기관 목록, 체크포인트 단계)은 다음 단계다.
+ADR-0034의 시점확인 토큰을 검증하는 TCB 크레이트다. DER·CMS 파서와 RSA·ECDSA 검증이 핵심 검증기(`ityv-verify`)의 TCB를 키우지 않도록 따로 두었고(ADR-0034 §6), 다른 워크스페이스 크레이트에 의존하지 않는다. 결정과 이유는 `docs/adr/ADR-0037-tsa-crate.md`에 있다. 장부와의 연결(`TimestampRecord`, genesis의 기관 목록, 체크포인트 단계)은 `ityv-verify`의 `timestamp` 모듈이 이 크레이트의 공개 API로 한다(ADR-0039).
 
 | 모듈 | 내용 | 근거 |
 |---|---|---|
@@ -25,7 +25,7 @@ ADR-0034의 시점확인 토큰을 검증하는 TCB 크레이트다. DER·CMS �
 genesis의 기관 항목 ──▶ PinnedTsa::from_bytes(pin) ─┐
 체크포인트 객체 해시 ─▶ Imprint::of(Sha512, &hash) ─┤
 장부의 DER 토큰 ────────────────────────────────────┴─▶ verify_token
-                                                         │ Err(TsaError::…) → TimestampInvalid (연결 단계)
+                                                         │ Err(TsaError::…) → TimestampInvalid (ityv-verify, ADR-0039)
                                                          ▼
                                   VerifiedTimestamp: gen_time(), earliest(), latest(), policy(),
                                   serial(), nonce(), accuracy(), imprint(), certificate_sha256(),
@@ -43,7 +43,7 @@ genesis의 기관 항목 ──▶ PinnedTsa::from_bytes(pin) ─┐
 - 거부마다 `TsaError`의 고유 변형이 있고, 토큰이 낼 수 있는 변형 가운데 `Der(_)`를 뺀 59개마다 그 규칙만 어긴 토큰이 정확히 그 오류로 거부된다(`tests/rules.rs`, 전수 `match`; `Der(_)`는 `der` 단위 테스트와 `tests/strict.rs`). 검사 순서(구조 → 인증서 → 허용 알고리즘 → 서명 속성 → 서명 → 내용)가 고정이므로 같은 토큰은 언제나 같은 오류를 낸다.
 
 보장하지 않는 것:
-- 기관이 적은 시각이 참이라는 것. 기관 하나는 아무 시각에나 서명할 수 있다. ADR-0034는 서로 다른 운영 주체의 기관 둘 이상을 요구하고, 그 판정은 연결 단계의 체크포인트 단계가 한다.
+- 기관이 적은 시각이 참이라는 것. 기관 하나는 아무 시각에나 서명할 수 있다. ADR-0034는 서로 다른 운영 주체의 기관 둘 이상을 요구하고, 그 판정은 `ityv-verify`의 체크포인트 단계가 한다(ADR-0039).
 - 인증서의 폐지 여부, 루트까지의 경로. 인증서는 해시로 고정되며 그 고정의 출처는 genesis다.
 - 양자 내성. 토큰의 RSA·ECDSA 서명은 보강 증거이고 신뢰의 뿌리는 증인 정족수의 하이브리드 서명이다(ADR-0034 §5).
 - 실제 지정 기관의 토큰이 이 엄격성을 통과한다는 것. freetsa.org 토큰은 통과했고(ESS v1 허용 핀), 지정 기관, 특히 정부 운영 기관의 실제 토큰은 채택 전에 확인한다. 남은 미확인 항목(`SignedData` 버전, `directoryName`이 아닌 `tsa` 이름, RSA-PSS 등)은 ADR-0037의 위험 목록에 있다.

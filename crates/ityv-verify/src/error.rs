@@ -27,7 +27,7 @@ pub enum Reference {
 }
 
 /// The rule a genesis or amendment broke (VC-005, VC-009, VC-014,
-/// VC-067, VC-104, VC-105).
+/// VC-067, VC-104, VC-105, VC-114).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Rule {
     /// An object is not the canonical encoding of its schema.
@@ -95,6 +95,19 @@ pub enum Rule {
     /// unit and another unit, a box or a module, or a box and a module.
     /// A device attestation names its device by this identifier alone.
     DeviceId,
+    /// A timestamp authority's pin is not a valid `ityv-tsa` pin, or does
+    /// not allow SHA-512, the digest every imprint uses (ADR-0034 §3): no
+    /// token of it could ever verify.
+    TimestampPin,
+    /// Two pins of the timestamp authority set name one signing
+    /// certificate: one authority would count as two.
+    TimestampCertificate,
+    /// Two timestamp authorities of one operator differ in kind: an
+    /// operator is either the government or not (VC-114).
+    TimestampOperator,
+    /// The timestamp authority set lacks a government-run or a
+    /// non-government authority (VC-114).
+    TimestampAuthorities,
 }
 
 /// Where in the genesis a rule was broken.

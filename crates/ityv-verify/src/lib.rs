@@ -11,7 +11,8 @@
 //! | Module | Stage | Specification |
 //! |---|---|---|
 //! | [`genesis`] | 1. Pin, signatures, every entry set whole, cross-set agreement, amendments | §4, §14 1, ADR-0028, VC-005, VC-009, VC-014, VC-067, VC-104, VC-105 |
-//! | [`checkpoint`] | 2. Checkpoint chain: witness quorum and diversity, successor rules, roots recomputed from the ledger | §5.3, §5.4, §14 2, VC-011..014 |
+//! | [`checkpoint`] | 2. Checkpoint chain: witness quorum and diversity, successor rules, roots recomputed from the ledger, no backdated time, the anchoring of each checkpoint | §5.3, §5.4, §5.5, §14 2, VC-011..014, VC-115, VC-116 |
+//! | [`timestamp`] | External timestamps: the genesis's authorities, every timestamp record's token verified under its authority's pins over the stamped event | §5.5, ADR-0034, ADR-0037, ADR-0039, VC-114..118 |
 //! | [`index`] | 3. Frame chain, event hashes, canonical events, replayed events, records after close | §5.1, §14 3, VC-010, VC-039, VC-101 |
 //! | [`authority`] | The signed legal authorization that grants every capability | §4.4, VC-006..008 |
 //! | [`boxes`] | 4. Every expected box through its state machine, following genesis amendments: opening, records, fallback, device swap, close invariants, late closes, custody, completeness | §4.3, §7, §14 4, VC-037..040, VC-100, VC-105, VC-106 |
@@ -36,6 +37,9 @@
 //! * Problems in the ledger do not stop the index: an invalid frame is
 //!   left out, reported as a [`index::Finding`], and puts the box it
 //!   belongs to (or the whole ledger) under `HOLD_REVIEW`.
+//!
+//! External timestamps (ADR-0039) are verified with `ityv-tsa` and judged
+//! by the checkpoint stage; the ledger's anchor deadline comes from them.
 //!
 //! What this crate does **not** do yet (ROADMAP M5): the split-view,
 //! connectivity and software stages (10–12). The highest status
@@ -66,6 +70,7 @@ pub mod report;
 mod sets;
 mod sigs;
 pub mod tally;
+pub mod timestamp;
 
 // Kani harnesses live outside `src/` because they carry a file-level lint
 // relaxation, which CONSTITUTION.md §1.1 forbids under `src/`.
@@ -108,4 +113,8 @@ pub use report::{Publications, Report, verify_ledger, verify_ledger_with};
 pub use tally::{
     ChunkOpening, ExpectedExclusion, OpeningOutcome, ScopeProblem, TallyEvent, TallyRefusal,
     TallyRefused, TallyStage, UnitTally, verify_tally,
+};
+pub use timestamp::{
+    Anchoring, StampedToken, TimestampProblem, TimestampRefusal, TimestampStage, Unanswered,
+    verify_timestamps,
 };

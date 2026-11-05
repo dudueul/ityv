@@ -64,8 +64,8 @@ use ityv_encoding::{
     BallotStyleEntry, CustodyRoute, ENTRY_SET_COUNT, ElectionId, EntrySet, GenesisBody, GenesisBox,
     GenesisEntry, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, ModuleEntry, ReportingUnitEntry,
     RosterSigner, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SetCommitment, SignedGenesis,
-    StationEntry, StationId, StationProgressPolicy, TrusteeEntry, WitnessRosterEntry,
-    decode_object,
+    StationEntry, StationId, StationProgressPolicy, TimestampAuthorityEntry, TrusteeEntry,
+    WitnessRosterEntry, decode_object,
 };
 use ityv_ledger::InclusionProof;
 use ityv_state::{Anchor, Entry, Genesis, Pinned};
@@ -74,6 +74,7 @@ use crate::cross;
 use crate::error::{Error, Rule};
 use crate::sets::{Appointments, Set};
 use crate::sigs::Material;
+use crate::timestamp;
 
 /// The eight amendable sets of one genesis state, each entry as its
 /// encoded object, in the order the set commits to them.
@@ -97,7 +98,7 @@ pub struct AmendableSets<'a> {
     pub appointments: &'a [Hash512],
 }
 
-/// The three sets an amendment cannot change.
+/// The four sets an amendment cannot change.
 #[derive(Debug, Clone, Copy)]
 pub struct FixedSets<'a> {
     /// `BallotStyleEntry` objects.
@@ -106,6 +107,8 @@ pub struct FixedSets<'a> {
     pub trustees: &'a [&'a [u8]],
     /// `WitnessRosterEntry` objects.
     pub witnesses: &'a [&'a [u8]],
+    /// `TimestampAuthorityEntry` objects (ADR-0039).
+    pub timestamp_authorities: &'a [&'a [u8]],
 }
 
 /// A genesis as published: the `SignedGenesis` object and every entry.
@@ -151,6 +154,7 @@ pub(crate) struct Fixed<'a> {
     pub(crate) styles: Set<'a, BallotStyleEntry<'a>>,
     pub(crate) trustees: Set<'a, TrusteeEntry<'a>>,
     pub(crate) witnesses: Set<'a, WitnessRosterEntry<'a>>,
+    pub(crate) timestamps: Set<'a, TimestampAuthorityEntry<'a>>,
 }
 
 fn commitment(
@@ -203,6 +207,7 @@ impl<'a> Fixed<'a> {
             styles: parse(state, input.ballot_styles, sets)?,
             trustees: parse(state, input.trustees, sets)?,
             witnesses: parse(state, input.witnesses, sets)?,
+            timestamps: parse(state, input.timestamp_authorities, sets)?,
         })
     }
 }
@@ -326,6 +331,7 @@ pub fn verify_genesis<'a>(
     })?;
     let body = signed.genesis().ok_or(Error::body(0, Rule::Kind))?;
     let fixed = Fixed::parse(0, &input.fixed, body.sets())?;
+    timestamp::check_authorities(0, &fixed.timestamps)?;
 
     let signing = signing_witnesses(0, &signed, &fixed.witnesses)?;
     let mut entries = Vec::with_capacity(signing.len());
@@ -698,5 +704,17 @@ impl<'a> VerifiedGenesis<'a> {
     /// The witness set, in key order (it is fixed for the election).
     pub fn witnesses(&self) -> impl Iterator<Item = &WitnessRosterEntry<'a>> + '_ {
         self.fixed.witnesses.items().iter().map(|i| &i.value)
+    }
+
+    /// The timestamp authorities, in key order (fixed for the election,
+    /// ADR-0039).
+    pub fn timestamp_authorities(&self) -> impl Iterator<Item = &TimestampAuthorityEntry<'a>> + '_ {
+        self.fixed.timestamps.items().iter().map(|i| &i.value)
+    }
+
+    /// The timestamp authority `tsa_id`, if the genesis pins it.
+    #[must_use]
+    pub fn timestamp_authority(&self, tsa_id: &[u8]) -> Option<&TimestampAuthorityEntry<'a>> {
+        self.fixed.timestamps.find(tsa_id)
     }
 }

@@ -32,8 +32,13 @@
 //!   that output; the commit must be dated before the publication and
 //!   the binding checkpoint at or after the commit and at least
 //!   `WITNESS_TIME_TOLERANCE + CLOCK_ERROR_BUCKETS + 1` buckets before the
-//!   publication. A mismatch refuses the seed (or the commit); no
-//!   observation leaves the stage incomplete.
+//!   publication. The binding checkpoint must also carry, in frames before
+//!   the seed, valid timestamp tokens of a government-run and a
+//!   non-government authority of two operators whose latest instant is
+//!   before the publication bucket begins (ADR-0039): from then on the
+//!   time condition rests on the timestamp authorities as well as on the
+//!   witnesses' attested time. A mismatch refuses the seed (or the
+//!   commit); no observation leaves the stage incomplete.
 //! * **The sample** (§12.2, VC-046): for each style, a partial Fisher–Yates
 //!   shuffle of the sorted frame driven by the style's sample stream
 //!   ([`draw_sample`], `ityv_crypto::SampleStream`), as long as the last
@@ -122,6 +127,7 @@ use crate::index::LedgerIndex;
 use crate::records::{RecordStage, commitments_of, scalars};
 use crate::sigs::Material;
 use crate::tally::{TallyStage, Trustees, event_at};
+use crate::timestamp::{TimestampStage, anchoring};
 
 /// The beacon publication the caller observed (PROTOCOL.md §12.1): the
 /// raw output of round `round` of the beacon the freezes and the commit
@@ -231,6 +237,13 @@ pub enum AuditRefusal {
     /// a commit dated later than the checkpoint that covers it is not what
     /// was witnessed.
     Backdated,
+    /// The seed's binding checkpoint lacks, in frames before the seed,
+    /// valid timestamp tokens of a government-run and a non-government
+    /// authority of two operators whose latest instant is before the start
+    /// of the observed publication bucket: nothing outside the witnesses
+    /// shows that it existed before the beacon value could be known
+    /// (ADR-0039).
+    Unstamped,
     /// A freeze's round tolerates as many discrepancies as the sample it
     /// can draw from the frame holds (`threshold ≥ min(sample_size,
     /// frame)`): every sample passes, so the rule rules nothing.
@@ -695,6 +708,7 @@ struct Ctx<'g, 'a> {
     authority: &'g AuthorityStage<'a>,
     trustees: Trustees<'a>,
     checkpoints: &'g [VerifiedCheckpoint],
+    timestamps: &'g TimestampStage<'g>,
     records: BTreeMap<[u8; 64], FrameRecord<'a>>,
     /// The roster of every genesis state, built once.
     rosters: Vec<Vec<RosterEntry<'a>>>,
@@ -1160,6 +1174,20 @@ impl<'a> Work<'a> {
             {
                 return Err(AuditRefusal::Late);
             }
+            // The timestamp authorities, not only the witnesses, must show
+            // the binding checkpoint existed before the value was out: a
+            // token's latest instant before the publication bucket begins
+            // is before the publication (ADR-0039). Tokens recorded after
+            // the seed do not count: the seed is judged as recorded.
+            let epoch = ctx.timestamps.epoch();
+            let stamped = anchoring(
+                ctx.timestamps
+                    .tokens_for(&binding.event_hash)
+                    .filter(|t| t.frame.get() < seq.get() && t.before(epoch, b.published)),
+            );
+            if !stamped.satisfied() {
+                return Err(AuditRefusal::Unstamped);
+            }
         }
         self.seed = Some((
             object_hash(event.body_bytes()),
@@ -1600,7 +1628,7 @@ pub fn verify_audit<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
     authority: &AuthorityStage<'a>,
-    checkpoints: &CheckpointChain,
+    checkpoints: &CheckpointChain<'_>,
     records: &RecordStage<'a>,
     tally: &TallyStage<'a>,
     input: &AuditInput<'_>,
@@ -1613,6 +1641,7 @@ pub fn verify_audit<'a>(
         authority,
         trustees: Trustees::of(genesis),
         checkpoints: checkpoints.checkpoints(),
+        timestamps: checkpoints.timestamps(),
         records: frame,
         by_signer: BTreeMap::new(),
         rosters: (0..genesis.state_count())

@@ -283,6 +283,12 @@ pub struct UnitId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReportingUnitId<'a>(Ident<'a>);
 
+/// Identifier of an external authority the genesis pins: a timestamp
+/// authority (PROTOCOL.md §5.5) or a voter-roll source or custodian
+/// (§6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuthorityId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -339,3 +345,4 @@ ident_newtype!(SignerId);
 ident_newtype!(RouteId);
 ident_newtype!(UnitId);
 ident_newtype!(ReportingUnitId);
+ident_newtype!(AuthorityId);

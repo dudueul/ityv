@@ -1,4 +1,4 @@
-//! The genesis (ADR-0028): `GenesisBody` (0x0002, version 6),
+//! The genesis (ADR-0028, ADR-0039): `GenesisBody` (0x0002, version 7),
 //! `SignedGenesis` (0x0033), `GenesisAmendmentBody` (0x0034), the entry
 //! objects 0x0035–0x003E, and the check-in events `ObserverCountAttestBody`
 //! (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041):
@@ -40,11 +40,11 @@ use ityv_encoding::{
     SCHEMA_GENESIS_BODY, SCHEMA_GENESIS_BOX, SCHEMA_MODULE_ENTRY,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_ROSTER_SIGNER,
     SCHEMA_SIGNED_GENESIS, SCHEMA_STATION_ENTRY, SCHEMA_STATION_PROGRESS_POLICY,
-    SCHEMA_TRUSTEE_ENTRY, SCHEMA_VERSION_1, SCHEMA_VERSION_GENESIS, SCHEMA_WITNESS_ROSTER_ENTRY,
-    SchemaId, SetCommitment, SignedGenesis, SignerId, StationEntry, StationId, StationKind,
-    StationParts, StationProgressPolicy, TimeBucket, TrusteeEntry, TrusteeId, UnitId,
-    WitnessQuorum, WitnessRosterEntry, WitnessedEvent, chunks_for, decode_object, keys_share_half,
-    purpose_of,
+    SCHEMA_TIMESTAMP_AUTHORITY_ENTRY, SCHEMA_TRUSTEE_ENTRY, SCHEMA_VERSION_1,
+    SCHEMA_VERSION_GENESIS, SCHEMA_WITNESS_ROSTER_ENTRY, SchemaId, SetCommitment, SignedGenesis,
+    SignerId, StationEntry, StationId, StationKind, StationParts, StationProgressPolicy,
+    TimeBucket, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry, WitnessedEvent,
+    chunks_for, decode_object, keys_share_half, purpose_of,
 };
 use proptest::prelude::*;
 use std::vec::Vec;
@@ -797,7 +797,7 @@ fn trustee_and_witness_vectors() {
 #[test]
 fn entry_sets() {
     let codes: Vec<u8> = EntrySet::ALL.iter().map(|s| s.code()).collect();
-    assert_eq!(codes, (1..=11).collect::<Vec<u8>>());
+    assert_eq!(codes, (1..=12).collect::<Vec<u8>>());
     for (i, set) in EntrySet::ALL.iter().enumerate() {
         assert_eq!(set.index(), i);
         assert_eq!(set.amendable(), i < AMENDABLE_SET_COUNT);
@@ -818,6 +818,7 @@ fn entry_sets() {
             Some(SCHEMA_BALLOT_STYLE_ENTRY),
             Some(SCHEMA_TRUSTEE_ENTRY),
             Some(SCHEMA_WITNESS_ROSTER_ENTRY),
+            Some(SCHEMA_TIMESTAMP_AUTHORITY_ENTRY),
         ]
     );
     assert_eq!(GenesisBox::SET, EntrySet::Boxes);
@@ -1016,11 +1017,14 @@ fn genesis_body_vectors() {
         SCHEMA_VERSION_GENESIS,
         &v,
     );
-    // Version 1 is not this schema's version.
-    assert_eq!(
-        kind::<GenesisBody<'_>>(SCHEMA_GENESIS_BODY, SCHEMA_VERSION_1, &bytes).0,
-        ErrorKind::UnsupportedVersion
-    );
+    // Version 1 is not this schema's version, nor is version 6, the
+    // eleven-set body before the timestamp authorities (ADR-0039).
+    for version in [SCHEMA_VERSION_1, 6] {
+        assert_eq!(
+            kind::<GenesisBody<'_>>(SCHEMA_GENESIS_BODY, version, &bytes).0,
+            ErrorKind::UnsupportedVersion
+        );
+    }
 }
 
 #[test]

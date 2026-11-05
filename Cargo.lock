@@ -420,6 +420,7 @@ dependencies = [
  "ityv-encoding",
  "ityv-ledger",
  "ityv-state",
+ "ityv-tsa",
  "rand_chacha",
  "rand_core",
 ]

@@ -1067,3 +1067,120 @@ fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
     assert_eq!(verified.unit_station(b"U-2B"), st2);
     assert_eq!(verified.unit_station(b"U-2C"), st2);
 }
+
+/// The timestamp authority set (ADR-0039, VC-114), entries in key order:
+/// 0 `TSA-FREE-1`, 1 `TSA-GOV-1` (two pins), 2 `TSA-GOV-2`.
+#[test]
+fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
+    use common::tsa;
+    use ityv_encoding::{OrgId, PolicyAccuracy, TimestampAuthorityKind, TimestampPins};
+    use ityv_tsa::{DigestAlgorithm, DigestSet, PinnedTsa, SignatureAlgorithm, SignatureSet};
+    let set = EntrySet::TimestampAuthorities;
+    let base = Draft::standard();
+    assert_eq!(verify(&base), Ok(()));
+    let verified = verify_genesis(&standard().pin, &standard().input(), &[]).unwrap();
+    assert_eq!(verified.timestamp_authorities().count(), 3);
+
+    // No non-government authority.
+    let mut d = base.clone();
+    d.timestamps
+        .retain(|a| a.kind == TimestampAuthorityKind::Government);
+    assert_eq!(
+        verify(&d),
+        Err(Error {
+            state: 0,
+            set: Some(set),
+            index: None,
+            rule: Rule::TimestampAuthorities,
+        })
+    );
+    // No government authority.
+    let mut d = base.clone();
+    d.timestamps
+        .retain(|a| a.kind == TimestampAuthorityKind::NonGovernment);
+    assert_eq!(verify(&d).unwrap_err().rule, Rule::TimestampAuthorities);
+    // None at all.
+    let mut d = base.clone();
+    d.timestamps.clear();
+    assert_eq!(verify(&d).unwrap_err().rule, Rule::TimestampAuthorities);
+
+    // Pin bytes that are not a pin.
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[&[0x01, 0x02]]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampPin)));
+    // A pin that does not allow SHA-512, the digest of every imprint.
+    let cert_hash: [u8; 32] = tsa::signer(tsa::GOV_SAME_OPERATOR).pin[1..33]
+        .try_into()
+        .unwrap();
+    let pin = PinnedTsa::new(
+        cert_hash,
+        DigestSet::from_bits(DigestAlgorithm::Sha256.bit()).unwrap(),
+        SignatureSet::from_bits(SignatureAlgorithm::RsaPkcs1Sha256.bit()).unwrap(),
+        false,
+        &tsa::POLICY,
+        None,
+    )
+    .unwrap();
+    let mut bytes = std::vec![0u8; pin.encoded_len()];
+    let len = pin.encode(&mut bytes).unwrap();
+    bytes.truncate(len);
+    let bytes: &'static [u8] = common::leak_slice(bytes);
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[bytes]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampPin)));
+
+    // One certificate pinned for two authorities.
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[tsa::signer(tsa::FREE).pin]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampCertificate)));
+    // One certificate pinned twice for one authority, under two encodings
+    // (another policy list).
+    let pin = PinnedTsa::new(
+        cert_hash,
+        DigestSet::from_bits(DigestAlgorithm::Sha256.bit() | DigestAlgorithm::Sha512.bit())
+            .unwrap(),
+        SignatureSet::from_bits(SignatureAlgorithm::RsaPkcs1Sha256.bit()).unwrap(),
+        false,
+        &[0x06, 0x04, 0x2A, 0x03, 0x04, 0x02],
+        None,
+    )
+    .unwrap();
+    let mut bytes = std::vec![0u8; pin.encoded_len()];
+    let len = pin.encode(&mut bytes).unwrap();
+    bytes.truncate(len);
+    let other_policy: &'static [u8] = common::leak_slice(bytes);
+    let mut pins = std::vec![tsa::signer(tsa::GOV_SAME_OPERATOR).pin, other_policy];
+    pins.sort();
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&pins).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampCertificate)));
+
+    // One operator, two kinds.
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"FREE-TSA").unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampOperator)));
+    // Many authorities of one operator and one kind are fine (they count
+    // as one toward an anchor).
+    let mut d = base.clone();
+    d.timestamps[2].policy_accuracy = PolicyAccuracy::from_millis(1000).unwrap();
+    assert_eq!(verify(&d), Ok(()));
+
+    // The set's own rules: order, count, root.
+    let mut raw = base.raw();
+    raw.timestamps.swap(0, 1);
+    let built = sign_genesis(&base, raw);
+    assert_eq!(
+        verify_genesis(&built.pin, &built.input(), &[]).unwrap_err(),
+        at(set, 1, Rule::NotSorted)
+    );
+    let built = sign_genesis_with(&base, base.raw(), &SIGNERS, |p| {
+        p.sets[set.index()].count += 1;
+    });
+    let err = verify_genesis(&built.pin, &built.input(), &[]).unwrap_err();
+    assert_eq!((err.set, err.rule), (Some(set), Rule::Count));
+    let built = sign_genesis_with(&base, base.raw(), &SIGNERS, |p| {
+        p.sets[set.index()].root = Hash512([0x77; 64]);
+    });
+    let err = verify_genesis(&built.pin, &built.input(), &[]).unwrap_err();
+    assert_eq!((err.set, err.rule), (Some(set), Rule::Root));
+}

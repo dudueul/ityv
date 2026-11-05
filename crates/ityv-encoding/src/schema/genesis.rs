@@ -26,7 +26,8 @@ use crate::schema::util::{
 use crate::schema::{
     SCHEMA_BALLOT_STYLE_ENTRY, SCHEMA_CUSTODY_ROUTE, SCHEMA_GENESIS_BOX, SCHEMA_MODULE_ENTRY,
     SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_ROSTER_SIGNER, SCHEMA_STATION_ENTRY,
-    SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TRUSTEE_ENTRY, SCHEMA_WITNESS_ROSTER_ENTRY,
+    SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TIMESTAMP_AUTHORITY_ENTRY, SCHEMA_TRUSTEE_ENTRY,
+    SCHEMA_WITNESS_ROSTER_ENTRY,
 };
 use crate::writer::Writer;
 
@@ -48,7 +49,7 @@ pub const MAX_OBSERVER_TOKENS: usize = 16;
 pub const TOKEN_CHECK_KEY_LEN: usize = 32;
 
 /// Number of entry sets in a genesis.
-pub const ENTRY_SET_COUNT: usize = 11;
+pub const ENTRY_SET_COUNT: usize = 12;
 
 /// Number of entry sets a `GenesisAmendment` may replace (the first
 /// eight codes of [`EntrySet`]).
@@ -168,7 +169,7 @@ impl StationKind {
 
 /// The entry sets of a genesis, in the order of their commitments in the
 /// `GenesisBody` (ADR-0028). Codes 1–8 may be replaced by a
-/// `GenesisAmendment`; codes 9–11 are fixed for the election.
+/// `GenesisAmendment`; codes 9–12 are fixed for the election.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum EntrySet {
@@ -197,6 +198,11 @@ pub enum EntrySet {
     /// `witness_roster`: [`WitnessRosterEntry`], by `witness_id`. Its root
     /// is the `witness_roster_hash`.
     Witnesses = 11,
+    /// The timestamp authorities (ADR-0034 §1, ADR-0039):
+    /// [`TimestampAuthorityEntry`](crate::TimestampAuthorityEntry), by
+    /// `tsa_id`. Fixed for the election: an authority that rotates its
+    /// certificate carries one pin per certificate.
+    TimestampAuthorities = 12,
 }
 
 impl EntrySet {
@@ -213,6 +219,7 @@ impl EntrySet {
         Self::BallotStyles,
         Self::Trustees,
         Self::Witnesses,
+        Self::TimestampAuthorities,
     ];
 
     /// The wire code.
@@ -259,6 +266,7 @@ impl EntrySet {
             Self::BallotStyles => Some(SCHEMA_BALLOT_STYLE_ENTRY),
             Self::Trustees => Some(SCHEMA_TRUSTEE_ENTRY),
             Self::Witnesses => Some(SCHEMA_WITNESS_ROSTER_ENTRY),
+            Self::TimestampAuthorities => Some(SCHEMA_TIMESTAMP_AUTHORITY_ENTRY),
         }
     }
 }

@@ -484,7 +484,7 @@ fn drawn(seed: &Hash512, style: &'static [u8], casts: &[Cast], list: &[(u64, u32
 
 fn anchored() -> Publications {
     Publications {
-        anchors: Publication::Satisfied,
+        now: TimeBucket::new(0),
         board: Publication::Pending,
     }
 }
@@ -2582,9 +2582,9 @@ fn a_witness_set_from_the_verified_genesis_adopts_the_published_checkpoints() {
     let world = audit_world();
     let mut book = Book::new(world);
     let first_size = book.frames.len() as u64;
-    book.checkpoint_at(READY + 1);
+    book.checkpoint_bare_at(READY + 1);
     let first = last_checkpoint(&book);
-    book.checkpoint_at(READY + 1);
+    book.checkpoint_bare_at(READY + 1);
     let second = last_checkpoint(&book);
     let entries = ityv_verify::witness_entries(world.genesis).unwrap();
     let set = ityv_verify::witness_set(
@@ -2621,4 +2621,126 @@ fn a_witness_set_from_the_verified_genesis_adopts_the_published_checkpoints() {
     .unwrap();
     let (r, _) = before.adopt(&other, &[last_checkpoint(&book)], &proof, now);
     assert_eq!(r, Err(ityv_ledger::Error::LedgerMismatch));
+}
+
+/// The audit up to the seed with the binding checkpoint at `COMMIT_BUCKET`
+/// unstamped; `stamps` adds records over it (given the checkpoint event)
+/// before the seed and `late` after it; then a one-record round and the
+/// report with the observed beacon.
+fn stamped_seed(stamps: &[(usize, u64)], late: &[(usize, u64)]) -> (Report<'static>, u64) {
+    let list = [(1u64, 0u32)];
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_bare_at(COMMIT_BUCKET);
+    let event: &'static [u8] = book.ledger.events.last().copied().unwrap();
+    let binding = book.last.unwrap().1;
+    let stamp = |book: &mut Book, &(signer, seconds): &(usize, u64)| {
+        book.push(
+            ityv_encoding::SCHEMA_TIMESTAMP_RECORD,
+            common::tsa::stamp(
+                signer,
+                ityv_ledger::SCHEMA_SIGNED_CHECKPOINT,
+                event,
+                seconds,
+            ),
+        );
+    };
+    for s in stamps {
+        stamp(&mut book, s);
+    }
+    let at = book.w(seed(seed_body(binding, |_| {})));
+    for s in late {
+        stamp(&mut book, s);
+    }
+    let sample = drawn(
+        &audit_seed(&DICE, &beacon(), &binding),
+        STYLE1,
+        &casts,
+        &list,
+    );
+    book.q(reference(&sample[0]));
+    book.w(compare(&sample[0], ComparisonCode::Match));
+    (report(&mut book, &observed()), at)
+}
+
+/// ADR-0039: the binding checkpoint carries, in frames before the seed,
+/// tokens of a government-run and a non-government authority of two
+/// operators whose latest instant is before the start of the publication
+/// bucket. The witnesses' bucket rule holds in every case here
+/// (`binding = PUBLISHED − 3`), so only the tokens decide.
+#[test]
+fn the_binding_checkpoint_needs_tokens_from_before_the_publication() {
+    use common::tsa::{FREE, GOV, GOV_SAME_OPERATOR, at};
+    let start = |k: u64| at(k, 0);
+    // Both kinds, the government's latest instant (one second of
+    // accuracy) and the other's (500 ms, rounded down) the last second
+    // before the publication bucket: taken.
+    let (r, _) = stamped_seed(
+        &[(GOV, start(PUBLISHED) - 2), (FREE, start(PUBLISHED) - 1)],
+        &[],
+    );
+    assert!(audit_refused(&r).is_empty(), "{:?}", audit_refused(&r));
+    assert_eq!(r.status().status(), Status::PaperAudited);
+    // No token at all.
+    let (r, seed_at) = stamped_seed(&[], &[]);
+    assert_eq!(
+        audit_refused(&r)[0],
+        (seed_at, AuditEvent::Seed, AuditRefusal::Unstamped)
+    );
+    assert!(r.status().holds().contains(HoldReason::AuditSeedRefused));
+    // One kind only, of one operator.
+    let (r, seed_at) = stamped_seed(
+        &[
+            (GOV, start(COMMIT_BUCKET)),
+            (GOV_SAME_OPERATOR, start(COMMIT_BUCKET)),
+        ],
+        &[],
+    );
+    assert_eq!(
+        audit_refused(&r)[0],
+        (seed_at, AuditEvent::Seed, AuditRefusal::Unstamped)
+    );
+    // The government's latest instant reaches the publication bucket.
+    let (r, seed_at) = stamped_seed(
+        &[(GOV, start(PUBLISHED) - 1), (FREE, start(PUBLISHED) - 1)],
+        &[],
+    );
+    assert_eq!(
+        audit_refused(&r)[0],
+        (seed_at, AuditEvent::Seed, AuditRefusal::Unstamped)
+    );
+    // The other's token at the publication bucket.
+    let (r, seed_at) = stamped_seed(
+        &[(GOV, start(COMMIT_BUCKET)), (FREE, start(PUBLISHED))],
+        &[],
+    );
+    assert_eq!(
+        audit_refused(&r)[0],
+        (seed_at, AuditEvent::Seed, AuditRefusal::Unstamped)
+    );
+    // Timely tokens recorded after the seed do not count: the seed is
+    // judged as recorded.
+    let (r, seed_at) = stamped_seed(
+        &[(GOV, start(COMMIT_BUCKET))],
+        &[(FREE, start(COMMIT_BUCKET))],
+    );
+    assert_eq!(
+        audit_refused(&r)[0],
+        (seed_at, AuditEvent::Seed, AuditRefusal::Unstamped)
+    );
+    // Without the observation there is nothing to compare with: the audit
+    // is incomplete, nothing is refused.
+    let list = [(1u64, 0u32)];
+    let (mut book, casts) = tallied(audit_world());
+    let body = freeze_body(STYLE1, &codes(&casts), &list);
+    book.w(freeze(body));
+    book.w(commit(commit_body(&[body], |_| {})));
+    book.checkpoint_bare_at(COMMIT_BUCKET);
+    let binding = book.last.unwrap().1;
+    book.w(seed(seed_body(binding, |_| {})));
+    let r = report(&mut book, &AuditInput::default());
+    assert!(audit_refused(&r).is_empty());
+    assert_eq!(r.status().status(), Status::CryptoTallyVerified);
 }

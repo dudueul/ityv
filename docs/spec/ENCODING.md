@@ -80,7 +80,7 @@ offset  size  field
 | `schema_id` | 이름 | 깊이 | 비고 |
 |---|---|---|---|
 | 0x0001 | `LedgerFrame` | 1 | 장부 프레임 헤더: seq, prev_hash, event_hash |
-| 0x0002 | `GenesisBody` | 6 | genesis 본문: 핀·키·정족수·정당 명부·챔버, 항목 집합 11개의 (수, root)(§8.54, ADR-0028). 버전 1–5는 내용만 나열한 명세 초안(3에서 연결 목록 해시, 4에서 릴리스 목록 해시와 증명 키·참관인 확인 키, 5에서 `progress_policies[]`)이었고 인코딩된 적이 없다. 버전 6이 처음 인코딩된 형식이다 |
+| 0x0002 | `GenesisBody` | 7 | genesis 본문: 핀·키·정족수·정당 명부·챔버, 항목 집합 12개의 (수, root)(§8.54, ADR-0028). 버전 1–5는 내용만 나열한 명세 초안(3에서 연결 목록 해시, 4에서 릴리스 목록 해시와 증명 키·참관인 확인 키, 5에서 `progress_policies[]`)이었고 인코딩된 적이 없다. 버전 6이 처음 인코딩된 형식이다(집합 11개). 버전 7(ADR-0039): 집합 12(시점확인 기관)를 더한다. 버전 6 본문은 받지 않는다 |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
@@ -157,6 +157,8 @@ offset  size  field
 | 0x004C | `AuditFindingBody` | 1 | 감사 발견: 투표양식, 장치, 발견 문서 해시(§8.71). 서명은 `WitnessedEvent` |
 | 0x004D | `HandCountReportBody` | 1 | 보고 단위별 수검표 결과(`PaperCountReportBody`와 같은 필드, §8.72). 서명은 `WitnessedEvent` |
 | 0x004E | `AuditCommitBody` | 1 | 감사 약정(`AuditCommit`): 모든 동결 뒤, 비콘 공표 전에 주사위 기록 해시, 비콘 지정 문서 해시와 회차, 동결 본문들의 정렬 집합 root를 고정(§8.73, ADR-0036). 서명은 `WitnessedEvent` |
+| 0x004F | `TimestampRecord` | 1 | 장부 이벤트: 기관 하나의 RFC 3161 토큰과 그 대상인 앞 이벤트(스키마, 객체 해시), 또는 응답 없음(§8.75, ADR-0034, ADR-0039). 자기 서명 없음 |
+| 0x0050 | `TimestampAuthorityEntry` | 1 | genesis 항목(집합 12): 시점확인 기관, 운영 주체, 정부 운영 여부, 정책 정확도, `ityv-tsa` 핀 1–4개(§8.74, ADR-0039) |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -166,7 +168,7 @@ offset  size  field
 
 ## 7. 시험 벡터
 
-`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 6), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다.
+`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 7), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다. 시점확인(ADR-0039) 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`다.
 
 ## 8. 예시 스키마 필드 정의
 
@@ -812,7 +814,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 ### 8.49–8.59 genesis와 투표소 사건 (ADR-0028)
 
-> English summary: the genesis is a bounded body (`GenesisBody`, 0x0002 version 6) with the scalar fields, pins, the two authority keys, the witness quorum, the party roster and chamber thresholds, and the count and Merkle root of eleven entry sets. Each entry is its own object (0x0035–0x003E); a set is strictly ascending by the entry key, its leaves are the entries' object hashes, and its root is the RFC 9162-shaped SHA3-512 root. `SignedGenesis` (0x0033) carries the body with the commission's, the committee's and at least `q` witness signatures; `GenesisAmendmentBody` (0x0034) replaces the eight amendable set commitments. Three witnessed station events: `ObserverCountAttestBody` (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041).
+> English summary: the genesis is a bounded body (`GenesisBody`, 0x0002 version 7) with the scalar fields, pins, the two authority keys, the witness quorum, the party roster and chamber thresholds, and the count and Merkle root of twelve entry sets (version 6 had eleven; the twelfth, the timestamp authorities, is §8.74). Each entry is its own object (0x0035–0x003E, 0x0050); a set is strictly ascending by the entry key, its leaves are the entries' object hashes, and its root is the RFC 9162-shaped SHA3-512 root. `SignedGenesis` (0x0033) carries the body with the commission's, the committee's and at least `q` witness signatures; `GenesisAmendmentBody` (0x0034) replaces the eight amendable set commitments. Three witnessed station events: `ObserverCountAttestBody` (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041).
 
 #### 8.49 `StationEntry` (0x0036, genesis `stations[]`, 열쇠 `station_id`)
 
@@ -846,7 +848,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 `WitnessRosterEntry`(열쇠 `witness_id`): `witness_id: Ident<64>` ‖ `org_id: Ident<64>` ‖ `provider: Ident<64>` ‖ `region: Ident<64>` ‖ `key: [u8; 2624]`(purpose `checkpoint`, `genesis`, `genesis-amendment`) ‖ `appointment_hash: Hash512`(0이 아님).
 
-#### 8.54 `GenesisBody` (0x0002, 버전 6)
+#### 8.54 `GenesisBody` (0x0002, 버전 7)
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
@@ -862,9 +864,9 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 | 10 | `quorum` | `u8` × 6 | `n`, `q`, `f`, 조직·공급자·지역 하한. `13 ≤ n ≤ 64`, `9 ≤ q ≤ n`, `2q − n > f`, 하한은 7·4·3 이상 `q` 이하(아니면 `ValueOutOfRange`) |
 | 11 | `parties` | `Array<{chamber: u8, name: Bytes<128>, seats: u16, evidence_hash: Hash512}, 4>` | 2–4개(1개 이하 `InvariantViolation`), i번째의 `chamber`는 `P(i+1)`, 이름은 비지 않은 UTF-8(아니면 `ValueOutOfRange`), 의석 내림차순(어기면 `InvariantViolation`, VC-067), `evidence_hash` 0이 아님 |
 | 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`). `members`가 8을 넘는 genesis는 검증기가 받지 않는다(임계 분산의 용량, `Rule::ChamberSize`, ADR-0035) |
-| 13 | `sets` | `{count: u64, root: Hash512}` × 11 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
+| 13 | `sets` | `{count: u64, root: Hash512}` × 12 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
 
-집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`). 1–8은 변경할 수 있고 9–11은 선거 동안 고정이다.
+집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`), 12 시점확인 기관(`TimestampAuthorityEntry`, §8.74). 1–8은 변경할 수 있고 9–12는 선거 동안 고정이다. 버전 6에는 집합 12가 없었다(ADR-0039).
 
 집합의 리프 입력은 항목 객체의 §4 객체 해시이고, 항목은 열쇠 바이트 엄격 오름차순이다. 임명 집합은 해시 자체를 바이트 오름차순으로 둔다. root는 PROTOCOL §5.3의 트리 root(리프 접두 0x00, 노드 접두 0x01, 빈 집합은 빈 트리의 root)다. genesis 핀은 이 본문 객체의 객체 해시다.
 
@@ -885,7 +887,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `body` | `Bytes<16384>` | `GenesisBody`(버전 6) 또는 `GenesisAmendmentBody` 객체 전체. 다른 스키마는 `SchemaMismatch` |
+| 1 | `body` | `Bytes<16384>` | `GenesisBody`(버전 7) 또는 `GenesisAmendmentBody` 객체 전체. 다른 스키마는 `SchemaMismatch` |
 | 2 | `commission_sig` | `[u8; 4691]` | |
 | 3 | `committee_sig` | `[u8; 4691]` | |
 | 4 | `witness_sigs` | `Array<{witness_id: Ident<64>, sig: [u8; 4691]}, 64>` | `witness_id` 엄격 오름차순. genesis면 본문의 `q` 이상, 변경이면 9 이상(모자라면 `InvariantViolation`, 위치는 개수 필드) |
@@ -1096,3 +1098,33 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 0이 아니어야 하는 해시가 0이면 `InvalidPreviousHash`다. 비콘과 동결이 받아들인 것과 같은지, 약정이 선거마다 하나인지, 고정 체크포인트와 약정이 비콘 공표 전인지는 검증기가 확인한다(VC-045, VC-119).
 
 시험 벡터는 `audit_manifest_freeze_body.txt`, `audit_commit_body.txt`, `audit_seed_body.txt`, `sample_opening_body.txt`, `sample_opening_ref_body.txt`, `sample_comparison_body.txt`, `audit_finding_body.txt`, `hand_count_report_body.txt`이고, 버전을 올린 `witnessed_event.txt`(버전 3), `roster_signer.txt`(버전 3), `quorum_signed.txt`(버전 2)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_audit.rs`에 있다.
+
+### 8.74–8.75 시점확인 (ADR-0034, ADR-0039)
+
+> English summary: the genesis's timestamp authorities (set 12, fixed for the election) and the ledger event that carries one authority's RFC 3161 token over one earlier ledger event. The pins are `ityv-tsa`'s byte form (ADR-0037 §1), opaque to this crate; the verifier reads them, verifies the token over SHA-512 of the target's object hash, and judges it by the latest instant the authority allows (PROTOCOL §5.5).
+
+#### 8.74 `TimestampAuthorityEntry` (0x0050, genesis 집합 12, 열쇠 `tsa_id`)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `tsa_id` | `Ident<64>` | 기관 ID. `TimestampRecord`가 이 값으로 기관을 가리킨다 |
+| 2 | `operator` | `Ident<64>` | 운영 주체. 같은 운영 주체의 기관들은 앵커에서 하나로 센다 |
+| 3 | `kind` | `u8` | 1 정부 운영, 2 정부 밖. 그 밖은 `ValueOutOfRange` |
+| 4 | `policy_accuracy_ms` | `u32` | 토큰이 정확도를 밝히지 않을 때의 정책 정확도(밀리초), 3,600,000 이하(넘으면 `ValueOutOfRange`) |
+| 5 | `pins` | `Array<Bytes<16952>, 4>` | `ityv-tsa` 핀 바이트(서명 인증서마다 하나), 1–4개(0이면 `InvariantViolation`), 각 1바이트 이상(빈 핀은 `InvariantViolation`), 바이트 엄격 오름차순(`NotSorted`, `Duplicate`) |
+
+핀의 상한 16,952는 `ityv-tsa` 핀의 고정부(36)와 길이 두 개(4), 정책 8개(각 66 이하), 인증서(16,384 이하)의 합이다. 핀이 `ityv-tsa`로 읽히고 SHA-512를 허용하는지, 한 인증서가 두 번 고정되지 않는지, 같은 운영 주체의 기관이 한 구분인지, 정부 운영과 정부 밖이 각각 있는지(VC-114)는 검증기의 genesis 규칙이다(ADR-0039 2항).
+
+#### 8.75 `TimestampRecord` (0x004F, 장부 이벤트)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `target_schema` | `u32` | 대상 이벤트의 스키마(그 프레임이 적은 것): 0x0010 `SignedCheckpoint`, 0x0028 `WitnessedEvent`, 0x0033 `SignedGenesis`만. 그 밖은 `ValueOutOfRange`(VC-117) |
+| 3 | `target_hash` | `Hash512` | 대상 이벤트의 객체 해시(그 프레임의 `event_hash`), 0이 아님(`InvalidPreviousHash`). 토큰의 `messageImprint`는 이 64바이트의 SHA-512다 |
+| 4 | `authority_id` | `Ident<64>` | genesis 집합 12의 기관 ID |
+| 5 | `token` | `Option<Bytes<16384>>` | DER `TimeStampToken`. 없음은 기관이 응답하지 않았다는 운영자의 기록(ADR-0034 3항). 있으면 1바이트 이상(빈 토큰은 `InvariantViolation`) |
+
+기록에는 자기 서명이 없다. 토큰이 기관의 서명이고 프레임은 체크포인트가 덮는다. 대상이 앞 프레임에 받아들여진 이벤트인지, `WitnessedEvent`의 본문이 시점확인을 받는 종류(법적 결정, 명부 사건)인지, 토큰이 그 기관의 어느 핀으로 그 각인에 대해 검증되는지는 검증기가 확인한다(PROTOCOL §5.5, ADR-0039 3·4항).
+
+시험 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`이고, 집합이 하나 늘어 `genesis_body.txt`(버전 7)와 `signed_genesis.txt`를 다시 만들었다. 왕복 속성 테스트는 `tests/m5_timestamp.rs`에 있다.

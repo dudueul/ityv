@@ -31,13 +31,15 @@ use ityv_encoding::{
     ReportingUnitId, RosterRole, RosterSigner, RouteId, SCHEMA_GENESIS_AMENDMENT_BODY,
     SCHEMA_GENESIS_BODY, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SCHEMA_VERSION_GENESIS, SchemaId,
     SetCommitment, SignedGenesis, SignerId, StationEntry, StationId, StationKind, StationParts,
-    StationProgressPolicy, TimeBucket, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum,
-    WitnessRosterEntry, encode_object,
+    StationProgressPolicy, TimeBucket, TimestampAuthorityEntry, TrusteeEntry, TrusteeId, UnitId,
+    WitnessQuorum, WitnessRosterEntry, encode_object,
 };
 use ityv_ledger::{Accumulator, sorted_set_root};
 use ityv_verify::{AmendableSets, AmendmentInput, FixedSets, GenesisInput};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
+
+pub mod tsa;
 
 pub fn leak<T>(value: T) -> &'static T {
     Box::leak(Box::new(value))
@@ -200,6 +202,7 @@ pub struct Draft {
     pub styles: Vec<BallotStyleEntry<'static>>,
     pub trustees: Vec<TrusteeEntry<'static>>,
     pub witnesses: Vec<WitnessRosterEntry<'static>>,
+    pub timestamps: Vec<TimestampAuthorityEntry<'static>>,
     pub parties: Vec<PartyEntry<'static>>,
     pub chambers: Vec<ChamberThreshold>,
     pub quorum: WitnessQuorum,
@@ -466,6 +469,7 @@ impl Draft {
             styles,
             trustees,
             witnesses,
+            timestamps: tsa::authorities(),
             parties: std::vec![
                 PartyEntry {
                     chamber: ChamberCode::P1,
@@ -522,6 +526,7 @@ impl Draft {
             styles: encode_set(&self.styles),
             trustees: encode_set(&self.trustees),
             witnesses: encode_set(&self.witnesses),
+            timestamps: encode_set(&self.timestamps),
         }
     }
 }
@@ -550,6 +555,7 @@ pub struct Raw {
     pub styles: Vec<&'static [u8]>,
     pub trustees: Vec<&'static [u8]>,
     pub witnesses: Vec<&'static [u8]>,
+    pub timestamps: Vec<&'static [u8]>,
 }
 
 fn commit_objects(objects: &[&[u8]]) -> SetCommitment {
@@ -588,6 +594,7 @@ impl Raw {
             commit_objects(&self.styles),
             commit_objects(&self.trustees),
             commit_objects(&self.witnesses),
+            commit_objects(&self.timestamps),
         ]
     }
 
@@ -609,6 +616,7 @@ impl Raw {
             ballot_styles: leak_slice(self.styles.clone()),
             trustees: leak_slice(self.trustees.clone()),
             witnesses: leak_slice(self.witnesses.clone()),
+            timestamp_authorities: leak_slice(self.timestamps.clone()),
         }
     }
 }

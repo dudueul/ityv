@@ -26,6 +26,7 @@ pub mod scan_count;
 pub mod share_package;
 pub mod slip;
 pub mod tally;
+pub mod timestamp;
 pub mod util;
 pub mod witnessed;
 
@@ -73,7 +74,7 @@ pub const fn schema_version(schema: SchemaId) -> u16 {
 /// `LedgerFrame` (ENCODING.md §6, `0x0001`).
 pub const SCHEMA_LEDGER_FRAME: SchemaId = SchemaId::new(0x0001);
 
-/// `GenesisBody` (ENCODING.md §8.54, `0x0002`, version 6).
+/// `GenesisBody` (ENCODING.md §8.54, `0x0002`, version 7).
 pub const SCHEMA_GENESIS_BODY: SchemaId = SchemaId::new(0x0002);
 
 /// `LegalAuthorization` (ENCODING.md §6, `0x0003`).
@@ -271,3 +272,9 @@ pub const SCHEMA_HAND_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x004D);
 
 /// `AuditCommitBody` (ENCODING.md §8.73, `0x004E`).
 pub const SCHEMA_AUDIT_COMMIT_BODY: SchemaId = SchemaId::new(0x004E);
+
+/// `TimestampRecord` (ENCODING.md §8.75, `0x004F`).
+pub const SCHEMA_TIMESTAMP_RECORD: SchemaId = SchemaId::new(0x004F);
+
+/// `TimestampAuthorityEntry` (ENCODING.md §8.74, `0x0050`, genesis set 12).
+pub const SCHEMA_TIMESTAMP_AUTHORITY_ENTRY: SchemaId = SchemaId::new(0x0050);

@@ -29,9 +29,9 @@ use ityv_encoding::{
     DisputeEventParts, DisputeType, EventRole, EventSig, Hash512, KeysetId, LedgerId,
     ModuleCounter, ModuleCounters, OrgId, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY,
     SCHEMA_BOX_OPENED_BODY, SCHEMA_CHECKPOINT_BODY, SCHEMA_DISPUTE_EVENT_BODY,
-    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, SchemaId, Scope, Seq, SignerId, SignerRole, TimeBucket, TreeSize,
-    WitnessedEvent,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TIMESTAMP_RECORD,
+    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, Scope, Seq, SignerId, SignerRole,
+    TimeBucket, TreeSize, WitnessedEvent,
 };
 use ityv_encoding::{
     BoxProgressBody, BoxProgressParts, BoxProgressState, CheckinProgressBody, CheckinProgressParts,
@@ -44,8 +44,11 @@ use ityv_ledger::{
     Breach, EMPTY_ROOT, SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry,
     root_of_leaves, sorted_set_root,
 };
+use ityv_state::status::{Outcome, Step};
 use ityv_state::{HoldReason, Publication, Status};
-use ityv_verify::{Publications, Report, VerifiedGenesis, verify_genesis, verify_ledger};
+use ityv_verify::{
+    Anchoring, Publications, Report, VerifiedGenesis, verify_genesis, verify_ledger,
+};
 
 const BOX: &[u8] = b"BOX-1";
 const MODULES: [&[u8]; 2] = [b"M-B1-P1", b"M-B1-P2"];
@@ -423,8 +426,18 @@ impl Book {
     }
 
     /// A checkpoint over every frame so far, signed by nine witnesses,
-    /// following the last one.
+    /// following the last one, anchored by the government's and the
+    /// non-government authority's real tokens a minute into its bucket.
     fn checkpoint(&mut self) {
+        self.checkpoint_bare();
+        let event = *self.ledger.events.last().unwrap();
+        for record in common::tsa::anchor(SCHEMA_SIGNED_CHECKPOINT, event, 150) {
+            self.push(SCHEMA_TIMESTAMP_RECORD, record);
+        }
+    }
+
+    /// As [`Self::checkpoint`], without timestamp tokens.
+    fn checkpoint_bare(&mut self) {
         let (seq, previous) = self
             .last
             .map_or((1, Hash512::ZERO), |(seq, hash)| (seq + 1, hash));
@@ -473,8 +486,9 @@ impl Book {
     }
 }
 
+/// The caller's clock in the checkpoints' bucket, the board not due.
 const ANCHORED: Publications = Publications {
-    anchors: Publication::Satisfied,
+    now: TimeBucket::new(150),
     board: Publication::Pending,
 };
 
@@ -482,13 +496,86 @@ const ANCHORED: Publications = Publications {
 fn nothing_anchored_is_unverified() {
     let mut book = Book::new();
     book.push(SCHEMA_WITNESSED_EVENT, opened());
-    book.checkpoint();
-    let report = book.report(Publications {
-        anchors: Publication::Pending,
+    book.checkpoint_bare();
+    // Within the window the deadline is open; past it, missed. Neither is
+    // a hold: an unanchored checkpoint leaves the status unverified
+    // (FAILURE_CASES.md §8).
+    let report = book.report(ANCHORED);
+    assert_eq!(report.evidence().step(Step::Checkpoints), Outcome::Passed);
+    assert_eq!(report.status().status(), Status::Unverified);
+    assert!(report.status().holds().is_empty());
+    assert_eq!(
+        report.checkpoints().anchor_deadline(TimeBucket::new(154)),
+        Publication::Pending
+    );
+    let late = book.report(Publications {
+        now: TimeBucket::new(155),
+        board: Publication::Pending,
+    });
+    assert_eq!(late.status().status(), Status::Unverified);
+    assert!(late.status().holds().is_empty());
+    assert_eq!(
+        late.checkpoints().anchor_deadline(TimeBucket::new(155)),
+        Publication::Breached(Breach::AnchorsShort { have: 0, need: 2 })
+    );
+    // One authority's token is not an anchor, even of two certificates.
+    let mut one = Book::new();
+    one.push(SCHEMA_WITNESSED_EVENT, opened());
+    one.checkpoint_bare();
+    let event = *one.ledger.events.last().unwrap();
+    for signer in [
+        common::tsa::GOV,
+        common::tsa::GOV_ROTATED,
+        common::tsa::GOV_SAME_OPERATOR,
+    ] {
+        one.push(
+            SCHEMA_TIMESTAMP_RECORD,
+            common::tsa::stamp(
+                signer,
+                SCHEMA_SIGNED_CHECKPOINT,
+                event,
+                common::tsa::at(150, 60),
+            ),
+        );
+    }
+    let report = one.report(Publications {
+        now: TimeBucket::new(155),
         board: Publication::Pending,
     });
     assert_eq!(report.status().status(), Status::Unverified);
-    assert!(report.status().holds().is_empty());
+    assert_eq!(
+        report.checkpoints().last().unwrap().anchoring,
+        Anchoring {
+            government: true,
+            non_government: false,
+            operators: 1
+        }
+    );
+    assert_eq!(
+        report.checkpoints().anchor_deadline(TimeBucket::new(155)),
+        Publication::Breached(Breach::AnchorsShort { have: 1, need: 2 })
+    );
+}
+
+#[test]
+fn the_tokens_of_the_last_checkpoint_anchor_the_ledger() {
+    let mut book = Book::new();
+    book.push(SCHEMA_WITNESSED_EVENT, opened());
+    book.checkpoint_bare();
+    // An earlier checkpoint without tokens is covered by a later anchored
+    // one: the anchor deadline follows the last checkpoint.
+    book.checkpoint();
+    let report = book.report(Publications {
+        now: TimeBucket::new(400),
+        board: Publication::Pending,
+    });
+    let chain = report.checkpoints().checkpoints();
+    assert!(!chain[0].anchoring.satisfied());
+    assert!(chain[1].anchoring.satisfied());
+    assert_eq!(report.status().status(), Status::LogConsistent);
+    // Tokens after the last checkpoint do not keep step 2 from passing.
+    assert_eq!(report.evidence().step(Step::Checkpoints), Outcome::Passed);
+    assert_eq!(report.checkpoints().timestamps().tokens().len(), 2);
 }
 
 #[test]
@@ -586,7 +673,7 @@ fn a_hold_anywhere_is_hold_review() {
     book.push(SCHEMA_WITNESSED_EVENT, opened());
     book.checkpoint();
     let report = book.report(Publications {
-        anchors: Publication::Satisfied,
+        now: TimeBucket::new(150),
         board: Publication::Breached(Breach::BoardLate {
             published: TimeBucket::new(300),
             deadline: TimeBucket::new(200),

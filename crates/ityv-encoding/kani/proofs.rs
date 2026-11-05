@@ -453,6 +453,7 @@ use crate::schema::events::{
 use crate::schema::genesis::{CaptureProfile, RosterRole, StationKind};
 use crate::schema::genesis_body::AmendmentReason;
 use crate::schema::tally::{ExclusionReason, ReceiptOutcome};
+use crate::schema::timestamp::TimestampAuthorityKind;
 use crate::schema::witnessed::EventRole;
 
 static E1: ElectionId<'static> = match ElectionId::new(b"E") {
@@ -532,6 +533,10 @@ fn event_codes_are_exact() {
         (
             ComparisonCode::from_code(code).map(ComparisonCode::code),
             0..=6,
+        ),
+        (
+            TimestampAuthorityKind::from_code(code).map(TimestampAuthorityKind::code),
+            1..=2,
         ),
     ];
     for (decoded, range) in checks {
@@ -922,5 +927,29 @@ fn audit_round_rules_are_exact() {
         assert_eq!(r.get(0), Some(first));
         assert_eq!(r.get(1), Some(second));
         assert_eq!(r.get(2), None);
+    }
+}
+
+use crate::schema::timestamp::{
+    MAX_POLICY_ACCURACY_MS, PolicyAccuracy, TIMESTAMP_TARGET_SCHEMAS, timestamp_target_allowed,
+};
+
+/// A timestamp record stamps exactly a signed checkpoint, a witnessed event
+/// or a signed genesis, for every 32-bit schema (VC-117), and the policy
+/// accuracy is accepted exactly up to one hour (ADR-0039).
+#[kani::proof]
+fn timestamp_rules_are_exact() {
+    let raw: u32 = kani::any();
+    let allowed = timestamp_target_allowed(SchemaId::new(raw));
+    assert_eq!(allowed, raw == 0x0010 || raw == 0x0028 || raw == 0x0033);
+    assert_eq!(
+        allowed,
+        TIMESTAMP_TARGET_SCHEMAS.contains(&SchemaId::new(raw))
+    );
+    let millis: u32 = kani::any();
+    let accuracy = PolicyAccuracy::from_millis(millis);
+    assert_eq!(accuracy.is_some(), millis <= MAX_POLICY_ACCURACY_MS);
+    if let Some(a) = accuracy {
+        assert_eq!(a.millis(), millis);
     }
 }

@@ -48,19 +48,24 @@
 //! The legal authorization ([`crate::authorize_ledger`]) gives the scopes;
 //! without `BALLOT_MARK` the report says that only counts back the result.
 //!
-//! The verifier has no clock. Whether the checkpoints were anchored in
-//! time and the board published by its deadline needs the current time
-//! and the anchor receipts, so the caller supplies both as [`Publications`]
-//! (computed with `ityv_ledger::check_anchor` and
-//! `ityv_ledger::check_board`). Until the anchors are satisfied the status
-//! stays `UNVERIFIED`.
+//! The checkpoints are anchored in time by the timestamp tokens on the
+//! ledger (ADR-0034, ADR-0039): the verifier decides the anchor deadline
+//! itself from the tokens of the last valid checkpoint
+//! ([`CheckpointChain::anchor_deadline`]). It has no clock, so the caller
+//! supplies its current time bucket, which only tells a window still open
+//! from one missed when the last checkpoint is short of tokens, and the
+//! board deadline (`ityv_ledger::check_board`) as [`Publications`]. Until
+//! the anchor deadline is met the status stays `UNVERIFIED`; frames after
+//! the last checkpoint that carry only checkpoints and timestamp records
+//! do not keep step 2 from passing, since the tokens of the last
+//! checkpoint can only be recorded after it.
 //!
 //! With the participation ledger complete and every unit's tally passed,
 //! the status reaches `CRYPTO_TALLY_VERIFIED`; with every style's audit
 //! concluded, `PAPER_AUDITED`. What the report does not run yet: split
 //! view, connectivity and software (stages 10–12).
 
-use ityv_encoding::{CaptureProfile, ScopeSet};
+use ityv_encoding::{CaptureProfile, SCHEMA_TIMESTAMP_RECORD, ScopeSet, TimeBucket};
 use ityv_ledger::SCHEMA_SIGNED_CHECKPOINT;
 use ityv_state::status::{Step, evaluate};
 use ityv_state::{Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport};
@@ -77,12 +82,16 @@ use crate::progress::{ProgressStage, verify_progress};
 use crate::records::{RecordStage, verify_records};
 use crate::tally::{TallyStage, verify_tally};
 
-/// What the caller observed outside the ledger: the publication deadlines
-/// (PROTOCOL.md §5.5, `FAILURE_CASES.md` §8).
+/// What the caller brings from outside the ledger for the publication
+/// deadlines (PROTOCOL.md §5.5, `FAILURE_CASES.md` §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Publications {
-    /// The anchor deadline of the latest checkpoint.
-    pub anchors: Publication,
+    /// The caller's current time, as the genesis's 15-minute bucket index.
+    /// The verifier decides the anchor deadline from the timestamp tokens
+    /// on the ledger ([`CheckpointChain::anchor_deadline`]); this tells only
+    /// whether the window of a last checkpoint still short of tokens is
+    /// open (ADR-0034 §4).
+    pub now: TimeBucket,
     /// The board deadline.
     pub board: Publication,
 }
@@ -92,7 +101,7 @@ pub struct Publications {
 pub struct Report<'a> {
     index: LedgerIndex<'a>,
     authority: AuthorityStage<'a>,
-    checkpoints: CheckpointChain,
+    checkpoints: CheckpointChain<'a>,
     boxes: BoxStage<'a>,
     records: RecordStage<'a>,
     progress: ProgressStage<'a>,
@@ -117,9 +126,9 @@ impl<'a> Report<'a> {
         &self.authority
     }
 
-    /// The checkpoint chain (stage 2).
+    /// The checkpoint chain (stage 2), with the ledger's timestamp records.
     #[must_use]
-    pub const fn checkpoints(&self) -> &CheckpointChain {
+    pub const fn checkpoints(&self) -> &CheckpointChain<'a> {
         &self.checkpoints
     }
 
@@ -206,10 +215,11 @@ const fn outcome(passed: bool) -> Outcome {
 
 /// The outcome of the checkpoint step: failed when a checkpoint broke a
 /// rule; passed when the last valid checkpoint covers every frame but the
-/// checkpoints after it (a checkpoint cannot cover its own frame); not
-/// run otherwise (no checkpoint yet, or other frames after the covered
-/// part).
-fn checkpoint_outcome(chain: &CheckpointChain, index: &LedgerIndex<'_>) -> Outcome {
+/// checkpoints and timestamp records after it (a checkpoint cannot cover
+/// its own frame, and its tokens come after it; a token is the authority's
+/// signed statement, not ledger content another stage reads); not run
+/// otherwise (no checkpoint yet, or other frames after the covered part).
+fn checkpoint_outcome(chain: &CheckpointChain<'_>, index: &LedgerIndex<'_>) -> Outcome {
     if !chain.findings().is_empty() {
         return Outcome::Failed;
     }
@@ -217,7 +227,10 @@ fn checkpoint_outcome(chain: &CheckpointChain, index: &LedgerIndex<'_>) -> Outco
     let checkpoints_after = index
         .events()
         .iter()
-        .filter(|e| e.seq.get() > covered && e.schema == SCHEMA_SIGNED_CHECKPOINT)
+        .filter(|e| {
+            e.seq.get() > covered
+                && (e.schema == SCHEMA_SIGNED_CHECKPOINT || e.schema == SCHEMA_TIMESTAMP_RECORD)
+        })
         .count();
     let after = index.tree_size().saturating_sub(covered);
     if chain.last().is_some() && u64::try_from(checkpoints_after).ok() == Some(after) {
@@ -316,7 +329,7 @@ pub fn verify_ledger_with<'a>(
         .with_step(Step::Participation, ran(participation.complete()))
         .with_step(Step::Tally, ran(tally.passed()))
         .with_step(Step::Audit, ran(audit.passed()))
-        .with_anchors(publications.anchors)
+        .with_anchors(checkpoints.anchor_deadline(publications.now))
         .with_board(publications.board)
         .with_holds(holds);
     if receipt_scan {
