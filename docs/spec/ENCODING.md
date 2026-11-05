@@ -1221,6 +1221,6 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 | 6 | `unit_sig` | `[u8; 4691]` | 유닛 서명 |
 | 7 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 4>` | 정당 모듈 서명, 서로 다른 모듈(같으면 `Duplicate`) |
 
-서명은 모두 필드 1–5의 헤더 없는 인코딩에 대해 purpose `contested-checkin`이다(`ParticipationSet`과 같은 방식, §8.25). 순번과 시각은 담지 않는다. 가명 옆의 시각은 확인 순서를 드러낸다(VC-084). 모듈의 순서와 수(정당마다 하나, 챔버 순서), 유닛과 모듈의 키는 검증기가 확인한다. 공개 장부는 이 객체의 프레임(객체 해시)만 싣고, 본문은 열람 권한이 있는 검증기가 받는다(ADR-0040 7항).
+서명은 모두 필드 1–5의 헤더 없는 인코딩에 대해 purpose `contested-checkin`이다(`ParticipationSet`과 같은 방식, §8.25). 순번과 시각은 담지 않는다. 가명 옆의 시각은 확인 순서를 드러낸다(VC-084). 모듈의 순서와 수(정당마다 하나, 챔버 순서), 유닛과 모듈의 키는 검증기가 확인한다. 공개 장부는 이 객체의 프레임(객체 해시)만 싣고, 본문은 열람 권한이 있는 검증기가 받는다(ADR-0040 7항). 이의 투표 한 건은 필드 1–5(서명된 메시지)로 정해진다: 서명은 매번 다르므로 같은 메시지를 다시 서명한 객체는 사본이고, 필드 하나라도 다르면 다른 이의 투표다(PROTOCOL §6.2).
 
 시험 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`이고, 버전을 올린 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `witnessed_event.txt`(버전 4)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_roll.rs`에 있다.

@@ -886,10 +886,13 @@ fn contested_checkins_are_counted_in_public_and_checked_with_access() {
     let stage = run_with(&book, &supplied);
     let st1 = StationId::new(b"ST-1").unwrap();
     let findings: Vec<ContestedFinding<'_>> = stage.contested().iter().map(|c| c.finding).collect();
+    // Seven of the ten frames have no body that verifies, so a pseudonym
+    // found in no set is not yet absent: one of those could be another
+    // check-in of it.
     let mut expected = std::vec![
-        ContestedFinding::Absent,
+        ContestedFinding::Undetermined,
         ContestedFinding::Elsewhere(st1),
-        ContestedFinding::Absent,
+        ContestedFinding::Undetermined,
     ];
     expected.extend([ContestedFinding::Invalid; 7]);
     expected.push(ContestedFinding::NotOnLedger);
@@ -936,7 +939,9 @@ fn a_pseudonym_or_an_envelope_label_in_two_check_ins_excludes_them_all() {
     // The second review's proof of concept: one voter (pseudonym 9, in no
     // participation set) with three contested check-ins: two envelopes,
     // and the first one's message signed again (hedged signatures make it
-    // another object). Each was `Absent`, so countable, with no hold.
+    // another object). Each was `Absent`, so countable, with no hold. Now
+    // both envelopes are excluded and reported, without a hold (as for a
+    // pseudonym found in a participation set).
     let st1 = StationId::new(b"ST-1").unwrap();
     let mut book = Book::new(election_world());
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
@@ -960,7 +965,7 @@ fn a_pseudonym_or_an_envelope_label_in_two_check_ins_excludes_them_all() {
             ContestedFinding::Repeated,
         ]
     );
-    assert_eq!(stage.holds(), only(HoldReason::ContestedRepeated));
+    assert_eq!(stage.holds(), HoldSet::empty());
     // The copy is counted once: two messages at ST-1.
     assert_eq!(stage.contested_counts(), [(st1, 2)]);
 
@@ -984,9 +989,9 @@ fn a_pseudonym_or_an_envelope_label_in_two_check_ins_excludes_them_all() {
     assert_eq!(stage.holds(), HoldSet::empty());
     assert_eq!(stage.contested_counts(), [(st1, 1)]);
 
-    // One envelope label under two pseudonyms: both refused, even the one
-    // whose pseudonym is in a set; a third check-in of its own label is
-    // untouched.
+    // One envelope label under two pseudonyms: both excluded, even the one
+    // whose pseudonym is in a set, and the ledger holds (a device or
+    // insider fault); a third check-in of its own label is untouched.
     let mut book = Book::new(election_world());
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
     let a = labelled(9, 0x4C, 1);
@@ -1005,10 +1010,10 @@ fn a_pseudonym_or_an_envelope_label_in_two_check_ins_excludes_them_all() {
             ContestedFinding::Absent,
         ]
     );
-    assert_eq!(stage.holds(), only(HoldReason::ContestedRepeated));
+    assert_eq!(stage.holds(), only(HoldReason::ContestedLabelReused));
     assert_eq!(stage.contested_counts(), [(st1, 3)]);
     // A pseudonym repeated and found elsewhere is repeated: both
-    // envelopes are excluded either way, and the repetition holds.
+    // envelopes are excluded either way, without a hold.
     let mut book = Book::new(election_world());
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
     let a = labelled(2, 0x50, 1);
@@ -1023,9 +1028,199 @@ fn a_pseudonym_or_an_envelope_label_in_two_check_ins_excludes_them_all() {
             .iter()
             .all(|c| c.finding == ContestedFinding::Repeated)
     );
-    assert_eq!(stage.holds(), only(HoldReason::ContestedRepeated));
+    assert_eq!(stage.holds(), HoldSet::empty());
     // The public verifier sees frames only, and holds nothing.
     assert_eq!(run(&book).holds(), HoldSet::empty());
+}
+
+/// A check-in of `pseudonym` with envelope label `label` at `station` by
+/// `unit` (key number `unit_key`) and the modules `modules`, signatures
+/// drawn from `seed`.
+fn checkin_at(
+    station: &'static [u8],
+    unit: &'static [u8],
+    unit_key: u16,
+    modules: &[(&'static [u8], u16)],
+    (pseudonym, label): (u8, u8),
+    seed: u64,
+) -> &'static [u8] {
+    let message = group(&ContestedMessage {
+        election_id: election(),
+        station_id: StationId::new(station).unwrap(),
+        unit_id: UnitId::new(unit).unwrap(),
+        pseudonym: leak([pseudonym; 64]),
+        envelope_label: Token192([label; 24]),
+    });
+    signed_checkin(message, unit_key, modules, seed)
+}
+
+const ST2_MODULES: [(&[u8], u16); 2] = [(b"M-U2A-P1", 12), (b"M-U2A-P2", 13)];
+const SPARE_MODULES: [(&[u8], u16); 2] = [(b"M-U1B-P1", 10), (b"M-U1B-P2", 11)];
+
+fn findings_of(stage: &RollStage<'static>) -> Vec<ContestedFinding<'static>> {
+    stage.contested().iter().map(|c| c.finding).collect()
+}
+
+#[test]
+fn a_check_in_is_absent_only_against_every_contested_frame_s_body() {
+    // The final review's F1: pseudonym 9 (in no set) has two envelopes on
+    // the ledger. A verifier given one body (one district's) saw `Absent`,
+    // countable, with no hold.
+    let mut book = Book::new(election_world());
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    let first = labelled(9, 0x4C, 1);
+    let second = labelled(9, 0x4D, 1);
+    book.push(SCHEMA_CONTESTED_CHECKIN, first);
+    book.push(SCHEMA_CONTESTED_CHECKIN, second);
+    let both = run_with(&book, &[first, second]);
+    assert_eq!(
+        findings_of(&both),
+        [ContestedFinding::Repeated, ContestedFinding::Repeated]
+    );
+    assert_eq!(both.holds(), HoldSet::empty());
+    for supplied in [first, second] {
+        let one = run_with(&book, &[supplied]);
+        assert_eq!(one.contested_frames(), 2);
+        assert_eq!(findings_of(&one), [ContestedFinding::Undetermined]);
+        assert_eq!(one.holds(), HoldSet::empty());
+    }
+    // Another voter's envelope beside it: undetermined until every frame's
+    // body is in, then absent.
+    let mut book = Book::new(election_world());
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    let other = labelled(8, 0x4E, 1);
+    for c in [first, other] {
+        book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    assert_eq!(
+        findings_of(&run_with(&book, &[first])),
+        [ContestedFinding::Undetermined]
+    );
+    assert_eq!(
+        findings_of(&run_with(&book, &[first, other])),
+        [ContestedFinding::Absent, ContestedFinding::Absent]
+    );
+    // A copy covers its own frame; a body of the frame that does not
+    // verify does not.
+    let resigned = labelled(9, 0x4C, 2);
+    let mut book = Book::new(election_world());
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    let first_seq = ityv_encoding::Seq::new(book.push(SCHEMA_CONTESTED_CHECKIN, first)).unwrap();
+    book.push(SCHEMA_CONTESTED_CHECKIN, resigned);
+    assert_eq!(
+        findings_of(&run_with(&book, &[first, resigned])),
+        [ContestedFinding::Absent, ContestedFinding::Copy(first_seq)]
+    );
+    assert_eq!(
+        findings_of(&run_with(&book, &[first])),
+        [ContestedFinding::Undetermined]
+    );
+    let foreign = contested(
+        ElectionId::new(b"E-OTHER").unwrap(),
+        b"ST-1",
+        b"U-1A",
+        0,
+        &MODULES,
+        8,
+    );
+    let mut book = Book::new(election_world());
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for c in [first, foreign] {
+        book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    let stage = run_with(&book, &[first, foreign]);
+    assert_eq!(
+        findings_of(&stage),
+        [ContestedFinding::Undetermined, ContestedFinding::Invalid]
+    );
+    assert_eq!(stage.holds(), only(HoldReason::ContestedCheckinInvalid));
+}
+
+#[test]
+fn a_check_in_is_its_whole_message_and_a_shared_label_holds() {
+    // The final review's F3: the same (pseudonym, label) signed at ST-1 and
+    // at ST-2 by their units was a silent copy; ST-2's check-in vanished
+    // from the per-station count. Now they are two messages sharing a
+    // label: both excluded, and the ledger holds.
+    let st1 = StationId::new(b"ST-1").unwrap();
+    let st2 = StationId::new(b"ST-2").unwrap();
+    let at_st1 = checkin_at(b"ST-1", b"U-1A", 0, &MODULES, (9, 0x4C), 1);
+    let at_st2 = checkin_at(b"ST-2", b"U-2A", 2, &ST2_MODULES, (9, 0x4C), 1);
+    let mut book = Book::new(world());
+    for c in [at_st1, at_st2] {
+        book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    let stage = run_with(&book, &[at_st1, at_st2]);
+    assert_eq!(
+        findings_of(&stage),
+        [ContestedFinding::LabelReused, ContestedFinding::LabelReused]
+    );
+    assert_eq!(stage.holds(), only(HoldReason::ContestedLabelReused));
+    assert_eq!(stage.contested_counts(), [(st1, 1), (st2, 1)]);
+    // At one station by the unit in service and the spare: two messages.
+    let spare = checkin_at(b"ST-1", b"U-1B", 1, &SPARE_MODULES, (9, 0x4C), 1);
+    let mut book = Book::new(world());
+    for c in [at_st1, spare] {
+        book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    let stage = run_with(&book, &[at_st1, spare]);
+    assert_eq!(
+        findings_of(&stage),
+        [ContestedFinding::LabelReused, ContestedFinding::LabelReused]
+    );
+    assert_eq!(stage.contested_counts(), [(st1, 2)]);
+    // One pseudonym under two labels at two stations: the voter contested
+    // twice, excluded and reported without a hold, each station counting
+    // its own.
+    let other_label = checkin_at(b"ST-2", b"U-2A", 2, &ST2_MODULES, (9, 0x4D), 1);
+    let mut book = Book::new(world());
+    for c in [at_st1, other_label] {
+        book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    let stage = run_with(&book, &[at_st1, other_label]);
+    assert_eq!(
+        findings_of(&stage),
+        [ContestedFinding::Repeated, ContestedFinding::Repeated]
+    );
+    assert_eq!(stage.holds(), HoldSet::empty());
+    assert_eq!(stage.contested_counts(), [(st1, 1), (st2, 1)]);
+    // A label shared and a pseudonym repeated: the label wins and holds,
+    // and the pseudonym's other envelope is repeated.
+    let third = checkin_at(b"ST-2", b"U-2A", 2, &ST2_MODULES, (7, 0x4D), 1);
+    let mut book = Book::new(world());
+    for c in [at_st1, other_label, third] {
+        book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    }
+    let stage = run_with(&book, &[at_st1, other_label, third]);
+    assert_eq!(
+        findings_of(&stage),
+        [
+            ContestedFinding::Repeated,
+            ContestedFinding::LabelReused,
+            ContestedFinding::LabelReused,
+        ]
+    );
+    assert_eq!(stage.holds(), only(HoldReason::ContestedLabelReused));
+}
+
+#[test]
+fn a_check_in_whose_pseudonym_is_in_its_own_station_s_set_is_excluded() {
+    // The final review's F2 (legal): the code excludes a pseudonym found in
+    // any station's set, the contesting station's own included; the
+    // statute now says so (`LEGAL_ANNEX.md` §44-5 ②).
+    let mut book = Book::new(election_world());
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    let c = labelled(2, 0x60, 1);
+    book.push(SCHEMA_CONTESTED_CHECKIN, c);
+    let stage = run_with(&book, &[c]);
+    assert_eq!(stage.contested()[0].station, StationId::new(b"ST-1"));
+    assert_eq!(
+        findings_of(&stage),
+        [ContestedFinding::Elsewhere(
+            StationId::new(b"ST-1").unwrap()
+        )]
+    );
+    assert_eq!(stage.holds(), HoldSet::empty());
 }
 
 #[test]

@@ -334,16 +334,19 @@ pub enum HoldReason {
     /// access to the restricted body, does not verify: another election,
     /// a station or unit the genesis does not have, or signatures that are
     /// not the unit's and one party module's per party (§6.2, ADR-0033
-    /// decision 6, ADR-0040).
+    /// decision 6, ADR-0040). Only a verifier with access holds on it; the
+    /// public verifier sees the frames.
     ContestedCheckinInvalid = 76,
-    /// Contested check-ins supplied by a verifier with access repeat a
-    /// pseudonym under another envelope label, or an envelope label under
-    /// another pseudonym: one voter voted twice under protest, or one
-    /// envelope stands for two voters. Every envelope of the pseudonym (or
-    /// label) is excluded from the count and the fact is passed to the
-    /// investigators (§6.2, ADR-0033 decision 6, `LEGAL_ANNEX.md`
-    /// amendment 14, §44-5 ②).
-    ContestedRepeated = 77,
+    /// Contested check-ins supplied by a verifier with access carry one
+    /// envelope label in two different messages, whatever their
+    /// pseudonyms: no envelope with the label can be matched to one record,
+    /// so every one of them is excluded from the count. Labels are random
+    /// (ADR-0010 decision 2), so this is a device or insider fault, not a
+    /// voter's act (§6.2, ADR-0033 decision 6, ADR-0040). Only a verifier
+    /// with access holds on it; the public verifier sees the frames. A
+    /// pseudonym that contested twice under two labels is excluded and
+    /// reported without a hold, as one found in a participation set.
+    ContestedLabelReused = 77,
     /// The roll does not match the election as it ran: an election-day
     /// station of the genesis's last state has no resident extract (a
     /// station added after the freeze), or an amendment was recorded after
@@ -433,7 +436,7 @@ impl HoldReason {
         Self::RollEventRefused,
         Self::RollCustodyMismatch,
         Self::ContestedCheckinInvalid,
-        Self::ContestedRepeated,
+        Self::ContestedLabelReused,
         Self::RollIncomplete,
     ];
 

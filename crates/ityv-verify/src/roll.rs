@@ -51,23 +51,33 @@
 //! frame, the check-in unit it names in service or spare in a state up to
 //! that frame, one party module of that unit per party in chamber order,
 //! over the field group) and its pseudonym looked up in the accepted
-//! participation sets: found means a second attempt, excluded and passed
-//! to investigators; absent, once every station's set is in, means the
-//! "already voted" mark was false and the envelope may be counted by a
-//! legal decision (ADR-0033 decision 6). Check-ins are one per message, the
-//! pair (pseudonym, envelope label), not per object: hybrid signatures are
-//! hedged, so the same message signed again is another object and another
-//! frame, and it counts once ([`ContestedFinding::Copy`]). A pseudonym in
-//! two messages (two envelopes) is a voter who voted twice under protest,
-//! and a label in two messages is one envelope for two voters: every such
-//! check-in is excluded ([`ContestedFinding::Repeated`],
-//! [`ContestedFinding::LabelReused`]) and holds the ledger
-//! (`ContestedRepeated`). The stage reports the finding; the counting is
-//! the law's.
+//! participation sets, the contesting station's own included: found means
+//! a second attempt, excluded and passed to investigators; absent means
+//! the "already voted" mark was false and the envelope may be counted by a
+//! legal decision (ADR-0033 decision 6), but only once every station's set
+//! is in and every contested frame of the ledger has a supplied body that
+//! verifies: the decision needs every station's records, the national set
+//! of bodies, or a second check-in of the pseudonym in another district
+//! would go unseen. Check-ins are one per signed message (election,
+//! station, unit, pseudonym, envelope label), not per object: hybrid
+//! signatures are hedged, so the same message signed again is another
+//! object and another frame, and it counts once
+//! ([`ContestedFinding::Copy`]). An envelope label in two messages cannot
+//! tell which record its envelope is: every check-in with the label is
+//! excluded ([`ContestedFinding::LabelReused`]) and the ledger holds
+//! (`ContestedLabelReused`), since labels are random and only a device or
+//! an insider repeats one. Otherwise a pseudonym in two messages (two
+//! envelopes) is a voter who contested twice: every check-in of the
+//! pseudonym is excluded and the fact passed to investigators
+//! ([`ContestedFinding::Repeated`]), without a hold, as for a pseudonym
+//! found in a participation set (`LEGAL_ANNEX.md` amendment 14, §44-5 ②).
+//! The stage reports the finding; the counting is the law's.
 //!
 //! Every event the stage cannot take is listed ([`RollRefused`]) and holds
 //! the ledger (`RollEventRefused`); a supplied check-in of the ledger that
-//! does not verify holds it too (`ContestedCheckinInvalid`).
+//! does not verify holds it too (`ContestedCheckinInvalid`). The holds of
+//! contested check-ins are seen by a verifier with access only: the public
+//! verifier has their frames.
 //!
 //! What this stage does not prove: that the extracts are true of the
 //! registers (their sources sign them), which entries their merge gives,
@@ -362,28 +372,38 @@ pub enum ContestedFinding<'a> {
     /// key verifies it, or module signatures that are not one per party
     /// from that unit's modules in chamber order.
     Invalid,
-    /// The pseudonym is in the accepted participation set of the station:
-    /// a second attempt, excluded and passed to investigators.
+    /// The pseudonym is in the accepted participation set of the station
+    /// (the contesting station's own included): a second attempt, excluded
+    /// and passed to investigators.
     Elsewhere(StationId<'a>),
-    /// The pseudonym is in no accepted participation set, and every
-    /// station's set is in: the mark was false, and the envelope may be
-    /// counted by a legal decision.
+    /// The pseudonym is in no accepted participation set, every station's
+    /// set is in, and every contested frame of the ledger has a supplied
+    /// body that verifies (the national set of bodies) with no other
+    /// message of the pseudonym: the mark was false, and the envelope may
+    /// be counted by a legal decision.
     Absent,
     /// The pseudonym is in no participation set taken so far, and some
-    /// station's set is still missing.
+    /// station's set is still missing, or some contested frame of the
+    /// ledger has no supplied body that verifies, so another check-in of
+    /// the pseudonym cannot be ruled out.
     Undetermined,
-    /// The same message (pseudonym and envelope label) as the check-in of
-    /// the frame given, an earlier frame or the same: a copy, signed again
-    /// or supplied twice, that counts once with it.
+    /// The same signed message (election, station, unit, pseudonym and
+    /// envelope label) as the check-in of the frame given, an earlier
+    /// frame or the same: a copy, signed again or supplied twice, that
+    /// counts once with it and shares its finding.
     Copy(Seq),
-    /// Its pseudonym is in another check-in with another envelope label:
-    /// the voter voted twice under protest. Every envelope of the pseudonym
-    /// is excluded and the fact passed to investigators (ADR-0033 decision
-    /// 6). Takes precedence over the participation lookup.
+    /// Its pseudonym is in another message with another envelope label:
+    /// the voter contested twice. Every envelope of the pseudonym is
+    /// excluded and the fact passed to investigators (ADR-0033 decision 6).
+    /// Like [`ContestedFinding::Elsewhere`], it does not hold the ledger.
+    /// Takes precedence over the participation lookup.
     Repeated,
-    /// Its envelope label is in another check-in with another pseudonym:
-    /// one envelope cannot be two voters'. Every check-in with the label is
-    /// excluded.
+    /// Its envelope label is in another message, whatever the pseudonyms:
+    /// no envelope with the label can be matched to one record. Every
+    /// check-in with the label is excluded, and the ledger holds
+    /// (`ContestedLabelReused`): labels are random 192-bit values (ADR-0010
+    /// decision 2), so a repeated one is a device or insider fault. Takes
+    /// precedence over [`ContestedFinding::Repeated`].
     LabelReused,
 }
 
@@ -1007,8 +1027,15 @@ fn merge_allows(extracts: &[TakenExtract<'_>], entries: u64) -> bool {
     residents.saturating_sub(removals) <= entries && entries <= residents.saturating_add(additions)
 }
 
-/// The message of a verified check-in: its pseudonym and envelope label.
-type MessageKey<'a> = (&'a [u8; PSEUDONYM_LEN], [u8; 24]);
+/// The message of a verified check-in: its signed bytes, which are its
+/// identity (election, station, unit, pseudonym and envelope label, in
+/// their one encoding), with its pseudonym and envelope label.
+#[derive(Debug, Clone, Copy)]
+struct Message<'a> {
+    bytes: &'a [u8],
+    pseudonym: &'a [u8; PSEUDONYM_LEN],
+    label: [u8; 24],
+}
 
 /// What the stage finds of one supplied body, and its message if it
 /// verifies.
@@ -1018,7 +1045,7 @@ fn contested_report<'a>(
     participation: &ParticipationStage<'a>,
     frames: &BTreeMap<[u8; 64], Seq>,
     bytes: &'a [u8],
-) -> (ContestedReport<'a>, Option<MessageKey<'a>>) {
+) -> (ContestedReport<'a>, Option<Message<'a>>) {
     let Some(seq) = frames.get(&object_hash(bytes).0).copied() else {
         return (
             ContestedReport {
@@ -1059,47 +1086,61 @@ fn contested_report<'a>(
             station,
             finding,
         },
-        Some((m.pseudonym, m.envelope_label.0)),
+        Some(Message {
+            bytes: checkin.message_bytes(),
+            pseudonym: m.pseudonym,
+            label: m.envelope_label.0,
+        }),
     )
 }
 
 /// Applies the repetition rules to the reports of the supplied check-ins
-/// (module documentation): a message seen in an earlier frame (or earlier
-/// in the same frame) is a copy of the first; among the first of each
-/// message, a pseudonym under two labels is repeated, else a label under
-/// two pseudonyms is reused.
-fn settle_contested<'a>(reports: &mut [(ContestedReport<'a>, Option<MessageKey<'a>>)]) {
+/// (module documentation), with `frames` the number of contested frames on
+/// the ledger: a message seen in an earlier frame (or earlier in the same
+/// frame) is a copy of the first; among the first of each message, a label
+/// in two messages is reused, else a pseudonym under two labels is
+/// repeated; and a pseudonym found nowhere stays absent only when every
+/// frame has a supplied body that verifies.
+fn settle_contested<'a>(reports: &mut [(ContestedReport<'a>, Option<Message<'a>>)], frames: usize) {
     let mut order: Vec<usize> = (0..reports.len())
         .filter(|&i| reports.get(i).is_some_and(|r| r.1.is_some()))
         .collect();
     order.sort_by_key(|&i| reports.get(i).and_then(|r| r.0.seq).map(Seq::get));
-    let mut first: BTreeMap<MessageKey<'a>, Seq> = BTreeMap::new();
+    let mut first: BTreeMap<&'a [u8], Seq> = BTreeMap::new();
+    let mut covered: BTreeSet<Seq> = BTreeSet::new();
     let mut labels: BTreeMap<&'a [u8; PSEUDONYM_LEN], BTreeSet<[u8; 24]>> = BTreeMap::new();
-    let mut pseudonyms: BTreeMap<[u8; 24], BTreeSet<&'a [u8; PSEUDONYM_LEN]>> = BTreeMap::new();
+    let mut messages: BTreeMap<[u8; 24], usize> = BTreeMap::new();
     for &i in &order {
-        let Some((report, Some(key))) = reports.get_mut(i) else {
+        let Some((report, Some(m))) = reports.get_mut(i) else {
             continue;
         };
         let Some(seq) = report.seq else { continue };
-        if let Some(&earlier) = first.get(key) {
+        covered.insert(seq);
+        if let Some(&earlier) = first.get(m.bytes) {
             report.finding = ContestedFinding::Copy(earlier);
             continue;
         }
-        first.insert(*key, seq);
-        labels.entry(key.0).or_default().insert(key.1);
-        pseudonyms.entry(key.1).or_default().insert(key.0);
+        first.insert(m.bytes, seq);
+        labels.entry(m.pseudonym).or_default().insert(m.label);
+        let count = messages.entry(m.label).or_default();
+        *count = count.saturating_add(1);
     }
-    for (report, key) in reports.iter_mut() {
-        let Some((pseudonym, label)) = key else {
+    // Every frame names one object (the index refuses a replay), so the
+    // frames with a verified body are all of them when they are as many.
+    let every_frame = covered.len() == frames;
+    for (report, m) in reports.iter_mut() {
+        let Some(m) = m else {
             continue;
         };
         if matches!(report.finding, ContestedFinding::Copy(_)) {
             continue;
         }
-        if labels.get(*pseudonym).is_some_and(|l| l.len() > 1) {
-            report.finding = ContestedFinding::Repeated;
-        } else if pseudonyms.get(label).is_some_and(|p| p.len() > 1) {
+        if messages.get(&m.label).is_some_and(|n| *n > 1) {
             report.finding = ContestedFinding::LabelReused;
+        } else if labels.get(m.pseudonym).is_some_and(|l| l.len() > 1) {
+            report.finding = ContestedFinding::Repeated;
+        } else if report.finding == ContestedFinding::Absent && !every_frame {
+            report.finding = ContestedFinding::Undetermined;
         }
     }
 }
@@ -1218,12 +1259,12 @@ pub fn verify_roll<'a>(
         .map(|e| (e.hash.0, e.seq))
         .collect();
     stage.contested_frames = frames.len();
-    let mut reports: Vec<(ContestedReport<'a>, Option<MessageKey<'a>>)> = input
+    let mut reports: Vec<(ContestedReport<'a>, Option<Message<'a>>)> = input
         .contested
         .iter()
         .map(|bytes| contested_report(genesis, index, participation, &frames, bytes))
         .collect();
-    settle_contested(&mut reports);
+    settle_contested(&mut reports, frames.len());
     stage.contested = reports.into_iter().map(|(r, _)| r).collect();
     stage.holds = HoldSet::empty()
         .with_if(!stage.refused.is_empty(), HoldReason::RollEventRefused)
@@ -1239,13 +1280,11 @@ pub fn verify_roll<'a>(
             HoldReason::ContestedCheckinInvalid,
         )
         .with_if(
-            stage.contested.iter().any(|c| {
-                matches!(
-                    c.finding,
-                    ContestedFinding::Repeated | ContestedFinding::LabelReused
-                )
-            }),
-            HoldReason::ContestedRepeated,
+            stage
+                .contested
+                .iter()
+                .any(|c| c.finding == ContestedFinding::LabelReused),
+            HoldReason::ContestedLabelReused,
         )
         .with_if(
             !stage.late.is_empty() || !stage.missing.is_empty(),
