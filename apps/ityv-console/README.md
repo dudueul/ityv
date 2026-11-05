@@ -16,7 +16,7 @@ node scripts/screens.cjs <출력 디렉터리>   # 화면 캡처 검사(아래)
 node scripts/races.cjs                    # 요청 경쟁·오류 경로·CSP 검사(아래)
 ```
 
-`bun run dev`와 `bun run build`는 먼저 `scripts/data.ts`를 돌린다. 이 스크립트는 저장소 루트에서 `cargo build --locked -p ityv-wasm --target wasm32-unknown-unknown --release`와 `cargo run --locked --profile release -p ityv-sim -- public/bundles`를 실행하고 WASM을 `public/`에 복사한다. `ITYV_SIM_SET=quick`이면 빠른 묶음(36개)만, 기본은 전체(39개)를 만든다. `ITYV_SIM_PROFILE`로 cargo 프로필을 바꾼다(`dev`, `test`). 포트는 `PORT`, 주소는 `HOST`(기본 127.0.0.1). `rustup target add wasm32-unknown-unknown`이 먼저 필요하다. 만든 파일(`public/ityv_wasm.wasm`, `public/bundles/`, `dist/`)은 저장소에 넣지 않는다. CI는 `bun run build` 한 경로로 WASM, 빠른 번들, `dist/`를 만든다.
+`bun run dev`와 `bun run build`는 먼저 `scripts/data.ts`를 돌린다. 이 스크립트는 저장소 루트에서 `cargo build --locked -p ityv-wasm --target wasm32-unknown-unknown --release`와 `cargo run --locked --profile release -p ityv-sim -- public/bundles`를 실행하고 WASM을 `public/`에 복사한다. `ITYV_SIM_SET=quick`이면 빠른 묶음(55개)만, 기본은 전체(58개)를 만든다. `ITYV_SIM_PROFILE`로 cargo 프로필을 바꾼다(`dev`, `test`). 포트는 `PORT`, 주소는 `HOST`(기본 127.0.0.1). `rustup target add wasm32-unknown-unknown`이 먼저 필요하다. 만든 파일(`public/ityv_wasm.wasm`, `public/bundles/`, `dist/`)은 저장소에 넣지 않는다. CI는 `bun run build` 한 경로로 WASM, 빠른 번들, `dist/`를 만든다.
 
 ## 무엇을 믿는가
 
@@ -24,7 +24,7 @@ node scripts/races.cjs                    # 요청 경쟁·오류 경로·CSP �
 
 ## 쪽
 
-- **검증 대시보드** (`#/dashboard`): 시나리오를 "정상 선거"와 "공격·장애"로 묶어 고르거나 번들 파일(256 MB까지)을 놓는다. 파일은 브라우저 밖으로 나가지 않는다. 보이는 것: 파일 이름·번들 해시·시나리오, 검증한 선거 ID, 상태 사다리(일곱 어휘만, 칸마다 다른 아이콘, 지금 상태와 그 상태가 뜻하지 않는 것, 닿지 않는 것과 `PAPER_AUDITED`에 필요한 것: 감사까지 실린 장부와 호출자가 본 비콘 공표; `HOLD_REVIEW`와 `LEGAL_CERTIFIED`는 사다리 밖에 따로), 시나리오의 기대와 실제 및 불일치 표시, 쓴 핀의 지문과 다른 핀을 넣는 칸, 보류 사유(코드 0–71·이름·한국어 설명), 단계별 결과, 보고 단위별 상태·열어 본 수·종이 대조, 감사(아래), 투표함, 투표소별 바깥 장수 그래프와 경보(표 보기 포함, 넘친 칸은 띠로), 체크포인트 지문, 받지 않은 이벤트(프레임·스키마·단계·이유), 분쟁(법적 결정 참조는 건수만), 추적코드 포함 확인, 빠른 시나리오 전체 자체 시험(번들 해시까지 비교, 다른 쪽으로 옮기면 멈춤).
+- **검증 대시보드** (`#/dashboard`): 시나리오를 "정상 선거"와 "공격·장애"로 묶어 고르거나 번들 파일(256 MB까지)을 놓는다. 파일은 브라우저 밖으로 나가지 않는다. 보이는 것: 파일 이름·번들 해시·시나리오, 검증한 선거 ID, 상태 사다리(일곱 어휘만, 칸마다 다른 아이콘, 지금 상태와 그 상태가 뜻하지 않는 것, 닿지 않는 것과 `PAPER_AUDITED`에 필요한 것: 감사까지 실린 장부와 호출자가 본 비콘 공표; `HOLD_REVIEW`와 `LEGAL_CERTIFIED`는 사다리 밖에 따로), 시나리오의 기대와 실제 및 불일치 표시, 쓴 핀의 지문과 다른 핀을 넣는 칸, 보류 사유(코드 0–85·이름·한국어 설명), 단계별 결과, 보고 단위별 상태·열어 본 수·종이 대조, 감사(아래), 투표함, 투표소별 바깥 장수 그래프와 경보(표 보기 포함, 넘친 칸은 띠로), 체크포인트 지문, 받지 않은 이벤트(프레임·스키마·단계·이유), 분쟁(법적 결정 참조는 건수만), 추적코드 포함 확인, 빠른 시나리오 전체 자체 시험(번들 해시까지 비교, 다른 쪽으로 옮기면 멈춤).
 - **기기 화면 시제품** (`#/devices/<기기>?state=…&zoom=1.5&hc=1&detail=1`): SCREENS.md §1 투함 스캐너 유권자 화면(표의 11개 상태, 단추, 화면 밖 촉각 단추), §2 사무원·참관인 화면, §3 확인 장치 사무원 화면, §4 분류기 확장, §5 게이트웨이, §6.1 참관인 앱 현장 증명 결과, §6.2 참관인 앱 진행과 경보, §7 유권자 확인 앱. 모든 화면 맨 아래에 신원 줄과 "소프트웨어 확인"이 있고, 상세 화면은 내용 영역 안에서 열려 신원 줄을 가리지 않으며, 유권자 화면에서 열면 10초 뒤 돌아간다. "시제품" 표지와 상태 선택은 기기 틀 밖에 있다. 없는 상태를 주면 첫 상태를 그리고 그렇다고 알린다.
 
 ### 감사
