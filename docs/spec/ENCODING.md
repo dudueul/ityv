@@ -174,7 +174,7 @@ offset  size  field
 
 ## 7. 시험 벡터
 
-`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 7), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다. 시점확인(ADR-0039) 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`다. 명부(ADR-0040) 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`다.
+`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다. 시점확인(ADR-0039) 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`다. 명부(ADR-0040) 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`다.
 
 ## 8. 예시 스키마 필드 정의
 
@@ -1221,6 +1221,6 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 | 6 | `unit_sig` | `[u8; 4691]` | 유닛 서명 |
 | 7 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 4>` | 정당 모듈 서명, 서로 다른 모듈(같으면 `Duplicate`) |
 
-서명은 모두 필드 1–5의 헤더 없는 인코딩에 대해 purpose `contested-checkin`이다(`ParticipationSet`과 같은 방식, §8.25). 순번과 시각은 담지 않는다. 가명 옆의 시각은 확인 순서를 드러낸다(VC-084). 모듈의 순서와 수(정당마다 하나, 챔버 순서), 유닛과 모듈의 키는 검증기가 확인한다. 공개 장부는 이 객체의 프레임(객체 해시)만 싣고, 본문은 열람 권한이 있는 검증기가 받는다(ADR-0040 8항).
+서명은 모두 필드 1–5의 헤더 없는 인코딩에 대해 purpose `contested-checkin`이다(`ParticipationSet`과 같은 방식, §8.25). 순번과 시각은 담지 않는다. 가명 옆의 시각은 확인 순서를 드러낸다(VC-084). 모듈의 순서와 수(정당마다 하나, 챔버 순서), 유닛과 모듈의 키는 검증기가 확인한다. 공개 장부는 이 객체의 프레임(객체 해시)만 싣고, 본문은 열람 권한이 있는 검증기가 받는다(ADR-0040 7항).
 
 시험 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`이고, 버전을 올린 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `witnessed_event.txt`(버전 4)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_roll.rs`에 있다.

@@ -840,7 +840,7 @@ pub struct GenesisWitnessSig<'a> {
 /// witness signatures, all over exactly the body bytes with the body's
 /// purpose (PROTOCOL.md §4.2, §4.3).
 ///
-/// Rules: the body is a complete `GenesisBody` (version 7) or
+/// Rules: the body is a complete `GenesisBody` (version 8) or
 /// `GenesisAmendmentBody` (`SchemaMismatch` otherwise); the witness
 /// signatures are strictly ascending by `witness_id` (`NotSorted`,
 /// `Duplicate`) and at least the genesis quorum `q`, or nine for an

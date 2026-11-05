@@ -1,4 +1,5 @@
-//! The genesis (ADR-0028, ADR-0039): `GenesisBody` (0x0002, version 7),
+//! The genesis (ADR-0028, ADR-0039, ADR-0040): `GenesisBody` (0x0002,
+//! version 8),
 //! `SignedGenesis` (0x0033), `GenesisAmendmentBody` (0x0034), the entry
 //! objects 0x0035–0x003E, and the check-in events `ObserverCountAttestBody`
 //! (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041):
