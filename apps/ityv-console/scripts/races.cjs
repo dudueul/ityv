@@ -375,6 +375,12 @@ run = function (ex, data) {
       roll.length === 2 && roll.every((t) => t.includes("3 / 3") && t.includes("효력 있음")),
       roll.join(" | "),
     );
+    const rollText = (await page.textContent("[data-testid=roll]").catch(() => "")) ?? "";
+    check(
+      "the roll card names the poll close and lists no late amendment or missing extract",
+      rollText.includes("마감은 선거일 투표소의 첫 참여 집합, 프레임") && (await page.$("[data-testid=roll-incomplete]")) === null,
+      rollText.slice(-240),
+    );
     await page.goto(`${base}#/dashboard?scenario=fault-roll-amendment-short`);
     await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("fault-roll-amendment-short"), null, { timeout: 60000 });
     const short = await page.$$eval("[data-testid=roll-rows] tr", (xs) => xs.map((x) => x.textContent));

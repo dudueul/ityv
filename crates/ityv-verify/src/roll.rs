@@ -493,6 +493,9 @@ impl<'a> RollStage<'a> {
     /// (`RollIncomplete`) and keep the stage from [`RollStage::complete`].
     #[must_use]
     pub fn roll(&self) -> Option<&RollState> {
+        // An amendment and the participation set that marks the close are
+        // two ledger events, which never share a frame, so `<` and `<=`
+        // between their frames agree.
         let in_time: Vec<&TakenAmendment<'a>> = self
             .amendments
             .iter()
@@ -1139,6 +1142,8 @@ fn settle_close<'a>(
         })
         .filter_map(|s| s.set)
         .min_by_key(|seq| seq.get());
+    // An amendment and the participation set that marks the close never
+    // share a frame (a frame carries one event), so `>` and `>=` agree.
     stage.late = stage
         .amendments
         .iter()

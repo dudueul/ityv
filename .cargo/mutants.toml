@@ -70,6 +70,13 @@ exclude_re = [
     # between their frames agree (crates/ityv-verify/src/roll.rs,
     # `Work::subject`).
     "replace < with <= in Work<'_, 'a>::subject",
+    # Equivalent: an amendment and the participation set that marks the
+    # poll close are two ledger events, which never share a frame, so `<`
+    # and `<=` (`>` and `>=`) between their frames agree; each comparison
+    # carries a comment saying so (crates/ityv-verify/src/roll.rs:
+    # `RollStage::roll`, `settle_close`).
+    "replace < with <= in RollStage<'a>::roll",
+    "replace > with >= in settle_close",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)
