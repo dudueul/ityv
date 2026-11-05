@@ -168,7 +168,11 @@ pub fn capture_hash(file: &[u8]) -> Hash512 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects
+    )]
 
     use super::*;
 
@@ -225,6 +229,70 @@ mod tests {
         assert_ne!(payload_root_of(&payload), root);
         assert_eq!(chunk_leaf(&[0u8; 4096]), zero_leaf());
         assert_eq!(chunk_leaf(&[0u8; 5000]), zero_leaf());
+    }
+
+    fn unhex(s: &str) -> Hash512 {
+        let mut out = [0u8; 64];
+        for (i, b) in out.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+        }
+        Hash512(out)
+    }
+
+    /// Answers computed with Python's `hashlib.sha3_512` over the labelled
+    /// inputs, independently of this crate.
+    #[test]
+    fn known_answers_from_an_independent_sha3() {
+        let link = link_id(&[7; 32]);
+        assert_eq!(
+            link,
+            unhex(
+                "07ae4f64248fd0d79bc59e74b0322565d5740aaf080e57ac36ac22436b8a67dad187a8ad9386a6edfae0c6f20781fcb0df75d5423a857ee8ecbd9d185cea5d1b"
+            )
+        );
+        let h0 = chain_start(&link);
+        assert_eq!(
+            h0,
+            unhex(
+                "252f5282f42f30514a87fa3af792aed83e923312902e2655a62ea46bd7c9d5cb375e6b339e62f1a216bec5c2d01304e7ed91c659aac99928e338886a41348173"
+            )
+        );
+        assert_eq!(
+            chain_next(&h0, &Hash512([1; 64])),
+            unhex(
+                "f99466e8118d38497466554bfb470652efffe25acb6f56c652760eb93e1c57853233bc56f6e466e7031ed286cd5a905855675d251b724247e1737e54e3a37aad"
+            )
+        );
+        assert_eq!(
+            zero_leaf(),
+            unhex(
+                "d5cfe59623f682b692a678ee2a5f243521fe330ac3a329b6b9ede60eadaa478702203d5acb7aee03075e8aae8f531477badbbdba9e43ec4cdaf2194d12017e94"
+            )
+        );
+        assert_eq!(
+            chunk_leaf(b"hello"),
+            unhex(
+                "a78c126545f70873ad81a9f49f302aa5f21df6f61c5699c9abe4ae63f4ec56970483b38fe47db2f41bde2aa43ecd3cc687403b1cfd60d0a4f8169ca2c7ed6563"
+            )
+        );
+        assert_eq!(
+            payload_root([]),
+            Some(unhex(
+                "a8dbf2f3da7e0460d8c20a3cedc5ab825e79f67eefb9fd098d95f1f831714de102f2edf8468552b4148630b0506bf0e4bbeceba6679092cfd5c012f75173885b"
+            ))
+        );
+        assert_eq!(
+            payload_root_of(b"hello"),
+            unhex(
+                "6729aa74bc0e791a057ea2d8f4535805ccf06d3eef7b18549eefc64dfed5a6513497cac158e4e2da4adb71f6f7c5b874979d954770f3685e245ebadb8e91d2dd"
+            )
+        );
+        assert_eq!(
+            capture_hash(b"capture file"),
+            unhex(
+                "89478283a860e617b09fb2324b5940b8ab0f2f0b71cd8b19666981bf5d1700d69f71f76ac545af91ce5994f774f446214a3055d4d563d804a6c9a0680f33c768"
+            )
+        );
     }
 
     #[test]
