@@ -569,10 +569,11 @@ fn manifest_findings<'a>(manifest: &ConnectivityManifest<'a>) -> Vec<ManifestFin
 }
 
 /// What a commitment unit's frame link may carry: public objects and
-/// sealed share packages (ADR-0041 decision 7). A named constant, not an
-/// expression in the match: the two bits are disjoint, so `|`, `^` and `+`
-/// would give the same set.
-const SCANNER_CARRIES: u32 = CARRY_PUBLIC | CARRY_SEALED;
+/// sealed share packages (ADR-0041 decision 7), the bits `CARRY_PUBLIC`
+/// and `CARRY_SEALED`. A literal, as `ityv_encoding::CARRIES_MASK` is: the
+/// two bits are disjoint, so in an expression of them `|` and `^` give the
+/// same set. The unit tests tie the literal to the two names.
+const SCANNER_CARRIES: u32 = 0b11;
 
 /// The rules one entry breaks.
 fn entry_problems(e: &ManifestEntry<'_>) -> Vec<ManifestProblem> {
@@ -2206,6 +2207,11 @@ mod tests {
             CARRY_ROLL,
         );
         assert_eq!(entry_problems(&gateway), [P::RollLookup]);
+    }
+
+    #[test]
+    fn the_scanner_carries_public_objects_and_sealed_packages() {
+        assert_eq!(SCANNER_CARRIES, CARRY_PUBLIC | CARRY_SEALED);
     }
 
     #[test]
