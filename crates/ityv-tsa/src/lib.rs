@@ -108,7 +108,7 @@ pub use cms::MAX_CERTIFICATES;
 pub use der::{MAX_DEPTH, MAX_OID_LEN};
 pub use error::{DerError, TsaError};
 pub use oid::ObjectId;
-pub use pin::{MAX_POLICIES, PIN_FORMAT_VERSION, PinnedTsa, Policies};
+pub use pin::{MAX_POLICIES, PIN_FORMAT_VERSION, PinnedTsa, Policies, SignerKey};
 pub use rsa::{MAX_RSA_BITS, MIN_RSA_BITS};
 pub use time::GenTime;
 pub use tst::{Accuracy, MAX_ACCURACY_SECONDS, MAX_NONCE_LEN, MAX_SERIAL_LEN};

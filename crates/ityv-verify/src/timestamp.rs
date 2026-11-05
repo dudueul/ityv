@@ -110,9 +110,12 @@ pub const MAX_TIMESTAMP_ACCURACY_MS: u32 = 60_000;
 
 /// Checks the genesis's timestamp authority set (VC-114): every declared
 /// accuracy within bounds; pins that allow SHA-512 and name a signer key
-/// some token could verify under; no certificate and no key pinned twice;
-/// one kind per operator, operators compared as names (`same_org`);
-/// and a government-run and a non-government authority.
+/// some token could verify under (an EC point on its curve), whose
+/// certificate is still valid when the election's epoch day `epoch` begins
+/// (the genesis fixes no end of the election, so this is the overlap it
+/// can check); no certificate and no key (an RSA modulus, an EC point)
+/// pinned twice; one kind per operator, operators compared as names
+/// (`same_org`); and a government-run and a non-government authority.
 ///
 /// # Errors
 /// [`Rule::TimestampAccuracy`], [`Rule::TimestampPin`],
@@ -122,7 +125,11 @@ pub const MAX_TIMESTAMP_ACCURACY_MS: u32 = 60_000;
 pub(crate) fn check_authorities(
     state: u64,
     set: &Set<'_, TimestampAuthorityEntry<'_>>,
+    epoch: Day,
 ) -> Result<(), Error> {
+    // The epoch day's first second; a day count that does not fit leaves
+    // no certificate valid after it.
+    let begins = epoch.get().saturating_mul(86_400);
     let at = |index: usize, rule| Error::entry(state, EntrySet::TimestampAuthorities, index, rule);
     let mut certificates: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut keys: BTreeSet<&[u8]> = BTreeSet::new();
@@ -141,10 +148,13 @@ pub(crate) fn check_authorities(
             let key = pin
                 .signer_key()
                 .map_err(|_| at(index, Rule::TimestampPin))?;
+            if key.not_after().unix_seconds() < begins {
+                return Err(at(index, Rule::TimestampPin));
+            }
             if !certificates.insert(*pin.certificate_sha256()) {
                 return Err(at(index, Rule::TimestampCertificate));
             }
-            if !keys.insert(key) {
+            if !keys.insert(key.public_key()) {
                 return Err(at(index, Rule::TimestampKey));
             }
         }

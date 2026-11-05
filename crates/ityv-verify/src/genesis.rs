@@ -336,7 +336,7 @@ pub fn verify_genesis<'a>(
     })?;
     let body = signed.genesis().ok_or(Error::body(0, Rule::Kind))?;
     let fixed = Fixed::parse(0, &input.fixed, body.sets())?;
-    timestamp::check_authorities(0, &fixed.timestamps)?;
+    timestamp::check_authorities(0, &fixed.timestamps, body.election_epoch_day())?;
     roll::check_authorities(0, &fixed.rolls, body.custody_quorum())?;
 
     let signing = signing_witnesses(0, &signed, &fixed.witnesses)?;

@@ -57,6 +57,20 @@ impl<'a> EcPublicKey<'a> {
         self.curve
     }
 
+    /// The point, SEC1 uncompressed.
+    pub(crate) const fn point(&self) -> &'a [u8] {
+        self.point
+    }
+
+    /// Whether the point is a point of the curve other than the identity,
+    /// as [`EcPublicKey::verify`] needs it: decoded by the backend.
+    pub(crate) fn on_curve(&self) -> bool {
+        match self.curve {
+            Curve::P256 => p256::ecdsa::VerifyingKey::from_sec1_bytes(self.point).is_ok(),
+            Curve::P384 => p384::ecdsa::VerifyingKey::from_sec1_bytes(self.point).is_ok(),
+        }
+    }
+
     /// Verifies the DER `signature` over the message `digest`.
     pub(crate) fn verify(&self, digest: &[u8], signature: &[u8]) -> Result<(), TsaError> {
         let mut fixed = [0u8; MAX_SIGNATURE];

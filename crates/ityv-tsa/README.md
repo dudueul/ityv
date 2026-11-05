@@ -32,7 +32,7 @@ genesis의 기관 항목 ──▶ PinnedTsa::from_bytes(pin) ─┐
                                   certificate_source()
 ```
 
-`PinnedTsa::signer_key()`는 핀의 인증서 사본을 `verify_token`이 서명자 인증서를 읽듯 읽고, 핀이 허용한 서명 알고리즘 가운데 그 키가 만들고 그 다이제스트도 허용된 것이 있을 때만 그 `SubjectPublicKeyInfo`(DER)를 돌려준다. 사본이 없으면 `CertificateNotPinned`, 사본이 서명자 인증서로 받아들여지지 않으면 그 오류, 맞는 알고리즘이 없으면 `SignatureNotAllowed`다. 연결 단계가 genesis에서 어떤 토큰도 검증될 수 없는 핀과, 한 키를 두 인증서로 핀한 기관을 거부하는 데 쓴다(ADR-0039 2항).
+`PinnedTsa::signer_key()`는 핀의 인증서 사본을 `verify_token`이 서명자 인증서를 읽듯 읽고, EC 점이 곡선 위에 있고, 핀이 허용한 서명 알고리즘 가운데 그 키가 만들고 그 다이제스트도 허용된 것이 있을 때만 서명자(`SignerKey`: 서명 키(RSA 모듈러스나 EC 점), 인증서의 `notBefore`·`notAfter`)를 돌려준다. 사본이 없으면 `CertificateNotPinned`, 사본이 서명자 인증서로 받아들여지지 않으면 그 오류, 곡선 밖의 점이면 `InvalidEcPoint`, 맞는 알고리즘이 없으면 `SignatureNotAllowed`다. 연결 단계가 genesis에서 어떤 토큰도 검증될 수 없는 핀과, 한 키를 두 인증서로 핀한 기관을 거부하는 데 쓴다(ADR-0039 2항).
 
 핀의 바이트 형식(`src/pin.rs`): 형식 버전 1, 서명 인증서 DER의 SHA-256(32), 다이제스트 마스크, 서명 알고리즘 마스크, 플래그(ESS v1 허용), 정책 목록(DER OID 1–8개, 오름차순, `u16` 길이 접두), 인증서(선택, `u16` 길이 접두). 모르는 비트, 정렬되지 않거나 겹친 정책, 길이가 맞지 않는 핀은 거부하므로 핀마다 인코딩이 하나다. `PinnedTsa::new`와 `encode`가 같은 형식을 만든다.
 

@@ -266,6 +266,11 @@ fn ca_config(name: &str) -> String {
 /// A self-signed certificate (DER) over the key `k.pem` in `dir`, under
 /// the common name `name` and serial `serial`.
 fn self_signed(dir: &Path, name: &str, serial: usize) -> (Vec<u8>, String) {
+    self_signed_until(dir, name, serial, "20361231000000Z")
+}
+
+/// As [`self_signed`], valid until `end` (`YYYYMMDDhhmmssZ`).
+fn self_signed_until(dir: &Path, name: &str, serial: usize, end: &str) -> (Vec<u8>, String) {
     std::fs::write(dir.join("ca.cnf"), ca_config(name)).unwrap();
     std::fs::write(dir.join("index.txt"), "").unwrap();
     std::fs::write(dir.join("serial"), std::format!("{serial:02X}\n")).unwrap();
@@ -291,7 +296,7 @@ fn self_signed(dir: &Path, name: &str, serial: usize) -> (Vec<u8>, String) {
             "-startdate",
             "20240101000000Z",
             "-enddate",
-            "20361231000000Z",
+            end,
             "-notext",
             "-out",
             "c.pem",
@@ -308,10 +313,17 @@ fn self_signed(dir: &Path, name: &str, serial: usize) -> (Vec<u8>, String) {
 /// serial): its pin bytes, as [`Signer::pin`] but for that certificate.
 /// One key under two certificates is one signer (ADR-0039 2).
 pub fn recertified(index: usize) -> &'static [u8] {
+    recertified_until(index, "20361231000000Z")
+}
+
+/// As [`recertified`], the certificate valid until `end`
+/// (`YYYYMMDDhhmmssZ`): the pin of signer `index`'s key under a
+/// certificate that may end before the election.
+pub fn recertified_until(index: usize, end: &str) -> &'static [u8] {
     let signer = signer(index);
     in_scratch(|dir| {
         std::fs::write(dir.join("k.pem"), &signer.key_pem).unwrap();
-        let (cert, _) = self_signed(dir, "recertified", 0x40 + index);
+        let (cert, _) = self_signed_until(dir, "recertified", 0x40 + index, end);
         pin_of(leak_slice(cert), DIGESTS, SIGNATURES)
     })
 }

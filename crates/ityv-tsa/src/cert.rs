@@ -30,7 +30,24 @@ pub(crate) enum PublicKey<'a> {
     Ec(EcPublicKey<'a>),
 }
 
-impl PublicKey<'_> {
+impl<'a> PublicKey<'a> {
+    /// The key as one signer holds it: the RSA modulus or the EC point.
+    pub(crate) const fn identity(&self) -> &'a [u8] {
+        match self {
+            Self::Rsa(key) => key.modulus(),
+            Self::Ec(key) => key.point(),
+        }
+    }
+
+    /// Whether the key can verify at all: an EC point is on its curve
+    /// (an RSA key's form was checked when it was read).
+    pub(crate) fn usable(&self) -> bool {
+        match self {
+            Self::Rsa(_) => true,
+            Self::Ec(key) => key.on_curve(),
+        }
+    }
+
     /// Whether this key makes signatures of `algorithm`: an RSA key the
     /// three RSA algorithms, a P-256 key ECDSA P-256/SHA-256, a P-384 key
     /// the two P-384 ones (the pairs `verify_token` accepts).
@@ -75,8 +92,6 @@ pub(crate) struct Certificate<'a> {
     pub(crate) not_before: GenTime,
     pub(crate) not_after: GenTime,
     pub(crate) key: PublicKey<'a>,
-    /// The `SubjectPublicKeyInfo`, whole encoding.
-    pub(crate) key_info: &'a [u8],
     /// The subject key identifier extension's key identifier, if present.
     pub(crate) subject_key_id: Option<&'a [u8]>,
 }
@@ -136,7 +151,7 @@ pub(crate) fn parse(raw: &[u8]) -> Result<Certificate<'_>, TsaError> {
     let not_after = read_time(&mut validity)?;
     validity.finish()?;
     let subject = tbs.checked(SEQUENCE)?;
-    let (key, key_info) = read_public_key(&mut tbs)?;
+    let key = read_public_key(&mut tbs)?;
     if tbs.is_empty() {
         return Err(TsaError::MissingTimestampingEku);
     }
@@ -152,7 +167,6 @@ pub(crate) fn parse(raw: &[u8]) -> Result<Certificate<'_>, TsaError> {
         not_before,
         not_after,
         key,
-        key_info,
         subject_key_id,
     })
 }
@@ -170,10 +184,9 @@ fn read_time(validity: &mut Reader<'_>) -> Result<GenTime, DerError> {
 
 /// `SubjectPublicKeyInfo`: RSA (`rsaEncryption` with `NULL` parameters,
 /// RFC 3279 §2.3.1) or EC (`id-ecPublicKey` with a named curve, RFC 5480
-/// §2.1.1). The key and the whole encoding.
-fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<(PublicKey<'a>, &'a [u8]), TsaError> {
-    let whole = tbs.read(SEQUENCE)?;
-    let mut info = tbs.enter(&whole)?;
+/// §2.1.1).
+fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<PublicKey<'a>, TsaError> {
+    let mut info = tbs.sequence()?;
     let mut algorithm = info.sequence()?;
     let id = algorithm.oid()?;
     let parameters = if algorithm.is_empty() {
@@ -190,10 +203,7 @@ fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<(PublicKey<'a>, &'a [u8])
             let modulus = rsa.unsigned()?;
             let exponent = rsa.unsigned()?;
             rsa.finish()?;
-            Ok((
-                PublicKey::Rsa(RsaPublicKey::new(modulus, exponent)?),
-                whole.raw,
-            ))
+            Ok(PublicKey::Rsa(RsaPublicKey::new(modulus, exponent)?))
         }
         (oid::EC_PUBLIC_KEY, Some(parameters)) if parameters.tag == OID => {
             let curve = match parameters.value {
@@ -201,7 +211,7 @@ fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<(PublicKey<'a>, &'a [u8])
                 oid::P384 => Curve::P384,
                 _ => return Err(TsaError::UnsupportedPublicKey),
             };
-            Ok((PublicKey::Ec(EcPublicKey::new(curve, key)?), whole.raw))
+            Ok(PublicKey::Ec(EcPublicKey::new(curve, key)?))
         }
         _ => Err(TsaError::UnsupportedPublicKey),
     }
@@ -522,10 +532,7 @@ mod tests {
         let mut reader = Reader::new(spki);
         let key = read_public_key(&mut reader);
         assert!(key.is_err() || reader.is_empty());
-        if let Ok((_, whole)) = key {
-            assert_eq!(whole, spki);
-        }
-        key.map(|(key, _)| key)
+        key
     }
 
     #[test]

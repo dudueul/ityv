@@ -1143,6 +1143,46 @@ fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
         )),
         Err(at(set, 2, Rule::TimestampPin))
     );
+    // A pin whose EC point is off its curve (the second review's proof of
+    // concept): `ityv-tsa` read it, and no token could verify under it.
+    let mut p256 = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../ityv-tsa/tests/vectors/p256.crt"),
+    )
+    .unwrap();
+    let point = p256
+        .windows(4)
+        .position(|w| w == [0x03, 0x42, 0x00, 0x04])
+        .unwrap();
+    let ecdsa = SignatureAlgorithm::EcdsaP256Sha256.bit();
+    let good_p256: &'static [u8] = common::leak_slice(p256.clone());
+    assert_eq!(
+        with_pin(tsa::pin_of(good_p256, sha256 | sha512, ecdsa)),
+        Ok(())
+    );
+    p256[point + 4 + 63] ^= 0x01;
+    let off_curve: &'static [u8] = common::leak_slice(p256);
+    assert_eq!(
+        with_pin(tsa::pin_of(off_curve, sha256 | sha512, ecdsa)),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A certificate that ends before the election's epoch day (day 20 000,
+    // 2024-10-04) begins: refused; one that ends as it begins is taken
+    // (the genesis carries no end of the election to check more).
+    assert_eq!(
+        with_pin(tsa::recertified_until(
+            tsa::GOV_SAME_OPERATOR,
+            "20241003235959Z"
+        )),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    assert_eq!(
+        with_pin(tsa::recertified_until(
+            tsa::GOV_SAME_OPERATOR,
+            "20241004000000Z"
+        )),
+        Ok(())
+    );
     // A pin without its certificate: its key cannot be compared.
     let hash: [u8; 32] = tsa::signer(tsa::GOV_SAME_OPERATOR).pin[1..33]
         .try_into()

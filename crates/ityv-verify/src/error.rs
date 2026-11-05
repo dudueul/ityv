@@ -97,17 +97,20 @@ pub enum Rule {
     DeviceId,
     /// A timestamp authority's pin is not a valid `ityv-tsa` pin, does
     /// not allow SHA-512 (the digest every imprint uses, ADR-0034 §3), does
-    /// not carry its certificate, or allows no signature algorithm its
-    /// certificate's key makes over a digest it allows
-    /// (`PinnedTsa::signer_key`): no token of it could ever verify, or
-    /// its key could not be compared with the others' (ADR-0039 2).
+    /// not carry its certificate, has an EC point off its curve, allows no
+    /// signature algorithm its certificate's key makes over a digest it
+    /// allows (`PinnedTsa::signer_key`), or its certificate's validity ends
+    /// before the election's epoch day begins: no token of it could ever
+    /// verify for the election, or its key could not be compared with the
+    /// others' (ADR-0039 2).
     TimestampPin,
     /// Two pins of the timestamp authority set name one signing
     /// certificate: one authority would count as two.
     TimestampCertificate,
-    /// Two pins of the timestamp authority set carry one public key
-    /// (`SubjectPublicKeyInfo`) under two certificates: one signer would
-    /// count as two authorities (ADR-0039 2).
+    /// Two pins of the timestamp authority set carry one signing key
+    /// under two certificates (one RSA modulus, whatever the exponent, or
+    /// one EC point; `SignerKey::public_key`): one signer would count as
+    /// two authorities (ADR-0039 2).
     TimestampKey,
     /// Two timestamp authorities of one operator differ in kind: an
     /// operator is either the government or not (VC-114). Operators are

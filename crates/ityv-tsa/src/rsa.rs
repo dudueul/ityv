@@ -59,6 +59,12 @@ impl<'a> RsaPublicKey<'a> {
         Ok(Self { modulus, exponent })
     }
 
+    /// The modulus magnitude (no leading zero octet): what makes the key
+    /// one signer's, whatever its public exponent.
+    pub(crate) const fn modulus(&self) -> &'a [u8] {
+        self.modulus
+    }
+
     /// Verifies `signature` over `digest`, the `digest_algorithm` digest of the message.
     pub(crate) fn verify(
         &self,

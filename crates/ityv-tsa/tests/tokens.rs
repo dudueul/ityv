@@ -314,12 +314,42 @@ fn a_changed_tst_info_byte_breaks_the_message_digest() {
     }
 }
 
-/// The `SubjectPublicKeyInfo` of the certificate `cert` (a file under
-/// `tests/vectors`): the seventh element of its `TBSCertificate`.
-fn key_info(cert: &[u8]) -> std::vec::Vec<u8> {
+/// The signing key of the certificate `cert` as `SignerKey::public_key`
+/// gives it, read independently: in the seventh element of the
+/// `TBSCertificate` (the `SubjectPublicKeyInfo`), the `BIT STRING`'s
+/// octets after the unused-bits octet are the EC point; for RSA they are
+/// `RSAPublicKey`, whose first `INTEGER` without its leading zero is the
+/// modulus.
+fn signing_key(cert: &[u8]) -> std::vec::Vec<u8> {
     let certificate = common::elements(cert)[0].1;
     let tbs = common::elements(certificate)[0].1;
-    common::elements(tbs)[6].2.to_vec()
+    let spki = common::elements(tbs)[6].1;
+    let bits = common::elements(spki)[1].1;
+    let octets = &bits[1..];
+    if octets[0] == 0x04 {
+        return octets.to_vec();
+    }
+    let rsa = common::elements(octets)[0].1;
+    let modulus = common::elements(rsa)[0].1;
+    modulus.strip_prefix(&[0]).unwrap_or(modulus).to_vec()
+}
+
+/// `cert` (a vector file) with its key's octet at offset `at` within the
+/// key bytes (`signing_key`) changed by `change`, and a permissive pin of
+/// the result.
+fn with_key_octet(cert: &str, at: usize, change: impl Fn(u8) -> u8) -> Pin {
+    let original = vector(cert);
+    let key = signing_key(&original);
+    let start = original
+        .windows(key.len())
+        .position(|w| w == key.as_slice())
+        .unwrap();
+    let mut patched = original;
+    patched[start + at] = change(patched[start + at]);
+    let mut pin = permissive(cert);
+    pin.certificate_sha256 = sha256(&patched);
+    pin.certificate = Some(patched);
+    pin
 }
 
 #[test]
@@ -336,7 +366,7 @@ fn a_pin_names_its_signer_key_when_some_token_could_verify() {
         PinnedTsa::from_bytes(&bytes)
             .unwrap()
             .signer_key()
-            .map(<[u8]>::to_vec)
+            .map(|k| k.public_key().to_vec())
     };
     // Each key with each algorithm it makes, over an allowed digest.
     for (cert, algorithm) in [
@@ -347,7 +377,7 @@ fn a_pin_names_its_signer_key_when_some_token_could_verify() {
         ("p384.crt", S::EcdsaP384Sha384),
         ("p384.crt", S::EcdsaP384Sha512),
     ] {
-        let spki = key_info(&vector(cert));
+        let spki = signing_key(&vector(cert));
         assert_eq!(
             key(&pin_of(cert, &[algorithm.digest()], &[algorithm])),
             Ok(spki.clone()),
@@ -405,18 +435,86 @@ fn a_pin_names_its_signer_key_when_some_token_could_verify() {
         Err(TsaError::SignerIsCa)
     );
     // The key is the one tokens verify under: every valid token verifies
-    // under a pin whose key is its certificate's.
+    // under a pin whose key is its certificate's, with a genTime inside the
+    // certificate's validity the key gives.
     for expected in generated() {
         let pin = Pin::for_token(&expected, true);
         let bytes = pin.bytes();
         let pinned = PinnedTsa::from_bytes(&bytes).unwrap();
+        let signer = pinned.signer_key().unwrap();
         assert_eq!(
-            pinned.signer_key(),
-            Ok(key_info(pinned.certificate().unwrap()).as_slice()),
+            signer.public_key(),
+            signing_key(pinned.certificate().unwrap()).as_slice(),
             "{}",
             expected.token
         );
+        let token = vector(&expected.token);
+        let verified = pin.verify(&token, &imprint_of(expected.imprint)).unwrap();
+        assert!(
+            signer.not_before() <= verified.gen_time(),
+            "{}",
+            expected.token
+        );
+        assert!(
+            verified.gen_time() <= signer.not_after(),
+            "{}",
+            expected.token
+        );
+        assert!(signer.not_before() < signer.not_after());
     }
+}
+
+#[test]
+fn a_pin_with_an_off_curve_point_names_no_key() {
+    // The second review's proof of concept: a P-256 point whose Y was
+    // changed in its last bit is no point of the curve. The pin read, and
+    // `signer_key` gave a key under which no token can verify.
+    for cert in ["p256.crt", "p384.crt"] {
+        let len = signing_key(&vector(cert)).len();
+        let off = with_key_octet(cert, len - 1, |b| b ^ 0x01);
+        let bytes = off.bytes();
+        let pinned = PinnedTsa::from_bytes(&bytes).unwrap();
+        assert_eq!(pinned.signer_key(), Err(TsaError::InvalidEcPoint), "{cert}");
+        // The genuine certificate's point is on the curve.
+        let good = permissive(cert).bytes();
+        assert!(PinnedTsa::from_bytes(&good).unwrap().signer_key().is_ok());
+    }
+    let token = vector("p256-sha256.tst");
+    let off = with_key_octet("p256.crt", 64, |b| b ^ 0x01);
+    assert!(
+        off.verify(&token, &imprint_of(DigestAlgorithm::Sha512))
+            .is_err()
+    );
+}
+
+#[test]
+fn one_rsa_modulus_under_two_exponents_is_one_signer_key() {
+    // The second review's info item: the same modulus with another public
+    // exponent was another `SubjectPublicKeyInfo`, though whoever knows
+    // the factorisation signs under both. The key is the modulus.
+    let original = vector("rsa2048.crt");
+    let at = original
+        .windows(5)
+        .rposition(|w| w == [0x02, 0x03, 0x01, 0x00, 0x01])
+        .unwrap();
+    let mut patched = original.clone();
+    patched[at + 4] = 0x03; // e = 65539
+    let key_of = |cert: &[u8]| {
+        let mut pin = permissive("rsa2048.crt");
+        pin.certificate_sha256 = sha256(cert);
+        pin.certificate = Some(cert.to_vec());
+        let bytes = pin.bytes();
+        PinnedTsa::from_bytes(&bytes)
+            .unwrap()
+            .signer_key()
+            .map(|k| k.public_key().to_vec())
+    };
+    let a = key_of(&original).unwrap();
+    let b = key_of(&patched).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.len(), 256);
+    // Another modulus is another key.
+    assert_ne!(key_of(&vector("rsa3072.crt")[..]), Ok(a));
 }
 
 #[test]
