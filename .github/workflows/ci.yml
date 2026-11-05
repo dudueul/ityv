@@ -127,7 +127,11 @@ jobs:
     # in one shard, so they are split too. The audit stage (ADR-0036) added
     # about 180 mutants each to ityv-verify and ityv-encoding, whose slowest
     # shards had already reached four and three hours, so ityv-verify now has
-    # five shards and ityv-encoding three.
+    # five shards and ityv-encoding three. Timestamps and roll custody (ADR-0039,
+    # ADR-0040) pushed one ityv-verify shard past the six-hour limit: shards
+    # are now dealt round-robin, so slow mutants (the roll and tally tests)
+    # spread evenly instead of landing in one consecutive slice, and
+    # ityv-verify has eight shards of about three hours.
     strategy:
       fail-fast: false
       matrix:
@@ -144,11 +148,14 @@ jobs:
           - { crate: ityv-cunit, shard: 3/4 }
           - { crate: ityv-state, shard: 0/2 }
           - { crate: ityv-state, shard: 1/2 }
-          - { crate: ityv-verify, shard: 0/5 }
-          - { crate: ityv-verify, shard: 1/5 }
-          - { crate: ityv-verify, shard: 2/5 }
-          - { crate: ityv-verify, shard: 3/5 }
-          - { crate: ityv-verify, shard: 4/5 }
+          - { crate: ityv-verify, shard: 0/8 }
+          - { crate: ityv-verify, shard: 1/8 }
+          - { crate: ityv-verify, shard: 2/8 }
+          - { crate: ityv-verify, shard: 3/8 }
+          - { crate: ityv-verify, shard: 4/8 }
+          - { crate: ityv-verify, shard: 5/8 }
+          - { crate: ityv-verify, shard: 6/8 }
+          - { crate: ityv-verify, shard: 7/8 }
           - { crate: ityv-tsa, shard: 0/1 }
     steps:
       - uses: actions/checkout@v4.2.2
@@ -156,7 +163,7 @@ jobs:
         with:
           toolchain: 1.97.0
       - run: cargo install --locked cargo-mutants@27.1.0
-      - run: cargo mutants -p ${{ matrix.crate }} --shard ${{ matrix.shard }} --jobs 2 --timeout 300
+      - run: cargo mutants -p ${{ matrix.crate }} --shard ${{ matrix.shard }} --sharding round-robin --jobs 2 --timeout 300
 
   console:
     name: console (WASM verifier, scenario bundles, TypeScript)
