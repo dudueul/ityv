@@ -13,14 +13,15 @@ ityv는 손기표 종이 원본 위에 끝단 간 검증(E2E) 암호 계층을 �
 ## 읽는 순서
 
 1. `GLOSSARY.md` 용어. 모든 문서가 이 용어를 쓴다.
-2. `docs/adr/` 결정기록 34건(ADR-0000은 서식). 왜 이렇게 설계했는지.
+2. `docs/adr/` 결정기록 38건(ADR-0000은 서식). 왜 이렇게 설계했는지.
 3. `CONSTITUTION.md` 공학 규칙과 검증 사다리.
 4. `docs/spec/PROTOCOL.md` 프로토콜 명세. `docs/spec/ENCODING.md` 정규 인코딩. `docs/spec/FAILURE_CASES.md` 장애·공격 경우의 수.
 5. `docs/legal/LEGAL_ANNEX.md` 법령 개정 권고와 단계 활성화. `docs/governance/GOVERNANCE.md` 거버넌스.
 6. `docs/usecases/`, `docs/ballot/`, `docs/processing/` 사용례, 투표지 모양, 처리 흐름.
 7. `docs/assurance/` 위협·요구사항 수확, P0 게이트, 검증 사다리, 행동 명세.
-8. `crates/` 신뢰 기반 크레이트. 정규 인코딩 `ityv-encoding`, 암호 `ityv-crypto`, 공개원장 `ityv-ledger`, 커밋먼트 유닛 `ityv-cunit`, 상태 기계 `ityv-state`, 공개 검증기 `ityv-verify`. 크레이트마다 README가 무엇을 보장하고 무엇을 보장하지 않는지 적는다.
-9. `docs/ROADMAP.md` 다음 단계.
+8. `crates/` 신뢰 기반 크레이트. 정규 인코딩 `ityv-encoding`, 암호 `ityv-crypto`, 공개원장 `ityv-ledger`, 커밋먼트 유닛 `ityv-cunit`, 상태 기계 `ityv-state`, 공개 검증기 `ityv-verify`, 외부 시점확인 토큰 검증 `ityv-tsa`. 크레이트마다 README가 무엇을 보장하고 무엇을 보장하지 않는지 적는다.
+9. `apps/`, `tools/` 신뢰 기반 밖의 검증 콘솔(`apps/ityv-console`, `apps/ityv-wasm`)과 합성 선거 시뮬레이터(`tools/ityv-sim`).
+10. `docs/ROADMAP.md` 다음 단계.
 
 ## 빌드와 검사
 
@@ -32,6 +33,22 @@ cargo fmt --all -- --check
 ```
 
 Kani 하네스는 `cargo kani -p ityv-encoding`으로 실행한다(Kani 설치 필요). CI 구성은 `.github/workflows/ci.yml`을 본다.
+
+## 검증 콘솔 미리보기
+
+공개 검증 대시보드와 미래 현장 기기의 화면 시제품을 브라우저에서 본다(`apps/ityv-console`, ADR-0038). 판정은 브라우저 안에서 WASM으로 돌린 `ityv-verify`가 내고 서버에 묻지 않는다. 시나리오는 공개 시드로 만든 합성 선거(선거 ID가 `SIM-`으로 시작)이며, 이름은 지어낸 것이고 키는 공개 시드에서 만든 시험 키다. 콘솔은 신뢰 기반 밖의 코드다.
+
+준비물은 rustup(`rust-toolchain.toml`의 Rust 1.97.0을 스스로 설치한다)과 Bun 1.4.4다.
+
+```bash
+rustup target add wasm32-unknown-unknown
+```
+
+```bash
+cd apps/ityv-console && bun install --frozen-lockfile && bun run dev
+```
+
+http://127.0.0.1:3000/ 을 연다. 첫 실행은 WASM 검증기와 시뮬레이터를 빌드하고 시나리오 39개를 만드느라 몇 분 걸린다. 주소와 포트는 `HOST`, `PORT`로 바꾸고(기본 127.0.0.1:3000), `ITYV_SIM_SET=quick`이면 빠른 묶음 36개만 만든다. 화면 구성, 정적 빌드(`bun run build`), 검사 방법은 `apps/ityv-console/README.md`를 본다.
 
 ## 계보
 
