@@ -202,6 +202,34 @@ fn reseal(l: &mut Link, slot: u64, change: impl FnOnce(&mut Built)) {
     f.seal(key, link(key));
 }
 
+/// The day's links with the scanner's stream cut into data frames: slot
+/// `s` of each `(s, from)` carries the stream's bytes from `from` to the
+/// next cut (the last to the end); every other frame carries none and
+/// starts where the data before it end.
+fn cut_stream(cuts: &[(u64, usize)]) -> Vec<Link> {
+    let mut links = honest_links();
+    let l = &mut links[SCANNER];
+    let data = l.frames[0].data.clone();
+    let key = l.key;
+    let mut offset = 0usize;
+    for f in &mut l.frames {
+        if let Some(i) = cuts.iter().position(|(s, _)| *s == f.slot) {
+            let from = cuts[i].1;
+            let to = cuts.get(i + 1).map_or(data.len(), |c| c.1);
+            f.data = data[from..to].to_vec();
+            f.payload_len = (to - from) as u32;
+            f.stream_offset = from as u64;
+            offset = to;
+        } else {
+            f.data = Vec::new();
+            f.payload_len = 0;
+            f.stream_offset = offset as u64;
+        }
+        f.seal(key, link(key));
+    }
+    links
+}
+
 /// The device events of `filter` among the day's, in ledger order.
 fn device_events(filter: (bool, &'static [u8])) -> Vec<&'static [u8]> {
     day()
@@ -248,6 +276,9 @@ fn a_clean_uplink_is_complete_and_includes_every_device_event() {
     assert!(c.complete());
     assert_eq!(c.holds(), HoldSet::empty());
     assert!(c.incidents().is_empty());
+    // One entry per station of the genesis, the one the lookup finds.
+    assert_eq!(c.stations().len(), 1);
+    assert_eq!(c.stations()[0].station_id.as_bytes(), ST);
     let s = station(&r);
     assert_eq!(s.gateway_id.unwrap().as_bytes(), b"GW-ST-1");
     assert_eq!(s.sessions.len(), 11);
@@ -498,6 +529,41 @@ fn a_session_lists_only_its_stations_links_with_their_logs() {
     }
     let r = verify(events);
     assert_eq!(sessions_found(&r), [(11, SessionProblem::LogUnlisted)]);
+
+    // A link of the station that sent nothing in the session needs no log:
+    // its head and stream end stay where they were (the spare check-in
+    // unit, never used).
+    let spare = link(common::uplink::UNIT_FRAME_BASE + 1);
+    let add_spare = |p: &mut UplinkSessionParts<'static>| {
+        if p.session_index == 3 {
+            let mut entries: Vec<SessionLink> = p.links.iter().collect();
+            entries.push(SessionLink {
+                link_id_hash: spare,
+                frames: 0,
+                catchup_frames: 0,
+                missing_slots: 0,
+                stream_end: 0,
+                chain_head: ityv_crypto::uplink::chain_start(&spare),
+            });
+            entries.sort_by(|a, b| a.link_id_hash.as_bytes().cmp(b.link_id_hash.as_bytes()));
+            let bytes: Vec<u8> = entries
+                .iter()
+                .flat_map(|l| {
+                    let mut buf = std::vec![0u8; 156];
+                    ityv_encoding::Encode::encode(l, &mut ityv_encoding::Writer::new(&mut buf))
+                        .unwrap();
+                    buf
+                })
+                .collect();
+            p.links = SessionLinks::new(leak_slice(bytes)).unwrap();
+        }
+    };
+    let mut plan = Plan::new(ST, honest_links());
+    plan.tweak_body = Some(&add_spare);
+    let r = verify(plan.events());
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(station(&r).sessions[2].links, 3);
+    assert_eq!(r.connectivity().holds(), HoldSet::empty());
 }
 
 #[test]
@@ -664,6 +730,91 @@ fn slots_no_window_covers_are_an_undeclared_gap() {
     assert!(gaps.contains(&(10, Some(unit()))));
     assert_eq!(link_report(&r, scanner()).missing_slots, 6);
     assert_eq!(box_holds(&r), only(HoldReason::UplinkSessionRefused));
+
+    // The stream may skip across those slots: the data the scanner sent
+    // in slot 157 never reached a session, and slot 162 starts after it.
+    let o = &day().links[SCANNER].objects;
+    let mut plan = Plan::new(
+        ST,
+        cut_stream(&[(150, 0), (157, o[1].stream_offset as usize)]),
+    );
+    plan.windows.remove(1);
+    let r = verify(plan.events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert_eq!(station(&r).outside.len(), 4);
+    assert_eq!(
+        box_holds(&r),
+        only(HoldReason::UplinkSessionRefused).with(HoldReason::UplinkObjectOutside)
+    );
+}
+
+#[test]
+fn lost_frames_cut_the_received_stream() {
+    let o = &day().links[SCANNER].objects;
+    let lose = |l: usize, f: &Built| {
+        if l == SCANNER && f.slot == 151 {
+            None
+        } else {
+            window(f.slot)
+        }
+    };
+    let declare = |i: u32, e: &mut SessionLink| {
+        if i == 1 && e.link_id_hash == scanner() {
+            e.missing_slots = 1;
+        }
+    };
+    // Slot 151's frame, lost, held the end of the batch attestation and
+    // the start of the first record: neither lies in the received stream,
+    // though the bytes on both sides of the loss arrived.
+    let cut = 1000usize;
+    assert!((cut as u64) < o[1].stream_offset);
+    let mut plan = Plan::new(
+        ST,
+        cut_stream(&[
+            (150, 0),
+            (151, cut),
+            (152, o[1].stream_offset as usize + 10),
+        ]),
+    );
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    let r = verify(plan.events());
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    // In ledger order: the record, then the batch attestation.
+    let outside: Vec<Hash512> = station(&r).outside.iter().map(|e| e.hash).collect();
+    assert_eq!(outside, [o[1].object_hash, o[0].object_hash]);
+    assert_eq!(link_report(&r, scanner()).included, 3);
+    assert_eq!(box_holds(&r), only(HoldReason::UplinkObjectOutside));
+
+    // The loss takes the stream's tail: the record received before it but
+    // listed by no object is not an object, though frames after the loss
+    // carry nothing and start at the stream's end.
+    let unlist = |k: usize, l: usize, mut objects: Vec<StreamObject>| {
+        if k == 0 && l == SCANNER {
+            objects.retain(|x| x.object_hash != o[2].object_hash);
+        }
+        objects
+    };
+    let mut plan = Plan::new(
+        ST,
+        cut_stream(&[(150, 0), (151, o[2].stream_offset as usize + 10)]),
+    );
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    plan.objects_in = Some(&unlist);
+    let r = verify(plan.events());
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(found(&r, scanner()), [LinkProblem::NotObject]);
+    assert_eq!(station(&r).outside.len(), 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -900,6 +1051,72 @@ fn a_frame_proves_its_fill_zero_and_its_public_chunks() {
     assert_eq!(box_holds(&r), only(HoldReason::UplinkFrameInvalid));
 }
 
+/// The number of 4 KiB chunks `[start, end)` touches.
+fn chunks_of(start: u64, end: u64) -> u64 {
+    (end - 1) / 4096 - start / 4096 + 1
+}
+
+#[test]
+fn a_chunk_is_checked_only_against_objects_that_tile_it() {
+    let o = &day().links[SCANNER].objects;
+    let all = stream_len(&day().links[SCANNER]).div_ceil(4096);
+
+    // The closing tick listed under another schema the scanner may send:
+    // the ledger's event of that hash is not that object, so the chunks
+    // that hold it are not checked, and the tick is not on the link.
+    let tick = o[4];
+    let relabel = |k: usize, l: usize, mut objects: Vec<StreamObject>| {
+        if k == 0 && l == SCANNER {
+            objects.last_mut().unwrap().schema = ityv_encoding::SCHEMA_CHALLENGE_OPENING;
+        }
+        objects
+    };
+    let mut plan = Plan::new(ST, honest_links());
+    plan.objects_in = Some(&relabel);
+    let r = verify(plan.events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    let b = link_report(&r, scanner());
+    let held = chunks_of(tick.stream_offset, tick.stream_offset + u64::from(tick.len));
+    assert_eq!((b.checked_chunks, b.opaque_chunks), (all - held, held));
+    assert_eq!(station(&r).outside.len(), 1);
+    assert_eq!(station(&r).outside[0].hash, tick.object_hash);
+
+    // The first session lists only the batch attestation; the second lists
+    // a record again inside the attestation's end (a log's own objects
+    // never overlap), then the rest. The attestation ends inside chunk 3,
+    // which the objects then do not tile: it is not checked.
+    let x_end = o[0].stream_offset + u64::from(o[0].len);
+    assert_eq!(x_end / 4096, 3);
+    assert!(x_end - 3 * 4096 > u64::from(o[1].len));
+    let inner = StreamObject {
+        stream_offset: x_end - u64::from(o[1].len),
+        ..o[1]
+    };
+    let rest: Vec<StreamObject> = o[1..].to_vec();
+    let nest = move |k: usize, l: usize, objects: Vec<StreamObject>| match (k, l) {
+        (0, SCANNER) => std::vec![objects[0]],
+        (1, SCANNER) => core::iter::once(inner)
+            .chain(rest.iter().copied())
+            .collect(),
+        _ => objects,
+    };
+    let mut plan = Plan::new(ST, honest_links());
+    plan.objects_in = Some(&nest);
+    let r = verify(plan.events());
+    // The record listed inside the attestation overlaps it and repeats in
+    // its run.
+    assert_eq!(
+        found(&r, scanner()),
+        [LinkProblem::Overlap, LinkProblem::Batch]
+    );
+    let b = link_report(&r, scanner());
+    assert_eq!((b.checked_chunks, b.opaque_chunks), (all - 1, 1));
+}
+
 // ---------------------------------------------------------------------------
 // Objects (VC-079).
 
@@ -935,6 +1152,22 @@ fn a_device_sends_only_the_kinds_it_may() {
     assert_eq!(found(&r, scanner()), [LinkProblem::Kind]);
     // It is on U-1A's link too: included there.
     assert!(station(&r).outside.is_empty());
+
+    // A manifest whose check-in unit link carries nothing: the unit's tick
+    // and participation set are kinds it may send but not on that link.
+    let mut entries = common::uplink::standard_entries();
+    for e in &mut entries {
+        if e.device_class == DeviceClass::CheckinUnit && e.frames_per_slot > 0 {
+            e.carries = 0;
+        }
+    }
+    let r = verify_book(
+        book_in(manifest_world(common::uplink::manifest(&entries))),
+        Plan::new(ST, honest_links()).events(),
+    );
+    assert!(r.connectivity().manifest_findings().is_empty());
+    assert_eq!(found(&r, unit()), [LinkProblem::Kind, LinkProblem::Kind]);
+    assert!(found(&r, scanner()).is_empty());
 }
 
 #[test]
@@ -1043,6 +1276,72 @@ fn records_travel_in_closed_batches_and_packages_after_their_records() {
     assert!(problems.contains(&LinkProblem::Package), "{problems:?}");
     // It is sealed: its chunk is opaque.
     assert!(link_report(&r, scanner()).opaque_chunks > 0);
+
+    // Each record's own share package right after it: sealed, not on the
+    // ledger, but named by the ledger's record before it. The same with the
+    // last two packages swapped: each follows a record that names the
+    // other, and no record before it names it.
+    let packages: Vec<&'static [u8]> = o[1..4]
+        .iter()
+        .map(|bytes| {
+            let record = ityv_encoding::decode_object::<ityv_encoding::CastRecord<'_>>(
+                ityv_encoding::SCHEMA_CAST_RECORD,
+                ityv_encoding::SCHEMA_VERSION_1,
+                bytes,
+            )
+            .unwrap();
+            let counter = record
+                .body()
+                .module_counters()
+                .iter()
+                .next()
+                .unwrap()
+                .counter;
+            let package = share_package(B1.id, counter);
+            assert_eq!(
+                ityv_crypto::object_hash(package),
+                *record.body().share_package_hash()
+            );
+            package
+        })
+        .collect();
+    let stream = [
+        o[0],
+        o[1],
+        packages[0],
+        o[2],
+        packages[1],
+        o[3],
+        packages[2],
+        o[4],
+    ];
+    let r = verify(Plan::new(ST, with_stream(SCANNER, &stream)).events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert!(station(&r).outside.is_empty());
+    let swapped = [
+        o[0],
+        o[1],
+        packages[0],
+        o[2],
+        packages[2],
+        o[3],
+        packages[1],
+        o[4],
+    ];
+    let r = verify(Plan::new(ST, with_stream(SCANNER, &swapped)).events());
+    assert_eq!(
+        found(&r, scanner()),
+        [
+            LinkProblem::Package,
+            LinkProblem::NotOnLedger,
+            LinkProblem::Package,
+            LinkProblem::NotOnLedger
+        ]
+    );
 }
 
 #[test]
@@ -1207,6 +1506,28 @@ fn an_incident_needs_registered_people_and_a_box_of_its_station() {
         Some(IncidentProblem::Subject)
     );
     assert_eq!(box_holds(&r), only(HoldReason::ConnectivityIncidentRefused));
+}
+
+#[test]
+fn an_incident_signer_may_sign_under_a_key_of_an_earlier_state() {
+    // The amendment gives obs-a a new key; obs-a signs an incident after it
+    // under the key of the genesis, which registered obs-a too.
+    let (w, amendment) = amended_world();
+    let mut book = Book::new(w);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, amendment);
+    book.w(witnessed(
+        incident_body(Some(ST), Some(B1.id), false),
+        &PEOPLE,
+    ));
+    let r = verify_book(book, Vec::new());
+    let i = &r.connectivity().incidents()[0];
+    assert_eq!(i.refused, None);
+    assert_eq!(i.boxes, [BoxId::new(B1.id).unwrap()]);
+    assert!(
+        !r.connectivity()
+            .ledger_holds()
+            .contains(HoldReason::ConnectivityIncidentRefused)
+    );
 }
 
 #[test]
@@ -1389,6 +1710,7 @@ fn a_capture_shows_frames_hidden_injected_or_changed() {
         capture_problems(&c),
         [(Some((152, 0)), CaptureProblem::Hidden)]
     );
+    assert!(!c.agrees());
     assert_eq!(c.matched, 2);
 
     // A published frame the capture lacks between frames it has.
@@ -1547,8 +1869,23 @@ fn carrier_records_must_match_the_sessions() {
         bytes: 0,
     });
     assert_eq!(
-        carrier(&r, w, ST, CarrierLine::Gateway, moved),
+        carrier(&r, w, ST, CarrierLine::Gateway, moved.clone()),
         [CarrierProblem::Unexplained]
+    );
+    // The finding names the interval with traffic, not the quiet one.
+    let logs = [CarrierLog {
+        station_id: ST,
+        line: CarrierLine::Gateway,
+        intervals: leak_slice(moved),
+    }];
+    let found = compare_carrier(w.genesis, r.index(), r.connectivity(), &logs);
+    assert_eq!(
+        found.iter().map(|f| f.interval).collect::<Vec<_>>(),
+        [Some(CarrierInterval {
+            from_slot: 300,
+            to_slot: 305,
+            bytes: 10,
+        })]
     );
 
     // A station the genesis does not have; a roll line at an election-day
@@ -1591,6 +1928,30 @@ fn early_world() -> &'static World {
         d.appointments = d.referenced_appointments();
         leak(build(&d, &TALLY_SCOPES))
     })
+}
+
+/// The one-box election with another connectivity manifest.
+fn manifest_world(manifest: &'static [u8]) -> &'static World {
+    let mut d = draft();
+    d.boxes.retain(|b| b.box_id.as_bytes() == B1.id);
+    d.stations.truncate(1);
+    d.policies.truncate(1);
+    d.units.truncate(1);
+    d.modules.retain(|m| {
+        ELECTION_MODULES
+            .iter()
+            .any(|e| e.0 == m.module_id.as_bytes())
+    });
+    for entry in &mut d.modules {
+        let m = ELECTION_MODULES
+            .iter()
+            .find(|e| e.0 == entry.module_id.as_bytes())
+            .unwrap();
+        entry.provisioned_hash = ityv_crypto::object_hash(provisioning(*m));
+    }
+    d.appointments = d.referenced_appointments();
+    d.manifest = manifest;
+    leak(build(&d, &TALLY_SCOPES))
 }
 
 #[test]

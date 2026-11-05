@@ -336,7 +336,11 @@ pub fn compare_capture(
                 continue;
             };
             let mut at = *offset;
-            while at < end {
+            // Each step passes the end of the object that holds `at`, which
+            // no later step can find again: at most one step per object,
+            // and the walk ends whatever the published objects are.
+            let mut steps = 0..=objects.len();
+            while at < end && steps.next().is_some() {
                 let next = objects
                     .iter()
                     .find(|(_, _, o, l)| *o <= at && at < o.saturating_add(u64::from(*l)));
@@ -363,7 +367,11 @@ fn assemble(pieces: &[(u64, &[u8])], offset: u64, len: u64) -> Option<Vec<u8>> {
     let end = offset.checked_add(len)?;
     let mut out = Vec::new();
     let mut at = offset;
-    while at < end {
+    // Each step takes the piece that holds `at` and moves past its end, so
+    // no piece is taken twice: at most one step per piece, and the one that
+    // finds none.
+    let mut steps = 0..=pieces.len();
+    while at < end && steps.next().is_some() {
         let (start, data) = pieces.iter().find(|(start, data)| {
             *start <= at
                 && u64::try_from(data.len())

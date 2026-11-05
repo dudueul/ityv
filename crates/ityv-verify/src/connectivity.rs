@@ -61,7 +61,8 @@
 //!    only in runs right after a batch attestation, in strictly ascending
 //!    record hash; a share package only right after the record that names
 //!    it; and, once the gateway sent its final session, every fully
-//!    received object a frame of the ledger names. A break is listed and
+//!    received object a frame of the ledger names (a sealed share package
+//!    through the ledger's record right before it). A break is listed and
 //!    holds like a frame (`UplinkObjectInvalid`).
 //! 5. **Inclusion (VC-080).** Once a station's gateway sent its final
 //!    session, every accepted cast record, batch attestation, challenge
@@ -96,6 +97,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
 use ityv_crypto::uplink::{chain_next, chain_start, chunk_leaf, link_id, payload_root};
 use ityv_crypto::{
@@ -303,7 +305,8 @@ pub enum LinkProblem {
     /// A share package not right after the record that names it.
     Package,
     /// A fully received object no ledger frame names, once the gateway
-    /// closed.
+    /// closed (a share package: no record on the ledger right before it
+    /// names it).
     NotOnLedger,
 }
 
@@ -565,6 +568,12 @@ fn manifest_findings<'a>(manifest: &ConnectivityManifest<'a>) -> Vec<ManifestFin
     out
 }
 
+/// What a commitment unit's frame link may carry: public objects and
+/// sealed share packages (ADR-0041 decision 7). A named constant, not an
+/// expression in the match: the two bits are disjoint, so `|`, `^` and `+`
+/// would give the same set.
+const SCANNER_CARRIES: u32 = CARRY_PUBLIC | CARRY_SEALED;
+
 /// The rules one entry breaks.
 fn entry_problems(e: &ManifestEntry<'_>) -> Vec<ManifestProblem> {
     let mut out = Vec::new();
@@ -611,7 +620,7 @@ fn entry_problems(e: &ManifestEntry<'_>) -> Vec<ManifestProblem> {
     }
     if e.sends_frames() {
         let allowed = match class {
-            DeviceClass::CommitmentUnit => CARRY_PUBLIC | CARRY_SEALED,
+            DeviceClass::CommitmentUnit => SCANNER_CARRIES,
             DeviceClass::CheckinUnit => CARRY_PUBLIC,
             DeviceClass::InterpretationUnit
             | DeviceClass::ChamberModule
@@ -1295,9 +1304,7 @@ fn judge_frames(
     let mut gap = 0u64;
     if let (Some(a), Some(b)) = (first, last) {
         for (start, end) in windows {
-            let (lo, hi) = (a.max(*start), b.min(*end));
-            let mut s = lo;
-            while s <= hi {
+            for s in a.max(*start)..=b.min(*end) {
                 // A slot is whole when it holds every number of its shape;
                 // a number beyond the shape is an `Index` finding, not a
                 // gap.
@@ -1308,10 +1315,6 @@ fn judge_frames(
                 if !full {
                     short.insert(s);
                 }
-                let Some(next) = s.checked_add(1) else {
-                    break;
-                };
-                s = next;
             }
         }
         gap = uncovered(windows, a, b);
@@ -1320,19 +1323,21 @@ fn judge_frames(
         .unwrap_or(u64::MAX)
         .saturating_add(gap);
     // Stream offsets: from 0, each frame where the previous ended, or later
-    // across a short slot.
+    // across a slot that fell short or that no window covers.
     let mut expected: Option<(u64, u64)> = None;
     for f in &work.frames {
         let e = &f.entry;
         let ok = match expected {
             None => e.stream_offset == 0,
-            Some((end, slot)) => {
-                e.stream_offset == end
-                    || (e.stream_offset > end
-                        && slot <= e.slot
+            Some((end, slot)) => match e.stream_offset.cmp(&end) {
+                Ordering::Equal => true,
+                Ordering::Greater => {
+                    slot <= e.slot
                         && (short.range(slot..=e.slot).next().is_some()
-                            || uncovered(windows, slot, e.slot) > 0))
-            }
+                            || uncovered(windows, slot, e.slot) > 0)
+                }
+                Ordering::Less => false,
+            },
         };
         if !ok {
             report.findings.push(finding(f, LinkProblem::Offset));
@@ -1404,6 +1409,12 @@ fn judge_objects(
         }
         // Batches and packages.
         let schema = o.schema;
+        // A share package the record right before it names: sealed, so not
+        // on the ledger itself, but named by the record that is.
+        let named = schema == SCHEMA_SHARE_PACKAGE
+            && previous.is_some_and(|(s, package)| {
+                s == SCHEMA_CAST_RECORD && package == Some(o.object_hash)
+            });
         if schema == SCHEMA_BATCH_ATTEST {
             group = true;
             last_record = None;
@@ -1433,10 +1444,12 @@ fn judge_objects(
             None
         };
         previous = Some((schema, package));
-        // On the ledger, once the gateway closed.
+        // On the ledger, once the gateway closed (a share package through
+        // the record that names it).
         if ctx.closed
             && covered(&received, o.stream_offset, end)
             && !ctx.on_ledger.contains(&o.object_hash.0)
+            && !named
         {
             report.findings.push(finding(l, LinkProblem::NotOnLedger));
         }

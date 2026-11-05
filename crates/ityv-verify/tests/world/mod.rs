@@ -357,6 +357,16 @@ pub(crate) struct Cast {
     pub(crate) chunks: u8,
 }
 
+/// The stand-in for the sealed share package of box `box_id`'s record
+/// `counter`: an object of the share package's schema the record names by
+/// hash (the tests never open it; the connectivity tests send it after its
+/// record).
+pub(crate) fn share_package(box_id: &[u8], counter: u64) -> &'static [u8] {
+    let mut body = box_id.to_vec();
+    body.extend_from_slice(&counter.to_be_bytes());
+    common::uplink::fake_object(ityv_encoding::SCHEMA_SHARE_PACKAGE, &body)
+}
+
 /// The module record message `body_hash ‖ module_id ‖ counter`.
 pub(crate) fn module_message(body_hash: &Hash512, module: &'static [u8], counter: u64) -> Vec<u8> {
     let mut buf = [0u8; 140];
@@ -456,7 +466,7 @@ pub(crate) fn cast_styled(
         commitments: Commitments::new(&points).unwrap(),
         proof: leak_slice(buf),
         module_counters: ModuleCounters::new(&counters).unwrap(),
-        share_package_hash: Hash512([6; 64]),
+        share_package_hash: object_hash(share_package(bx.id, counter)),
         transport_flags: 0,
     })
     .unwrap();
