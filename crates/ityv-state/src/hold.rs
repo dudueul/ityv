@@ -336,11 +336,19 @@ pub enum HoldReason {
     /// not the unit's and one party module's per party (§6.2, ADR-0033
     /// decision 6, ADR-0040).
     ContestedCheckinInvalid = 76,
+    /// Contested check-ins supplied by a verifier with access repeat a
+    /// pseudonym under another envelope label, or an envelope label under
+    /// another pseudonym: one voter voted twice under protest, or one
+    /// envelope stands for two voters. Every envelope of the pseudonym (or
+    /// label) is excluded from the count and the fact is passed to the
+    /// investigators (§6.2, ADR-0033 decision 6, `LEGAL_ANNEX.md`
+    /// amendment 14, §44-5 ②).
+    ContestedRepeated = 77,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 78] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -418,6 +426,7 @@ impl HoldReason {
         Self::RollEventRefused,
         Self::RollCustodyMismatch,
         Self::ContestedCheckinInvalid,
+        Self::ContestedRepeated,
     ];
 
     /// The reason's code.

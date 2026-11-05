@@ -222,10 +222,10 @@ genesis는 선거 시작 후 변경되지 않는다. 장치 교체 등 불가피
 조회가 "이미 투표함"이라고 답했는데 선거권자가 부인하면 이의 투표를 허용한다.
 - 카운터·가명 유닛은 가명을 계산하되 `ParticipationSet`에 넣지 않고 restricted `ContestedCheckin`(가명, 봉투 라벨)으로 남긴다.
 - 투표지는 봉투에 넣어 별도 함에 넣는다(ADR-0010).
-- 선거 뒤 그 가명이 다른 어느 `ParticipationSet`에도 없을 때만, 집계 효과 1의 `LegalDecisionRef`로 봉투를 같은 선거구의 다른 봉투들과 섞어 연다. 있으면 제외하고 수사에 넘긴다.
+- 선거 뒤 그 가명이 다른 어느 `ParticipationSet`에도 없고 다른 어느 `ContestedCheckin`에도 없을 때만, 집계 효과 1의 `LegalDecisionRef`로 봉투를 같은 선거구의 다른 봉투들과 섞어 연다. 다른 `ParticipationSet`에 있으면 제외하고 수사에 넘긴다. 같은 가명의 이의 투표가 둘 이상이면(봉투가 둘 이상) 그 가명의 봉투는 모두 제외하고 수사에 넘긴다.
 - 투표소별 이의 투표 수를 공개한다(VC-112).
 
-`ContestedCheckin`(스키마 0x0056, restricted, `ENCODING.md` §8.81)은 선거, 투표소, 유닛, 가명, 봉투 라벨에 카운터·가명 유닛과 그 유닛의 정당 모듈 P1…Pn이 `ParticipationSet`처럼 서명한 기록이다(purpose `contested-checkin`, 순번·시각 없음). 공개 장부는 그 프레임(객체 해시)만 싣고, 공개 검증기는 그 수를 센다. 열람 권한이 있는 검증기는 본문을 받아 그 프레임의 genesis 상태의 투표소와, 그 프레임까지의 상태에서 그 투표소의 유닛(사용 중 또는 예비)과 모듈의 키로 확인하고, 가명을 받아들여진 `ParticipationSet`에서 찾는다. 있으면 그 투표소를 알리고(이중 투표 시도), 모든 투표소의 집합이 들어왔는데 없으면 없다고, 아직 들어오지 않은 집합이 있으면 미정이라고 알린다. 검증되지 않는 본문은 장부 전체를 `HOLD_REVIEW`(`ContestedCheckinInvalid`)로 둔다. 봉투를 여는 것은 `LegalDecisionRef`의 일이고 검증기는 판정만 보고한다(ADR-0040).
+`ContestedCheckin`(스키마 0x0056, restricted, `ENCODING.md` §8.81)은 선거, 투표소, 유닛, 가명, 봉투 라벨에 카운터·가명 유닛과 그 유닛의 정당 모듈 P1…Pn이 `ParticipationSet`처럼 서명한 기록이다(purpose `contested-checkin`, 순번·시각 없음). 공개 장부는 그 프레임(객체 해시)만 싣고, 공개 검증기는 그 수를 센다. 열람 권한이 있는 검증기는 본문을 받아 그 프레임의 genesis 상태의 투표소와, 그 프레임까지의 상태에서 그 투표소의 유닛(사용 중 또는 예비)과 모듈의 키로 확인하고, 가명을 받아들여진 `ParticipationSet`에서 찾는다. 있으면 그 투표소를 알리고(이중 투표 시도), 모든 투표소의 집합이 들어왔는데 없으면 없다고, 아직 들어오지 않은 집합이 있으면 미정이라고 알린다. 이의 투표는 객체가 아니라 메시지(가명, 봉투 라벨) 하나가 한 건이다: 하이브리드 서명은 매번 다르므로 같은 메시지를 다시 서명하면 다른 객체·다른 프레임이 되지만 한 건으로 세고(사본), 투표소별 수(VC-112)도 메시지로 센다. 한 가명이 봉투 라벨이 다른 메시지 둘 이상에 있으면(한 선거권자의 이의 투표가 둘) 그 메시지는 모두 제외하고, 한 봉투 라벨이 가명이 다른 메시지 둘 이상에 있으면(한 봉투가 두 선거권자의 것) 그 메시지도 모두 제외하며, 어느 쪽이든 장부 전체가 `HOLD_REVIEW`(`ContestedRepeated`)다. 검증되지 않는 본문은 장부 전체를 `HOLD_REVIEW`(`ContestedCheckinInvalid`)로 둔다. 봉투를 여는 것은 `LegalDecisionRef`의 일이고 검증기는 판정만 보고한다(ADR-0040).
 
 ### 6.3 확인 카운터 이벤트
 `CheckinCounter`(스키마 0x0009): `election_id`, `station_id`, `seq`(투표소별 1부터), `pseudonym: Hash512`, `time_bucket`, `ballot_style_id`, 카운터·가명 유닛 서명, 정당 모듈 P1…Pn 각각의 서명(`(station_id, seq)`에 대한 서명). 50건마다 또는 2시간마다(먼저 오는 쪽), 그리고 마감 시 `ObserverCountAttest` 이벤트(본문 `ObserverCountAttestBody` 0x003F: 투표소, 유닛, 누적 수 = 마지막 순번, 정기·마감 구분, 시간 구간, `ENCODING.md` §8.57): 서로 다른 조직의 참관인 서명 2개 이상, 참관인 말고는 서명하지 않는다(VC-016). 마감 대조(§6.5, §7.10 8항)는 마감 구분의 누적 수를 쓴다(VC-106).

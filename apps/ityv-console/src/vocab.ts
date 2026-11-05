@@ -228,6 +228,7 @@ export const HOLDS: Record<number, { name: string; ko: string }> = {
   74: { name: "RollEventRefused", ko: "선거인명부 사건을 받을 수 없다: 출처 추출(그 출처 기관, 동결 뒤), 동결(병합한 추출과 다른 출처 root, 빠진 투표구), 보관 영수증(보관 기관이 아님, 앞 프레임의 상태가 아님, 두 번째), 변경(출처 서명, 사슬)." },
   75: { name: "RollCustodyMismatch", ko: "보관 기관이 다시 계산해 서명한 값(항목 root와 수, 인원수 표, 출처 root, 명부 가명 root)이 명부 상태와 다르다. 그 영수증은 정족수에 세지 않고, 분쟁에서 보관 사본을 대조한다." },
   76: { name: "ContestedCheckinInvalid", ko: "열람 권한이 있는 검증기에 넘긴 이의 투표 기록이 장부의 프레임과 맞지 않거나 서명이 검증되지 않거나, 그 가명이 받아들인 참여 집합에 없다." },
+  77: { name: "ContestedRepeated", ko: "열람 권한이 있는 검증기에 넘긴 이의 투표 기록에서 한 가명이 봉투 라벨이 다른 기록 둘 이상에 있거나(한 선거권자가 이의 투표를 거듭함), 한 봉투 라벨이 가명이 다른 기록 둘 이상에 있다(한 봉투가 두 선거권자의 것). 그 봉투는 모두 개표에서 빠지고 수사기관에 통보한다." },
 };
 
 /** Korean name of the alarm kinds. */

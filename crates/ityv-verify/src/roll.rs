@@ -54,8 +54,16 @@
 //! participation sets: found means a second attempt, excluded and passed
 //! to investigators; absent, once every station's set is in, means the
 //! "already voted" mark was false and the envelope may be counted by a
-//! legal decision (ADR-0033 decision 6). The stage reports the finding;
-//! the counting is the law's.
+//! legal decision (ADR-0033 decision 6). Check-ins are one per message, the
+//! pair (pseudonym, envelope label), not per object: hybrid signatures are
+//! hedged, so the same message signed again is another object and another
+//! frame, and it counts once ([`ContestedFinding::Copy`]). A pseudonym in
+//! two messages (two envelopes) is a voter who voted twice under protest,
+//! and a label in two messages is one envelope for two voters: every such
+//! check-in is excluded ([`ContestedFinding::Repeated`],
+//! [`ContestedFinding::LabelReused`]) and holds the ledger
+//! (`ContestedRepeated`). The stage reports the finding; the counting is
+//! the law's.
 //!
 //! Every event the stage cannot take is listed ([`RollRefused`]) and holds
 //! the ledger (`RollEventRefused`); a supplied check-in of the ledger that
@@ -80,12 +88,12 @@ use ityv_crypto::hash::object_hash;
 use ityv_crypto::{Purpose, Sha3Hasher};
 use ityv_encoding::{
     AuthorityId, CheckinUnit, ContestedCheckin, EntrySet, EventRole, HYBRID_VK_LEN, Hash512,
-    PURPOSE_CONTESTED_CHECKIN, RollAmendmentBody, RollAmendmentReason, RollAuthorityEntry,
-    RollAuthorityKind, RollCustodyReceiptBody, RollFreezeBody, RollSourceExtractBody,
-    RollSourceKind, RollState, SCHEMA_CONTESTED_CHECKIN, SCHEMA_ROLL_AMENDMENT_BODY,
-    SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
-    SCHEMA_WITNESSED_EVENT, Seq, StationId, StationKind, WitnessedEvent, decode_object,
-    schema_version,
+    PSEUDONYM_LEN, PURPOSE_CONTESTED_CHECKIN, RollAmendmentBody, RollAmendmentReason,
+    RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody, RollFreezeBody,
+    RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_CONTESTED_CHECKIN,
+    SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
+    SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_WITNESSED_EVENT, Seq, StationId, StationKind,
+    WitnessedEvent, decode_object, schema_version,
 };
 use ityv_ledger::{InclusionProof, sorted_set_root, verify_inclusion};
 use ityv_state::{
@@ -332,6 +340,19 @@ pub enum ContestedFinding<'a> {
     /// The pseudonym is in no participation set taken so far, and some
     /// station's set is still missing.
     Undetermined,
+    /// The same message (pseudonym and envelope label) as the check-in of
+    /// the frame given, an earlier frame or the same: a copy, signed again
+    /// or supplied twice, that counts once with it.
+    Copy(Seq),
+    /// Its pseudonym is in another check-in with another envelope label:
+    /// the voter voted twice under protest. Every envelope of the pseudonym
+    /// is excluded and the fact passed to investigators (ADR-0033 decision
+    /// 6). Takes precedence over the participation lookup.
+    Repeated,
+    /// Its envelope label is in another check-in with another pseudonym:
+    /// one envelope cannot be two voters'. Every check-in with the label is
+    /// excluded.
+    LabelReused,
 }
 
 /// One supplied contested check-in and what the stage found.
@@ -440,6 +461,28 @@ impl<'a> RollStage<'a> {
     #[must_use]
     pub fn contested(&self) -> &[ContestedReport<'a>] {
         &self.contested
+    }
+
+    /// The number of contested check-ins per station among those supplied
+    /// (VC-112, for a verifier with access): the messages that verify, a
+    /// copy counted once, in station order. The public verifier has
+    /// [`RollStage::contested_frames`] only.
+    #[must_use]
+    pub fn contested_counts(&self) -> Vec<(StationId<'a>, usize)> {
+        let mut counts: BTreeMap<&'a [u8], (StationId<'a>, usize)> = BTreeMap::new();
+        for c in &self.contested {
+            let counted = !matches!(
+                c.finding,
+                ContestedFinding::NotOnLedger
+                    | ContestedFinding::Invalid
+                    | ContestedFinding::Copy(_)
+            );
+            if let (true, Some(station)) = (counted, c.station) {
+                let entry = counts.entry(station.as_bytes()).or_insert((station, 0));
+                entry.1 = entry.1.saturating_add(1);
+            }
+        }
+        counts.into_values().collect()
     }
 
     /// Whether the freeze and every amendment took effect.
@@ -865,20 +908,27 @@ fn contested_valid(
         })
 }
 
-/// What the stage finds of one supplied body.
+/// The message of a verified check-in: its pseudonym and envelope label.
+type MessageKey<'a> = (&'a [u8; PSEUDONYM_LEN], [u8; 24]);
+
+/// What the stage finds of one supplied body, and its message if it
+/// verifies.
 fn contested_report<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
     participation: &ParticipationStage<'a>,
     frames: &BTreeMap<[u8; 64], Seq>,
     bytes: &'a [u8],
-) -> ContestedReport<'a> {
+) -> (ContestedReport<'a>, Option<MessageKey<'a>>) {
     let Some(seq) = frames.get(&object_hash(bytes).0).copied() else {
-        return ContestedReport {
-            seq: None,
-            station: None,
-            finding: ContestedFinding::NotOnLedger,
-        };
+        return (
+            ContestedReport {
+                seq: None,
+                station: None,
+                finding: ContestedFinding::NotOnLedger,
+            },
+            None,
+        );
     };
     let decoded: Option<ContestedCheckin<'a>> = decode_object(
         SCHEMA_CONTESTED_CHECKIN,
@@ -888,22 +938,70 @@ fn contested_report<'a>(
     .ok();
     let station = decoded.map(|c| c.message().station_id);
     let Some(checkin) = decoded.filter(|c| contested_valid(genesis, index, seq, c)) else {
-        return ContestedReport {
-            seq: Some(seq),
-            station,
-            finding: ContestedFinding::Invalid,
-        };
+        return (
+            ContestedReport {
+                seq: Some(seq),
+                station,
+                finding: ContestedFinding::Invalid,
+            },
+            None,
+        );
     };
     let all_sets = participation.stations().iter().all(|s| s.set.is_some());
-    let finding = match participation.pseudonym_station(checkin.message().pseudonym) {
+    let m = checkin.message();
+    let finding = match participation.pseudonym_station(m.pseudonym) {
         Some(found) => ContestedFinding::Elsewhere(found),
         None if all_sets => ContestedFinding::Absent,
         None => ContestedFinding::Undetermined,
     };
-    ContestedReport {
-        seq: Some(seq),
-        station,
-        finding,
+    (
+        ContestedReport {
+            seq: Some(seq),
+            station,
+            finding,
+        },
+        Some((m.pseudonym, m.envelope_label.0)),
+    )
+}
+
+/// Applies the repetition rules to the reports of the supplied check-ins
+/// (module documentation): a message seen in an earlier frame (or earlier
+/// in the same frame) is a copy of the first; among the first of each
+/// message, a pseudonym under two labels is repeated, else a label under
+/// two pseudonyms is reused.
+fn settle_contested<'a>(reports: &mut [(ContestedReport<'a>, Option<MessageKey<'a>>)]) {
+    let mut order: Vec<usize> = (0..reports.len())
+        .filter(|&i| reports.get(i).is_some_and(|r| r.1.is_some()))
+        .collect();
+    order.sort_by_key(|&i| reports.get(i).and_then(|r| r.0.seq).map(Seq::get));
+    let mut first: BTreeMap<MessageKey<'a>, Seq> = BTreeMap::new();
+    let mut labels: BTreeMap<&'a [u8; PSEUDONYM_LEN], BTreeSet<[u8; 24]>> = BTreeMap::new();
+    let mut pseudonyms: BTreeMap<[u8; 24], BTreeSet<&'a [u8; PSEUDONYM_LEN]>> = BTreeMap::new();
+    for &i in &order {
+        let Some((report, Some(key))) = reports.get_mut(i) else {
+            continue;
+        };
+        let Some(seq) = report.seq else { continue };
+        if let Some(&earlier) = first.get(key) {
+            report.finding = ContestedFinding::Copy(earlier);
+            continue;
+        }
+        first.insert(*key, seq);
+        labels.entry(key.0).or_default().insert(key.1);
+        pseudonyms.entry(key.1).or_default().insert(key.0);
+    }
+    for (report, key) in reports.iter_mut() {
+        let Some((pseudonym, label)) = key else {
+            continue;
+        };
+        if matches!(report.finding, ContestedFinding::Copy(_)) {
+            continue;
+        }
+        if labels.get(*pseudonym).is_some_and(|l| l.len() > 1) {
+            report.finding = ContestedFinding::Repeated;
+        } else if pseudonyms.get(label).is_some_and(|p| p.len() > 1) {
+            report.finding = ContestedFinding::LabelReused;
+        }
     }
 }
 
@@ -969,11 +1067,13 @@ pub fn verify_roll<'a>(
         .map(|e| (e.hash.0, e.seq))
         .collect();
     stage.contested_frames = frames.len();
-    stage.contested = input
+    let mut reports: Vec<(ContestedReport<'a>, Option<MessageKey<'a>>)> = input
         .contested
         .iter()
         .map(|bytes| contested_report(genesis, index, participation, &frames, bytes))
         .collect();
+    settle_contested(&mut reports);
+    stage.contested = reports.into_iter().map(|(r, _)| r).collect();
     stage.holds = HoldSet::empty()
         .with_if(!stage.refused.is_empty(), HoldReason::RollEventRefused)
         .with_if(
@@ -986,6 +1086,15 @@ pub fn verify_roll<'a>(
                 .iter()
                 .any(|c| c.finding == ContestedFinding::Invalid),
             HoldReason::ContestedCheckinInvalid,
+        )
+        .with_if(
+            stage.contested.iter().any(|c| {
+                matches!(
+                    c.finding,
+                    ContestedFinding::Repeated | ContestedFinding::LabelReused
+                )
+            }),
+            HoldReason::ContestedRepeated,
         );
     work.stage
 }
