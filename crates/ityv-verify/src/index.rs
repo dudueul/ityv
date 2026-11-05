@@ -69,6 +69,11 @@ use ityv_encoding::{
     Seq, SignedGenesis, SignedLegalAuthorization, StationId, TimestampRecord, WitnessedEvent,
     decode_object,
 };
+use ityv_encoding::{
+    RollAmendmentBody, RollCustodyReceiptBody, RollFreezeBody, RollSourceExtractBody,
+    SCHEMA_CONTESTED_CHECKIN, SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
+    SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
+};
 use ityv_ledger::{
     ChainHead, ChainState, Error as LedgerError, FrameStream, Record, SCHEMA_SIGNED_CHECKPOINT,
     SignedCheckpoint,
@@ -92,14 +97,19 @@ pub enum Scope<'a> {
 /// §12.3): the public ledger carries their frames and event hashes, and
 /// only restricted or sealed verifiers hold the bodies. The index keeps
 /// such a frame by its hash (replays still count) and asks for no body:
-/// `CheckinCounter` (0x0009, restricted) and `SharePackage` (0x000B,
-/// sealed). A sample opening is not among them: its restricted body
+/// `CheckinCounter` (0x0009, restricted), `SharePackage` (0x000B, sealed)
+/// and `ContestedCheckin` (0x0056, restricted; a verifier with access
+/// gives the roll stage the bodies, ADR-0040). A sample opening is not among them: its restricted body
 /// (`SampleOpeningBody`, `0x0049`) never reaches the public ledger, which
 /// carries instead the trustees' public reference to it
 /// (`SampleOpeningRefBody` in a `QuorumSigned`, ADR-0036); a frame of the
 /// restricted schema is one the verifier does not know, and holds the
 /// ledger.
-pub const OPAQUE_SCHEMAS: [SchemaId; 2] = [SchemaId::new(0x0009), SCHEMA_SHARE_PACKAGE];
+pub const OPAQUE_SCHEMAS: [SchemaId; 3] = [
+    SchemaId::new(0x0009),
+    SCHEMA_SHARE_PACKAGE,
+    SCHEMA_CONTESTED_CHECKIN,
+];
 
 /// What is wrong with a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -429,6 +439,20 @@ fn witnessed<'a>(event: &WitnessedEvent<'a>) -> Option<(Scope<'a>, ElectionId<'a
     } else if s == SCHEMA_AUDIT_FINDING_BODY {
         let b = event.body::<AuditFindingBody<'a>>(s).ok()?;
         (Scope::Box(b.parts().device_id), b.parts().election_id)
+    } else if s == SCHEMA_ROLL_SOURCE_EXTRACT_BODY {
+        // The roll's events: the roll stage reads every one, and the roll
+        // is the election's (ADR-0040).
+        let b = event.body::<RollSourceExtractBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_ROLL_FREEZE_BODY {
+        let b = event.body::<RollFreezeBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_ROLL_CUSTODY_RECEIPT_BODY {
+        let b = event.body::<RollCustodyReceiptBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_ROLL_AMENDMENT_BODY {
+        let b = event.body::<RollAmendmentBody<'a>>(s).ok()?;
+        (Scope::Election, b.parts().election_id)
     } else {
         return None;
     };

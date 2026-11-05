@@ -276,7 +276,9 @@ const fn witness_role(role: EventRole) -> Option<RosterRole> {
         | EventRole::Authority
         | EventRole::Device
         | EventRole::Chair
-        | EventRole::Auditor => None,
+        | EventRole::Auditor
+        | EventRole::RollSource
+        | EventRole::RollCustodian => None,
     }
 }
 

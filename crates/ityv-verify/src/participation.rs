@@ -78,11 +78,12 @@ use ityv_crypto::hash::object_hash;
 use ityv_encoding::schema_version;
 use ityv_encoding::{
     ActorSigs, COMMITTEE_ACTOR, ChamberCode, CheckinUnit, Decode, HYBRID_SIG_LEN, HYBRID_VK_LEN,
-    Hash512, ModuleId, ModuleProvisioned, ObserverCountKind, OrgId, PURPOSE_MODULE_PROVISIONED,
-    PURPOSE_PARTICIPATION_SET, PURPOSE_PARTY_KEY, ParticipationSet, PartyKeyCeremony, RosterRole,
-    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
-    StationId, WitnessedEvent, decode_object, is_party_chamber, keys_share_half,
+    Hash512, ModuleId, ModuleProvisioned, ObserverCountKind, OrgId, PSEUDONYM_LEN,
+    PURPOSE_MODULE_PROVISIONED, PURPOSE_PARTICIPATION_SET, PURPOSE_PARTY_KEY, ParticipationSet,
+    PartyKeyCeremony, RosterRole, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY,
+    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, StationId, WitnessedEvent, decode_object,
+    is_party_chamber, keys_share_half,
 };
 use ityv_state::{
     HoldReason, HoldSet, IssuanceCount, IssuanceTotals, ObserverCount, Primary, RosterEntry,
@@ -220,7 +221,16 @@ pub struct ParticipationStage<'a> {
     ceremonies: Vec<(ChamberCode, Seq)>,
     missing_ceremonies: Vec<ChamberCode>,
     missing_provisioning: Vec<(ModuleId<'a>, Hash512)>,
+    /// The accepted sets, in station key order.
+    sets: Vec<ParticipationSet<'a>>,
     holds: HoldSet,
+}
+
+/// Whether the sorted pseudonyms of `set` hold `pseudonym` (a binary
+/// search over the set's bytes viewed as 64-byte values: no copy).
+fn holds_pseudonym(set: &ParticipationSet<'_>, pseudonym: &[u8; PSEUDONYM_LEN]) -> bool {
+    let (values, _) = set.pseudonyms().as_bytes().as_chunks::<PSEUDONYM_LEN>();
+    values.binary_search(pseudonym).is_ok()
 }
 
 impl<'a> ParticipationStage<'a> {
@@ -288,6 +298,17 @@ impl<'a> ParticipationStage<'a> {
     #[must_use]
     pub const fn holds(&self) -> HoldSet {
         self.holds
+    }
+
+    /// The station of the first accepted participation set (in station
+    /// key order) that holds `pseudonym`, if any: where a contested
+    /// check-in's voter was counted (ADR-0033 decision 6, ADR-0040).
+    #[must_use]
+    pub fn pseudonym_station(&self, pseudonym: &[u8; PSEUDONYM_LEN]) -> Option<StationId<'a>> {
+        self.sets
+            .iter()
+            .find(|s| holds_pseudonym(s, pseudonym))
+            .map(ParticipationSet::station_id)
     }
 
     /// Whether every station's identities, every party's ceremony and
@@ -1100,6 +1121,7 @@ pub fn verify_participation<'a>(
         ceremonies: ceremonies.iter().map(|(c, x)| (*c, x.seq)).collect(),
         missing_ceremonies,
         missing_provisioning,
+        sets,
         holds,
     }
 }

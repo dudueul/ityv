@@ -11,8 +11,9 @@
 //! [`verify_timestamps`] reads every `TimestampRecord` of the ledger. A
 //! record is taken when its authority is pinned, it stamps an event the
 //! index accepted in an earlier frame, of a kind that is stamped (a signed
-//! checkpoint, a signed genesis or amendment, a witnessed legal decision;
-//! never a record, check-in counter or progress tick, VC-117), and its
+//! checkpoint, a signed genesis or amendment, a witnessed legal decision,
+//! roll freeze or custody receipt; never a record, check-in counter or
+//! progress tick, VC-117), and its
 //! token verifies (`ityv_tsa::verify_token`) under one of the authority's
 //! pins over the imprint SHA-512 of the stamped event's object hash
 //! (ADR-0034 §3). A record without a token is the operator's note that the
@@ -59,8 +60,9 @@ use alloc::vec::Vec;
 
 use ityv_encoding::{
     AuthorityId, Day, EntrySet, Hash512, OrgId, PolicyAccuracy, SCHEMA_LEGAL_DECISION_REF_BODY,
-    SCHEMA_SIGNED_GENESIS, SCHEMA_TIMESTAMP_RECORD, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
-    TimeBucket, TimestampAuthorityEntry, TimestampAuthorityKind, TimestampRecord, WitnessedEvent,
+    SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY, SCHEMA_SIGNED_GENESIS,
+    SCHEMA_TIMESTAMP_RECORD, SCHEMA_WITNESSED_EVENT, SchemaId, Seq, TimeBucket,
+    TimestampAuthorityEntry, TimestampAuthorityKind, TimestampRecord, WitnessedEvent,
     decode_object, schema_version,
 };
 use ityv_ledger::{ANCHOR_WINDOW, CLOCK_ERROR_BUCKETS, SCHEMA_SIGNED_CHECKPOINT};
@@ -363,7 +365,7 @@ impl<'a> TimestampStage<'a> {
 
 /// Whether `event` is of a kind that is stamped (ADR-0034 §2, VC-117): a
 /// signed checkpoint, a signed genesis or amendment, or a witnessed legal
-/// decision.
+/// decision, roll freeze or custody receipt (ADR-0040).
 fn stamped_kind(event: &IndexedEvent<'_>) -> bool {
     if event.schema == SCHEMA_SIGNED_CHECKPOINT || event.schema == SCHEMA_SIGNED_GENESIS {
         return true;
@@ -381,7 +383,12 @@ fn stamped_kind(event: &IndexedEvent<'_>) -> bool {
             )
             .ok()
         })
-        .is_some_and(|w| w.body_schema() == SCHEMA_LEGAL_DECISION_REF_BODY)
+        .is_some_and(|w| {
+            let body = w.body_schema();
+            body == SCHEMA_LEGAL_DECISION_REF_BODY
+                || body == SCHEMA_ROLL_FREEZE_BODY
+                || body == SCHEMA_ROLL_CUSTODY_RECEIPT_BODY
+        })
 }
 
 /// The latest instant `token` allows, in whole Unix seconds: `genTime`

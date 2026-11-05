@@ -38,13 +38,13 @@ use ityv_encoding::{
     RosterSigner, RouteId, SCHEMA_BALLOT_STYLE_ENTRY, SCHEMA_BOX_UNIT_SWAP_BODY,
     SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_CUSTODY_ROUTE, SCHEMA_GENESIS_AMENDMENT_BODY,
     SCHEMA_GENESIS_BODY, SCHEMA_GENESIS_BOX, SCHEMA_MODULE_ENTRY,
-    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_ROSTER_SIGNER,
-    SCHEMA_SIGNED_GENESIS, SCHEMA_STATION_ENTRY, SCHEMA_STATION_PROGRESS_POLICY,
-    SCHEMA_TIMESTAMP_AUTHORITY_ENTRY, SCHEMA_TRUSTEE_ENTRY, SCHEMA_VERSION_1,
-    SCHEMA_VERSION_GENESIS, SCHEMA_WITNESS_ROSTER_ENTRY, SchemaId, SetCommitment, SignedGenesis,
-    SignerId, StationEntry, StationId, StationKind, StationParts, StationProgressPolicy,
-    TimeBucket, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry, WitnessedEvent,
-    chunks_for, decode_object, keys_share_half, purpose_of,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_REPORTING_UNIT_ENTRY, SCHEMA_ROLL_AUTHORITY_ENTRY,
+    SCHEMA_ROSTER_SIGNER, SCHEMA_SIGNED_GENESIS, SCHEMA_STATION_ENTRY,
+    SCHEMA_STATION_PROGRESS_POLICY, SCHEMA_TIMESTAMP_AUTHORITY_ENTRY, SCHEMA_TRUSTEE_ENTRY,
+    SCHEMA_VERSION_1, SCHEMA_VERSION_GENESIS, SCHEMA_WITNESS_ROSTER_ENTRY, SchemaId, SetCommitment,
+    SignedGenesis, SignerId, StationEntry, StationId, StationKind, StationParts,
+    StationProgressPolicy, TimeBucket, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum,
+    WitnessRosterEntry, WitnessedEvent, chunks_for, decode_object, keys_share_half, purpose_of,
 };
 use proptest::prelude::*;
 use std::vec::Vec;
@@ -797,7 +797,7 @@ fn trustee_and_witness_vectors() {
 #[test]
 fn entry_sets() {
     let codes: Vec<u8> = EntrySet::ALL.iter().map(|s| s.code()).collect();
-    assert_eq!(codes, (1..=12).collect::<Vec<u8>>());
+    assert_eq!(codes, (1..=13).collect::<Vec<u8>>());
     for (i, set) in EntrySet::ALL.iter().enumerate() {
         assert_eq!(set.index(), i);
         assert_eq!(set.amendable(), i < AMENDABLE_SET_COUNT);
@@ -819,6 +819,7 @@ fn entry_sets() {
             Some(SCHEMA_TRUSTEE_ENTRY),
             Some(SCHEMA_WITNESS_ROSTER_ENTRY),
             Some(SCHEMA_TIMESTAMP_AUTHORITY_ENTRY),
+            Some(SCHEMA_ROLL_AUTHORITY_ENTRY),
         ]
     );
     assert_eq!(GenesisBox::SET, EntrySet::Boxes);
@@ -910,6 +911,7 @@ fn genesis_parts() -> GenesisParts<'static> {
         commission_key: &VK_A,
         committee_key: &VK_B,
         quorum: QUORUM,
+        custody_quorum: 3,
         parties: &PARTIES,
         chambers: &CHAMBERS,
         sets: sets(),
@@ -935,6 +937,7 @@ fn genesis_body_vectors() {
     assert_eq!(body.commission_key(), &VK_A);
     assert_eq!(body.committee_key(), &VK_B);
     assert_eq!(body.quorum(), &QUORUM);
+    assert_eq!(body.custody_quorum(), 3);
     assert_eq!(body.parties().collect::<Vec<_>>(), PARTIES.to_vec());
     assert_eq!(body.chambers().collect::<Vec<_>>(), CHAMBERS.to_vec());
     assert_eq!(body.sets(), &sets());
@@ -947,7 +950,8 @@ fn genesis_body_vectors() {
     let policy_at = HEADER_LEN + ident_len(E) + 8;
     let committee_at = policy_at + 64 + ident_len(b"PS-OR-1") + 3 * 64 + HYBRID_VK_LEN;
     let quorum_at = committee_at + HYBRID_VK_LEN;
-    let parties_at = quorum_at + 6;
+    let custody_at = quorum_at + 6;
+    let parties_at = custody_at + 1;
     let party_len = |name: &str| 1 + 4 + name.len() + 2 + 64;
     let first_party = parties_at + 4;
     let name_at = first_party + 1;
@@ -975,6 +979,14 @@ fn genesis_body_vectors() {
     let mut b = bytes.clone();
     b[quorum_at + 1] = 8;
     v.push(invalid("quorum 8", b, "ValueOutOfRange", quorum_at));
+    let mut b = bytes.clone();
+    b[custody_at] = 2;
+    v.push(invalid(
+        "custody quorum 2",
+        b,
+        "ValueOutOfRange",
+        custody_at,
+    ));
     let mut b = bytes.clone();
     b[parties_at..parties_at + 4].copy_from_slice(&1u32.to_be_bytes());
     v.push(invalid("one party", b, "InvariantViolation", parties_at));
@@ -1018,8 +1030,10 @@ fn genesis_body_vectors() {
         &v,
     );
     // Version 1 is not this schema's version, nor is version 6, the
-    // eleven-set body before the timestamp authorities (ADR-0039).
-    for version in [SCHEMA_VERSION_1, 6] {
+    // eleven-set body before the timestamp authorities (ADR-0039), nor
+    // version 7, the twelve-set body before the roll's authorities and
+    // the custody quorum (ADR-0040).
+    for version in [SCHEMA_VERSION_1, 6, 7] {
         assert_eq!(
             kind::<GenesisBody<'_>>(SCHEMA_GENESIS_BODY, version, &bytes).0,
             ErrorKind::UnsupportedVersion
@@ -1045,6 +1059,10 @@ fn genesis_body_rules() {
     }
     bad.push(GenesisParts {
         committee_key: &VK_A,
+        ..ok
+    });
+    bad.push(GenesisParts {
+        custody_quorum: 2,
         ..ok
     });
     bad.push(GenesisParts {
@@ -1858,10 +1876,11 @@ proptest! {
     #[test]
     fn genesis_body_round_trips(
         day in any::<u64>(),
-        counts in prop::array::uniform11(0u64..1_000_000),
+        counts in prop::array::uniform13(0u64..1_000_000),
         seats in (0u16..300, 0u16..300),
         q in 9u8..=13,
         f in 0u8..=4,
+        custody in any::<u8>(),
     ) {
         let (a, b) = if seats.0 >= seats.1 { seats } else { (seats.1, seats.0) };
         let parties: &'static [PartyEntry<'static>] = Box::leak(Box::new([
@@ -1878,10 +1897,11 @@ proptest! {
             election_epoch_day: Day::new(day),
             parties,
             quorum,
+            custody_quorum: custody,
             sets: s,
             ..genesis_parts()
         };
-        let valid = 2 * u16::from(q) > 13 + u16::from(f);
+        let valid = 2 * u16::from(q) > 13 + u16::from(f) && custody >= 3;
         match GenesisBody::new(&parts) {
             Ok(body) => {
                 prop_assert!(valid);

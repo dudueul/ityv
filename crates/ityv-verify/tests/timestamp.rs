@@ -565,3 +565,42 @@ fn a_record_names_its_authority_by_identifier() {
     assert!(world().genesis.timestamp_authority(b"TSA-ROGUE").is_none());
     let _: SchemaId = SCHEMA_TIMESTAMP_RECORD;
 }
+
+#[test]
+fn a_roll_freeze_and_its_receipts_are_stamped_and_an_extract_is_not() {
+    use common::roll;
+    // `LEGAL_ANNEX.md` amendment 15, §278-7 ①: the frozen roll's hash and the
+    // custody receipts are timestamped (ADR-0034 §2, ADR-0040).
+    let mut book = Book::new(world());
+    let events = roll::standard(&[b"ST-1"]);
+    let mut frames = Vec::new();
+    for (schema, event) in &events {
+        frames.push(book.push(*schema, event));
+    }
+    let extract = events[0].1;
+    let freeze = events[2].1;
+    let receipt = events[3].1;
+    for event in [freeze, receipt, extract] {
+        push(
+            &mut book,
+            stamp(GOV, SCHEMA_WITNESSED_EVENT, event, at(10, 0)),
+        );
+    }
+    book.checkpoint_at(B);
+    let c = chain(&book);
+    let stamped = c.timestamps();
+    assert_eq!(stamped.tokens_for(&object_hash(freeze)).count(), 1);
+    assert_eq!(stamped.tokens_for(&object_hash(receipt)).count(), 1);
+    let t = stamped.tokens_for(&object_hash(freeze)).next().unwrap();
+    assert_eq!(t.target_frame.get(), frames[2]);
+    assert_eq!(stamped.tokens_for(&object_hash(extract)).count(), 0);
+    assert_eq!(
+        stamped
+            .refusals()
+            .iter()
+            .map(|r| (r.target, r.problem))
+            .collect::<Vec<_>>(),
+        [(object_hash(extract), TimestampProblem::Target)]
+    );
+    assert!(c.holds().contains(HoldReason::TimestampInvalid));
+}

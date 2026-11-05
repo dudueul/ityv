@@ -27,7 +27,7 @@ pub enum Reference {
 }
 
 /// The rule a genesis or amendment broke (VC-005, VC-009, VC-014,
-/// VC-067, VC-104, VC-105, VC-114).
+/// VC-067, VC-104, VC-105, VC-107, VC-108, VC-114).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Rule {
     /// An object is not the canonical encoding of its schema.
@@ -108,6 +108,16 @@ pub enum Rule {
     /// The timestamp authority set lacks a government-run or a
     /// non-government authority (VC-114).
     TimestampAuthorities,
+    /// The roll's custodians cannot confirm a roll: two custodians of one
+    /// organisation (one would count twice), fewer custodians than the
+    /// custody quorum, or no custodian of the court administration or of
+    /// the Ministry of the Interior (ADR-0033 decision 2, VC-108,
+    /// ADR-0040).
+    RollCustodians,
+    /// The roll's sources cannot give a roll: no district head for the
+    /// resident extracts, or not exactly one source of the national
+    /// snapshot (ADR-0033 decision 1, VC-107, ADR-0040).
+    RollSources,
 }
 
 /// Where in the genesis a rule was broken.

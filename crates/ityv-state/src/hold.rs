@@ -318,11 +318,29 @@ pub enum HoldReason {
     /// buckets before the checkpoint's bucket. The chain ends there (§5.5,
     /// ADR-0034 §4, VC-116, ADR-0039).
     TimestampMismatch = 73,
+    /// A voter-roll event of the ledger was not taken: an extract, the
+    /// freeze, a custody receipt or an amendment whose signer is not the
+    /// authority the genesis registers for it, whose signature does not
+    /// verify, that comes out of order or answers nothing, or that repeats
+    /// or contradicts one taken (§6.1, ADR-0033, VC-107, VC-111,
+    /// ADR-0040).
+    RollEventRefused = 74,
+    /// A custodian's receipt gives other values than the roll state it
+    /// answers (entries root and count, counts table, sources root, a
+    /// pseudonym root): the copies disagree and are compared in a dispute
+    /// (§6.1, ADR-0033 decision 2, VC-108, ADR-0040).
+    RollCustodyMismatch = 75,
+    /// A contested check-in of the ledger, supplied by a verifier with
+    /// access to the restricted body, does not verify: another election,
+    /// a station or unit the genesis does not have, or signatures that are
+    /// not the unit's and one party module's per party (§6.2, ADR-0033
+    /// decision 6, ADR-0040).
+    ContestedCheckinInvalid = 76,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 74] = [
+    pub const ALL: [Self; 77] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -397,6 +415,9 @@ impl HoldReason {
         Self::AuditSampleFailed,
         Self::TimestampInvalid,
         Self::TimestampMismatch,
+        Self::RollEventRefused,
+        Self::RollCustodyMismatch,
+        Self::ContestedCheckinInvalid,
     ];
 
     /// The reason's code.

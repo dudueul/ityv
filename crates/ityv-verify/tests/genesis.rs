@@ -1184,3 +1184,91 @@ fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
     let err = verify_genesis(&built.pin, &built.input(), &[]).unwrap_err();
     assert_eq!((err.set, err.rule), (Some(set), Rule::Root));
 }
+
+#[test]
+fn refuses_a_roll_authority_set_that_breaks_a_rule() {
+    use common::roll::{self, ROLL_BASE};
+    use ityv_encoding::{OrgId, RollAuthorityKind as K};
+    let set = EntrySet::RollAuthorities;
+    let base = Draft::standard();
+    assert_eq!(verify(&base), Ok(()));
+    let verified = verify_genesis(&standard().pin, &standard().input(), &[]).unwrap();
+    assert_eq!(verified.roll_authorities().count(), 11);
+    assert_eq!(verified.genesis().body().custody_quorum(), 3);
+    let jud = verified.roll_authority(roll::C_JUD).unwrap();
+    assert_eq!(jud.kind, K::CustodianJudiciary);
+    assert_eq!(
+        verified.roll_authority_entry(roll::C_JUD).unwrap().get(),
+        jud
+    );
+    assert!(verified.roll_authority(b"R-NOBODY").is_none());
+    assert!(verified.roll_authority_entry(b"R-NOBODY").is_none());
+    let whole = |rule| Error {
+        state: 0,
+        set: Some(set),
+        index: None,
+        rule,
+    };
+    let without = |id: &[u8]| {
+        let mut d = base.clone();
+        d.rolls.retain(|a| a.authority_id.as_bytes() != id);
+        d
+    };
+
+    // Two custodians of one organisation (in key order R-C-PA, then
+    // R-C-PB): one would count twice.
+    let mut d = base.clone();
+    d.rolls[5].org_id = OrgId::new(b"PARTY-A").unwrap();
+    assert_eq!(verify(&d), Err(at(set, 5, Rule::RollCustodians)));
+    // A source may share its organisation with a custodian (the court
+    // administration keeps the deaths and a copy).
+    let mut d = base.clone();
+    d.rolls[7].org_id = OrgId::new(b"COURT-ADMIN").unwrap();
+    assert_eq!(verify(&d), Ok(()));
+    // Fewer custodians than the quorum.
+    let mut d = base.clone();
+    d.custody_quorum = 6;
+    assert_eq!(verify(&d), Err(whole(Rule::RollCustodians)));
+    d.custody_quorum = 5;
+    assert_eq!(verify(&d), Ok(()));
+    // Without the court administration or the Ministry of the Interior.
+    for id in [roll::C_JUD, roll::C_INT] {
+        assert_eq!(verify(&without(id)), Err(whole(Rule::RollCustodians)));
+    }
+    // Three custodians make a quorum of three; two do not.
+    let mut d = without(roll::C_IVC);
+    d.rolls
+        .retain(|a| a.kind != K::CustodianParty || a.authority_id.as_bytes() == roll::C_PA);
+    assert_eq!(verify(&d), Ok(()));
+    d.rolls.retain(|a| a.authority_id.as_bytes() != roll::C_PA);
+    assert_eq!(verify(&d), Err(whole(Rule::RollCustodians)));
+
+    // No district head, no snapshot, two snapshots.
+    for d in [without(roll::GU), without(roll::SNAPSHOT)] {
+        assert_eq!(verify(&d), Err(whole(Rule::RollSources)));
+    }
+    let mut d = base.clone();
+    d.rolls.push(roll::entry((
+        b"R-SNAPSHOT-2",
+        b"MOIS-2",
+        K::ResidentSnapshot,
+        11,
+    )));
+    assert_eq!(verify(&d), Err(whole(Rule::RollSources)));
+    // Other sources are optional.
+    for id in [roll::DEATHS, roll::DISQ, roll::OVERSEAS, roll::APPEAL] {
+        assert_eq!(verify(&without(id)), Ok(()));
+    }
+
+    // A key another authority or the commission has, a key nothing could
+    // verify under.
+    let mut d = base.clone();
+    d.rolls[6].key = registered(ROLL_BASE + 3);
+    assert_eq!(verify(&d), Err(at(set, 6, Rule::SharedKey)));
+    let mut d = base.clone();
+    d.rolls[0].key = registered(common::COMMISSION);
+    assert_eq!(verify(&d), Err(at(set, 0, Rule::SharedKey)));
+    let mut d = base.clone();
+    d.rolls[2].key = weak(registered(SPARE_BASE + 5));
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::InvalidKey)));
+}

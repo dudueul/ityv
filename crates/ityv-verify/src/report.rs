@@ -20,11 +20,14 @@
 //! - the voting progress record ([`crate::verify_progress`], §7.10, part
 //!   of the box invariants): a stream, alarm or close comparison that does
 //!   not hold holds its box or station;
-//! 6. participation ([`crate::verify_participation`]): passed when every
-//!    station's identities, party ceremony and provisioning record could be
-//!    checked; not run while one is not yet on the ledger; an event that
-//!    cannot be taken, a repeated pseudonym or an identity that does not
-//!    hold holds the ledger;
+//! 6. participation ([`crate::verify_participation`] and
+//!    [`crate::verify_roll`]): passed when every station's identities,
+//!    party ceremony and provisioning record could be checked and the
+//!    roll's freeze and every amendment took effect under the custody
+//!    quorum; not run while one is not yet on the ledger; an event that
+//!    cannot be taken, a repeated pseudonym, an identity that does not
+//!    hold, a custody receipt that disagrees or a supplied contested
+//!    check-in that does not verify holds the ledger;
 //! 7. tally ([`crate::verify_tally`]): passed when every ballot style and
 //!    reporting unit of the genesis has a tally scope that is the
 //!    recomputation, an opening of every chunk that verifies, and a paper
@@ -80,6 +83,7 @@ use crate::index::{LedgerIndex, build_index};
 use crate::participation::{ParticipationStage, verify_participation};
 use crate::progress::{ProgressStage, verify_progress};
 use crate::records::{RecordStage, verify_records};
+use crate::roll::{RollInput, RollStage, verify_roll};
 use crate::tally::{TallyStage, verify_tally};
 
 /// What the caller brings from outside the ledger for the publication
@@ -106,6 +110,7 @@ pub struct Report<'a> {
     records: RecordStage<'a>,
     progress: ProgressStage<'a>,
     participation: ParticipationStage<'a>,
+    roll: RollStage<'a>,
     disputes: DisputeStage<'a>,
     tally: TallyStage<'a>,
     audit: AuditStage<'a>,
@@ -154,6 +159,12 @@ impl<'a> Report<'a> {
     #[must_use]
     pub const fn participation(&self) -> &ParticipationStage<'a> {
         &self.participation
+    }
+
+    /// The voter roll (stage 6).
+    #[must_use]
+    pub const fn roll(&self) -> &RollStage<'a> {
+        &self.roll
     }
 
     /// The disputes (stage 9).
@@ -272,6 +283,27 @@ pub fn verify_ledger_with<'a>(
     publications: Publications,
     audit_input: &AuditInput<'_>,
 ) -> Report<'a> {
+    verify_ledger_full(
+        genesis,
+        frames,
+        events,
+        publications,
+        audit_input,
+        &RollInput::default(),
+    )
+}
+
+/// As [`verify_ledger_with`], with what a verifier with access brings to
+/// the roll stage: the restricted contested check-ins ([`RollInput`]).
+#[must_use]
+pub fn verify_ledger_full<'a>(
+    genesis: &VerifiedGenesis<'a>,
+    frames: &'a [u8],
+    events: &[&'a [u8]],
+    publications: Publications,
+    audit_input: &AuditInput<'_>,
+    roll_input: &RollInput<'a>,
+) -> Report<'a> {
     let index = build_index(genesis, frames, events);
     let authority = authorize_ledger(genesis, &index);
     let checkpoints = verify_checkpoints(genesis, &index, &authority);
@@ -279,6 +311,7 @@ pub fn verify_ledger_with<'a>(
     let records = verify_records(genesis, &index, &boxes);
     let progress = verify_progress(genesis, &index, &boxes);
     let participation = verify_participation(genesis, &index, &boxes, &records);
+    let roll = verify_roll(genesis, &index, &participation, roll_input);
     let disputes = verify_disputes(genesis, &index, &authority);
     let tally = verify_tally(
         genesis,
@@ -310,6 +343,7 @@ pub fn verify_ledger_with<'a>(
         .union(records.holds())
         .union(progress.holds())
         .union(participation.holds())
+        .union(roll.holds())
         .union(disputes.holds())
         .union(tally.holds())
         .union(audit.holds());
@@ -326,7 +360,10 @@ pub fn verify_ledger_with<'a>(
         .with_step(Step::BoxInvariants, Outcome::Passed)
         .with_step(Step::BoxCompleteness, ran(boxes.complete()))
         .with_step(Step::Records, Outcome::Passed)
-        .with_step(Step::Participation, ran(participation.complete()))
+        .with_step(
+            Step::Participation,
+            ran(participation.complete() && roll.complete()),
+        )
         .with_step(Step::Tally, ran(tally.passed()))
         .with_step(Step::Audit, ran(audit.passed()))
         .with_anchors(checkpoints.anchor_deadline(publications.now))
@@ -344,6 +381,7 @@ pub fn verify_ledger_with<'a>(
         records,
         progress,
         participation,
+        roll,
         disputes,
         tally,
         audit,

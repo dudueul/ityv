@@ -358,7 +358,9 @@ pub(crate) fn check_chair_report(
             | EventRole::Receiver
             | EventRole::Authority
             | EventRole::Device
-            | EventRole::Auditor => return Err(Error::NotRegistered),
+            | EventRole::Auditor
+            | EventRole::RollSource
+            | EventRole::RollCustodian => return Err(Error::NotRegistered),
         };
         roster_key(roster, s.signer_id, role, s.org_id)?;
         signing_key(keys, s, role)

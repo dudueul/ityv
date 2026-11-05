@@ -106,3 +106,8 @@ ADR-0009는 명부 동결 commitment와 추가 전용 변경으로 동결 뒤의
 - **명부 원문 공개.** 개인정보 침해가 크다. 기각.
 - **선관위 단독 commitment(현행 설계).** 동결 뒤 조작만 드러내고, 작성 단계와 바꿔치기된 공표는 막지 못한다. 보강한다.
 - **명부를 블록체인에 올리기.** 공개 commitment는 이미 공개원장에 있다. 문제는 누가 그 값을 보증하느냐이므로 기술이 아니라 보관 기관의 분산이 답이다.
+
+## 구현 현황 (2026-11-04)
+
+- 연결(M5 2h, ADR-0040): genesis 집합 13 `RollAuthorityEntry`와 본문의 보관 정족수(`GenesisBody` 버전 8), 명부 사건 `RollSourceExtractBody`·`RollFreezeBody`·`RollCustodyReceiptBody`·`RollAmendmentBody`(`WitnessedEvent` 버전 4, 역할 11·12)와 restricted `ContestedCheckin`, `ityv-state`의 서명자·정족수 규칙, `ityv-verify`의 명부 단계(1·2·3·5항의 검증 가능한 부분, 6항의 판정; VC-107..111). 4항의 인원수는 공표하는 표의 해시로 싣는다(ADR-0040 3항).
+- 남은 것: 인원수 표와 통계의 대조 도구, 부분집합 검사(§6.5), 투표소별 이의 투표 수의 공표와 봉투 혼합(VC-112), 참여자 실재 표본 감사(7항, VC-113), 보관·파기 기록, 법령 개정안 14의 조문 대조.

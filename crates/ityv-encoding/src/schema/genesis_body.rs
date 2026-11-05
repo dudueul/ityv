@@ -1,4 +1,4 @@
-//! The genesis body (`GenesisBody`, schema `0x0002`, version 7), the
+//! The genesis body (`GenesisBody`, schema `0x0002`, version 8), the
 //! amendment body (`GenesisAmendmentBody`, schema `0x0034`) and their
 //! signed wrapper (`SignedGenesis`, schema `0x0033`) (ADR-0028;
 //! PROTOCOL.md §4.1–§4.3; ENCODING.md §8.54–§8.56).
@@ -6,14 +6,16 @@
 //! The body holds what fits in one bounded object: the scalar fields and
 //! pins, the keys of the election commission and the Independent
 //! Verification Committee, the witness quorum and diversity rule, the
-//! party roster, the chamber thresholds, and for each entry set of
+//! roll's custody quorum, the party roster, the chamber thresholds, and for each entry set of
 //! [`crate::schema::genesis`] its count and Merkle root. The genesis hash
 //! that is pinned out of band (VC-005) is the object hash of the body.
 //!
 //! Versions 1–5 of schema `0x0002` were specification drafts that listed
 //! the contents without an encoding; version 6 is the first canonical
 //! encoding, with eleven entry sets. Version 7 (ADR-0039) adds the twelfth,
-//! the timestamp authorities; a version 6 body is not a version 7 body.
+//! the timestamp authorities. Version 8 (ADR-0040) adds the thirteenth,
+//! the roll's sources and custodians, and the custody quorum after the
+//! witness quorum. A body of one version is not a body of another.
 
 use core::str;
 
@@ -23,6 +25,7 @@ use crate::error::{Error, Kind};
 use crate::primitives::{Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident, TimeBucket};
 use crate::reader::Reader;
 use crate::schema::genesis::{AMENDABLE_SET_COUNT, ENTRY_SET_COUNT, EntrySet, read_nonzero_hash};
+use crate::schema::roll::MIN_CUSTODY_QUORUM;
 use crate::schema::share_package::ChamberCode;
 use crate::schema::util::{
     HYBRID_SIG_LEN, HYBRID_VK_LEN, ascending_by, keys_share_half, read_fixed,
@@ -30,9 +33,9 @@ use crate::schema::util::{
 use crate::schema::{SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_GENESIS_BODY, SCHEMA_VERSION_1};
 use crate::writer::Writer;
 
-/// The version of schema `0x0002` this crate encodes: 7, twelve entry
-/// sets (ADR-0039).
-pub const SCHEMA_VERSION_GENESIS: u16 = 7;
+/// The version of schema `0x0002` this crate encodes: 8, thirteen entry
+/// sets and the custody quorum (ADR-0040).
+pub const SCHEMA_VERSION_GENESIS: u16 = 8;
 
 /// Maximum length of an embedded genesis or amendment body object.
 pub const MAX_GENESIS_BODY_LEN: usize = 16_384;
@@ -252,6 +255,10 @@ pub struct GenesisParts<'a> {
     pub committee_key: &'a [u8; HYBRID_VK_LEN],
     /// The witness quorum and diversity rule.
     pub quorum: WitnessQuorum,
+    /// How many distinct custodians must confirm one roll state
+    /// (ADR-0033 decision 2; `LEGAL_ANNEX.md` amendment 14, §44-3 ④: at least
+    /// [`MIN_CUSTODY_QUORUM`], set by sub-regulation).
+    pub custody_quorum: u8,
     /// The party chambers, `P1`…`Pn` in order.
     pub parties: &'a [PartyEntry<'a>],
     /// The chamber thresholds: `P1`…`Pn`, `J`, `A`, `C`, `N`.
@@ -285,11 +292,12 @@ fn chamber_valid(index: usize, parties: usize, chamber: ChamberThreshold) -> boo
         && chamber.threshold <= chamber.members
 }
 
-/// The genesis body (schema `0x0002`, version 7).
+/// The genesis body (schema `0x0002`, version 8).
 ///
 /// Rules: the four document hashes are nonzero (`InvalidPreviousHash`);
 /// the two authority keys share no half (`InvariantViolation`, VC-006);
-/// the quorum profile is valid (`ValueOutOfRange`); two to four party
+/// the quorum profile is valid (`ValueOutOfRange`); the custody quorum is
+/// at least [`MIN_CUSTODY_QUORUM`] (`ValueOutOfRange`); two to four party
 /// chambers `P1`…`Pn` in order with non-increasing seats and a non-empty
 /// UTF-8 name (`InvariantViolation`, `ValueOutOfRange` for bad UTF-8,
 /// VC-067); the chamber thresholds list exactly `P1`…`Pn`, `J`, `A`, `C`,
@@ -307,6 +315,7 @@ pub struct GenesisBody<'a> {
     commission_key: &'a [u8; HYBRID_VK_LEN],
     committee_key: &'a [u8; HYBRID_VK_LEN],
     quorum: WitnessQuorum,
+    custody_quorum: u8,
     parties: [Option<PartyEntry<'a>>; MAX_PARTIES],
     party_count: u8,
     chambers: [Option<ChamberThreshold>; MAX_CHAMBERS],
@@ -352,6 +361,7 @@ impl<'a> GenesisBody<'a> {
         if !hashes_ok
             || keys_share_half(parts.commission_key, parts.committee_key)
             || !parts.quorum.is_valid()
+            || parts.custody_quorum < MIN_CUSTODY_QUORUM
             || !parties_ok
             || !chambers_ok
             || !witness_count_matches(parts.quorum, &parts.sets)
@@ -377,6 +387,7 @@ impl<'a> GenesisBody<'a> {
             commission_key: parts.commission_key,
             committee_key: parts.committee_key,
             quorum: parts.quorum,
+            custody_quorum: parts.custody_quorum,
             parties,
             party_count: u8::try_from(n).map_err(|_| bad)?,
             chambers,
@@ -445,6 +456,13 @@ impl<'a> GenesisBody<'a> {
         &self.quorum
     }
 
+    /// How many distinct custodians must confirm one roll state
+    /// (ADR-0040).
+    #[must_use]
+    pub const fn custody_quorum(&self) -> u8 {
+        self.custody_quorum
+    }
+
     /// The party chambers in order.
     pub fn parties(&self) -> impl Iterator<Item = PartyEntry<'a>> + '_ {
         self.parties
@@ -484,6 +502,7 @@ impl Encode for GenesisBody<'_> {
             .saturating_add(3 * 64)
             .saturating_add(2 * HYBRID_VK_LEN)
             .saturating_add(self.quorum.encoded_len())
+            .saturating_add(1)
             .saturating_add(parties)
             .saturating_add(chambers)
             .saturating_add(ENTRY_SET_COUNT.saturating_mul(72))
@@ -500,6 +519,7 @@ impl Encode for GenesisBody<'_> {
         w.write_array(self.commission_key)?;
         w.write_array(self.committee_key)?;
         self.quorum.encode(w)?;
+        w.write_u8(self.custody_quorum)?;
         w.write_count(usize::from(self.party_count), MAX_PARTIES)?;
         for p in self.parties() {
             w.write_u8(p.chamber.code())?;
@@ -557,6 +577,11 @@ impl<'a> Decode<'a> for GenesisBody<'a> {
             return Err(Error::new(Kind::InvariantViolation, committee_at));
         }
         let quorum = WitnessQuorum::decode(r)?;
+        let custody_at = r.position();
+        let custody_quorum = r.read_u8()?;
+        if custody_quorum < MIN_CUSTODY_QUORUM {
+            return Err(Error::new(Kind::ValueOutOfRange, custody_at));
+        }
         let parties_at = r.position();
         let party_count = r.read_count(MAX_PARTIES)?;
         if party_count < MIN_PARTIES {
@@ -604,6 +629,7 @@ impl<'a> Decode<'a> for GenesisBody<'a> {
             commission_key,
             committee_key,
             quorum,
+            custody_quorum,
             parties,
             party_count: u8::try_from(party_count)
                 .map_err(|_| Error::new(Kind::CountExceedsMax, parties_at))?,

@@ -1319,6 +1319,9 @@ fn a_clean_election_reaches_crypto_tally_verified() {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     tally1(
         &mut book,
         &casts,
@@ -1384,6 +1387,9 @@ fn a_clean_election_reaches_crypto_tally_verified() {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     let body = scope_body(&spec(STYLE1, RU1, &codes(&casts)));
     book.q(scope(body));
     book.checkpoint();
@@ -1439,6 +1445,9 @@ fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(5));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book.checkpoint();
     tally1(
         &mut book,
@@ -1472,6 +1481,143 @@ fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
             board: Publication::Pending,
         },
     )
+}
+
+/// The clean one-box election with the roll events `roll_events` in place
+/// of the standard roll, and contested check-ins `contested` supplied.
+fn election_with_roll(
+    roll_events: &[(SchemaId, &'static [u8])],
+    contested: &[&'static [u8]],
+) -> Report<'static> {
+    let world = election_world();
+    let mut book = Book::new(world);
+    for chamber in [ChamberCode::P1, ChamberCode::P2] {
+        book.push(SCHEMA_PARTY_KEY_CEREMONY, ceremony(chamber));
+    }
+    for m in ELECTION_MODULES {
+        book.push(SCHEMA_MODULE_PROVISIONED, provisioning(m));
+    }
+    let casts = box1(&mut book);
+    for (schema, event) in station_record(3) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll_events {
+        book.push(*schema, event);
+    }
+    tally1(
+        &mut book,
+        &casts,
+        &spec(STYLE1, RU1, &codes(&casts)),
+        &[1, 1, 1, 0, 0],
+        0,
+    );
+    book.checkpoint();
+    let anchored = Publications {
+        now: TimeBucket::new(0),
+        board: Publication::Pending,
+    };
+    let book = common::leak(book);
+    ityv_verify::verify_ledger_full(
+        world.genesis,
+        book.ledger.bytes(),
+        &book.ledger.events,
+        anchored,
+        &ityv_verify::AuditInput::default(),
+        &ityv_verify::RollInput {
+            contested: common::leak_slice(contested.to_vec()),
+        },
+    )
+}
+
+#[test]
+fn the_participation_step_waits_for_the_roll_and_its_holds_reach_the_status() {
+    use common::roll;
+    // The standard roll: verified.
+    let report = election_with_roll(&roll(), &[]);
+    assert!(report.roll().complete());
+    assert_eq!(report.status().status(), Status::CryptoTallyVerified);
+    // No roll on the ledger: the participation step is not run
+    // (`LEGAL_ANNEX.md` amendment 14, §44-3 ④), and nothing holds.
+    let report = election_with_roll(&[], &[]);
+    assert!(report.participation().complete());
+    assert!(!report.roll().complete());
+    assert_eq!(report.status().holds(), HoldSet::empty());
+    assert_eq!(report.status().status(), Status::SourceCompletenessChecked);
+    // The freeze and two receipts: not confirmed either.
+    let mut short = roll();
+    short.pop();
+    let report = election_with_roll(&short, &[]);
+    assert!(report.roll().freeze().is_some());
+    assert_eq!(report.status().status(), Status::SourceCompletenessChecked);
+    // A receipt that disagrees holds the ledger.
+    let mut events = roll();
+    let freeze_body = roll::freeze(
+        roll::state(0x40),
+        roll::sources(&[roll::residents(b"ST-1", 0x10), roll::snapshot()]),
+    );
+    let mut other = roll::state(0x40);
+    other.entry_count += 1;
+    events.push((
+        SCHEMA_WITNESSED_EVENT,
+        roll::witnessed(
+            roll::receipt(
+                roll::C_PA,
+                freeze_body,
+                other,
+                Some(roll::sources(&[roll::residents(b"ST-1", 0x10), roll::snapshot()]).0),
+                false,
+            ),
+            &[roll::by(roll::C_PA)],
+            None,
+        ),
+    ));
+    let report = election_with_roll(&events, &[]);
+    assert!(report.roll().complete());
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert_eq!(
+        report.status().holds(),
+        HoldSet::empty().with(HoldReason::RollCustodyMismatch)
+    );
+    // A roll event that cannot be taken holds the ledger.
+    let mut events = roll();
+    events.push((
+        SCHEMA_WITNESSED_EVENT,
+        roll::witnessed(roll::snapshot(), &[roll::by(roll::SNAPSHOT)], Some(3)),
+    ));
+    let report = election_with_roll(&events, &[]);
+    assert_eq!(
+        report.status().holds(),
+        HoldSet::empty().with(HoldReason::RollEventRefused)
+    );
+    // A supplied contested check-in that does not verify holds the
+    // ledger; the public verifier, without it, does not.
+    let bad = object(
+        ityv_encoding::SCHEMA_CONTESTED_CHECKIN,
+        SCHEMA_VERSION_1,
+        &ityv_encoding::ContestedCheckin::new(
+            group(&ityv_encoding::ContestedMessage {
+                election_id: common::election(),
+                station_id: ityv_encoding::StationId::new(b"ST-1").unwrap(),
+                unit_id: ityv_encoding::UnitId::new(b"U-1A").unwrap(),
+                pseudonym: common::leak([9u8; 64]),
+                envelope_label: ityv_encoding::Token192([1; 24]),
+            }),
+            common::leak([0u8; ityv_encoding::HYBRID_SIG_LEN]),
+            &[],
+        )
+        .unwrap(),
+    );
+    let mut events = roll();
+    events.push((ityv_encoding::SCHEMA_CONTESTED_CHECKIN, bad));
+    let public = election_with_roll(&events, &[]);
+    assert_eq!(public.roll().contested_frames(), 1);
+    assert_eq!(public.status().status(), Status::CryptoTallyVerified);
+    let with_access = election_with_roll(&events, &[bad]);
+    assert_eq!(
+        with_access.status().holds(),
+        HoldSet::empty().with(HoldReason::ContestedCheckinInvalid)
+    );
 }
 
 #[test]

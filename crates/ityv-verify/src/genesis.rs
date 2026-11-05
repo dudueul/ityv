@@ -63,15 +63,16 @@ use ityv_crypto::Purpose;
 use ityv_encoding::{
     BallotStyleEntry, CustodyRoute, ENTRY_SET_COUNT, ElectionId, EntrySet, GenesisBody, GenesisBox,
     GenesisEntry, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, ModuleEntry, ReportingUnitEntry,
-    RosterSigner, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SetCommitment, SignedGenesis,
-    StationEntry, StationId, StationProgressPolicy, TimestampAuthorityEntry, TrusteeEntry,
-    WitnessRosterEntry, decode_object,
+    RollAuthorityEntry, RosterSigner, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SetCommitment,
+    SignedGenesis, StationEntry, StationId, StationProgressPolicy, TimestampAuthorityEntry,
+    TrusteeEntry, WitnessRosterEntry, decode_object,
 };
 use ityv_ledger::InclusionProof;
 use ityv_state::{Anchor, Entry, Genesis, Pinned};
 
 use crate::cross;
 use crate::error::{Error, Rule};
+use crate::roll;
 use crate::sets::{Appointments, Set};
 use crate::sigs::Material;
 use crate::timestamp;
@@ -98,7 +99,7 @@ pub struct AmendableSets<'a> {
     pub appointments: &'a [Hash512],
 }
 
-/// The four sets an amendment cannot change.
+/// The five sets an amendment cannot change.
 #[derive(Debug, Clone, Copy)]
 pub struct FixedSets<'a> {
     /// `BallotStyleEntry` objects.
@@ -109,6 +110,8 @@ pub struct FixedSets<'a> {
     pub witnesses: &'a [&'a [u8]],
     /// `TimestampAuthorityEntry` objects (ADR-0039).
     pub timestamp_authorities: &'a [&'a [u8]],
+    /// `RollAuthorityEntry` objects (ADR-0040).
+    pub roll_authorities: &'a [&'a [u8]],
 }
 
 /// A genesis as published: the `SignedGenesis` object and every entry.
@@ -155,6 +158,7 @@ pub(crate) struct Fixed<'a> {
     pub(crate) trustees: Set<'a, TrusteeEntry<'a>>,
     pub(crate) witnesses: Set<'a, WitnessRosterEntry<'a>>,
     pub(crate) timestamps: Set<'a, TimestampAuthorityEntry<'a>>,
+    pub(crate) rolls: Set<'a, RollAuthorityEntry<'a>>,
 }
 
 fn commitment(
@@ -208,6 +212,7 @@ impl<'a> Fixed<'a> {
             trustees: parse(state, input.trustees, sets)?,
             witnesses: parse(state, input.witnesses, sets)?,
             timestamps: parse(state, input.timestamp_authorities, sets)?,
+            rolls: parse(state, input.roll_authorities, sets)?,
         })
     }
 }
@@ -332,6 +337,7 @@ pub fn verify_genesis<'a>(
     let body = signed.genesis().ok_or(Error::body(0, Rule::Kind))?;
     let fixed = Fixed::parse(0, &input.fixed, body.sets())?;
     timestamp::check_authorities(0, &fixed.timestamps)?;
+    roll::check_authorities(0, &fixed.rolls, body.custody_quorum())?;
 
     let signing = signing_witnesses(0, &signed, &fixed.witnesses)?;
     let mut entries = Vec::with_capacity(signing.len());
@@ -716,5 +722,26 @@ impl<'a> VerifiedGenesis<'a> {
     #[must_use]
     pub fn timestamp_authority(&self, tsa_id: &[u8]) -> Option<&TimestampAuthorityEntry<'a>> {
         self.fixed.timestamps.find(tsa_id)
+    }
+
+    /// The roll's sources and custodians, in key order (fixed for the
+    /// election, ADR-0040).
+    pub fn roll_authorities(&self) -> impl Iterator<Item = &RollAuthorityEntry<'a>> + '_ {
+        self.fixed.rolls.items().iter().map(|i| &i.value)
+    }
+
+    /// The roll authority `authority_id`, if the genesis registers it.
+    #[must_use]
+    pub fn roll_authority(&self, authority_id: &[u8]) -> Option<&RollAuthorityEntry<'a>> {
+        self.fixed.rolls.find(authority_id)
+    }
+
+    /// The roll authority `authority_id`, proved against the last state.
+    #[must_use]
+    pub fn roll_authority_entry(
+        &self,
+        authority_id: &[u8],
+    ) -> Option<Entry<RollAuthorityEntry<'a>>> {
+        self.prove(&self.fixed.rolls, authority_id)
     }
 }

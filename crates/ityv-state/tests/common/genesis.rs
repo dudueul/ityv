@@ -587,6 +587,7 @@ pub(crate) fn body(
         commission_key: key_bytes(&commission().verifying_key()),
         committee_key: key_bytes(&committee().verifying_key()),
         quorum,
+        custody_quorum: 3,
         parties: &PARTIES,
         chambers: &CHAMBERS,
         sets: commitments,

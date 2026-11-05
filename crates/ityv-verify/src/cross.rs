@@ -439,5 +439,8 @@ fn check_keys(
     for (i, item) in f.witnesses.items().iter().enumerate() {
         keys.add(item.value.key, Some(EntrySet::Witnesses), i)?;
     }
+    for (i, item) in f.rolls.items().iter().enumerate() {
+        keys.add(item.value.key, Some(EntrySet::RollAuthorities), i)?;
+    }
     Ok(())
 }

@@ -18,6 +18,7 @@
 //! | [`boxes`] | 4. Every expected box through its state machine, following genesis amendments: opening, records, fallback, device swap, close invariants, late closes, custody, completeness | §4.3, §7, §14 4, VC-037..040, VC-100, VC-105, VC-106 |
 //! | [`records`] | 5. Cast records: OR proofs, record signatures, batch attestations, counter continuity, record set roots, `UNATTESTED` | §7.2.1, §7.5, §7.6, §14 5, VC-025..027, VC-053, VC-057 |
 //! | [`progress`] | Voting progress record: device streams in slot order, device swaps, station alarms and on-site checks, close comparisons | §7.10, ADR-0027, VC-102, VC-103, VC-106 |
+//! | [`roll`] | 6. The voter roll: source extracts, the freeze as their merge, custody receipts and the custody quorum, amendments with their sources, contested check-ins | §6.1, §6.2, §14 6, ADR-0033, ADR-0040, VC-107..111 |
 //! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
 //! | [`tally`] | 7. Tally: receipt resolutions, legal tally effects, tally scopes recomputed, aggregate openings against the commitments, paper counts per reporting unit | §10.6, §11, §14 7, VC-024, VC-042..044, VC-057, VC-063, VC-075, VC-099 |
 //! | [`audit`] | 8. Audit: freezes against the recomputed frames, the commit, the seed recomputed against the binding checkpoint and the observed beacon, the sample redrawn, opening references and comparisons, restricted openings reconstructed, escalation, full comparisons, findings, hand counts | §12, §14 8, VC-045..047, VC-059, VC-074 |
@@ -67,6 +68,7 @@ pub mod participation;
 pub mod progress;
 pub mod records;
 pub mod report;
+pub mod roll;
 mod sets;
 mod sigs;
 pub mod tally;
@@ -109,7 +111,12 @@ pub use records::{
     AcceptedRecord, BatchFinding, BatchProblem, BoxRecords, RecordRefusal, RecordStage,
     RejectedRecord, verify_records,
 };
-pub use report::{Publications, Report, verify_ledger, verify_ledger_with};
+pub use report::{Publications, Report, verify_ledger, verify_ledger_full, verify_ledger_with};
+pub use roll::{
+    ContestedFinding, ContestedReport, Custody, CustodyMismatch, RollEvent, RollInput, RollRefusal,
+    RollRefused, RollStage, TakenAmendment, TakenExtract, roll_entry_commitment,
+    roll_entry_included, verify_roll,
+};
 pub use tally::{
     ChunkOpening, ExpectedExclusion, OpeningOutcome, ScopeProblem, TallyEvent, TallyRefusal,
     TallyRefused, TallyStage, UnitTally, verify_tally,

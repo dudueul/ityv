@@ -18,7 +18,9 @@
 //! * the status vocabulary: `HOLD_REVIEW` exactly on a failure or hold, and
 //!   each status only with its steps passed;
 //! * the custody chain's first link: index, previous hash, organisations
-//!   and route.
+//!   and route;
+//! * the roll's custody quorum: the number of custodians and both
+//!   branches of government, counted from the codes (ADR-0040).
 //!
 //! Kani additionally checks every harness for panics, overflow and
 //! out-of-bounds access on all explored inputs.
@@ -789,4 +791,41 @@ fn audit_phase_is_exact() {
         .or_else(|| decide(second, counts[1], 1))
         .unwrap_or(AuditPhase::HandCount);
     assert_eq!(audit_phase(&rounds, frame, &counts), expected);
+}
+
+/// Any roll authority kind.
+fn any_roll_kind() -> ityv_encoding::RollAuthorityKind {
+    let code: u8 = kani::any();
+    match ityv_encoding::RollAuthorityKind::from_code(code) {
+        Some(kind) => kind,
+        None => {
+            kani::assume(false);
+            ityv_encoding::RollAuthorityKind::ResidentExtract
+        }
+    }
+}
+
+/// The roll's custody quorum (ADR-0040, VC-108) over three confirming
+/// kinds of any function, and each prefix of them, with any quorum: it
+/// holds exactly when the kinds coded 11 or more number at least the
+/// quorum and include the codes 11 (the court administration) and 12 (the
+/// Ministry of the Interior).
+#[kani::proof]
+#[kani::unwind(5)]
+fn custody_quorum_is_exact() {
+    let kinds = [any_roll_kind(), any_roll_kind(), any_roll_kind()];
+    let quorum: u8 = kani::any();
+    for len in 0..=3 {
+        let used = &kinds[..len];
+        let mut custodians = 0u8;
+        let mut judiciary = false;
+        let mut interior = false;
+        for k in used {
+            custodians += u8::from(k.code() >= 11);
+            judiciary |= k.code() == 11;
+            interior |= k.code() == 12;
+        }
+        let expected = custodians >= quorum && judiciary && interior;
+        assert_eq!(crate::roll::custody_quorum(used, quorum), expected);
+    }
 }

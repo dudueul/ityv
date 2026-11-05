@@ -1483,6 +1483,14 @@ pub(crate) fn station_record_of(boxes: &[(Bx, u64)]) -> Vec<(SchemaId, &'static 
     ticks
 }
 
+/// The complete roll of the one-station worlds (ADR-0040): ST-1's
+/// resident extract, the national snapshot, the freeze and three
+/// custodians' receipts, the court administration's with the pseudonym
+/// root.
+pub(crate) fn roll() -> Vec<(SchemaId, &'static [u8])> {
+    common::roll::standard(&[b"ST-1"])
+}
+
 /// A one-box election (BOX-1 at ST-1 in RU-1) whose module entries pin
 /// their provisioning records.
 pub(crate) fn election_world() -> &'static World {

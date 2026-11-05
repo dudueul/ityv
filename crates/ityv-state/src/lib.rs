@@ -19,6 +19,7 @@
 //! | [`issuance`] | Issuance and participation identities | `FAILURE_CASES.md` §0 |
 //! | [`tally`] | Tally-scope and aggregate-opening gates, trustee quorum, paper comparison | §11.1, §11.2, §11.5, VC-057, VC-063, VC-075 |
 //! | [`audit`] | Audit gates, audit signers, the escalation rule, the reason-code follow-ups, hand counts | §12, VC-045..047, VC-074 |
+//! | [`roll`] | Roll-event signers and the custody quorum | §6.1, ADR-0033, ADR-0040, VC-107, VC-108, VC-111 |
 //! | [`dispute`] | Dispute life cycle | §13, VC-048, VC-049 |
 //! | [`status`] | The verifier status vocabulary | §14, VC-049, VC-050 |
 //! | [`progress`] | Progress streams, alarms, observer counts and device swaps | §6.2, §6.3, §7.10, VC-102, VC-103 |
@@ -78,6 +79,7 @@ pub mod hold;
 pub mod issuance;
 pub mod progress;
 pub mod record;
+pub mod roll;
 pub mod sig;
 pub mod status;
 pub mod tally;
@@ -121,6 +123,7 @@ pub use record::{
     Disposition, Exclusion, Primary, Profile, Receipt, RecordEvent, RecordState, RecordStatus,
     TEST_STYLE_PREFIX, is_test_style,
 };
+pub use roll::{admit_amendment, admit_extract, admit_freeze, admit_receipt, custody_quorum};
 pub use sig::{Key, Signed, check_event, halves_differ};
 pub use status::{
     Evidence, LegalReference, Outcome, PURPOSE_LEGAL_DECISION, Publication, Status, StatusReport,

@@ -452,6 +452,7 @@ use crate::schema::events::{
 };
 use crate::schema::genesis::{CaptureProfile, RosterRole, StationKind};
 use crate::schema::genesis_body::AmendmentReason;
+use crate::schema::roll::{RollAmendmentReason, RollAuthorityKind, RollSourceKind};
 use crate::schema::tally::{ExclusionReason, ReceiptOutcome};
 use crate::schema::timestamp::TimestampAuthorityKind;
 use crate::schema::witnessed::EventRole;
@@ -483,7 +484,7 @@ static ORG_B: OrgId<'static> = match OrgId::new(b"B") {
 fn event_codes_are_exact() {
     let code: u8 = kani::any();
     let role = EventRole::from_code(code);
-    assert_eq!(role.is_some(), (1..=10).contains(&code));
+    assert_eq!(role.is_some(), (1..=12).contains(&code));
     if let Some(r) = role {
         assert_eq!(r.code(), code);
     }
@@ -951,5 +952,35 @@ fn timestamp_rules_are_exact() {
     assert_eq!(accuracy.is_some(), millis <= MAX_POLICY_ACCURACY_MS);
     if let Some(a) = accuracy {
         assert_eq!(a.millis(), millis);
+    }
+}
+
+/// The roll's codes (ADR-0040): an authority kind decodes exactly from
+/// 1–6 (sources) and 11–14 (custodians) and is a custodian exactly from
+/// 11; a source kind and an amendment reason decode exactly from 1–5, and
+/// each names a source, never a custodian, as its signer.
+#[kani::proof]
+fn roll_codes_are_exact() {
+    let code: u8 = kani::any();
+    let kind = RollAuthorityKind::from_code(code);
+    assert_eq!(
+        kind.is_some(),
+        (1..=6).contains(&code) || (11..=14).contains(&code)
+    );
+    if let Some(k) = kind {
+        assert_eq!(k.code(), code);
+        assert_eq!(k.is_custodian(), code >= 11);
+    }
+    let source = RollSourceKind::from_code(code);
+    assert_eq!(source.is_some(), (1..=5).contains(&code));
+    if let Some(s) = source {
+        assert_eq!(s.code(), code);
+        assert!(!s.authority().is_custodian());
+    }
+    let reason = RollAmendmentReason::from_code(code);
+    assert_eq!(reason.is_some(), (1..=5).contains(&code));
+    if let Some(r) = reason {
+        assert_eq!(r.code(), code);
+        assert!(!r.source().is_custodian());
     }
 }

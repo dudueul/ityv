@@ -58,6 +58,11 @@ exclude_re = [
     # cannot carry its own hash), so `<` and `<=` between their frames agree
     # (crates/ityv-verify/src/timestamp.rs, `verify_timestamps`).
     "replace < with <= in verify_timestamps",
+    # Equivalent: a custody receipt and the freeze or amendment it answers
+    # are two ledger events, which never share a frame, so `<` and `<=`
+    # between their frames agree (crates/ityv-verify/src/roll.rs,
+    # `Work::subject`).
+    "replace < with <= in Work<'_, 'a>::subject",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)

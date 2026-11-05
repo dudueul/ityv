@@ -449,6 +449,9 @@ fn through_records(world: &'static World) -> Book {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book
 }
 
@@ -1613,6 +1616,9 @@ fn two_style_tallied(world: &'static World) -> (Book, Vec<Cast>, Vec<Cast>) {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(5));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book.checkpoint();
     tally1(
         &mut book,
@@ -2228,6 +2234,9 @@ fn two_unit_tallied(world: &'static World) -> (Book, Vec<Cast>) {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(5));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book.checkpoint();
     tally1(
         &mut book,
@@ -2377,6 +2386,9 @@ fn large_tallied(world: &'static World, n: u64) -> (Book, Vec<Cast>) {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(n as u8));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book.checkpoint();
     let mut votes = [0u64; 5];
     for c in &casts {
@@ -2439,6 +2451,9 @@ fn an_empty_frame_is_not_a_vacuous_rule() {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book.checkpoint();
     tally1(
         &mut book,

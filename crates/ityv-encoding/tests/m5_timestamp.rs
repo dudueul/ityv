@@ -117,7 +117,7 @@ fn both_schemas_are_version_1_and_registered() {
     assert_eq!(EntrySet::TimestampAuthorities.index(), 11);
     assert!(!EntrySet::TimestampAuthorities.amendable());
     assert_eq!(EntrySet::TimestampAuthorities.version(), 1);
-    assert_eq!(EntrySet::ALL.last(), Some(&EntrySet::TimestampAuthorities));
+    assert_eq!(EntrySet::ALL.get(11), Some(&EntrySet::TimestampAuthorities));
     assert_eq!(
         <TimestampAuthorityEntry<'_> as GenesisEntry<'_>>::SET,
         EntrySet::TimestampAuthorities
