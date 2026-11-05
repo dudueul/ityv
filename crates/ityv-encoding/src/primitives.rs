@@ -353,15 +353,6 @@ const fn org_separator(byte: u8) -> bool {
     matches!(byte, b'.' | b'_' | b':' | b'-')
 }
 
-/// The bytes of an organisation name that name it: separators dropped,
-/// letters lowered.
-fn org_letters(org: &[u8]) -> impl Iterator<Item = u8> + '_ {
-    org.iter()
-        .copied()
-        .filter(|b| !org_separator(*b))
-        .map(|b| b.to_ascii_lowercase())
-}
-
 /// Whether `a` and `b` name one organisation, as every rule that counts
 /// organisations or keeps them apart compares them (witness and observer
 /// diversity, custody hand-offs, the roll custodians, the timestamp
@@ -376,5 +367,25 @@ fn org_letters(org: &[u8]) -> impl Iterator<Item = u8> + '_ {
 /// name stands for is the genesis reviewers' to check.
 #[must_use]
 pub fn same_org(a: OrgId<'_>, b: OrgId<'_>) -> bool {
-    org_letters(a.as_bytes()).eq(org_letters(b.as_bytes()))
+    let (left, right) = (a.as_bytes(), b.as_bytes());
+    let (mut at_left, mut at_right) = (0usize, 0usize);
+    // One loop, one step per byte of either name (at most the two lengths
+    // and one more): skip a separator on either side, else compare one
+    // letter of each. A single loop keeps the model checker's unwinding
+    // of the rules that call this small.
+    loop {
+        match (left.get(at_left), right.get(at_right)) {
+            (Some(l), _) if org_separator(*l) => at_left = at_left.saturating_add(1),
+            (_, Some(r)) if org_separator(*r) => at_right = at_right.saturating_add(1),
+            (Some(l), Some(r)) => {
+                if !l.eq_ignore_ascii_case(r) {
+                    return false;
+                }
+                at_left = at_left.saturating_add(1);
+                at_right = at_right.saturating_add(1);
+            }
+            (None, None) => return true,
+            (Some(_), None) | (None, Some(_)) => return false,
+        }
+    }
 }
