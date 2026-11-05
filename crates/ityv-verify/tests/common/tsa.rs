@@ -2,6 +2,14 @@
 //! (3.0 or later, on `PATH`) at test time, as `ityv-tsa`'s
 //! `tests/vectors/make.sh` makes its vectors.
 //!
+//! OpenSSL 3 is required, not optional: the tokens need its `ts`
+//! `ess_cert_id_alg` (an ESS v2 binding; `LibreSSL`, the `openssl` of macOS,
+//! has no such option and would bind with ESS v1, which the test pins
+//! refuse). The first use checks `openssl version` and fails every test
+//! that needs a token, with that message, when it is missing or another
+//! implementation: no test is skipped. Every integration test of this
+//! crate builds the test genesis, whose authorities these are.
+//!
 //! Five throwaway authorities' RSA-2048 keys are generated once per test
 //! process. Each certificate is self-signed with `openssl ca -selfsign`,
 //! valid from 2024-01-01 (the tests' election epoch is day 20 000,
@@ -19,8 +27,11 @@
 //!
 //! No private key is committed or left behind: a key lives in memory and is
 //! written to a fresh directory under the system temporary directory only
-//! for the one OpenSSL call that needs it; the directory is removed after
-//! each call.
+//! for the one OpenSSL call that needs it, and the directory is removed
+//! when the call ends, by a guard that also runs if the call panics. The
+//! directory's name has a random part and is created only if nothing is at
+//! that path (not an existing directory, not a symbolic link), so no other
+//! user of the temporary directory can have it read or written there.
 //!
 //! The authorities (indices of [`signer`]):
 //!
@@ -144,16 +155,69 @@ fn run(dir: &Path, args: &[&str], stdin: Option<&[u8]>) -> Vec<u8> {
     out.stdout
 }
 
-/// Runs `f` in a fresh directory that is removed afterwards.
-fn in_scratch<T>(f: impl FnOnce(&Path) -> T) -> T {
+/// A fresh directory, removed when dropped, also while a panic unwinds.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // Nothing to report from a destructor; a leftover directory is
+        // the one thing this guard exists to prevent.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A new directory under the system temporary directory, with a name no
+/// one can predict, made only if nothing is at that path yet.
+fn scratch() -> Scratch {
+    use core::hash::{BuildHasher as _, Hasher as _};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir: PathBuf =
-        std::env::temp_dir().join(std::format!("ityv-verify-tsa-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let result = f(&dir);
-    std::fs::remove_dir_all(&dir).unwrap();
-    result
+    // `RandomState` is keyed from the operating system's randomness.
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(n);
+    let random = hasher.finish();
+    let dir: PathBuf = std::env::temp_dir().join(std::format!(
+        "ityv-verify-tsa-{}-{n}-{random:016x}",
+        std::process::id()
+    ));
+    // `create_dir` fails if anything, a symbolic link included, is there.
+    std::fs::create_dir(&dir)
+        .unwrap_or_else(|e| panic!("a fresh scratch directory {}: {e}", dir.display()));
+    let guard = Scratch(dir);
+    let kind = std::fs::symlink_metadata(&guard.0).unwrap().file_type();
+    assert!(
+        kind.is_dir() && !kind.is_symlink(),
+        "{} is not a directory of ours",
+        guard.0.display()
+    );
+    guard
+}
+
+/// Runs `f` in a fresh directory that is removed afterwards, also if `f`
+/// panics.
+pub fn in_scratch<T>(f: impl FnOnce(&Path) -> T) -> T {
+    let dir = scratch();
+    f(&dir.0)
+}
+
+/// Fails, with a message, unless `openssl` on `PATH` is OpenSSL 3 or
+/// later (module documentation).
+fn require_openssl_3() {
+    let out = Command::new("openssl")
+        .arg("version")
+        .output()
+        .expect("the verifier's timestamp tests need `openssl` (OpenSSL 3.0 or later) on PATH");
+    let version = String::from_utf8_lossy(&out.stdout);
+    let major = version
+        .strip_prefix("OpenSSL ")
+        .and_then(|rest| rest.split('.').next())
+        .and_then(|major| major.parse::<u32>().ok());
+    assert!(
+        out.status.success() && major.is_some_and(|m| m >= 3),
+        "the verifier's timestamp tests need OpenSSL 3.0 or later as `openssl` on PATH \
+         (ESS v2 bindings, `ts` option `ess_cert_id_alg`); found: {}",
+        version.trim()
+    );
 }
 
 /// The bytes of a pin of `cert` (DER) with the given masks, the tests'
@@ -286,7 +350,10 @@ fn make_signer(index: usize) -> Signer {
 /// Signer `index` (module documentation), made once per process.
 pub fn signer(index: usize) -> &'static Signer {
     static SIGNERS_MADE: OnceLock<Vec<&'static Signer>> = OnceLock::new();
-    SIGNERS_MADE.get_or_init(|| (0..SIGNERS.len()).map(|i| leak(make_signer(i))).collect())[index]
+    SIGNERS_MADE.get_or_init(|| {
+        require_openssl_3();
+        (0..SIGNERS.len()).map(|i| leak(make_signer(i))).collect()
+    })[index]
 }
 
 fn authority_id(name: &'static str) -> AuthorityId<'static> {

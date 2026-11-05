@@ -677,6 +677,32 @@ fn a_record_without_a_token_names_an_earlier_stamped_event() {
     assert!(c.holds().is_empty());
 }
 
+#[test]
+fn openssl_scratch_directories_are_fresh_and_never_left_behind() {
+    // Keys are written to a scratch directory only for one OpenSSL call
+    // (`tests/common/tsa.rs`): it is removed even when the call panics,
+    // and every call gets its own, unpredictable directory.
+    let mut seen = std::path::PathBuf::new();
+    let unwound = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+        tsa::in_scratch(|dir| {
+            seen = dir.to_path_buf();
+            std::fs::write(dir.join("k.pem"), "not a key").unwrap();
+            panic!("an OpenSSL call failed");
+        })
+    }));
+    assert!(unwound.is_err());
+    assert!(!seen.as_os_str().is_empty());
+    assert!(!seen.exists(), "{} was left behind", seen.display());
+    let first = tsa::in_scratch(|dir| {
+        assert!(std::fs::read_dir(dir).unwrap().next().is_none());
+        dir.to_path_buf()
+    });
+    let second = tsa::in_scratch(std::path::Path::to_path_buf);
+    assert_ne!(first, second);
+    assert!(!first.exists() && !second.exists());
+    assert!(first.starts_with(std::env::temp_dir()));
+}
+
 /// `HoldSet` with one reason.
 struct HoldSetOf;
 
