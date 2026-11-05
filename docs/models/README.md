@@ -14,7 +14,7 @@
 java -XX:+UseParallelGC -jar tla2tools.jar -config LedgerWitness.cfg LedgerWitness.tla
 ```
 
-`tla2tools.jar`는 https://github.com/tlaplus/tlaplus/releases 의 공식 배포본 v1.8.0을 쓰며, `.github/workflows/models.yml`이 SHA-256으로 고정해 내려받아 실행한다. 모델 검사는 CI에서 수행되고 로컬 실행은 선택이다. 모델 상수는 `.cfg`에 있다. 증인 13, 정족수 9, 비잔틴 4의 실제 프로필은 상태 공간이 커서 TLC로 전수 검사하지 않으며, 모델의 가정 `2·Quorum − N > Byzantine`가 그 프로필에서도 성립함(18 − 13 = 5 > 4)을 `ASSUME`으로 고정한다. 더 큰 인스턴스는 Apalache의 유계 검사로 다룬다.
+`tla2tools.jar`는 https://github.com/tlaplus/tlaplus/releases 의 공식 안정 배포본 v1.7.4를 쓰며, `.github/workflows/models.yml`이 SHA-256으로 고정해 내려받아 실행한다. v1.8.0 태그는 야간 빌드마다 다시 올라오는 사전 배포본이라 체크섬으로 고정할 수 없어 쓰지 않는다(2026-10-30 빌드에 고정했던 체크섬이 2026-11-03 빌드로 바뀌며 깨졌다). 모델 검사는 CI에서 수행되고 로컬 실행은 선택이다. 모델 상수는 `.cfg`에 있다. 증인 13, 정족수 9, 비잔틴 4의 실제 프로필은 상태 공간이 커서 TLC로 전수 검사하지 않으며, 모델의 가정 `2·Quorum − N > Byzantine`가 그 프로필에서도 성립함(18 − 13 = 5 > 4)을 `ASSUME`으로 고정한다. 더 큰 인스턴스는 Apalache의 유계 검사로 다룬다.
 
 ## 실행 기록
 
