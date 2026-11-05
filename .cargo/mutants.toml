@@ -58,6 +58,13 @@ exclude_re = [
     # cannot carry its own hash), so `<` and `<=` between their frames agree
     # (crates/ityv-verify/src/timestamp.rs, `verify_timestamps`).
     "replace < with <= in verify_timestamps",
+    # Equivalent: the events a timestamp record can name are kept in a map
+    # filtered to the three schemas only to save memory. A record's target
+    # schema is one of those three (the decoder refuses any other, VC-117,
+    # Kani `timestamp_rules_are_exact`) and must equal the event's, so an
+    # unfiltered map finds the same targets
+    # (crates/ityv-verify/src/timestamp.rs, `stamped_schema`).
+    "replace stamped_schema -> bool with true",
     # Equivalent: a custody receipt and the freeze or amendment it answers
     # are two ledger events, which never share a frame, so `<` and `<=`
     # between their frames agree (crates/ityv-verify/src/roll.rs,
