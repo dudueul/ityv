@@ -84,4 +84,5 @@
 
 1. **번들 형식 3.** 감사 갈래(개정 1)와 시점확인·명부 갈래가 따로 번들 형식을 버전 2로 올렸다(비콘 관찰 섹션 0x0008, GENESIS 섹션의 genesis 집합 12·13). 통합하며 둘을 합친 버전 3으로 올렸다. 형식은 `tools/ityv-sim/README.md`의 "번들 형식"에 있다. 버전 1과 2는 읽지 않는다.
 2. **앵커 기한.** 검증기가 장부의 시점확인 토큰으로 정한다(ADR-0039 7항). 번들의 PUBLICATIONS에 있는 체크포인트와 영수증 구간은 읽지 않고, 호출자는 지금 시각과 게시판 기한만 넘긴다.
-3. **시뮬레이터.** 체크포인트마다 두 가상 기관(정부 운영과 정부 밖)이 찍는다. 감사의 고정 체크포인트도 시드보다 앞에서 찍으므로 감사 시나리오는 시점확인 규칙(`AuditRefusal::Unstamped`) 아래에서도 같은 결과에 닿는다.
+3. **시뮬레이터.** 체크포인트마다 두 가상 기관(정부 운영과 정부 밖)이 찍는다. 감사의 고정 체크포인트도 시드보다 앞에서 찍으므로 감사 시나리오는 시점확인 규칙(`AuditRefusal::Unstamped`) 아래에서도 같은 결과에 닿는다. `attack-seed-grinding`의 고정 체크포인트는 정직한 기관이 만든 때(공표 뒤)에 찍으므로 토큰 규칙으로도 걸리지만 먼저 걸린 `Late`가 보인다.
+4. **시나리오 7개.** `quick-roll-amended`, `attack-checkpoint-backdated`, `fault-anchor-missed`, `attack-tsa-unpinned`, `attack-roll-extract-after-freeze`, `fault-roll-amendment-short`, `attack-binding-unstamped`(빠른 묶음 43개, 전체 46개). 기존 시나리오의 기대 결과는 바뀌지 않았다.

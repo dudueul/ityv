@@ -168,7 +168,7 @@ fn last_checkpoint_bucket(steps: &[Step]) -> u64 {
         .rev()
         .find_map(|s| match s {
             Step::Checkpoint { bucket, .. } | Step::ForkCheckpoint { bucket, .. } => Some(*bucket),
-            Step::Event { .. } => None,
+            Step::Event { .. } | Step::Stamp { .. } => None,
         })
         .unwrap_or(0)
 }
@@ -321,7 +321,7 @@ fn audit_scenarios(out: &mut Vec<Scenario>, slips: &[Slip]) {
             (
                 "빠른 시연: 감사까지 끝난 선거",
                 "깨끗한 선거의 집계 뒤에 투표양식마다 감사 동결(표본 프레임과 라운드 규칙), 감사 약정(주사위 기록·비콘 지정·동결을 고정), 약정 직후의 고정 체크포인트, 비콘 공표 뒤의 시드, 표본 기록마다 신뢰기관의 열기 흔적과 감사인의 종이 대조(모두 일치)가 실렸다. 비콘 관찰(회차·출력·공표 구간)은 시연용 고정 자료다.",
-                "PAPER_AUDITED. 보류 없음. 고정 체크포인트가 비콘 공표보다 7구간 앞서고(규칙은 3구간 이상), 두 투표양식 모두 첫 라운드에서 끝났다. 비콘 관찰 없이 검증하면 감사를 끝낼 수 없어 CRYPTO_TALLY_VERIFIED에 머문다.",
+                "PAPER_AUDITED. 보류 없음. 고정 체크포인트가 비콘 공표보다 7구간 앞서고(규칙은 3구간 이상), 시드보다 앞 프레임에 정부 운영 기관과 정부 밖 기관의 시점확인 토큰이 공표 전 시각으로 있으며(ADR-0039), 두 투표양식 모두 첫 라운드에서 끝났다. 비콘 관찰 없이 검증하면 감사를 끝낼 수 없어 CRYPTO_TALLY_VERIFIED에 머문다.",
             ),
             expected(Status::PaperAudited, &[]),
             slips.to_vec(),
@@ -462,7 +462,14 @@ fn audit_scenarios(out: &mut Vec<Scenario>, slips: &[Slip]) {
         let mut a = Audit::new(e);
         a.freeze_all(&[]);
         a.commit();
-        a.checkpoint(a.t.published - 2);
+        // The witnesses date it two buckets before the publication; the
+        // honest timestamp authorities stamp it when it is made, after the
+        // publication.
+        let made = a.t.published + 1;
+        a.checkpoint_stamped(
+            a.t.published - 2,
+            &[(crate::tsa::GOV, made), (crate::tsa::FREE, made)],
+        );
         a.seed(|_, _| true);
         for style in ["S-HB", "S-NR"] {
             a.compare(style, |r| truthful(&r.cast));
@@ -475,7 +482,7 @@ fn audit_scenarios(out: &mut Vec<Scenario>, slips: &[Slip]) {
             (
                 "비콘을 본 뒤 고른 고정 체크포인트",
                 "감사 약정 뒤 체크포인트를 바로 자르지 않았다. 비콘 회차가 공표된 뒤, 공표 구간보다 2구간 앞선 시각을 적은 체크포인트에 증인 서명을 받았다. 시계가 1분 늦은 정직한 증인은 공표 직후에도 그 구간에 서명할 수 있으므로, 운영자는 비콘 값을 보고 원하는 표본이 나오는 체크포인트를 고를 수 있었다.",
-                "고정 체크포인트는 공표보다 3구간 이상 앞서야 한다(binding ≤ P − 3). 시드가 늦음(Late)으로 거부되고 그 뒤의 열기 흔적과 대조도 받지 않는다: HOLD_REVIEW.",
+                "고정 체크포인트는 공표보다 3구간 이상 앞서야 한다(binding ≤ P − 3). 시드가 늦음(Late)으로 거부되고 그 뒤의 열기 흔적과 대조도 받지 않는다: HOLD_REVIEW. 증인 시각을 속여도 소용없다: 정직한 시점확인 기관의 토큰은 체크포인트를 만든 때(공표 뒤)의 시각이라, 공표 구간보다 앞선 토큰을 요구하는 규칙(ADR-0039)으로도 거부된다. 검증기는 먼저 걸린 규칙(Late)을 보인다.",
             ),
             hold(&refused_seed),
             Vec::new(),
@@ -499,6 +506,31 @@ fn audit_scenarios(out: &mut Vec<Scenario>, slips: &[Slip]) {
                 "약정보다 이른 고정 체크포인트",
                 "감사 약정에 실제보다 늦은 시각을 적었다. 약정을 덮는 첫 체크포인트(증인이 시각을 증언한다)가 약정에 적힌 시각보다 한 구간 이르다.",
                 "증인이 증언한 시각은 줄지 않으므로 그런 약정의 시각은 증언된 것이 아니다. 시드가 Backdated로 거부되고 열기 흔적과 대조도 받지 않는다: HOLD_REVIEW.",
+            ),
+            hold(&refused_seed),
+            Vec::new(),
+        ));
+    }
+    {
+        // The binding checkpoint stamped by the government's authority
+        // alone.
+        let mut a = Audit::new(e);
+        a.freeze_all(&[]);
+        a.commit();
+        a.checkpoint_stamped(a.t.binding, &[(crate::tsa::GOV, a.t.binding)]);
+        a.seed(|_, _| true);
+        for style in ["S-HB", "S-NR"] {
+            a.compare(style, |r| truthful(&r.cast));
+        }
+        a.finish();
+        out.push(audited(
+            a,
+            "attack-binding-unstamped",
+            a_,
+            (
+                "한 기관만 찍은 고정 체크포인트",
+                "약정 직후의 고정 체크포인트에 정부 운영 시점확인 기관의 토큰만 있다. 정부 밖 기관의 토큰은 시드 전에 실리지 않았다. 증인 시각의 규칙(공표보다 3구간 이상 앞섬)은 지켰다.",
+                "고정 체크포인트가 비콘 공표 전에 있었음은 증인 정족수만이 아니라 정부 운영과 정부 밖, 두 운영 주체의 토큰이 함께 보여야 한다(ADR-0039 8항). 시드가 Unstamped로 거부되고 열기 흔적과 대조도 받지 않는다: HOLD_REVIEW.",
             ),
             hold(&refused_seed),
             Vec::new(),
@@ -1258,8 +1290,160 @@ fn quick_scenarios() -> Vec<Scenario> {
             Vec::new(),
         ));
     }
+    timestamp_and_roll_scenarios(e, &mut out);
     audit_scenarios(&mut out, &slips);
     out
+}
+
+/// The step after the roll's last event (its last custody receipt).
+fn after_roll(e: &Election, steps: &[Step]) -> usize {
+    let last = *e.roll().last().unwrap();
+    steps
+        .iter()
+        .position(|s| s.event_bytes() == Some(last))
+        .unwrap()
+}
+
+/// Scenarios of the timestamp tokens (ADR-0039) and the roll's custody
+/// (ADR-0040), quick set.
+fn timestamp_and_roll_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
+    use HoldReason as H;
+    let q = Set::Quick;
+    let a = Group::Attack;
+    let gov = crate::tsa::GOV;
+    let free = crate::tsa::FREE;
+    // A token earlier than the last checkpoint's witnesses' time.
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let bucket = last_checkpoint_bucket(&bld.plan.steps);
+        bld.plan.steps.push(Step::Stamp {
+            named: free,
+            by: free,
+            bucket: bucket - 2,
+        });
+        out.push(bld.scenario(
+            "attack-checkpoint-backdated",
+            q,
+            a,
+            (
+                "시점확인 토큰이 드러낸 체크포인트 시각",
+                "마지막 체크포인트에 정부 밖 시점확인 기관의 토큰이 하나 더 실렸다. 토큰은 그 체크포인트가 증인들이 적은 구간보다 두 구간(30분) 앞서 이미 있었다고 말한다. 증인 정족수가 시각을 늦춰 적었거나 기관이 시각을 속였다.",
+                "유효한 토큰의 가장 늦은 순간이 체크포인트 구간보다 허용(1구간)을 넘게 앞서므로 사슬이 그 체크포인트에서 끝나고(VC-116) 체크포인트 단계가 실패한다: HOLD_REVIEW(TimestampMismatch, StepFailed). 그 체크포인트가 덮던 프레임은 앞 체크포인트까지만 확인된다.",
+            ),
+            hold(&[H::TimestampMismatch, H::StepFailed]),
+            Vec::new(),
+        ));
+    }
+    // The last checkpoint never stamped, and its window passed.
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        if let Some(Step::Checkpoint { stamps, .. }) = bld
+            .plan
+            .steps
+            .iter_mut()
+            .rev()
+            .find(|step| matches!(step, Step::Checkpoint { .. }))
+        {
+            *stamps = 0;
+        }
+        let mut s = bld.scenario(
+            "fault-anchor-missed",
+            q,
+            a,
+            (
+                "앵커 기한을 넘긴 마지막 체크포인트",
+                "깨끗한 선거와 같은 장부. 다만 마지막 체크포인트에 시점확인 토큰이 하나도 실리지 않았고, 호출자의 지금 시각은 그 앵커 창(체크포인트 구간 + 4)을 넘었다.",
+                "UNVERIFIED. 앵커 기한 위반은 보류가 아니라 미검증이다(FAILURE_CASES §8): 장부가 그 시각에 있었다는 외부 증거가 없으므로 어떤 단계가 통과해도 사다리를 오르지 않는다. 늦게라도 두 기관의 토큰이 실리고 그 위의 체크포인트가 앵커되면 풀린다.",
+            ),
+            expected(Status::Unverified, &[]),
+            Vec::new(),
+        );
+        s.publications.now = s.publications.checkpoint + 5;
+        out.push(s);
+    }
+    // A pinned authority's name over another authority's token.
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let bucket = last_checkpoint_bucket(&bld.plan.steps);
+        bld.plan.steps.push(Step::Stamp {
+            named: gov,
+            by: crate::tsa::ROGUE,
+            bucket,
+        });
+        out.push(bld.scenario(
+            "attack-tsa-unpinned",
+            q,
+            a,
+            (
+                "고정되지 않은 기관의 토큰",
+                "genesis가 고정하지 않은 기관의 토큰을, 정부 운영 시점확인 기관의 이름을 붙여 마지막 체크포인트에 실었다. 토큰 자체는 형식이 맞고 서명도 맞다.",
+                "그 기관의 어느 핀으로도 토큰이 검증되지 않으므로 기록을 받지 않고 장부가 HOLD_REVIEW(TimestampInvalid). 체크포인트 자체는 두 기관의 정상 토큰으로 앵커되어 있다.",
+            ),
+            hold(&[H::TimestampInvalid]),
+            Vec::new(),
+        ));
+    }
+    // An extract after the freeze.
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let at = after_roll(e, &bld.plan.steps);
+        insert_after(
+            &mut bld.plan.steps,
+            at,
+            Step::event(SCHEMA_WITNESSED_EVENT, e.roll_late_extract()),
+        );
+        out.push(bld.scenario(
+            "attack-roll-extract-after-freeze",
+            q,
+            a,
+            (
+                "동결 뒤에 바꾼 명부 추출",
+                "선거인명부가 동결되고 보관 기관 셋이 영수증을 낸 뒤, 구청장이 한빛초등학교 투표구의 주민등록 추출을 다른 내용으로 하나 더 서명해 실었다.",
+                "동결 뒤에는 추출을 받지 않는다. 명부를 바꾸는 길은 출처 서명과 보관 기관 정족수의 새 영수증이 있는 변경뿐이다(VC-111). 그 추출은 거부되고 HOLD_REVIEW(RollEventRefused).",
+            ),
+            hold(&[H::RollEventRefused]),
+            Vec::new(),
+        ));
+    }
+    // An amendment with its receipts.
+    for (name, custodians, text, expected_outcome) in [
+        (
+            "quick-roll-amended",
+            &["R-C-JUD", "R-C-INT", "R-C-IVC"][..],
+            (
+                "빠른 시연: 동결 뒤의 명부 변경",
+                "깨끗한 선거와 같은 장부에, 명부 동결 뒤 이의신청 결정으로 선거인 한 명을 더한 변경 1이 실렸다. 선관위·위원회·구청장(사유의 출처)이 서명했고, 보관 기관 셋(법원행정처, 행정안전부, 독립검증위원회)이 같은 새 명부 값에 영수증을 냈다.",
+                "CRYPTO_TALLY_VERIFIED. 보류 없음. 변경은 보관 정족수(3)와 두 부처를 갖추어 효력이 있다(VC-108, VC-111).",
+            ),
+            expected(Status::CryptoTallyVerified, &[]),
+        ),
+        (
+            "fault-roll-amendment-short",
+            &["R-C-JUD", "R-C-INT"][..],
+            (
+                "보관 정족수에 못 미친 명부 변경",
+                "명부 동결 뒤 이의신청 결정으로 선거인 한 명을 더한 변경 1이 실렸지만, 보관 기관 둘(법원행정처, 행정안전부)만 영수증을 냈다. genesis의 보관 정족수는 셋이다.",
+                "변경이 효력을 얻지 못해 참여 장부 단계(14절 6단계)가 끝나지 않는다. 보류는 아니다(영수증이 더 실리면 풀린다). 집계는 확인되었어도 SOURCE_COMPLETENESS_CHECKED에 머문다.",
+            ),
+            expected(Status::SourceCompletenessChecked, &[]),
+        ),
+    ] {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let first = after_roll(e, &bld.plan.steps);
+        for (at, event) in (first..).zip(e.roll_amendment(custodians)) {
+            insert_after(
+                &mut bld.plan.steps,
+                at,
+                Step::event(SCHEMA_WITNESSED_EVENT, event),
+            );
+        }
+        let group = if name.starts_with("quick") {
+            Group::Normal
+        } else {
+            a
+        };
+        out.push(bld.scenario(name, q, group, text, expected_outcome, Vec::new()));
+    }
 }
 
 fn full_scenarios() -> Vec<Scenario> {

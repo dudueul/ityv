@@ -74,6 +74,15 @@ pub const FREE: Authority = Authority {
 /// Both authorities, government first.
 pub const AUTHORITIES: [Authority; 2] = [GOV, FREE];
 
+/// An authority no genesis pins: its tokens are well formed, but no pin
+/// names its certificate (an attack scenario puts its token under a
+/// pinned authority's name).
+pub const ROGUE: Authority = Authority {
+    id: "TSA-ROGUE-SIM",
+    operator: "ROGUE-SIM",
+    kind: TimestampAuthorityKind::NonGovernment,
+};
+
 fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     let len = content.len();
@@ -324,12 +333,27 @@ pub fn record(
     bucket: u64,
     serial: u64,
 ) -> &'static [u8] {
-    let token = leak_slice(token(a, target, in_bucket(bucket), serial));
+    record_named(election, a, a, schema, target, bucket, serial)
+}
+
+/// As [`record`], with `by`'s token in a record that names `named`: the
+/// same authority for an honest record, another one for a forged record.
+#[must_use]
+pub fn record_named(
+    election: ElectionId<'static>,
+    named: Authority,
+    by: Authority,
+    schema: SchemaId,
+    target: &Hash512,
+    bucket: u64,
+    serial: u64,
+) -> &'static [u8] {
+    let token = leak_slice(token(by, target, in_bucket(bucket), serial));
     let record = TimestampRecord::new(&TimestampRecordParts {
         election_id: election,
         target_schema: schema,
         target_hash: *target,
-        authority_id: AuthorityId::new(a.id.as_bytes()).unwrap(),
+        authority_id: AuthorityId::new(named.id.as_bytes()).unwrap(),
         token: Some(token),
     })
     .unwrap();

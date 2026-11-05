@@ -35,24 +35,25 @@ use ityv_encoding::{
     ProgressAlarm, ProgressCheckBody, ProgressCheckParts, ProgressFinding, ProgressTick,
     Pseudonyms, QuorumSig, QuorumSigned, ReceiptEntries, ReceiptEntry, ReceiptOutcome,
     ReceiptResolutionBody, ReceiptResolutionParts, ReportingUnitEntry, ReportingUnitId,
-    RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody, RollCustodyReceiptParts,
-    RollFreezeBody, RollFreezeParts, RollSourceExtractBody, RollSourceExtractParts, RollSourceKind,
-    RollState, RosterRole, RosterSigner, RouteId, SCHEMA_AGGREGATE_OPENING_BODY,
-    SCHEMA_BATCH_ATTEST, SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY,
-    SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_PROGRESS_BODY, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY,
+    RollAmendmentBody, RollAmendmentParts, RollAmendmentReason, RollAuthorityEntry,
+    RollAuthorityKind, RollCustodyReceiptBody, RollCustodyReceiptParts, RollFreezeBody,
+    RollFreezeParts, RollSourceExtractBody, RollSourceExtractParts, RollSourceKind, RollState,
+    RosterRole, RosterSigner, RouteId, SCHEMA_AGGREGATE_OPENING_BODY, SCHEMA_BATCH_ATTEST,
+    SCHEMA_BATCH_ATTEST_BODY, SCHEMA_BOX_CLOSE, SCHEMA_BOX_CLOSE_BODY, SCHEMA_BOX_OPENED_BODY,
+    SCHEMA_BOX_PROGRESS_BODY, SCHEMA_CAST_RECORD, SCHEMA_CAST_RECORD_BODY,
     SCHEMA_CHECKIN_PROGRESS_BODY, SCHEMA_DISPUTE_EVENT_BODY, SCHEMA_FALLBACK_BODY,
     SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_GENESIS_BODY, SCHEMA_ISSUANCE_COUNT_BODY,
     SCHEMA_LATE_BATCH_CLOSE_BODY, SCHEMA_LEGAL_AUTHORIZATION, SCHEMA_MODULE_PROVISIONED,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_PARTICIPATION_SET,
     SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_CHECK_BODY, SCHEMA_PROGRESS_TICK,
-    SCHEMA_QUORUM_SIGNED, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
-    SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, Scalar32, Scope, ScopeSet, SetCommitment, ShareHolder, SignedGenesis,
-    SignedLegalAuthorization, SignerId, SignerRole, StationEntry, StationId, StationKind,
-    StationParts, StationProgressPolicy, TallyScopeBody, TallyScopeParts, TimeBucket, Token192,
-    TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry, WitnessedEvent, Writer,
-    purpose_of, write_quorum_message,
+    SCHEMA_QUORUM_SIGNED, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_ROLL_AMENDMENT_BODY,
+    SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY,
+    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Scalar32, Scope, ScopeSet, SetCommitment,
+    ShareHolder, SignedGenesis, SignedLegalAuthorization, SignerId, SignerRole, StationEntry,
+    StationId, StationKind, StationParts, StationProgressPolicy, TallyScopeBody, TallyScopeParts,
+    TimeBucket, Token192, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry,
+    WitnessedEvent, Writer, purpose_of, write_quorum_message,
 };
 use ityv_encoding::{
     SCHEMA_AUDIT_COMMIT_BODY, SCHEMA_AUDIT_FINDING_BODY, SCHEMA_AUDIT_FREEZE_BODY,
@@ -361,6 +362,15 @@ pub const ROLL_AUTHORITIES: [(&str, &str, RollAuthorityKind); 5] = [
         RollAuthorityKind::ResidentSnapshot,
     ),
 ];
+
+/// The roll's extracts with their sources, the freeze body, the frozen
+/// state and the sources root.
+type RollBodies = (
+    Vec<(&'static [u8], &'static str)>,
+    &'static [u8],
+    RollState,
+    Hash512,
+);
 
 /// The options of a style with `candidates` candidates (BLANK and
 /// UNREADABLE added).
@@ -1169,42 +1179,48 @@ impl Election {
     // -----------------------------------------------------------------
     // The voter roll (ADR-0033, ADR-0040).
 
-    /// A complete roll: each election-day station's resident extract by
-    /// the district head, the Ministry's snapshot, the freeze of their
-    /// merge, and the receipts of the three custodians (the court
-    /// administration with the pseudonym root). Each is a `WitnessedEvent`.
-    #[must_use]
-    pub fn roll(&self) -> Vec<&'static [u8]> {
-        let election_id = self.election_id();
-        let extract = |kind, precinct: Option<&'static str>, seed: &[u8]| {
-            let authority = if kind == RollSourceKind::Snapshot {
-                "R-SNAPSHOT"
-            } else {
-                "R-GU"
-            };
-            let body = object(
-                SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
-                &RollSourceExtractBody::new(&RollSourceExtractParts {
-                    election_id,
-                    authority_id: ityv_encoding::AuthorityId::new(text(authority)).unwrap(),
-                    kind,
-                    precinct: precinct.map(|p| StationId::new(text(p)).unwrap()),
-                    reference_day: EpochDay::new(EPOCH_DAY - 30),
-                    entry_count: 1_000,
-                    entries_root: hash_of("roll-extract", &[self.eid.as_bytes(), seed]),
-                })
-                .unwrap(),
-            );
-            (body, authority)
+    /// The roll's resident extract for precinct `precinct` (or the
+    /// Ministry's snapshot without one), with entries derived from `seed`:
+    /// its body and its source.
+    fn roll_extract(
+        &self,
+        kind: RollSourceKind,
+        precinct: Option<&'static str>,
+        seed: &[u8],
+    ) -> (&'static [u8], &'static str) {
+        let authority = if kind == RollSourceKind::Snapshot {
+            "R-SNAPSHOT"
+        } else {
+            "R-GU"
         };
+        let body = object(
+            SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
+            &RollSourceExtractBody::new(&RollSourceExtractParts {
+                election_id: self.election_id(),
+                authority_id: ityv_encoding::AuthorityId::new(text(authority)).unwrap(),
+                kind,
+                precinct: precinct.map(|p| StationId::new(text(p)).unwrap()),
+                reference_day: EpochDay::new(EPOCH_DAY - 30),
+                entry_count: 1_000,
+                entries_root: hash_of("roll-extract", &[self.eid.as_bytes(), seed]),
+            })
+            .unwrap(),
+        );
+        (body, authority)
+    }
+
+    /// The roll's extracts (every election-day station's, then the
+    /// snapshot), the freeze body over them, the frozen state and the
+    /// sources root.
+    fn roll_bodies(&self) -> RollBodies {
         let mut extracts: Vec<(&'static [u8], &'static str)> = self
             .spec
             .stations
             .iter()
             .filter(|s| s.kind == StationKind::ElectionDay)
-            .map(|s| extract(RollSourceKind::Residents, Some(s.id), s.id.as_bytes()))
+            .map(|s| self.roll_extract(RollSourceKind::Residents, Some(s.id), s.id.as_bytes()))
             .collect();
-        extracts.push(extract(RollSourceKind::Snapshot, None, b"snapshot"));
+        extracts.push(self.roll_extract(RollSourceKind::Snapshot, None, b"snapshot"));
         let mut hashes: Vec<Hash512> = extracts.iter().map(|(b, _)| object_hash(b)).collect();
         hashes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
         let sources_root = sorted_set_root(&hashes).unwrap();
@@ -1217,7 +1233,7 @@ impl Election {
         let freeze = object(
             SCHEMA_ROLL_FREEZE_BODY,
             &RollFreezeBody::new(&RollFreezeParts {
-                election_id,
+                election_id: self.election_id(),
                 state,
                 sources_root,
                 source_count: u32::try_from(extracts.len()).unwrap(),
@@ -1225,41 +1241,136 @@ impl Election {
             })
             .unwrap(),
         );
+        (extracts, freeze, state, sources_root)
+    }
+
+    /// The commission and the committee, who sign the freeze and every
+    /// amendment.
+    fn roll_authorities(&self) -> [Person; 2] {
+        [
+            Person {
+                id: "nec",
+                role: EventRole::Commission,
+                org: "NEC",
+                key: self.commission(),
+            },
+            Person {
+                id: "ivc",
+                role: EventRole::Committee,
+                org: "IVC",
+                key: self.committee(),
+            },
+        ]
+    }
+
+    /// The receipts of `custodians` for the roll state `state` of the
+    /// freeze or amendment body `subject` (the court administration's
+    /// carries the pseudonym root; a freeze's carry the sources root).
+    fn roll_receipts(
+        &self,
+        subject: &'static [u8],
+        state: RollState,
+        sources_root: Option<Hash512>,
+        custodians: &[&'static str],
+        bucket: u64,
+    ) -> Vec<&'static [u8]> {
+        custodians
+            .iter()
+            .map(|custodian| {
+                let receipt = object(
+                    SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
+                    &RollCustodyReceiptBody::new(&RollCustodyReceiptParts {
+                        election_id: self.election_id(),
+                        custodian: ityv_encoding::AuthorityId::new(text(custodian)).unwrap(),
+                        subject_hash: object_hash(subject),
+                        entries_root: state.entries_root,
+                        entry_count: state.entry_count,
+                        counts_hash: state.counts_hash,
+                        sources_root,
+                        pseudonym_root: (*custodian == "R-C-JUD").then_some(state.pseudonym_root),
+                        time_bucket: TimeBucket::new(bucket),
+                    })
+                    .unwrap(),
+                );
+                self.witnessed(receipt, &[self.roll_signer(custodian)], 0)
+            })
+            .collect()
+    }
+
+    /// A complete roll: each election-day station's resident extract by
+    /// the district head, the Ministry's snapshot, the freeze of their
+    /// merge, and the receipts of the three custodians (the court
+    /// administration with the pseudonym root). Each is a `WitnessedEvent`.
+    #[must_use]
+    pub fn roll(&self) -> Vec<&'static [u8]> {
+        let (extracts, freeze, state, sources_root) = self.roll_bodies();
         let mut events: Vec<&'static [u8]> = extracts
             .iter()
             .map(|(body, authority)| self.witnessed(body, &[self.roll_signer(authority)], 0))
             .collect();
-        let commission = Person {
-            id: "nec",
-            role: EventRole::Commission,
-            org: "NEC",
-            key: self.commission(),
+        events.push(self.witnessed(freeze, &self.roll_authorities(), 0));
+        events.extend(self.roll_receipts(
+            freeze,
+            state,
+            Some(sources_root),
+            &["R-C-JUD", "R-C-INT", "R-C-IVC"],
+            1,
+        ));
+        events
+    }
+
+    /// A second resident extract of the first election-day station, with
+    /// other entries, signed by its district head: after the freeze no
+    /// extract is taken (ADR-0040; a change goes through an amendment).
+    #[must_use]
+    pub fn roll_late_extract(&self) -> &'static [u8] {
+        let station = self
+            .spec
+            .stations
+            .iter()
+            .find(|s| s.kind == StationKind::ElectionDay)
+            .unwrap();
+        let (body, authority) = self.roll_extract(
+            RollSourceKind::Residents,
+            Some(station.id),
+            b"added after the freeze",
+        );
+        self.witnessed(body, &[self.roll_signer(authority)], 0)
+    }
+
+    /// Amendment 1 of the roll: an objection decision of the district
+    /// head (one voter added), signed by the commission, the committee and
+    /// the district head, then the receipts of `custodians` for it.
+    #[must_use]
+    pub fn roll_amendment(&self, custodians: &[&'static str]) -> Vec<&'static [u8]> {
+        let (_, freeze, frozen, _) = self.roll_bodies();
+        let state = RollState {
+            entries_root: hash_of("roll-entries-amended", &[self.eid.as_bytes()]),
+            entry_count: frozen.entry_count + 1,
+            counts_hash: hash_of("roll-counts-amended", &[self.eid.as_bytes()]),
+            pseudonym_root: hash_of("roll-pseudonyms-amended", &[self.eid.as_bytes()]),
         };
-        let committee = Person {
-            id: "ivc",
-            role: EventRole::Committee,
-            org: "IVC",
-            key: self.committee(),
-        };
-        events.push(self.witnessed(freeze, &[commission, committee], 0));
-        for (i, custodian) in ["R-C-JUD", "R-C-INT", "R-C-IVC"].into_iter().enumerate() {
-            let receipt = object(
-                SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
-                &RollCustodyReceiptBody::new(&RollCustodyReceiptParts {
-                    election_id,
-                    custodian: ityv_encoding::AuthorityId::new(text(custodian)).unwrap(),
-                    subject_hash: object_hash(freeze),
-                    entries_root: state.entries_root,
-                    entry_count: state.entry_count,
-                    counts_hash: state.counts_hash,
-                    sources_root: Some(sources_root),
-                    pseudonym_root: (i == 0).then_some(state.pseudonym_root),
-                    time_bucket: TimeBucket::new(1),
-                })
-                .unwrap(),
-            );
-            events.push(self.witnessed(receipt, &[self.roll_signer(custodian)], 0));
-        }
+        let amendment = object(
+            SCHEMA_ROLL_AMENDMENT_BODY,
+            &RollAmendmentBody::new(&RollAmendmentParts {
+                election_id: self.election_id(),
+                seq: 1,
+                previous_hash: object_hash(freeze),
+                reason: RollAmendmentReason::ObjectionDecision,
+                authority_id: ityv_encoding::AuthorityId::new(text("R-GU")).unwrap(),
+                basis_hash: hash_of("roll-objection-decision", &[self.eid.as_bytes()]),
+                state,
+                time_bucket: TimeBucket::new(2),
+            })
+            .unwrap(),
+        );
+        let [commission, committee] = self.roll_authorities();
+        let mut events = vec![self.witnessed(
+            amendment,
+            &[commission, committee, self.roll_signer("R-GU")],
+            0,
+        )];
+        events.extend(self.roll_receipts(amendment, state, None, custodians, 3));
         events
     }
 

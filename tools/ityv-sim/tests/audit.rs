@@ -236,6 +236,10 @@ fn each_attack_on_the_seed_draws_its_refusal() {
             "attack-commit-conflict",
             (AuditEvent::Commit, AuditRefusal::Conflict),
         ),
+        (
+            "attack-binding-unstamped",
+            (AuditEvent::Seed, AuditRefusal::Unstamped),
+        ),
     ] {
         let s = named(name);
         let r = verify(&s, ledger(&s));

@@ -48,6 +48,19 @@ pub enum Step {
         /// How many authorities stamp it (0 to 2).
         stamps: usize,
     },
+    /// A timestamp record over the last checkpoint so far: the token of
+    /// `by`, issued a minute into `bucket`, in a record that names
+    /// `named`. An honest record has `named == by` and the checkpoint's
+    /// own bucket; scenarios use other buckets (an early token) or another
+    /// signer (a forged record).
+    Stamp {
+        /// The authority the record names.
+        named: crate::tsa::Authority,
+        /// The authority whose token it carries.
+        by: crate::tsa::Authority,
+        /// The bucket a minute into which the token was issued.
+        bucket: u64,
+    },
     /// A second checkpoint under the previous checkpoint's sequence
     /// number over fewer frames: a rollback the witnesses signed (a fork
     /// of the checkpoint chain).
@@ -76,7 +89,7 @@ impl Step {
     pub const fn event_bytes(&self) -> Option<&'static [u8]> {
         match self {
             Self::Event { event, .. } => Some(event),
-            Self::Checkpoint { .. } | Self::ForkCheckpoint { .. } => None,
+            Self::Checkpoint { .. } | Self::Stamp { .. } | Self::ForkCheckpoint { .. } => None,
         }
     }
 }
@@ -109,6 +122,8 @@ struct Book<'e> {
     previous: Option<(u64, Hash512)>,
     bucket: Option<u64>,
     serial: u64,
+    /// The last checkpoint event.
+    checkpoint_event: Option<&'static [u8]>,
 }
 
 impl Book<'_> {
@@ -169,7 +184,25 @@ impl Book<'_> {
         self.previous = self.last.map(|(s, h, _)| (s, h));
         self.last = Some((seq, object_hash(body), size));
         self.bucket = Some(bucket);
+        self.checkpoint_event = Some(event);
         self.push(SCHEMA_SIGNED_CHECKPOINT, event, event);
+    }
+
+    /// A record naming `named` with `by`'s token over the last checkpoint,
+    /// issued a minute into `bucket`.
+    fn stamp_with(&mut self, named: crate::tsa::Authority, by: crate::tsa::Authority, bucket: u64) {
+        let target = object_hash(self.checkpoint_event.unwrap());
+        self.serial += 1;
+        let record = crate::tsa::record_named(
+            self.election.election_id(),
+            named,
+            by,
+            SCHEMA_SIGNED_CHECKPOINT,
+            &target,
+            bucket,
+            self.serial,
+        );
+        self.push(SCHEMA_TIMESTAMP_RECORD, record, record);
     }
 
     /// The tokens of the first `stamps` authorities over the last event (a
@@ -207,6 +240,7 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
         previous: None,
         bucket: None,
         serial: 0,
+        checkpoint_event: None,
     };
     for step in steps {
         match step {
@@ -229,6 +263,7 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
                 book.checkpoint(seq, previous, size, *bucket, 0);
                 book.stamp(*stamps, *bucket);
             }
+            Step::Stamp { named, by, bucket } => book.stamp_with(*named, *by, *bucket),
             Step::ForkCheckpoint { bucket, dropped } => {
                 let (seq, _, size) = book.last.unwrap();
                 let previous = book.previous.map_or(Hash512::ZERO, |(_, h)| h);
