@@ -1390,6 +1390,22 @@ fn refuses_a_roll_authority_set_that_breaks_a_rule() {
     let mut d = base.clone();
     d.rolls[5].org_id = OrgId::new(b"MOIS-2").unwrap();
     assert_eq!(verify(&d), Ok(()));
+    // A custodian of a reporting unit's election commission, however
+    // spelled (the final review's F7): the commission would count toward
+    // the quorum that confirms its own roll. A source may be one.
+    for spelling in [b"NEC-D".as_slice(), b"nec_d", b"NECD"] {
+        let mut d = base.clone();
+        d.rolls[5].org_id = OrgId::new(spelling).unwrap();
+        assert_eq!(
+            verify(&d),
+            Err(at(set, 5, Rule::RollCustodians)),
+            "{}",
+            String::from_utf8_lossy(spelling)
+        );
+    }
+    let mut d = base.clone();
+    d.rolls[6].org_id = OrgId::new(b"nec-d").unwrap();
+    assert_eq!(verify(&d), Ok(()));
     // A source may share its organisation with a custodian (the court
     // administration keeps the deaths and a copy).
     let mut d = base.clone();

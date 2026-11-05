@@ -48,6 +48,7 @@ pub use primitives::{
     AuthorityId, BallotStyleId, BoxId, Bytes, Day, ElectionId, Hash512, IDENT_MAX_STANDARD, Ident,
     KeysetId, LedgerId, ModuleId, ObserverId, OrgId, Point32, ReportingUnitId, RouteId, Scalar32,
     SchemaId, Seq, SignerId, StationId, TimeBucket, Token192, TreeSize, TrusteeId, UnitId,
+    same_org,
 };
 pub use reader::Reader;
 pub use schema::attestation::{

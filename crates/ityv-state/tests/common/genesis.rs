@@ -85,6 +85,11 @@ const WITNESS_IDS: [&[u8]; WITNESS_COUNT] = [
 const ORGS: [&[u8]; 7] = [
     b"ORG-1", b"ORG-2", b"ORG-3", b"ORG-4", b"ORG-5", b"ORG-6", b"ORG-7",
 ];
+/// The same seven organisations spelled another way (`same_org`): the
+/// witnesses from the eighth on write their organisation so.
+const SPELLED: [&[u8]; 7] = [
+    b"org_1", b"Org.2", b"org3", b"ORG:4", b"org-5", b"o-r-g-6", b"ORG_7",
+];
 const PROVIDERS: [&[u8]; 4] = [b"PROV-1", b"PROV-2", b"PROV-3", b"PROV-4"];
 const REGIONS: [&[u8]; 3] = [b"REG-1", b"REG-2", b"REG-3"];
 
@@ -96,7 +101,11 @@ fn witness(i: usize) -> WitnessRosterEntry<'static> {
     let id = |b: &'static [u8]| Ident::new(b, 64).unwrap();
     WitnessRosterEntry {
         witness_id: id(WITNESS_IDS[i]),
-        org_id: org(ORGS[i % ORGS.len()]),
+        org_id: org(if i < ORGS.len() {
+            ORGS[i]
+        } else {
+            SPELLED[i % SPELLED.len()]
+        }),
         provider: id(PROVIDERS[i % PROVIDERS.len()]),
         region: id(REGIONS[i % REGIONS.len()]),
         key: key_bytes(&witness_key(i).verifying_key()),

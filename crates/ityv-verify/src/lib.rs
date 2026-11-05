@@ -64,7 +64,6 @@ pub mod disputes;
 pub mod error;
 pub mod genesis;
 pub mod index;
-mod org;
 pub mod participation;
 pub mod progress;
 pub mod records;

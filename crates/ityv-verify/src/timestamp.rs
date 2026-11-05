@@ -75,7 +75,7 @@ use ityv_encoding::{
     SCHEMA_LEGAL_DECISION_REF_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
     SCHEMA_SIGNED_GENESIS, SCHEMA_TIMESTAMP_RECORD, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
     TimeBucket, TimestampAuthorityEntry, TimestampAuthorityKind, TimestampRecord,
-    WitnessRosterEntry, WitnessedEvent, decode_object, schema_version,
+    WitnessRosterEntry, WitnessedEvent, decode_object, same_org, schema_version,
 };
 use ityv_ledger::{ANCHOR_WINDOW, CLOCK_ERROR_BUCKETS, SCHEMA_SIGNED_CHECKPOINT};
 use ityv_state::{HoldReason, HoldSet};
@@ -84,7 +84,6 @@ use ityv_tsa::{DigestAlgorithm, Imprint, PinnedTsa, TsaError, VerifiedTimestamp,
 use crate::error::{Error, Rule};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
-use crate::org::same_org;
 use crate::sets::Set;
 
 /// Seconds in a day.

@@ -16,7 +16,7 @@
 use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
     BoxClose, CloseCounts, EventRole, MAX_ATTESTATIONS, MIN_CLERKS, MIN_OBSERVERS, ModuleCounters,
-    ModuleIds, OrgId, RosterRole, RosterSigner, SignerId, SignerRole,
+    ModuleIds, OrgId, RosterRole, RosterSigner, SignerId, SignerRole, same_org,
 };
 
 use crate::error::Error;
@@ -204,7 +204,8 @@ pub fn roster_key<'r>(
 /// with the stated role and organisation, no signer appears twice, only
 /// clerks and observers sign, and there are at least two clerks and
 /// observers from at least two organisations (VC-016, VC-038; two people
-/// of one organisation are one independent observer, ITYV-BEH-025).
+/// of one organisation are one independent observer, ITYV-BEH-025;
+/// organisations compare as names, `ityv_encoding::same_org`).
 ///
 /// What it does not prove: that anyone signed. [`check_witnesses`] and
 /// the box methods bind each signature to a verification token.
@@ -227,7 +228,7 @@ where
     I: Iterator<Item = Named<'w>>,
 {
     let mut clerks = 0usize;
-    let mut orgs: [Option<&[u8]>; MAX_ATTESTATIONS] = [None; MAX_ATTESTATIONS];
+    let mut orgs: [Option<OrgId<'_>>; MAX_ATTESTATIONS] = [None; MAX_ATTESTATIONS];
     let mut distinct = 0usize;
     for (index, a) in witnesses().enumerate() {
         roster_key(roster, a.signer_id, a.role, a.org_id)?;
@@ -240,11 +241,16 @@ where
         match a.role {
             RosterRole::Clerk => clerks = clerks.saturating_add(1),
             RosterRole::Observer => {
-                let org = a.org_id.as_bytes();
-                let seen = orgs.iter().take(distinct).flatten().any(|o| *o == org);
+                // Organisations compare as names (`same_org`): one body
+                // under two spellings is one organisation.
+                let seen = orgs
+                    .iter()
+                    .take(distinct)
+                    .flatten()
+                    .any(|o| same_org(*o, a.org_id));
                 if !seen {
                     if let Some(slot) = orgs.get_mut(distinct) {
-                        *slot = Some(org);
+                        *slot = Some(a.org_id);
                     }
                     distinct = distinct.saturating_add(1);
                 }
@@ -637,10 +643,12 @@ mod tests {
         let o1 = person(b"o1", RosterRole::Observer, b"PARTY-A");
         let o2 = person(b"o2", RosterRole::Observer, b"PARTY-B");
         let o3 = person(b"o3", RosterRole::Observer, b"PARTY-A");
+        // PARTY-A spelled another way: the same organisation (`same_org`).
+        let o4 = person(b"o4", RosterRole::Observer, b"party_a");
         let k1 = person(b"k1", RosterRole::Custodian, b"POLICE");
         let j1 = person(b"j1", RosterRole::Authority, b"COURT");
         let h1 = person(b"h1", RosterRole::Chair, b"NEC");
-        let roster = [c1, c2, o1, o2, o3, k1, j1, h1];
+        let roster = [c1, c2, o1, o2, o3, o4, k1, j1, h1];
         let check = |set: &[RosterEntry<'static>]| {
             let named: std::vec::Vec<_> = set.iter().map(|e| named(e)).collect();
             check_witness_set(&named, &roster)
@@ -648,6 +656,8 @@ mod tests {
         assert_eq!(check(&[c1, c2, o1, o2]), Ok(()));
         assert_eq!(check(&[c1, c2, o1, o3, o2]), Ok(()));
         assert_eq!(check(&[c1, c2, o1, o3]), Err(Error::SignersShort));
+        assert_eq!(check(&[c1, c2, o1, o4]), Err(Error::SignersShort));
+        assert_eq!(check(&[c1, c2, o4, o2]), Ok(()));
         assert_eq!(check(&[c1, o1, o2]), Err(Error::SignersShort));
         assert_eq!(check(&[c1, c1, o1, o2]), Err(Error::SignersShort));
         assert_eq!(check(&[c1, c2, o1, o1, o2]), Err(Error::SignersShort));

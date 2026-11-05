@@ -61,7 +61,9 @@ pub enum Error {
     /// VC-037).
     NotRegistered,
     /// A repeated signer, or fewer than two clerks and two observers of
-    /// different organisations (VC-016, VC-038).
+    /// different organisations (VC-016, VC-038), or witnesses short of the
+    /// genesis quorum and diversity (VC-014); organisations compare as
+    /// names (`ityv_encoding::same_org`).
     SignersShort,
     /// A custody handoff index is not the next one.
     CustodyIndex {
@@ -73,8 +75,8 @@ pub enum Error {
     /// A custody handoff does not name the previous handoff, or its sender
     /// is not the previous receiver.
     CustodyPrevious,
-    /// Sender and receiver of a custody handoff are the same organisation
-    /// (VC-040).
+    /// Sender and receiver of a custody handoff are the same organisation,
+    /// compared as names (`ityv_encoding::same_org`; VC-040).
     CustodySameOrganisation,
     /// A custody handoff leaves the route fixed in the genesis, or the
     /// route has fewer than two stops (VC-040).

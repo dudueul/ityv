@@ -346,3 +346,35 @@ ident_newtype!(RouteId);
 ident_newtype!(UnitId);
 ident_newtype!(ReportingUnitId);
 ident_newtype!(AuthorityId);
+
+/// Whether `byte` is a separator an organisation name may be written with
+/// or without.
+const fn org_separator(byte: u8) -> bool {
+    matches!(byte, b'.' | b'_' | b':' | b'-')
+}
+
+/// The bytes of an organisation name that name it: separators dropped,
+/// letters lowered.
+fn org_letters(org: &[u8]) -> impl Iterator<Item = u8> + '_ {
+    org.iter()
+        .copied()
+        .filter(|b| !org_separator(*b))
+        .map(|b| b.to_ascii_lowercase())
+}
+
+/// Whether `a` and `b` name one organisation, as every rule that counts
+/// organisations or keeps them apart compares them (witness and observer
+/// diversity, custody hand-offs, the roll custodians, the timestamp
+/// operators; ADR-0039 2, ADR-0040).
+///
+/// An organisation identifier is ASCII letters, digits and `.`, `_`, `:`,
+/// `-`, and two spellings of one name are one organisation: `MOIS-GPKI`,
+/// `mois-gpki`, `MOIS_GPKI` and `MOISGPKI` compare equal (letters lowered,
+/// separators dropped). This guards against a typo or a second spelling
+/// counting one body twice; it is not an identity check. Names that only
+/// look alike (`M0IS` and `MOIS`) are different names, and which body a
+/// name stands for is the genesis reviewers' to check.
+#[must_use]
+pub fn same_org(a: OrgId<'_>, b: OrgId<'_>) -> bool {
+    org_letters(a.as_bytes()).eq(org_letters(b.as_bytes()))
+}

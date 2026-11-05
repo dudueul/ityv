@@ -105,12 +105,12 @@ use ityv_crypto::hash::object_hash;
 use ityv_crypto::{Purpose, Sha3Hasher};
 use ityv_encoding::{
     AuthorityId, CheckinUnit, ContestedCheckin, EntrySet, EventRole, HYBRID_VK_LEN, Hash512, OrgId,
-    PSEUDONYM_LEN, PURPOSE_CONTESTED_CHECKIN, RollAmendmentBody, RollAmendmentReason,
-    RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody, RollFreezeBody,
-    RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_BOX_CLOSE, SCHEMA_CONTESTED_CHECKIN,
-    SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY, SCHEMA_ROLL_FREEZE_BODY,
-    SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_WITNESSED_EVENT, Seq, StationEntry, StationId,
-    StationKind, WitnessedEvent, decode_object, schema_version,
+    PSEUDONYM_LEN, PURPOSE_CONTESTED_CHECKIN, ReportingUnitEntry, RollAmendmentBody,
+    RollAmendmentReason, RollAuthorityEntry, RollAuthorityKind, RollCustodyReceiptBody,
+    RollFreezeBody, RollSourceExtractBody, RollSourceKind, RollState, SCHEMA_BOX_CLOSE,
+    SCHEMA_CONTESTED_CHECKIN, SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
+    SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY, SCHEMA_WITNESSED_EVENT, Seq,
+    StationEntry, StationId, StationKind, WitnessedEvent, decode_object, same_org, schema_version,
 };
 use ityv_ledger::{InclusionProof, sorted_set_root, verify_inclusion};
 use ityv_state::{
@@ -121,7 +121,6 @@ use ityv_state::{
 use crate::error::{Error, Rule};
 use crate::genesis::VerifiedGenesis;
 use crate::index::LedgerIndex;
-use crate::org::same_org;
 use crate::participation::ParticipationStage;
 use crate::sets::Set;
 use crate::sigs::Material;
@@ -228,6 +227,35 @@ pub(crate) fn check_authorities(
             EntrySet::RollAuthorities,
             Rule::RollSources,
         ));
+    }
+    Ok(())
+}
+
+/// Checks that no roll custodian of `rolls` belongs to the election
+/// commission of a reporting unit of `units`, as names compare
+/// ([`same_org`]): a commission that registered itself as a custodian
+/// would count toward the quorum that confirms its own roll (ADR-0040 2,
+/// rule `RollCustodians`). Run for every state, since the units may change
+/// by amendment.
+pub(crate) fn check_custodians_apart(
+    state: u64,
+    rolls: &Set<'_, RollAuthorityEntry<'_>>,
+    units: &Set<'_, ReportingUnitEntry<'_>>,
+) -> Result<(), Error> {
+    for (index, item) in rolls.items().iter().enumerate() {
+        let entry = &item.value;
+        let commission = units
+            .items()
+            .iter()
+            .any(|u| same_org(entry.org_id, u.value.commission_org()));
+        if entry.kind.is_custodian() && commission {
+            return Err(Error::entry(
+                state,
+                EntrySet::RollAuthorities,
+                index,
+                Rule::RollCustodians,
+            ));
+        }
     }
     Ok(())
 }

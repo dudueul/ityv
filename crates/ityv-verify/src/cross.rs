@@ -50,6 +50,7 @@ use ityv_encoding::{
 
 use crate::error::{Error, Reference, Rule};
 use crate::genesis::{Amendable, Fixed};
+use crate::roll;
 use crate::timestamp;
 
 /// The highest chamber code (`N`).
@@ -353,6 +354,7 @@ pub(crate) fn check<'a>(
     check_appointments(state, a, f)?;
     check_devices(state, a)?;
     timestamp::check_operators_apart(state, &f.timestamps, &f.witnesses, &a.roster, &a.units)?;
+    roll::check_custodians_apart(state, &f.rolls, &a.units)?;
     check_keys(state, a, f, body)
 }
 

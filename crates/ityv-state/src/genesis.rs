@@ -42,7 +42,7 @@ use ityv_crypto::hash::object_hash;
 use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
     ENTRY_SET_COUNT, ElectionId, GenesisBody, GenesisEntry, Hash512, MAX_GENESIS_WITNESSES,
-    SetCommitment, SignedGenesis, WitnessRosterEntry, decode_object,
+    SetCommitment, SignedGenesis, WitnessRosterEntry, decode_object, same_org,
 };
 use ityv_ledger::{InclusionProof, verify_inclusion};
 
@@ -200,11 +200,11 @@ fn prove<'a, T: GenesisEntry<'a>>(
 }
 
 /// Number of distinct values among `values`.
-fn distinct<'v>(values: impl Iterator<Item = &'v [u8]>) -> usize {
-    let mut seen: [Option<&[u8]>; MAX_GENESIS_WITNESSES] = [None; MAX_GENESIS_WITNESSES];
+fn distinct<T: Copy>(values: impl Iterator<Item = T>, same: impl Fn(T, T) -> bool) -> usize {
+    let mut seen: [Option<T>; MAX_GENESIS_WITNESSES] = [None; MAX_GENESIS_WITNESSES];
     let mut count = 0usize;
     for v in values {
-        if !seen.iter().take(count).flatten().any(|s| *s == v) {
+        if !seen.iter().take(count).flatten().any(|s| same(*s, v)) {
             if let Some(slot) = seen.get_mut(count) {
                 *slot = Some(v);
             }
@@ -238,9 +238,13 @@ fn check_seal(
     }
     let q = body.quorum();
     let entries = || witnesses.iter().map(Entry::get);
-    let diverse = distinct(entries().map(|w| w.org_id.as_bytes())) >= usize::from(q.min_orgs)
-        && distinct(entries().map(|w| w.provider.as_bytes())) >= usize::from(q.min_providers)
-        && distinct(entries().map(|w| w.region.as_bytes())) >= usize::from(q.min_regions);
+    // Organisations compare as names (`same_org`): one body under two
+    // spellings is one organisation toward `min_orgs` (VC-014).
+    let exact = |a: &[u8], b: &[u8]| a == b;
+    let diverse = distinct(entries().map(|w| w.org_id), same_org) >= usize::from(q.min_orgs)
+        && distinct(entries().map(|w| w.provider.as_bytes()), exact)
+            >= usize::from(q.min_providers)
+        && distinct(entries().map(|w| w.region.as_bytes()), exact) >= usize::from(q.min_regions);
     if count < usize::from(q.quorum) || !diverse {
         return Err(Error::SignersShort);
     }

@@ -130,10 +130,12 @@ pub enum Rule {
     /// non-government authority (VC-114).
     TimestampAuthorities,
     /// The roll's custodians cannot confirm a roll: two custodians of one
-    /// organisation, compared as names (ASCII case and the separators
-    /// `._:-` aside; one would count twice), fewer custodians than the
-    /// custody quorum, or not exactly one custodian each of the court
-    /// administration, the Ministry of the Interior and the committee
+    /// organisation, compared as names (`ityv_encoding::same_org`: ASCII
+    /// case and the separators `._:-` aside; one would count twice), fewer
+    /// custodians than the custody quorum, not exactly one custodian each
+    /// of the court administration, the Ministry of the Interior and the
+    /// committee, or (in any genesis state) a custodian of a reporting
+    /// unit's election commission, which would confirm its own roll
     /// (ADR-0033 decision 2, VC-108, ADR-0040).
     RollCustodians,
     /// The roll's sources cannot give a roll: no district head for the
