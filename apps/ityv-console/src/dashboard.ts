@@ -16,7 +16,7 @@
 // simulator's fixture data and is labelled so; the viewer can verify
 // without it.
 
-import type { AuditRecord, AuditReport, Hold, IndexElection, IndexScenario, Report, SimIndex, StationProgress, StyleAuditReport } from "./data";
+import type { AuditRecord, AuditReport, Hold, IndexElection, IndexScenario, Int, Report, RollCustody, SimIndex, StationProgress, StyleAuditReport, Token } from "./data";
 import { bucketTime, intNum, intText, slotDay, slotTime } from "./data";
 import { el, icon, rungIcon } from "./render";
 import { Cancelled, MAX_BUNDLE_BYTES, VerifierClient, loadBundle, parsePin, wasmSha256 } from "./verifier";
@@ -34,8 +34,10 @@ import {
   NOT_REACHABLE,
   OUTCOMES,
   PHASES,
+  ROLL_REASONS,
   STAGES,
   STEPS,
+  TSA_KINDS,
 } from "./vocab";
 
 interface Result {
@@ -901,6 +903,23 @@ function timeline(a: AuditReport): HTMLElement | null {
   return el("div", { class: "chartwrap" }, svg);
 }
 
+/** A token as text: authority, operator, kind, record frame and the
+ * bucket of its latest instant. */
+function tokenText(t: Token): string {
+  return `${t.authority} (${t.operator}, ${TSA_KINDS[t.kind] ?? t.kind}) · 기록 프레임 ${intText(t.frame)} · 가장 늦은 순간 구간 ${intText(t.latestBucket)} (${bucketTime(t.latestBucket)})`;
+}
+
+/** The display check of ADR-0039 8 over the binding checkpoint's tokens:
+ * both kinds and two operators among those recorded before the seed with
+ * their latest instant before the publication bucket. */
+function stampedCheck(tokens: { kind: string; operator: string; beforeSeed: boolean; beforePublication: boolean | null }[], check: (ok: boolean, text: string) => HTMLElement): HTMLElement {
+  const good = tokens.filter((t) => t.beforeSeed && t.beforePublication === true);
+  const gov = good.some((t) => t.kind === "Government");
+  const free = good.some((t) => t.kind === "NonGovernment");
+  const operators = new Set(good.map((t) => t.operator.toLowerCase())).size;
+  return check(gov && free && operators >= 2, `시드 앞 프레임의 공표 구간 전 토큰: 정부 운영 ${gov ? "있음" : "없음"} · 정부 밖 ${free ? "있음" : "없음"} · 운영 주체 ${operators}`);
+}
+
 function seedInputs(a: AuditReport): HTMLElement {
   const o = a.observation;
   const c = a.commit;
@@ -927,6 +946,25 @@ function seedInputs(a: AuditReport): HTMLElement {
         ? el("span", {}, `순번 ${intText(c.binding.seq)} · 프레임 ${intText(c.binding.frame)} · 구간 ${intText(c.binding.bucket)} (${bucketTime(c.binding.bucket)}) · 지문 `, el("code", {}, c.binding.fingerprint))
         : "약정을 덮는 유효한 체크포인트가 없다",
     );
+    if (c.binding) {
+      row(
+        "고정 체크포인트의 시점확인",
+        c.binding.tokens.length === 0
+          ? "토큰 없음"
+          : el(
+              "ul",
+              { class: "checks", "data-testid": "binding-tokens" },
+              ...c.binding.tokens.map((t) =>
+                el(
+                  "li",
+                  {},
+                  icon(t.beforeSeed && t.beforePublication === true ? "ok" : "wait"),
+                  ` ${tokenText(t)} · ${t.beforeSeed ? "시드 앞 프레임" : "시드 뒤 프레임"}${t.beforePublication === null ? "" : t.beforePublication ? " · 공표 구간 전" : " · 공표 구간 이후"}`,
+                ),
+              ),
+            ),
+      );
+    }
   } else {
     row("감사 약정", "받아들인 약정 없음");
   }
@@ -950,11 +988,12 @@ function seedInputs(a: AuditReport): HTMLElement {
         check(C < P, `약정 구간 ${C} < 공표 구간 ${P}`),
         check(B >= C, `고정 체크포인트 구간 ${B} ≥ 약정 구간 ${C}`),
         check(B + m <= P, `고정 체크포인트 구간 ${B} ≤ 공표 구간 − ${m} = ${P - m} (여유 ${P - B}구간)`),
+        stampedCheck(c.binding.tokens, check),
       ),
       el(
         "p",
         { class: "muted" },
-        `한계 ${m}구간 = 증인의 시각 허용 1 + 정직한 시계 오차 1 + 1. 공표 뒤에 서명하는 정직한 증인은 P − 2보다 이른 구간에 서명할 수 없으므로, 고정 체크포인트가 P − ${m} 이하이면 비콘 값을 알기 전에 서명된 것이다(ADR-0036 4항). 위 대조는 표시용이며 판정은 검증기의 시드 수락·거부다.`,
+        `한계 ${m}구간 = 증인의 시각 허용 1 + 정직한 시계 오차 1 + 1. 공표 뒤에 서명하는 정직한 증인은 P − 2보다 이른 구간에 서명할 수 없으므로, 고정 체크포인트가 P − ${m} 이하이면 비콘 값을 알기 전에 서명된 것이다(ADR-0036 4항). 증인만이 아니라 정부 운영과 정부 밖, 두 운영 주체의 시점확인 토큰도 시드 앞 프레임에서 그 체크포인트가 공표 구간 전에 있었음을 보여야 한다(ADR-0039 8항). 위 대조는 표시용이며 판정은 검증기의 시드 수락·거부다.`,
       ),
     );
   }
@@ -1195,6 +1234,74 @@ function auditCard(r: Report, election: IndexElection | null): HTMLElement | nul
   return card;
 }
 
+/** A checkpoint's anchoring, with its tokens on hover-free text. */
+function anchorCell(a: { government: boolean; nonGovernment: boolean; operators: Int; satisfied: boolean }, tokens: (Token & { inWindow: boolean })[]): HTMLElement {
+  return el(
+    "span",
+    { title: tokens.map((t) => `${tokenText(t)}${t.inWindow ? "" : " · 창 밖"}`).join("\n") },
+    icon(a.satisfied ? "ok" : "wait"),
+    ` ${a.satisfied ? "충족" : "미충족"} · 정부 운영 ${a.government ? "있음" : "없음"} · 정부 밖 ${a.nonGovernment ? "있음" : "없음"} · 운영 주체 ${intText(a.operators)} · 토큰 ${tokens.length}`,
+  );
+}
+
+/** One roll state's row: receipts against the quorum, the pseudonym root,
+ * whether it took effect. */
+function custodyRow(what: string, c: RollCustody, quorum: Int): HTMLElement {
+  return el(
+    "tr",
+    {},
+    el("th", {}, what),
+    el("td", { class: "num" }, intText(c.seq)),
+    el("td", { class: "num" }, intText(c.entryCount)),
+    el("td", {}, `${c.custodians.length} / ${intText(quorum)}`, c.custodians.length ? ` (${c.custodians.join(", ")})` : ""),
+    el("td", {}, c.pseudonymConfirmed ? "확인" : "없음"),
+    el("td", { class: `oc oc-${c.effective ? "PASSED" : "NOT_RUN"}` }, icon(c.effective ? "ok" : "wait"), c.effective ? " 효력 있음" : " 효력 없음"),
+  );
+}
+
+function rollCard(r: Report): HTMLElement | null {
+  const roll = r.roll;
+  if (!roll) return null;
+  const rows: HTMLElement[] = [];
+  if (roll.freeze) rows.push(custodyRow("동결", roll.freeze, roll.quorum));
+  for (const a of roll.amendments) {
+    rows.push(custodyRow(`변경 ${intText(a.number)} (${ROLL_REASONS[a.reason] ?? a.reason}, ${a.authority})`, a, roll.quorum));
+  }
+  return el(
+    "section",
+    { class: "card wide", "data-testid": "roll" },
+    el("h2", {}, "선거인명부 보관", el("span", { class: "muted" }, ` 보관 정족수 ${intText(roll.quorum)} · 출처 추출 ${intText(roll.extracts)}개 · ${roll.complete ? "동결과 모든 변경에 효력이 있다" : "효력이 없는 명부 상태가 있다"}`)),
+    rows.length === 0
+      ? el("p", { class: "muted" }, "받아들인 명부 동결이 없다. 14절 6단계는 동결과 모든 변경이 효력이 있어야 통과한다.")
+      : el(
+          "div",
+          { class: "scroll" },
+          el(
+            "table",
+            {},
+            el("thead", {}, el("tr", {}, el("th", {}, "상태"), el("th", { class: "num" }, "프레임"), el("th", { class: "num" }, "인원"), el("th", {}, "같은 값의 영수증 / 정족수"), el("th", {}, "명부 가명 root"), el("th", {}, "효력"))),
+            el("tbody", { "data-testid": "roll-rows" }, ...rows),
+          ),
+        ),
+    roll.refused.length || roll.mismatches.length
+      ? el(
+          "p",
+          { class: "warnline", "data-testid": "roll-refused" },
+          icon("warn"),
+          [
+            ...roll.refused.map((x) => `프레임 ${intText(x.seq)} ${x.event}: ${x.refusal}`),
+            ...roll.mismatches.map((m) => `프레임 ${intText(m.seq)} ${m.custodian}의 영수증이 명부 값과 다르다`),
+          ].join(", "),
+        )
+      : null,
+    el(
+      "p",
+      { class: "muted" },
+      `상태는 값이 같은 서로 다른 보관 기관의 영수증이 정족수 이상이고 그 가운데 법원행정처와 행정안전부가 있으며 하나가 명부 가명 root를 실었을 때 효력이 있다(VC-108, VC-109). 동결 뒤의 변경은 사유의 출처 기관이 서명한다(VC-111). 이의 투표 기록은 제한 등급이라 공개 장부에는 프레임만 있다(${intText(roll.contestedFrames)}개).`,
+    ),
+  );
+}
+
 function checkpointsCard(r: Report): HTMLElement {
   const c = r.checkpoints;
   return el(
@@ -1207,17 +1314,23 @@ function checkpointsCard(r: Report): HTMLElement {
       el(
         "table",
         {},
-        el("thead", {}, el("tr", {}, el("th", {}, "순번"), el("th", {}, "프레임"), el("th", {}, "트리 크기"), el("th", {}, "체크포인트 지문 (Base32 32자)"))),
+        el(
+          "thead",
+          {},
+          el("tr", {}, el("th", {}, "순번"), el("th", {}, "프레임"), el("th", {}, "구간"), el("th", {}, "트리 크기"), el("th", {}, "시점확인 앵커"), el("th", {}, "체크포인트 지문 (Base32 32자)")),
+        ),
         el(
           "tbody",
-          {},
+          { "data-testid": "checkpoint-rows" },
           ...(c?.valid ?? []).map((v) =>
             el(
               "tr",
               {},
               el("td", { class: "num" }, intText(v.seq)),
               el("td", { class: "num" }, intText(v.frame)),
+              el("td", { class: "num" }, `${intText(v.timeBucket)} (${bucketTime(v.timeBucket)})`),
               el("td", { class: "num" }, intText(v.treeSize)),
+              el("td", {}, anchorCell(v.anchoring, v.tokens)),
               el("td", {}, el("code", { class: "fp" }, v.fingerprint)),
             ),
           ),
@@ -1227,6 +1340,19 @@ function checkpointsCard(r: Report): HTMLElement {
     (c?.findings.length ?? 0) > 0
       ? el("p", { class: "warnline" }, icon("warn"), `사슬이 끝난 곳: ${c!.findings.map((f) => `프레임 ${intText(f.frame)} ${f.kind}`).join(", ")} · 확인하지 않은 체크포인트 ${intText(c!.unchecked)}개`)
       : null,
+    (c?.timestamps.refusals.length ?? 0) > 0
+      ? el(
+          "p",
+          { class: "warnline", "data-testid": "timestamp-refusals" },
+          icon("warn"),
+          `받지 않은 시점확인 기록: ${c!.timestamps.refusals.map((x) => `프레임 ${intText(x.frame)} ${x.authority} ${x.problem}`).join(", ")}`,
+        )
+      : null,
+    el(
+      "p",
+      { class: "muted" },
+      `시점확인 토큰 ${intText(c?.timestamps.tokens ?? 0)}개 · 응답 없음 기록 ${intText(c?.timestamps.unanswered ?? 0)}개. 앵커는 체크포인트 구간 + 4 안의 가장 늦은 순간을 가진 정부 운영과 정부 밖, 두 운영 주체의 토큰이다(VC-115). 장부의 앵커 기한은 마지막 체크포인트로 판정한다(ADR-0039 7항). 토큰은 증인 서명을 보강하는 증거이며 기관의 시각이 참이라는 증명은 아니다.`,
+    ),
     el("p", { class: "muted" }, "지문은 체크포인트 해시의 앞 20바이트를 Base32로 적은 것이다(PROTOCOL §5.7 5항). 소리 내어 읽고 공표된 값과 비교하는 대조용이며 서명 검증을 대신하지 않는다."),
   );
 }
@@ -1418,7 +1544,7 @@ function draw(root: HTMLElement): void {
     if (res.scenario) parts.push(expectedCard(res.scenario, r));
     parts.push(pinCard(r), holdsCard(r), stagesCard(r));
     if (r.genesis?.ok) {
-      parts.push(unitsCard(r, election), auditCard(r, election), progressCard(r, election), boxesCard(r, election), checkpointsCard(r), refusedCard(r), disputesCard(r), lookupCard(res));
+      parts.push(unitsCard(r, election), auditCard(r, election), progressCard(r, election), boxesCard(r, election), rollCard(r), checkpointsCard(r), refusedCard(r), disputesCard(r), lookupCard(res));
     } else {
       parts.push(
         el("section", { class: "card warnline" }, icon("stop"), `genesis를 받지 못했다: ${r.genesis?.error ?? ""}. genesis는 전부 아니면 전무이므로 그 위의 어떤 단계도 진행하지 않았다.`),

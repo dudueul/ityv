@@ -8,9 +8,12 @@
 // the self-test; an unknown device state falls back with a notice; the
 // status badge shows no check until an outside pin is used; the audit card
 // shows the seed's inputs, the binding checkpoint's time against the
-// beacon publication (labelled fixture data) and each style's rounds and
-// draws, and verifying without the beacon observation stays at the tally;
-// malformed URL escapes get 400; the built page works under its CSP.
+// beacon publication (labelled fixture data), its timestamp tokens and
+// each style's rounds and draws, and verifying without the beacon
+// observation stays at the tally; the checkpoints card shows each
+// checkpoint's anchoring and the roll card the custody of the freeze and
+// each amendment against the quorum; malformed URL escapes get 400; the
+// built page works under its CSP.
 //
 // Usage: node scripts/races.cjs
 //   ITYV_CONSOLE_URL  a running dev console (default: starts `bun server.ts`)
@@ -320,7 +323,13 @@ run = function (ex, data) {
     const card = await page.textContent("[data-testid=audit]");
     check("the audit card labels the beacon observation as fixture data", (await page.$("[data-testid=beacon-fixture]")) !== null && card.includes("시연용 고정 자료"));
     const timing = await page.$$eval("[data-testid=audit-timing] li", (xs) => xs.map((x) => !!x.querySelector(".icon-ok")));
-    check("the binding checkpoint precedes the publication by the margin", timing.length === 3 && timing.every(Boolean), JSON.stringify(timing));
+    check("the binding checkpoint precedes the publication by the margin and both kinds stamped it before", timing.length === 4 && timing.every(Boolean), JSON.stringify(timing));
+    const tokens = await page.$$eval("[data-testid=binding-tokens] li", (xs) => xs.map((x) => ({ ok: !!x.querySelector(".icon-ok"), text: x.textContent })));
+    check(
+      "the binding checkpoint's tokens are listed, both before the seed and the publication",
+      tokens.length === 2 && tokens.every((t) => t.ok && t.text.includes("시드 앞 프레임") && t.text.includes("공표 구간 전")),
+      JSON.stringify(tokens),
+    );
     check("the timeline is drawn", (await page.$("[data-testid=audit] svg.timeline")) !== null);
     const styles = await page.$$eval("[data-testid=audit] .style-audit", (xs) => xs.map((x) => x.dataset.style));
     check("every style has its audit", styles.length === 2, styles.join(","));
@@ -343,9 +352,41 @@ run = function (ex, data) {
     await page.goto(`${base}#/dashboard?scenario=attack-seed-grinding`);
     await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("attack-seed-grinding"), null, { timeout: 60000 });
     const late = await page.$$eval("[data-testid=audit-timing] li", (xs) => xs.map((x) => !!x.querySelector(".icon-ok")));
-    check("a binding checkpoint two buckets before the publication fails the margin", late.length === 3 && late[2] === false, JSON.stringify(late));
+    check("a binding checkpoint two buckets before the publication fails the margin, and its honest tokens come after", late.length === 4 && late[2] === false && late[3] === false, JSON.stringify(late));
     check("the grinding seed is refused as late", (await page.textContent("[data-testid=audit-refused]")).includes("Late"));
+    await page.goto(`${base}#/dashboard?scenario=attack-binding-unstamped`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("attack-binding-unstamped"), null, { timeout: 60000 });
+    const unstamped = await page.$$eval("[data-testid=audit-timing] li", (xs) => xs.map((x) => !!x.querySelector(".icon-ok")));
+    check("one kind of token fails the token check only", unstamped.length === 4 && unstamped[2] === true && unstamped[3] === false, JSON.stringify(unstamped));
+    check("the unstamped seed is refused", (await page.textContent("[data-testid=audit-refused]")).includes("Unstamped"));
     check("audit: no page errors", errors.length === 0, errors.join(" | "));
+    await page.close();
+  }
+
+  // 5c. Checkpoint anchoring and roll custody.
+  {
+    const { page, errors } = await open(browser, base, "#/dashboard?scenario=quick-roll-amended");
+    await waitStatus(page);
+    const anchors = await page.$$eval("[data-testid=checkpoint-rows] tr", (xs) => xs.map((x) => x.textContent));
+    check("every checkpoint of a clean ledger is anchored by both kinds", anchors.length > 0 && anchors.every((t) => t.includes("충족") && !t.includes("미충족")), anchors.join(" | "));
+    const roll = await page.$$eval("[data-testid=roll-rows] tr", (xs) => xs.map((x) => x.textContent));
+    check(
+      "the roll card shows the freeze and the amendment in effect with three of three receipts",
+      roll.length === 2 && roll.every((t) => t.includes("3 / 3") && t.includes("효력 있음")),
+      roll.join(" | "),
+    );
+    await page.goto(`${base}#/dashboard?scenario=fault-roll-amendment-short`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("fault-roll-amendment-short"), null, { timeout: 60000 });
+    const short = await page.$$eval("[data-testid=roll-rows] tr", (xs) => xs.map((x) => x.textContent));
+    check("an amendment short of the quorum shows two of three and no effect", short.length === 2 && short[1].includes("2 / 3") && short[1].includes("효력 없음"), short.join(" | "));
+    await page.goto(`${base}#/dashboard?scenario=quick-anchor-pending`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("quick-anchor-pending"), null, { timeout: 60000 });
+    const pending = await page.$$eval("[data-testid=checkpoint-rows] tr", (xs) => xs.map((x) => x.textContent));
+    check("the last checkpoint stamped by one kind is not anchored", pending.length > 0 && pending[pending.length - 1].includes("미충족"), pending.join(" | "));
+    await page.goto(`${base}#/dashboard?scenario=attack-tsa-unpinned`);
+    await page.waitForFunction(() => document.querySelector("[data-testid=result-meta]")?.textContent?.includes("attack-tsa-unpinned"), null, { timeout: 60000 });
+    check("a refused timestamp record is listed", ((await page.textContent("[data-testid=timestamp-refusals]").catch(() => "")) ?? "").includes("TSA-GOV-SIM"));
+    check("timestamps and roll: no page errors", errors.length === 0, errors.join(" | "));
     await page.close();
   }
 

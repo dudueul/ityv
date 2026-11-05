@@ -247,7 +247,7 @@ test("every hold code of ityv-state has a Korean explanation", () => {
     expect(typeof HOLDS[code]?.ko).toBe("string");
     expect(HOLDS[code]?.ko.length).toBeGreaterThan(10);
   }
-  expect(HOLDS[77]).toBeUndefined();
+  expect(HOLDS[77] === undefined).toBe(true);
   expect(Object.keys(STRINGS).length).toBeGreaterThan(80);
   void (null as unknown as StringId);
 });

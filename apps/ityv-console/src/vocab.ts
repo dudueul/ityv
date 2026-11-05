@@ -78,6 +78,23 @@ export const STAGES: Record<string, string> = {
   tally: "집계",
   disputes: "분쟁",
   audit: "감사",
+  timestamps: "시점확인",
+  roll: "선거인명부",
+};
+
+/** The two kinds of timestamp authority (ADR-0039). */
+export const TSA_KINDS: Record<string, string> = {
+  Government: "정부 운영",
+  NonGovernment: "정부 밖",
+};
+
+/** Roll amendment reasons (ityv-encoding `RollAmendmentReason`). */
+export const ROLL_REASONS: Record<string, string> = {
+  ObjectionDecision: "이의신청 결정",
+  AppealDecision: "불복 결정",
+  Death: "사망",
+  Disqualification: "선거권 제한",
+  Overseas: "재외선거인·국적 상실",
 };
 
 /** The audit events (ityv-verify `AuditEvent`). */
@@ -101,6 +118,7 @@ export const AUDIT_REFUSALS: Record<string, string> = {
   Beacon: "비콘 지정·회차가 다르거나, 관찰한 비콘 값과 다르다",
   Late: "늦다: 비콘 값을 알 수 있게 된 뒤에 입력이 고정되었다",
   Backdated: "고정 체크포인트가 그것이 덮는 약정보다 이르다",
+  Unstamped: "고정 체크포인트에 시드 앞 프레임의, 공표 구간보다 앞선 시점확인 토큰이 정부 운영과 정부 밖 두 운영 주체에서 없다(ADR-0039 8항)",
   Rule: "상한이 표본 크기 이상인 라운드(모든 표본이 통과한다)",
   Election: "다른 선거",
   Commit: "약정과 다른 주사위 기록",
