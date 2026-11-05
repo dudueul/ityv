@@ -236,7 +236,7 @@ sets    = list(boxes) ‖ list(stations) ‖ list(progress_policies) ‖ list(re
 | 묶음 | 시나리오 | 크기 합계 | 생성 시간 |
 |---|---|---|---|
 | `--quick` | 55 | 98.7 MB (번들 하나 1.2–2.4 MB) | 19.3초 |
-| 전체 | 46 | 102.4 MB (`local-clean` 12.6 MB, `local-voting` 9.6 MB, `national-clean` 8.0 MB) | 20.2초 |
+| 전체 | 58 | 136.7 MB (`local-clean` 15.9 MB, `local-voting` 11.9 MB, `national-clean` 10.0 MB) | 29.0초 |
 
 번들이 큰 까닭은 하이브리드 서명(ML-DSA-87, 4,627바이트)이다. 진행 기록 한 건, 모듈 발급 기록, 증인 체크포인트마다 붙는다. 번들은 저장소에 넣지 않는다(`bun run dev`/`build`가 만든다). 브라우저 WASM 검증 시간은 빠른 번들 약 0.3–0.4초, `local-clean` 약 6초, `national-clean` 약 3.5초(node 22, 같은 컨테이너)다.
 
