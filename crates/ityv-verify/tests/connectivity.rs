@@ -4037,6 +4037,40 @@ fn r3_1b_one_short_slot_buys_one_catch_up_slot() {
         .map(|f| f.slot.unwrap())
         .collect();
     assert_eq!(kinds, [154, 154]);
+
+    // A full normal frame is no catch-up group: the catch-up group after
+    // it (slot 152) is out of its kind's place.
+    let small = fake_object(
+        SCHEMA_PROGRESS_TICK,
+        &std::vec![0x43; MAX_PAYLOAD_LEN + 100],
+    );
+    let entry = entry_at(small, end);
+    let part = |slot: u64, index: u16, kind: FrameKind, from: u64, len: u64| {
+        let mut f = make_frame(key, slot, index, kind, from, &[]);
+        f.data = small[(from - end) as usize..(from - end + len) as usize].to_vec();
+        f.payload_len = len as u32;
+        f.objects = std::vec![entry];
+        f.seal(key, link(key));
+        f
+    };
+    let mut frames = std::vec![day().links[SCANNER].frames[0].clone()];
+    frames.push(part(151, 0, FrameKind::Normal, end, most));
+    frames.push(part(152, 0, FrameKind::CatchUp, end + most, 100));
+    let after = end + most + 100;
+    frames.push(make_frame(key, 152, 1, FrameKind::CatchUp, after, &[]));
+    for slot in 153..=212 {
+        frames.push(make_frame(key, slot, 0, FrameKind::Normal, after, &[]));
+    }
+    let mut links = honest_links();
+    links[SCANNER] = Link {
+        key,
+        frames,
+        objects: Vec::new(),
+    };
+    let mut plan = Plan::new(ST, links);
+    plan.tweak_body = Some(&not_final);
+    let r = verify(plan.events());
+    assert_eq!(found(&r, scanner()), [LinkProblem::KindOrder; 2]);
 }
 
 #[test]
