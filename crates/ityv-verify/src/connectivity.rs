@@ -399,8 +399,8 @@ pub enum LinkProblem {
     /// An object listed more often than its kind allows: a batch's
     /// attestation, record or package more than twice in normal and
     /// catch-up frames, any other object more than once; anything more
-    /// than once in close resends, or in one run of witnessed resend
-    /// slots.
+    /// than once in the close resend; in witnessed resends, more than once
+    /// plus once for each earlier listing there not received whole.
     Repeat,
     /// An object sent before its time or out of its order: a batch's
     /// attestation or record in a slot before the first its time bucket
@@ -426,10 +426,12 @@ pub enum LinkProblem {
     /// closed) or outside every run; within a group, a batch first sent
     /// after one of a higher index (in normal and catch-up frames, unless
     /// each such one was first sent in the slot before after a loss in
-    /// that slot).
+    /// that slot). Until the gateway closed, while a challenge opening may
+    /// be missing (bytes lost, or an opening listed and not laid), a run's
+    /// skipped members, early end and records outside every run wait.
     Batch,
-    /// A share package not right after the record that names it, or
-    /// longer than the election allows.
+    /// A share package not right after the record that names it (or the
+    /// first object of the stream), or longer than the election allows.
     Package,
     /// An object a received frame lists that no ledger frame names, once
     /// the gateway closed (a share package: no accepted record of the box
