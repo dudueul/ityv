@@ -11,7 +11,10 @@
 //! a frame of their own, its closed batches (an attestation, then its
 //! records by record hash, each followed by its sealed share package). A
 //! record no batch attestation has taken is never sent: the device sends
-//! records only in closed batches (PROTOCOL.md §5.8 item 4). Each frame
+//! records only in closed batches (PROTOCOL.md §5.8 item 4), and sends each
+//! closed batch twice: again in the next slot, before anything else there
+//! (the next window's first slot; a batch of the close slot goes again in
+//! the close resend instead). Each frame
 //! lists every object that overlaps its data and signs the list's hash
 //! with its header; a share package, and the object after one, start on a
 //! 4,096-byte boundary of the frame, with zero fill between (ADR-0041
@@ -452,6 +455,9 @@ struct Link {
     batches: Vec<&'static [u8]>,
     /// Every batch object sent, for the close resend.
     sent_batches: Vec<&'static [u8]>,
+    /// The batches the last data slot sent: their second copy goes first
+    /// in the next slot (PROTOCOL.md §5.8 item 4).
+    second: Vec<&'static [u8]>,
     /// Records no batch attestation has taken yet.
     unbatched: Vec<&'static [u8]>,
     /// Every object seen (a replayed event is sent once).
@@ -628,6 +634,7 @@ impl<'e> Gateways<'e> {
                     pending: Vec::new(),
                     batches: Vec::new(),
                     sent_batches: Vec::new(),
+                    second: Vec::new(),
                     unbatched: Vec::new(),
                     seen: BTreeSet::new(),
                 },
@@ -795,6 +802,14 @@ impl<'e> Gateways<'e> {
                 batches = singled(&batches);
             }
             link.sent_batches.extend(batches.iter().copied());
+            // The second copies of the last data slot's batches go first in
+            // this window's first slot; this window's batches go again in
+            // the next slot unless they go out in the close slot (whose
+            // close resend sends them again).
+            let mut second: VecDeque<&'static [u8]> = std::mem::take(&mut link.second).into();
+            if !(matches!(d, Device::Box(_)) && hi.min(last) == last) {
+                link.second.clone_from(&batches);
+            }
             let mut batches: VecDeque<&'static [u8]> = batches.into();
             let mut resend: VecDeque<&'static [u8]> = VecDeque::new();
             let data_slot = hi.min(last);
@@ -826,6 +841,9 @@ impl<'e> Gateways<'e> {
                         // Bytes that are no object, listing none.
                         link.offset += 3000;
                         (FrameKind::Normal, vec![0xC5u8; 3000], Vec::new())
+                    } else if slot == lo && (link.carry.is_some() || !second.is_empty()) {
+                        let (data, list) = link.fill(&mut second, MAX_PAYLOAD_LEN);
+                        (kind_of(closing, FrameKind::CatchUp), data, list)
                     } else if slot != data_slot {
                         (FrameKind::Normal, Vec::new(), Vec::new())
                     } else if link.carry.is_some() || !others.is_empty() {
@@ -982,6 +1000,7 @@ impl<'e> Gateways<'e> {
             assert!(
                 others.is_empty()
                     && batches.is_empty()
+                    && second.is_empty()
                     && resend.is_empty()
                     && link.carry.is_none(),
                 "a window's objects fit its frames"
