@@ -37,46 +37,66 @@
 //!    no longer be taken is refused too. Every refusal and disagreement
 //!    holds the station (`UplinkSessionRefused`).
 //! 3. **Frames (VC-078).** Per link, over every frame taken: the device's
-//!    frame key signed the frame's header; a normal frame's number is
-//!    below the manifest's frames per slot and any other's below its
-//!    catch-up count; a slot holds frames of one kind group; every frame
-//!    lies in its session's window; no frame precedes the slot of the
-//!    box's first opening (the station's first, for a check-in unit); no
-//!    normal or catch-up frame of a box follows the slot after its first
-//!    close's time bucket; nothing but resends follows a close resend and
-//!    nothing but witnessed resends follows a witnessed resend; the stream
-//!    starts at 0 and each frame starts where the previous ended, or later
-//!    across a missing slot; the payload root rebuilt from the published
-//!    data leaves and the zero leaf is the signed one (the padding proof);
-//!    and every data chunk whose bytes are all public ledger objects gives
-//!    the published leaf. A frame that breaks a rule is listed and holds
-//!    the device's box, or every box of the station for a check-in unit
+//!    frame key signed the frame's header, which carries the hash of the
+//!    frame's own object list; a normal frame's number is below the
+//!    manifest's frames per slot and any other's below its catch-up count;
+//!    a slot holds frames of one kind group; every frame lies in its
+//!    session's window; no frame precedes the slot of the box's first
+//!    opening (the station's first, for a check-in unit); no normal or
+//!    catch-up frame of a box follows the slot after its first close's
+//!    time bucket; nothing but resends follows a close resend and nothing
+//!    but witnessed resends follows a witnessed resend; the payload root
+//!    rebuilt from the published data leaves and the zero leaf is the
+//!    signed one (the padding proof); and the stream starts at 0 and each
+//!    frame starts where the previous ended, or later only across
+//!    positions (slot, number) no frame was taken in, by at most a full
+//!    payload each. The positions run over the slots the device must send
+//!    in: from the opening for a link that is its device's from the start
+//!    (from its first frame for one swapped in), to the close for one that
+//!    is its device's in the last state (to its last frame for one swapped
+//!    out), and over its witnessed resends' slots; a slot with frames
+//!    taken has its group's count of positions, one without the catch-up
+//!    count. A frame that breaks a rule is listed and holds the device's
+//!    box, or every box of the station for a check-in unit
 //!    (`UplinkFrameInvalid`).
-//! 4. **Objects (VC-079).** Per link, over every object listed: a kind the
-//!    device may send and the manifest lets it carry (never a check-in
-//!    counter or a contested check-in); objects in stream order without
-//!    overlap, each starting in the stream received by its session; the
-//!    received bytes covered by objects except where frames were lost; a
-//!    public object of the ledger with the ledger's length; cast records
-//!    only in runs right after a batch attestation, in strictly ascending
-//!    record hash; a share package only right after the record that names
-//!    it; and, once the gateway sent its final session, every fully
-//!    received object a frame of the ledger names (a sealed share package
-//!    through the ledger's record right before it). A break is listed and
-//!    holds like a frame (`UplinkObjectInvalid`).
+//! 4. **Objects (VC-079).** Per link, over every frame whose signature
+//!    verified: its list tiles its data (the first entry starts at or
+//!    before the data and reaches into it, each next one where the one
+//!    before ends, or at the frame's next 4,096-byte boundary around a
+//!    share package with the bytes between zero fill, the last reaches the
+//!    data's end; no list without data and no data without a list); two
+//!    frames list the same object at one position, and what one frame
+//!    carries out the next carries in; a kind the device may send and the
+//!    manifest lets it carry (never a check-in counter or a contested
+//!    check-in); a ledger event of the link's own box or station; a public
+//!    object of the ledger with the ledger's length; cast records only in
+//!    runs right after a batch attestation, in strictly ascending record
+//!    hash (after bytes not received, the tail of a batch whose
+//!    attestation was lost, still ascending); a share package right after
+//!    the record that names it (when that record is known) and no longer
+//!    than the election allows; and, once the gateway sent its final
+//!    session, every listed object, received whole or not, a frame of the
+//!    ledger names (a share package through an accepted record of its
+//!    box). Every data chunk that holds no package byte is recomputed from
+//!    the ledger's objects and the zero fill, in a frame whose list tiles
+//!    its data. A break is listed and holds like a frame
+//!    (`UplinkObjectInvalid`).
 //! 5. **Inclusion (VC-080).** Once a station's gateway sent its final
 //!    session, every accepted cast record, batch attestation, challenge
 //!    opening, progress tick and participation set of the station must be
-//!    an object of its device's link (a box's scanner in any genesis state;
-//!    the station's check-in units) that lies wholly in received frames.
+//!    listed by a received frame of its device's link (a box's scanner in
+//!    any genesis state; the station's check-in units), received whole,
+//!    and every chunk that holds bytes of it recomputed and matched.
 //!    Otherwise it is listed and holds its box or station
 //!    (`UplinkObjectOutside`).
 //! 6. **Incidents (VC-083).** A `ConnectivityIncident` signed by two
 //!    clerks and observers of two organisations, or by the committee and
 //!    observers of two organisations, all registered on the roster
 //!    (`ityv_state::check_incident_signers`), whose box (if any) is a box
-//!    of its station, holds the box, every box of the station, or the
-//!    whole ledger (`ConnectivityIncident`); a commitment unit involved
+//!    of its station, whose clerks are registered at that station and
+//!    which names a station unless the committee signed it, holds the
+//!    box, every box of the station, or the whole ledger
+//!    (`ConnectivityIncident`); a commitment unit involved
 //!    lists its boxes for a full comparison, with whether the audit stage
 //!    compared every record. Otherwise it is refused and holds the ledger
 //!    (`ConnectivityIncidentRefused`). The verifier never lifts the hold:
@@ -89,8 +109,8 @@
 //!
 //! What this stage does not prove: that the manifest is the hardware
 //! (teardown samples and radio checks, VC-082); the sealed bytes and the
-//! fill inside a data chunk that holds them (taps, VC-081:
-//! [`crate::compare_capture`]); when a device closed a batch or sent a
+//! fill after them in a package's last chunk (taps, VC-081:
+//! [`crate::compare_capture`]); how much of a frame a device fills; when a device closed a batch or sent a
 //! tick (only the order and unit are visible); the carrier's records
 //! ([`crate::compare_carrier`]); anything about the paper.
 
