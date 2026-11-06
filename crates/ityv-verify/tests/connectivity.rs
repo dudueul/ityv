@@ -4566,6 +4566,49 @@ fn r3_2_a_record_whose_batch_is_not_laid_yet_holds_nothing() {
 }
 
 #[test]
+fn r3_2_a_record_not_laid_yet_rides_its_batchs_run() {
+    // Mid-day, both batches laid and one record of batch 0 (the second by
+    // hash) not yet; the stream is whole. The record rides its batch's run
+    // between the two the ledger has: nothing.
+    let tick200 = box_tick_in(200, ityv_encoding::BoxProgressState::Casting);
+    let (_, s) = two_batches();
+    let missing = s[2];
+    let mut book = Book::new(election_world());
+    book.w(opened(B1));
+    let casts: Vec<Cast> = (1..=6).map(|i| cast(B1, i, 1)).collect();
+    for c in casts.iter().filter(|c| c.event != missing) {
+        book.push(ityv_encoding::SCHEMA_CAST_RECORD, c.event);
+    }
+    let all = codes(&casts);
+    book.push(
+        ityv_encoding::SCHEMA_BATCH_ATTEST,
+        batch(B1, 0, 1, 3, &all[..3]),
+    );
+    book.push(
+        ityv_encoding::SCHEMA_BATCH_ATTEST,
+        batch(B1, 1, 4, 6, &all[3..]),
+    );
+    book.push(SCHEMA_PROGRESS_TICK, tick200);
+    let mut links = links_of(&book);
+    let key = links[SCANNER].key;
+    let mut groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> =
+        std::vec![(150, FrameKind::Normal, with_packages(&s[..8]))];
+    for slot in 151..=160 {
+        groups.push((slot, FrameKind::Normal, Vec::new()));
+    }
+    links[SCANNER] = link_of(key, &groups, 1);
+    let mut plan = Plan::new(ST, links);
+    plan.tweak_body = Some(&not_final);
+    let r = verify_book(book, plan.events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert_eq!(r.connectivity().holds(), HoldSet::empty());
+}
+
+#[test]
 fn r3_2b_until_the_close_is_laid_the_devices_frames_state_it() {
     // The session over the close slot is laid, BOX-1's close not yet. The
     // device closed: its close slot 212 is a catch-up group, and it sends

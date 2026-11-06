@@ -2532,31 +2532,20 @@ fn judge_objects(
                         Some(list) => {
                             let next = at.map_or(0, |a| a.saturating_add(1));
                             let here = list.binary_search(&hash.0).ok();
-                            let fits = if unsettled {
-                                here.is_some_and(|h| h >= next)
-                            } else {
-                                here == Some(next)
-                            };
-                            (fits, here.or(at))
+                            (here == Some(next), here.or(at))
                         }
                         None => (last.is_none_or(|r| r < hash.0), None),
                     };
-                    if ok {
-                        Walk::Run {
-                            list,
-                            at,
-                            last: Some(hash.0),
-                        }
-                    } else if unsettled {
-                        // Perhaps a challenged record after the run.
-                        Walk::Outside
-                    } else {
+                    // While unsettled, perhaps a skipped member or a
+                    // challenged record after the run (no finding of the
+                    // walk can arise until the gateway closed).
+                    if !ok && !unsettled {
                         report.findings.push(finding(l, LinkProblem::Batch));
-                        Walk::Run {
-                            list,
-                            at,
-                            last: Some(hash.0),
-                        }
+                    }
+                    Walk::Run {
+                        list,
+                        at,
+                        last: Some(hash.0),
                     }
                 }
                 // After a loss, one stretch of one batch's records.
