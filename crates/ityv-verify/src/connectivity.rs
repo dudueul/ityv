@@ -2642,7 +2642,9 @@ fn judge_objects(
     {
         report.findings.push(finding(l, LinkProblem::Batch));
     }
-    // A close resend the stream ends in stops at the box's last batch.
+    // A close resend the stream ends in stops at the box's last batch (once
+    // the gateway closed, as `whole_end` holds: until then its next slot
+    // may not be laid yet).
     if whole_end
         && let Some(last) = resend_last
         && resend_batch != resent.last().copied()

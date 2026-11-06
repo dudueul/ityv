@@ -4273,6 +4273,78 @@ fn r3_1d_a_close_resend_starts_in_the_close_slot_unless_it_was_lost() {
 }
 
 #[test]
+fn r3_1d_a_close_resend_goes_on_to_the_last_batch() {
+    // The close resend in slot 212 carries batch 0 only. Mid-day, its next
+    // slot may not be laid yet: nothing. Once the gateway closed, it
+    // stopped before the box's last batch with nothing lost after it:
+    // `Resend`. So too where a witnessed resend follows it with nothing
+    // lost between (the normal frames lost, declared; the witnessed
+    // resend's last frame lost, so the stream does not end whole).
+    let tick200 = box_tick_in(200, ityv_encoding::BoxProgressState::Casting);
+    let (_, s) = two_batches();
+    let key = {
+        let (mut book, _) = two_batches();
+        book.push(SCHEMA_PROGRESS_TICK, tick200);
+        links_of(&book)[SCANNER].key
+    };
+    let stops = close_resend_link(key, &s, tick200, &with_packages(&s[..4]));
+    let mut followed = stops.clone();
+    let mut at = followed
+        .frames
+        .last()
+        .map_or(0, |f| f.stream_offset + u64::from(f.payload_len));
+    let second = with_packages(&s[4..8]);
+    let none: Vec<&'static [u8]> = Vec::new();
+    for (index, objs) in [(0, &second), (1, &none)] {
+        let f = make_frame(key, 220, index, FrameKind::WitnessedResend, at, objs);
+        at += u64::from(f.payload_len);
+        followed.frames.push(f);
+    }
+    for (case, l, midday) in [
+        (0, stops.clone(), true),
+        (1, stops, false),
+        (2, followed, false),
+    ] {
+        let (mut book, _) = two_batches();
+        book.push(SCHEMA_PROGRESS_TICK, tick200);
+        let mut links = links_of(&book);
+        links[SCANNER] = l;
+        let mut plan = Plan::new(ST, links);
+        let witnessed = case == 2;
+        if witnessed {
+            plan.windows = resend_windows(220);
+        }
+        let lose = move |k: usize, f: &Built| {
+            if witnessed && k == SCANNER && (f.slot == 150 || (f.slot, f.index) == (220, 1)) {
+                None
+            } else if f.slot >= 220 {
+                Some(11)
+            } else {
+                window(f.slot)
+            }
+        };
+        let declare = move |i: u32, e: &mut SessionLink| {
+            if witnessed && e.link_id_hash == scanner() && (i == 1 || i == 12) {
+                e.missing_slots = 1;
+            }
+        };
+        plan.assign = Some(&lose);
+        plan.tweak_link = Some(&declare);
+        if midday {
+            plan.tweak_body = Some(&not_final);
+        }
+        let r = verify_book(book, plan.events());
+        let want: &[LinkProblem] = if midday { &[] } else { &[LinkProblem::Resend] };
+        assert_eq!(found(&r, scanner()), want, "{case}");
+        assert!(
+            sessions_found(&r).is_empty(),
+            "{case}: {:?}",
+            sessions_found(&r)
+        );
+    }
+}
+
+#[test]
 fn r3_1d_a_close_resend_sends_the_boxs_batches_again_in_order() {
     // The close resend in the close slot: the box's two batches in their
     // order, nothing; batch 1 first and ticks after them, findings; the
