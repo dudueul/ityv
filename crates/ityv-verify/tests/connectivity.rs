@@ -5394,6 +5394,45 @@ fn r3_9_the_stations_opening_waits_for_every_box() {
 }
 
 #[test]
+fn r3_9b_the_stations_opening_and_close_once_every_box_has_one() {
+    // The audit for finding 4, ST-1 with two boxes, mid-day. Both
+    // openings laid two buckets after the opening: the station's opening
+    // is known, and the check-in unit's frames before it are
+    // `BeforeOpening`. Both opened at the opening and BOX-1 closed, BOX-2
+    // not: the unit's close (the station's last) is not known yet, so a
+    // catch-up group of the unit that no short slot explains waits.
+    let w = two_unit_world();
+    for late in [true, false] {
+        let mut book = Book::new(w);
+        let bucket = if late { OPEN_BUCKET + 2 } else { OPEN_BUCKET };
+        book.w(opened_at(B1, bucket));
+        book.w(opened_at(B2, bucket));
+        if !late {
+            book.push(ityv_encoding::SCHEMA_BOX_CLOSE, close(B1, 0, 0, 0, &[]));
+        }
+        let links = station_links(w.genesis, &book.ledger.events).remove(0).1;
+        let unit_key = links.last().unwrap().key;
+        let groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=161)
+            .map(|s| (s, FrameKind::Normal, Vec::new()))
+            .collect();
+        let mut unit = link_of(unit_key, &groups, 1);
+        if !late {
+            reseal(&mut unit, 160, |f| f.kind = FrameKind::CatchUp);
+            add(&mut unit, 160, |f| f.index = 1);
+        }
+        let mut plan = Plan::new(ST, std::vec![unit]);
+        plan.tweak_body = Some(&not_final);
+        let r = verify_book(book, plan.events());
+        let f = found(&r, link(unit_key));
+        if late {
+            assert!(f.contains(&LinkProblem::BeforeOpening), "{f:?}");
+        } else {
+            assert!(f.is_empty(), "{f:?}");
+        }
+    }
+}
+
+#[test]
 fn r3_10_until_the_gateway_closed_a_link_may_end_unannounced() {
     // The audit for finding 4. Mid-day, BOX-1's scanner stops after slot
     // 161 (its transmitter failed, say, and the swap that replaces it is
