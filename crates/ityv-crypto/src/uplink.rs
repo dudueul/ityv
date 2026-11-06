@@ -14,6 +14,11 @@
 //!   `SHA3-512("ityv:uplink-node:v1" ‖ 0x00 ‖ left ‖ right)`, a perfect
 //!   binary tree. A root rebuilt from a frame's data-chunk leaves and the
 //!   [`zero_leaf`] proves every later chunk zero (the padding proof).
+//! * [`objects_hash`]: `SHA3-512("ityv:uplink-objects:v1" ‖ 0x00 ‖
+//!   entries)`, over the encoded entries of a frame's object list (each
+//!   object that overlaps the frame's data: schema, object hash, stream
+//!   offset, length; 80 bytes each, in stream order). The frame header
+//!   carries it, so the device's signature covers where its objects lie.
 //! * [`capture_hash`]: `SHA3-512("ityv:capture:v1" ‖ 0x00 ‖ file)`, the
 //!   hash an observer signs for a capture file.
 //!
@@ -35,6 +40,8 @@ pub const CHUNK_LABEL: &[u8] = b"ityv:uplink-chunk:v1";
 pub const NODE_LABEL: &[u8] = b"ityv:uplink-node:v1";
 /// Label of a capture file hash.
 pub const CAPTURE_LABEL: &[u8] = b"ityv:capture:v1";
+/// Label of a frame's object list hash.
+pub const OBJECTS_LABEL: &[u8] = b"ityv:uplink-objects:v1";
 
 /// The depth of the payload tree: `2^8 = 256` leaves.
 const TREE_DEPTH: usize = 8;
@@ -166,6 +173,13 @@ pub fn capture_hash(file: &[u8]) -> Hash512 {
     labelled(CAPTURE_LABEL, &[file])
 }
 
+/// The hash of a frame's object list, given its encoded entries (80 bytes
+/// each; no count prefix, the entries' length gives it).
+#[must_use]
+pub fn objects_hash(entries: &[u8]) -> Hash512 {
+    labelled(OBJECTS_LABEL, &[entries])
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -288,6 +302,18 @@ mod tests {
             )
         );
         assert_eq!(
+            objects_hash(&[]),
+            unhex(
+                "189a472c0f17cef745401c8831e0b00db0f9662bc82ed8b6e455b807f36d4795413a603d74d407652a1199823fce2af18da7c78a095dd9a43eb1fe05bbb6b757"
+            )
+        );
+        assert_eq!(
+            objects_hash(&[5; 80]),
+            unhex(
+                "9ee7878e238620af9161acdd9f532dd7d0a9e33943690984e0da746c9b4c0e7d3cc99f74ee65b87fe055810b9844aac88fc3a0b1095d1651f147e4090f5765af"
+            )
+        );
+        assert_eq!(
             capture_hash(b"capture file"),
             unhex(
                 "89478283a860e617b09fb2324b5940b8ab0f2f0b71cd8b19666981bf5d1700d69f71f76ac545af91ce5994f774f446214a3055d4d563d804a6c9a0680f33c768"
@@ -305,5 +331,6 @@ mod tests {
         let h1 = chain_next(&h0, &Hash512([1; 64]));
         assert_ne!(h1, chain_next(&h1, &Hash512([1; 64])));
         assert_ne!(capture_hash(b"x"), labelled(LINK_LABEL, &[b"x"]));
+        assert_ne!(objects_hash(b"x"), capture_hash(b"x"));
     }
 }
