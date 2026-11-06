@@ -1130,6 +1130,11 @@ fn resend_windows(first: u64) -> Vec<(u64, u64)> {
 /// A witnessed `CheckinUnitSwap` at ST-1: U-1A fails, the spare U-1B
 /// reports from `at`.
 fn checkin_swap(at: u64) -> (SchemaId, &'static [u8]) {
+    unit_swap(b"U-1A", b"U-1B", at)
+}
+
+/// A witnessed `CheckinUnitSwap` at ST-1 of `failed` by `spare` at `at`.
+fn unit_swap(failed: &[u8], spare: &[u8], at: u64) -> (SchemaId, &'static [u8]) {
     use ityv_encoding::{
         CheckinUnitSwapBody, CheckinUnitSwapParts, SCHEMA_CHECKIN_UNIT_SWAP_BODY, SCHEMA_VERSION_1,
         SCHEMA_WITNESSED_EVENT, StationId,
@@ -1137,8 +1142,8 @@ fn checkin_swap(at: u64) -> (SchemaId, &'static [u8]) {
     let body = CheckinUnitSwapBody::new(&CheckinUnitSwapParts {
         election_id: common::election(),
         station_id: StationId::new(ST).unwrap(),
-        failed_unit: UnitId::new(b"U-1A").unwrap(),
-        spare_unit: UnitId::new(b"U-1B").unwrap(),
+        failed_unit: UnitId::new(leak_slice(failed.to_vec())).unwrap(),
+        spare_unit: UnitId::new(leak_slice(spare.to_vec())).unwrap(),
         at_slot: at,
         confirmed: true,
         next_seq: 1,
@@ -1216,6 +1221,35 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
             .box_holds(B1.id)
             .contains(HoldReason::UplinkFrameInvalid)
     );
+    // A swap of two other units moves neither link; a later swap that
+    // takes the spare out ends its slots too (a spare is used once: the
+    // unit it replaced does not come back).
+    let mut book = book_in(world);
+    for (failed, spare, at) in [
+        (&b"U-1C"[..], &b"U-1D"[..], 170),
+        (b"U-1A", b"U-1B", 181),
+        (b"U-1B", b"U-1A", 200),
+    ] {
+        book.push(
+            ityv_encoding::SCHEMA_WITNESSED_EVENT,
+            unit_swap(failed, spare, at).1,
+        );
+    }
+    let mut links = honest_links();
+    links[UNIT].frames.retain(|f| f.slot <= 180);
+    links.push(Link {
+        key: spare_key,
+        frames: common::uplink::frames(spare_key, &[], 181, 212, 1),
+        objects: Vec::new(),
+    });
+    let r = verify_book(book, Plan::new(ST, links).events());
+    let spare = report_of(&r, spare_key);
+    assert_eq!(spare.missing_slots, 0);
+    assert_eq!(
+        spare.findings.iter().map(|f| f.problem).collect::<Vec<_>>(),
+        [LinkProblem::AfterSwap; 12]
+    );
+    assert!(found(&r, unit()).is_empty(), "{:?}", found(&r, unit()));
 
     // A spare that sends with no swap on the ledger is measured from the
     // station's opening: the slots it did not send in are missing slots.
@@ -1263,6 +1297,21 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
     }
     assert!(station(&r).outside.is_empty());
     assert_eq!(r.connectivity().holds(), HoldSet::empty());
+    // The old scanner fell silent at slot 175: to the swap's slot, its
+    // silent slots are missing slots.
+    let mut book = book_in(w);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, amendment);
+    let (schema, event) = box_swap(181);
+    book.push(schema, event);
+    let mut links = honest_links();
+    links[SCANNER] = Link::new(new_key, &with_packages(&scanner_objects()), 181, 212, 1);
+    links.push(Link {
+        key: old_key,
+        frames: common::uplink::frames(old_key, &[], 150, 175, 1),
+        objects: Vec::new(),
+    });
+    let r = verify_book(book, Plan::new(ST, links).events());
+    assert_eq!(report_of(&r, old_key).missing_slots, 5);
 }
 
 #[test]
@@ -3463,6 +3512,61 @@ fn r2_g_a_run_holds_its_batchs_records_in_order() {
     ];
     let r = verify_stream(book, &with_packages(&reordered));
     assert_eq!(found(&r, scanner()), [LinkProblem::Batch]);
+}
+
+#[test]
+fn r2_g_runs_of_what_the_ledger_does_not_show() {
+    // A run after an attestation the ledger does not have: its records are
+    // judged by hash order alone (and the attestation is not on the ledger
+    // once the gateway closed).
+    let o = scanner_objects();
+    let fake = fake_object(ityv_encoding::SCHEMA_BATCH_ATTEST, &[0xBA; 200]);
+    let r = verify(Plan::new(ST, with_stream(SCANNER, &[fake, o[1], o[2], o[3], o[4]])).events());
+    assert_eq!(found(&r, scanner()), [LinkProblem::NotOnLedger]);
+    let r = verify(Plan::new(ST, with_stream(SCANNER, &[fake, o[3], o[2], o[1], o[4]])).events());
+    assert_eq!(
+        found(&r, scanner()),
+        [
+            LinkProblem::NotOnLedger,
+            LinkProblem::Batch,
+            LinkProblem::Batch
+        ]
+    );
+
+    // After a silent slot, a record the ledger does not have starts a run
+    // of its own; one the ledger has in no batch (a record refused after
+    // the box's close) is no run's.
+    let refused = cast(B1, 4, 1).event;
+    let unknown = fake_object(ityv_encoding::SCHEMA_CAST_RECORD, &[0x77; 300]);
+    let honest = &day().links[SCANNER];
+    let f150 = honest.frames[0].clone();
+    let end = u64::from(f150.payload_len);
+    for (record, problems) in [
+        (unknown, &[LinkProblem::NotOnLedger][..]),
+        (refused, &[LinkProblem::Batch][..]),
+    ] {
+        let mut book = book_in(election_world());
+        book.push(ityv_encoding::SCHEMA_CAST_RECORD, refused);
+        let mut links = honest_links();
+        links[SCANNER] = scanner_frames(
+            &[
+                (150, 0, f150.data.clone(), f150.objects.clone()),
+                (
+                    152,
+                    end + 1,
+                    record.to_vec(),
+                    std::vec![entry_at(record, end + 1)],
+                ),
+            ],
+            &[151],
+        );
+        let declare = declare_one(1);
+        let mut plan = Plan::new(ST, links);
+        plan.tweak_link = Some(&declare);
+        let r = verify_book(book, plan.events());
+        assert_eq!(found(&r, scanner()), problems);
+        assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    }
 }
 
 /// BOX-1's progress tick of `slot`, signed by its device.

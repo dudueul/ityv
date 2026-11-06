@@ -2061,10 +2061,9 @@ fn judge_objects(
     // Listings per object and kind group: normal and catch-up, close
     // resend, witnessed resend.
     let mut counts: BTreeMap<(u32, [u8; 64]), [u32; 3]> = BTreeMap::new();
-    // The batches first sent so far, in normal and catch-up frames, and
-    // the highest batch index among them; the latest tick's slot.
+    // The batches first sent so far, in normal and catch-up frames, by
+    // batch index; the latest tick's slot.
     let mut first_sent: BTreeSet<u32> = BTreeSet::new();
-    let mut highest: Option<u32> = None;
     let mut latest_tick: Option<u64> = None;
     for l in listed.values() {
         let o = &l.object;
@@ -2128,11 +2127,12 @@ fn judge_objects(
             if b.first_slot.is_some_and(|first| l.slot < first) {
                 report.findings.push(finding(l, LinkProblem::Time));
             }
-            if group == 0 && first_sent.insert(b.index) {
-                if highest.is_some_and(|h| b.index < h) {
+            // A batch first sent after one of a higher index.
+            if group == 0 && !first_sent.contains(&b.index) {
+                if first_sent.range(b.index..).next().is_some() {
                     report.findings.push(finding(l, LinkProblem::Batch));
                 }
-                highest = highest.max(Some(b.index));
+                first_sent.insert(b.index);
             }
         }
         if schema == SCHEMA_PROGRESS_TICK
@@ -2401,11 +2401,14 @@ fn box_swaps(index: &LedgerIndex<'_>, box_id: &[u8]) -> Vec<u64> {
 }
 
 /// The slots of the station's first `CheckinUnitSwap` that brought `unit`
-/// into service and of the first that took it out after that.
+/// into service (none for a unit in service from the start) and of the
+/// first that took it out after that. A spare is used once (VC-106): a
+/// unit taken out is not counted back in.
 fn unit_swaps(
     index: &LedgerIndex<'_>,
     station_id: &[u8],
     unit: &[u8],
+    original: bool,
 ) -> (Option<u64>, Option<u64>) {
     let mut brought = None;
     let mut taken = None;
@@ -2428,13 +2431,11 @@ fn unit_swaps(
             continue;
         };
         let p = swap.parts();
-        if brought.is_none() && p.spare_unit.as_bytes() == unit {
+        if !original && brought.is_none() && p.spare_unit.as_bytes() == unit {
             brought = Some(p.at_slot);
         }
-        if taken.is_none()
-            && p.failed_unit.as_bytes() == unit
-            && brought.is_none_or(|b| p.at_slot >= b)
-        {
+        let in_service = original || brought.is_some_and(|b| p.at_slot >= b);
+        if taken.is_none() && in_service && p.failed_unit.as_bytes() == unit {
             taken = Some(p.at_slot);
         }
     }
@@ -2862,7 +2863,7 @@ pub fn verify_connectivity<'a>(
             .map(|b| close_slot(index, b))
             .collect();
         // The station's last close once every opened box closed.
-        let last_close = if !box_closes.is_empty() && box_closes.iter().all(Option::is_some) {
+        let last_close = if box_closes.iter().all(Option::is_some) {
             box_closes.iter().flatten().max().copied()
         } else {
             None
@@ -2916,12 +2917,9 @@ pub fn verify_connectivity<'a>(
                     // and to the swaps that bring the unit in and take it
                     // out.
                     let opening = openings.iter().min().copied();
-                    let (brought, taken) = unit_swaps(index, station_id.as_bytes(), u.as_bytes());
-                    let start = if lw.info.original {
-                        opening
-                    } else {
-                        brought.or(opening)
-                    };
+                    let (brought, taken) =
+                        unit_swaps(index, station_id.as_bytes(), u.as_bytes(), lw.info.original);
+                    let start = brought.or(opening);
                     let end = match taken {
                         Some(at) => SpanEnd::Swap(at),
                         None if lw.info.current || brought.is_some() => {
