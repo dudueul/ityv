@@ -374,6 +374,8 @@ pub fn verify_genesis<'a>(
 
     let mut sets = Amendable::parse(0, &input.sets, genesis.sets())?;
     cross::check(0, &sets, &fixed, genesis.body())?;
+    let mut frame_keys = cross::FrameKeys::default();
+    frame_keys.add(0, &sets, &fixed, genesis.body())?;
     let mut seen = Seen::default();
     seen.add(&sets);
     let mut anchors = Vec::with_capacity(amendments.len().saturating_add(1));
@@ -391,6 +393,7 @@ pub fn verify_genesis<'a>(
         let next = amend(state, &genesis, &fixed, amendment)?;
         let next_sets = Amendable::parse(state, &amendment.sets, next.sets())?;
         cross::check(state, &next_sets, &fixed, next.body())?;
+        frame_keys.add(state, &next_sets, &fixed, next.body())?;
         seen.add(&next_sets);
         anchors.push(next.anchor());
         history.push(State {

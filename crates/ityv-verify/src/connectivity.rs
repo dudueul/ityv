@@ -99,22 +99,25 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-use ityv_crypto::uplink::{chain_next, chain_start, chunk_leaf, link_id, payload_root};
+use ityv_crypto::uplink::{
+    chain_next, chain_start, chunk_leaf, link_id, objects_hash, payload_root,
+};
 use ityv_crypto::{
     Purpose, RecordPurpose, RecordSignature, RecordVerifyingKey, object_hash, verify_record,
 };
 use ityv_encoding::{
     BoxClose, BoxId, BoxOpenedBody, CARRY_CHECKIN, CARRY_PUBLIC, CARRY_ROLL, CARRY_SEALED,
     CHUNK_LEN, CaptureMessage, CastRecord, ConnectivityIncidentBody, ConnectivityIncidentParts,
-    ConnectivityManifest, DeviceClass, Direction, Encode, EventRole, FrameEntry, FrameKind,
-    GatewayId, HEADER_LEN, Hash512, LogLeaves, ManifestEntry, Medium, PURPOSE_UPLINK_CAPTURE,
-    PURPOSE_UPLINK_SESSION, RosterRole, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE,
-    SCHEMA_BOX_OPENED_BODY, SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING,
-    SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PARTICIPATION_SET,
-    SCHEMA_PROGRESS_TICK, SCHEMA_SHARE_PACKAGE, SCHEMA_UPLINK_FRAME_HEADER,
-    SCHEMA_UPLINK_FRAME_LOG, SCHEMA_UPLINK_SESSION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT,
-    Schedule, SchemaId, Seq, StationEntry, StationId, StreamObject, UnitId, UplinkFrameHeader,
-    UplinkFrameLog, UplinkSession, WitnessedEvent, decode_object, encode_object, schema_version,
+    ConnectivityManifest, DeviceClass, Direction, Encode, EventRole, FRAME_HEADER_LEN, FrameEntry,
+    FrameKind, FrameObjects, GatewayId, HEADER_LEN, Hash512, LogLeaves, LoggedFrame,
+    MAX_PAYLOAD_LEN, ManifestEntry, Medium, PURPOSE_UPLINK_CAPTURE, PURPOSE_UPLINK_SESSION,
+    RosterRole, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_CAST_RECORD,
+    SCHEMA_CHALLENGE_OPENING, SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
+    SCHEMA_PARTICIPATION_SET, SCHEMA_PROGRESS_TICK, SCHEMA_SHARE_PACKAGE,
+    SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_UPLINK_FRAME_LOG, SCHEMA_UPLINK_SESSION, SCHEMA_VERSION_1,
+    SCHEMA_WITNESSED_EVENT, Schedule, SchemaId, Seq, StationEntry, StationId, StreamObject, UnitId,
+    UplinkFrameHeader, UplinkFrameLog, UplinkSession, WitnessedEvent, decode_object, encode_object,
+    max_package_len, schema_version,
 };
 use ityv_state::{HoldReason, HoldSet, RosterEntry, Signed, check_incident_signers};
 
@@ -281,7 +284,9 @@ pub enum LinkProblem {
     /// A normal or catch-up frame after a close resend, or another kind
     /// after a witnessed resend.
     KindOrder,
-    /// The stream offset goes back, or skips without a missing slot.
+    /// The stream offset goes back, or skips ahead where no position
+    /// between the frame and the one before it went untaken, or by more
+    /// than a full payload per untaken position.
     Offset,
     /// The payload root the data leaves and zero fill give is not the
     /// signed one: a chunk after the data is not zero.
@@ -291,21 +296,29 @@ pub enum LinkProblem {
     /// An object of a kind the device may not send or the manifest does
     /// not let it carry.
     Kind,
-    /// An object that starts before the previous one ends.
+    /// Two frames list different objects at one stream position: the
+    /// object a frame carries out is not the one the next carries in, or
+    /// one frame's object overlaps another's.
     Overlap,
-    /// An object listed before its first byte was received.
-    Early,
-    /// Received bytes that belong to no object.
+    /// A frame's object list does not tile its data: a data byte no entry
+    /// covers (other than the zero fill around a share package), an entry
+    /// outside the data, or a frame with data that lists nothing.
     NotObject,
+    /// A share package that does not start on a chunk boundary of its
+    /// frame, or an object after a package that does not.
+    Alignment,
+    /// A ledger event of another box or station than the link's device.
+    Foreign,
     /// A public object whose length is not the ledger's.
     Length,
     /// A cast record outside a run right after a batch attestation, or not
     /// above the previous record of its run.
     Batch,
-    /// A share package not right after the record that names it.
+    /// A share package not right after the record that names it, or
+    /// longer than the election allows.
     Package,
-    /// A fully received object no ledger frame names, once the gateway
-    /// closed (a share package: no record on the ledger right before it
+    /// An object a received frame lists that no ledger frame names, once
+    /// the gateway closed (a share package: no accepted record of the box
     /// names it).
     NotOnLedger,
 }
@@ -327,8 +340,9 @@ impl LinkProblem {
             | Self::Chunk => HoldReason::UplinkFrameInvalid,
             Self::Kind
             | Self::Overlap
-            | Self::Early
             | Self::NotObject
+            | Self::Alignment
+            | Self::Foreign
             | Self::Length
             | Self::Batch
             | Self::Package
@@ -379,9 +393,10 @@ pub struct LinkReport<'a> {
     /// Data chunks recomputed from public ledger objects.
     pub checked_chunks: u64,
     /// Data chunks the public cannot recompute (sealed bytes, objects not
-    /// on the ledger, lost starts): the taps' to check.
+    /// on the ledger): the taps' to check.
     pub opaque_chunks: u64,
-    /// Device events of the ledger found inside received frames.
+    /// Device events of the ledger received whole, every chunk of them
+    /// recomputed.
     pub included: u64,
     /// What breaks a rule, in stream order.
     pub findings: Vec<LinkFinding>,
@@ -433,6 +448,9 @@ pub enum IncidentProblem {
     Signers,
     /// The box is not a box of the station.
     Subject,
+    /// A clerk is not registered at the station the incident names, or an
+    /// incident of the whole election is not signed by the committee.
+    Scope,
 }
 
 /// A connectivity incident on the ledger (VC-083).
@@ -702,22 +720,14 @@ fn links<'a>(genesis: &VerifiedGenesis<'a>) -> BTreeMap<[u8; 64], LinkInfo<'a>> 
 // ---------------------------------------------------------------------------
 // The stage's work.
 
-/// One frame taken from a log, with its leaves.
+/// One frame taken from a log, with its leaves and its object list.
 #[derive(Debug, Clone, Copy)]
 struct Frame<'a> {
     log: Seq,
     window: (u64, u64),
     entry: FrameEntry<'a>,
     leaves: LogLeaves<'a>,
-}
-
-/// One object listed by a taken log.
-#[derive(Debug, Clone, Copy)]
-struct Listed {
-    log: Seq,
-    /// The stream end once the session that lists it was read.
-    received_by: u64,
-    object: StreamObject,
+    objects: FrameObjects<'a>,
 }
 
 /// What one link accumulates over the sessions.
@@ -727,16 +737,6 @@ struct LinkWork<'a> {
     head: Hash512,
     stream_end: u64,
     frames: Vec<Frame<'a>>,
-    objects: Vec<Listed>,
-}
-
-/// A session's declared missing slots per link, for the check after every
-/// session is read.
-#[derive(Debug, Clone, Copy)]
-struct Declared {
-    session_index: u32,
-    link: [u8; 64],
-    missing: u32,
 }
 
 /// What one station accumulates.
@@ -748,7 +748,9 @@ struct StationWork<'a> {
     final_session: Option<Seq>,
     sessions: Vec<SessionReport>,
     findings: Vec<SessionFinding>,
-    declared: Vec<Declared>,
+    /// The missing slots each session declares, by link and session
+    /// number.
+    declared: BTreeMap<([u8; 64], u32), u32>,
 }
 
 impl<'a> StationWork<'a> {
@@ -759,7 +761,7 @@ impl<'a> StationWork<'a> {
             final_session: None,
             sessions: Vec::new(),
             findings: Vec::new(),
-            declared: Vec::new(),
+            declared: BTreeMap::new(),
         }
     }
 
@@ -775,6 +777,17 @@ impl<'a> StationWork<'a> {
 
 type LogKey<'a> = (&'a [u8], u32, [u8; 64]);
 
+/// The logs of `station`'s session `index`, by key.
+fn session_keys<'a>(
+    logs: &BTreeMap<LogKey<'a>, (Seq, UplinkFrameLog<'a>)>,
+    station: &'a [u8],
+    index: u32,
+) -> Vec<LogKey<'a>> {
+    logs.range((station, index, [0u8; 64])..=(station, index, [0xFF; 64]))
+        .map(|(k, _)| *k)
+        .collect()
+}
+
 struct Work<'g, 'a> {
     genesis: &'g VerifiedGenesis<'a>,
     index: &'g LedgerIndex<'a>,
@@ -784,13 +797,27 @@ struct Work<'g, 'a> {
     logs: BTreeMap<LogKey<'a>, (Seq, UplinkFrameLog<'a>)>,
 }
 
+/// The length of an encoded frame header object.
+const HEADER_OBJECT_LEN: usize = HEADER_LEN + FRAME_HEADER_LEN;
+
 /// The encoded header object of `header`, and its object hash.
-fn header_hash(header: &ityv_encoding::UplinkFrameHeaderParts) -> Option<(Hash512, [u8; 167])> {
+fn header_hash(
+    header: &ityv_encoding::UplinkFrameHeaderParts,
+) -> Option<(Hash512, [u8; HEADER_OBJECT_LEN])> {
     let h = UplinkFrameHeader::new(header).ok()?;
-    let mut buf = [0u8; 167];
+    let mut buf = [0u8; HEADER_OBJECT_LEN];
     let len = encode_object(SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1, &h, &mut buf).ok()?;
     let bytes = buf.get(..len)?;
     Some((object_hash(bytes), buf))
+}
+
+/// The header of frame `entry` listing `objects` on link `link`.
+fn frame_header(
+    link: Hash512,
+    entry: &FrameEntry<'_>,
+    objects: &FrameObjects<'_>,
+) -> ityv_encoding::UplinkFrameHeaderParts {
+    entry.header(link, objects_hash(objects.as_bytes()))
 }
 
 /// The head after `frames` from `head`, or `None` if a header cannot be
@@ -798,11 +825,11 @@ fn header_hash(header: &ityv_encoding::UplinkFrameHeaderParts) -> Option<(Hash51
 fn chain_over<'a>(
     head: Hash512,
     link: &Hash512,
-    frames: impl Iterator<Item = FrameEntry<'a>>,
+    frames: impl Iterator<Item = LoggedFrame<'a>>,
 ) -> Option<Hash512> {
     let mut h = head;
     for f in frames {
-        let (hash, _) = header_hash(&f.header(*link))?;
+        let (hash, _) = header_hash(&frame_header(*link, &f.entry, &f.objects))?;
         h = chain_next(&h, &hash);
     }
     Some(h)
@@ -877,12 +904,7 @@ impl<'a> Work<'_, 'a> {
         let station = p.station_id;
         let state = self.index.state_at(seq);
         let index = p.session_index;
-        let keys: Vec<LogKey<'a>> = self
-            .logs
-            .keys()
-            .filter(|(s, i, _)| *s == station.as_bytes() && *i == index)
-            .copied()
-            .collect();
+        let keys = session_keys(&self.logs, station.as_bytes(), index);
         let refusal = {
             let st = self.stations.get(station.as_bytes());
             let last = st.and_then(|s| s.last);
@@ -946,15 +968,10 @@ impl<'a> Work<'_, 'a> {
                 head: chain_start(&link),
                 stream_end: 0,
                 frames: Vec::new(),
-                objects: Vec::new(),
             });
-            declared.push(Declared {
-                session_index: index,
-                link: link.0,
-                missing: l.missing_slots,
-            });
-            let frames: Vec<FrameEntry<'a>> = log
-                .map(|(_, lg)| lg.parts().frames.iter().collect())
+            declared.push(((link.0, index), l.missing_slots));
+            let frames: Vec<LoggedFrame<'a>> = log
+                .map(|(_, lg)| lg.frames_with().collect())
                 .unwrap_or_default();
             let head = chain_over(work.head, &link, frames.iter().copied());
             if head != Some(l.chain_head) {
@@ -964,7 +981,7 @@ impl<'a> Work<'_, 'a> {
             let normal = u64::try_from(
                 frames
                     .iter()
-                    .filter(|f| f.kind == FrameKind::Normal)
+                    .filter(|f| f.entry.kind == FrameKind::Normal)
                     .count(),
             )
             .unwrap_or(u64::MAX);
@@ -972,7 +989,9 @@ impl<'a> Work<'_, 'a> {
                 .unwrap_or(u64::MAX)
                 .saturating_sub(normal);
             let end = frames.last().map_or(work.stream_end, |f| {
-                f.stream_offset.saturating_add(u64::from(f.payload_len))
+                f.entry
+                    .stream_offset
+                    .saturating_add(u64::from(f.entry.payload_len))
             });
             if normal != l.frames {
                 findings.push((Some(link), SessionProblem::Frames));
@@ -985,28 +1004,14 @@ impl<'a> Work<'_, 'a> {
             }
             work.head = l.chain_head;
             work.stream_end = end;
-            if let Some((log_seq, lg)) = log {
-                let parts = lg.parts();
-                let mut leaves = parts.leaves.as_bytes();
-                for f in parts.frames.iter() {
-                    let n = f.payload_len;
-                    let take = ityv_encoding::data_chunks(n).saturating_mul(64);
-                    let (mine, rest) = leaves.split_at_checked(take).unwrap_or((&[], &[]));
-                    leaves = rest;
-                    work.frames.push(Frame {
-                        log: log_seq,
-                        window,
-                        entry: f,
-                        leaves: LogLeaves::new(mine).unwrap_or(LogLeaves::EMPTY),
-                    });
-                }
-                for o in parts.objects.iter() {
-                    work.objects.push(Listed {
-                        log: log_seq,
-                        received_by: end,
-                        object: o,
-                    });
-                }
+            if let Some((log_seq, _)) = log {
+                work.frames.extend(frames.iter().map(|f| Frame {
+                    log: log_seq,
+                    window,
+                    entry: f.entry,
+                    leaves: f.leaves,
+                    objects: f.objects,
+                }));
             }
         }
         let st = self.station(station);
@@ -1037,22 +1042,36 @@ impl<'a> Work<'_, 'a> {
 /// What a link's judgement needs from the rest of the ledger.
 struct LinkContext<'c, 'a> {
     entry: Option<ManifestEntry<'a>>,
+    /// The first slot of the box's first opening (the station's first,
+    /// for a check-in unit).
     opening: Option<u64>,
+    /// The box's close slot: no normal or catch-up frame after it (none
+    /// for a check-in unit).
     close: Option<u64>,
+    /// The last slot the device must send in, as far as the ledger shows:
+    /// the box's close slot (the station's last, for a check-in unit), or
+    /// while it is open the last slot of the station's last session.
+    span_end: Option<u64>,
     /// Public ledger objects by hash: schema and bytes.
     public: &'c BTreeMap<[u8; 64], (SchemaId, &'a [u8])>,
     /// Every event hash a ledger frame names.
     on_ledger: &'c BTreeSet<[u8; 64]>,
+    /// Whom each accepted event concerns, by hash.
+    scopes: &'c BTreeMap<[u8; 64], Scope<'a>>,
+    /// The share packages the box's accepted cast records name.
+    packages: &'c BTreeSet<[u8; 64]>,
+    /// The longest share package the election allows.
+    package_len: u64,
     closed: bool,
 }
 
 /// The received ranges of a link: merged `[start, end)` of every frame
-/// whose signature verified.
-fn received_ranges(frames: &[(Frame<'_>, bool)]) -> Vec<(u64, u64)> {
+/// given.
+fn received_ranges(frames: &[&Frame<'_>]) -> Vec<(u64, u64)> {
     let mut ranges: Vec<(u64, u64)> = frames
         .iter()
-        .filter(|(f, valid)| *valid && f.entry.payload_len > 0)
-        .map(|(f, _)| {
+        .filter(|f| f.entry.payload_len > 0)
+        .map(|f| {
             let start = f.entry.stream_offset;
             (start, start.saturating_add(u64::from(f.entry.payload_len)))
         })
@@ -1074,58 +1093,150 @@ fn uncovered(windows: &[(u64, u64)], a: u64, b: u64) -> u64 {
         return 0;
     };
     let covered = windows.iter().fold(0u64, |acc, (start, end)| {
-        let lo = a.max(*start);
-        let hi = b.min(*end);
-        let overlap = hi
-            .checked_sub(lo)
-            .and_then(|d| d.checked_add(1))
-            .unwrap_or(0);
-        acc.saturating_add(overlap)
+        acc.saturating_add(overlap(Some((*start, *end)), a, b))
     });
     span.saturating_sub(covered)
 }
 
-/// Whether `[start, end)` lies wholly in `ranges`.
-fn covered(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
-    start >= end || ranges.iter().any(|(a, b)| *a <= start && end <= *b)
+/// The slots of `[a, b]` in `range` (inclusive), if any.
+fn overlap(range: Option<(u64, u64)>, a: u64, b: u64) -> u64 {
+    range.map_or(0, |(lo, hi)| {
+        let lo = a.max(lo);
+        let hi = b.min(hi);
+        hi.checked_sub(lo)
+            .and_then(|d| d.checked_add(1))
+            .unwrap_or(0)
+    })
 }
 
-/// The data-chunk leaf of `frame`'s chunk `j` recomputed from public
-/// objects, or `None` if a byte of it is not public.
+/// Whether `[start, end)` lies wholly in `ranges` (sorted, merged).
+fn covered(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
+    if start >= end {
+        return true;
+    }
+    let after = ranges.partition_point(|(a, _)| *a <= start);
+    after
+        .checked_sub(1)
+        .and_then(|i| ranges.get(i))
+        .is_some_and(|(_, b)| end <= *b)
+}
+
+/// How a frame's object list tiles its data (ADR-0041 decisions 3 and 6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Tiling {
+    /// The first rule broken, with the stream offset where: data no entry
+    /// covers or an entry outside the data ([`LinkProblem::NotObject`]),
+    /// or a share package off its chunk boundary
+    /// ([`LinkProblem::Alignment`]).
+    pub(crate) problem: Option<(LinkProblem, u64)>,
+    /// The fill around share packages, as stream ranges: bytes that are
+    /// no object and must be zero.
+    pub(crate) fill: Vec<(u64, u64)>,
+}
+
+/// Where an object right after `previous` starts in a frame whose data
+/// start at `start`: right at its end, or at the frame's next chunk
+/// boundary when either is a share package.
+fn next_start(start: u64, previous_end: u64, aligned: bool) -> Option<u64> {
+    if !aligned {
+        return Some(previous_end);
+    }
+    let into = previous_end.checked_sub(start)?;
+    let chunk = u64::try_from(CHUNK_LEN).ok()?;
+    let up = into.div_ceil(chunk).checked_mul(chunk)?;
+    start.checked_add(up)
+}
+
+/// The tiling of a frame whose `payload_len` data bytes start at
+/// `stream_offset` by its list `objects`: the first entry starts at or
+/// before the data and reaches into them; each next one starts where the
+/// one before ends, or at the frame's next 4,096-byte boundary when either
+/// is a share package (the bytes between are fill); the last reaches the
+/// data's end or past it. A frame without data lists nothing.
+pub(crate) fn tiling(stream_offset: u64, payload_len: u32, objects: &FrameObjects<'_>) -> Tiling {
+    let mut out = Tiling {
+        problem: None,
+        fill: Vec::new(),
+    };
+    let start = stream_offset;
+    let Some(end) = start.checked_add(u64::from(payload_len)) else {
+        out.problem = Some((LinkProblem::NotObject, start));
+        return out;
+    };
+    let mut list = objects.iter();
+    let Some(first) = list.next() else {
+        if payload_len > 0 {
+            out.problem = Some((LinkProblem::NotObject, start));
+        }
+        return out;
+    };
+    let reaches = |o: &StreamObject| o.stream_offset < end && o.end().is_some_and(|e| e > start);
+    if first.stream_offset > start || !reaches(&first) {
+        out.problem = Some((LinkProblem::NotObject, start.min(first.stream_offset)));
+        return out;
+    }
+    let mut previous = first;
+    for o in list {
+        let aligned = previous.schema == SCHEMA_SHARE_PACKAGE || o.schema == SCHEMA_SHARE_PACKAGE;
+        let previous_end = previous.end().unwrap_or(u64::MAX);
+        let expected = next_start(start, previous_end, aligned);
+        if Some(o.stream_offset) != expected {
+            let problem = if aligned {
+                LinkProblem::Alignment
+            } else {
+                LinkProblem::NotObject
+            };
+            out.problem = Some((problem, o.stream_offset));
+            return out;
+        }
+        if !reaches(&o) {
+            out.problem = Some((LinkProblem::NotObject, o.stream_offset));
+            return out;
+        }
+        if o.stream_offset > previous_end {
+            out.fill.push((previous_end, o.stream_offset));
+        }
+        previous = o;
+    }
+    if previous.end().is_some_and(|e| e < end) {
+        out.problem = Some((LinkProblem::NotObject, previous.end().unwrap_or(u64::MAX)));
+    }
+    out
+}
+
+/// The leaf of the chunk of stream bytes `[lo, hi)` recomputed from the
+/// public objects of `objects` that overlap it (zeros between them), or
+/// `None` if a byte belongs to a share package or an object whose bytes
+/// the ledger does not show.
 fn public_leaf(
-    frame: &FrameEntry<'_>,
-    j: usize,
-    objects: &[Listed],
+    lo: u64,
+    hi: u64,
+    objects: &[StreamObject],
     public: &BTreeMap<[u8; 64], (SchemaId, &[u8])>,
 ) -> Option<Hash512> {
-    let offset_in = u64::try_from(j.checked_mul(CHUNK_LEN)?).ok()?;
-    let start = frame.stream_offset.checked_add(offset_in)?;
-    let data_end = frame
-        .stream_offset
-        .checked_add(u64::from(frame.payload_len))?;
-    let end = start
-        .checked_add(u64::try_from(CHUNK_LEN).ok()?)?
-        .min(data_end);
-    let mut chunk = Vec::with_capacity(CHUNK_LEN);
-    let mut at = start;
-    let first = objects.partition_point(|l| l.object.stream_offset <= start);
-    let mut i = first.checked_sub(1)?;
-    while at < end {
-        let l = objects.get(i)?;
-        let o = &l.object;
+    let mut chunk = [0u8; CHUNK_LEN];
+    for o in objects {
         let o_end = o.end()?;
-        if o.stream_offset > at || o_end <= at {
+        if o_end <= lo || o.stream_offset >= hi {
+            continue;
+        }
+        if o.schema == SCHEMA_SHARE_PACKAGE {
             return None;
         }
         let (schema, bytes) = public.get(&o.object_hash.0)?;
         if *schema != o.schema || u64::try_from(bytes.len()).ok() != Some(u64::from(o.len)) {
             return None;
         }
-        let from = usize::try_from(at.checked_sub(o.stream_offset)?).ok()?;
-        let to = usize::try_from(end.min(o_end).checked_sub(o.stream_offset)?).ok()?;
-        chunk.extend_from_slice(bytes.get(from..to)?);
-        at = end.min(o_end);
-        i = i.checked_add(1)?;
+        let from = lo.max(o.stream_offset);
+        let to = hi.min(o_end);
+        let src = bytes.get(
+            usize::try_from(from.checked_sub(o.stream_offset)?).ok()?
+                ..usize::try_from(to.checked_sub(o.stream_offset)?).ok()?,
+        )?;
+        let at = usize::try_from(from.checked_sub(lo)?).ok()?;
+        chunk
+            .get_mut(at..at.checked_add(src.len())?)?
+            .copy_from_slice(src);
     }
     Some(chunk_leaf(&chunk))
 }
@@ -1188,8 +1299,109 @@ fn witnessed_ok(bytes: Option<&[u8]>) -> bool {
     })
 }
 
+/// Whether an event that concerns `scope` is the link's device's: its
+/// box for a scanner, its station for a check-in unit.
+fn mine(scope: Scope<'_>, info: &LinkInfo<'_>) -> bool {
+    match (scope, info.device) {
+        (Scope::Box(b), LinkDevice::Box(d)) => b.as_bytes() == d.as_bytes(),
+        (Scope::Station(s), LinkDevice::Unit(_)) => s.as_bytes() == info.station.as_bytes(),
+        (Scope::Box(_), LinkDevice::Unit(_))
+        | (Scope::Station(_), LinkDevice::Box(_))
+        | (Scope::Election, _) => false,
+    }
+}
+
+/// The slots of a link's frames: per slot, whether it is a catch-up
+/// group, whether a witnessed one, and its numbers.
+type SlotGroups = BTreeMap<u64, (bool, bool, BTreeSet<u16>)>;
+
+/// Where a link must send frames: its shape, the slots from its opening
+/// to its close, and the slots of its witnessed resends.
+#[derive(Debug, Clone, Copy)]
+struct Shape {
+    normal: u16,
+    catchup: u16,
+    span: Option<(u64, u64)>,
+    witnessed: Option<(u64, u64)>,
+}
+
+impl Shape {
+    /// The slots of `[a, b]` the device must send in.
+    fn slots(&self, a: u64, b: u64) -> u64 {
+        if a > b {
+            return 0;
+        }
+        let both = self
+            .span
+            .zip(self.witnessed)
+            .map(|((p, q), (r, s))| (p.max(r), q.min(s)))
+            .filter(|(lo, hi)| lo <= hi);
+        overlap(self.span, a, b)
+            .saturating_add(overlap(self.witnessed, a, b))
+            .saturating_sub(overlap(both, a, b))
+    }
+
+    /// The numbers of slot `slot` the device must send: its group's count
+    /// when frames of it were taken, at most the catch-up count when none
+    /// was; none outside the slots it must send in.
+    fn count(&self, groups: &SlotGroups, slot: u64) -> u64 {
+        if self.slots(slot, slot) == 0 {
+            return 0;
+        }
+        let n = match groups.get(&slot) {
+            Some((false, _, _)) => self.normal,
+            Some((true, _, _)) | None => self.catchup,
+        };
+        u64::from(n)
+    }
+
+    /// The positions strictly between frame `previous` (or the start) and
+    /// frame `current`, (slot, number), that no frame took: the slots
+    /// between them took none.
+    fn absent(
+        &self,
+        groups: &SlotGroups,
+        previous: Option<(u64, u16)>,
+        current: (u64, u16),
+    ) -> u64 {
+        let (s2, i2) = current;
+        let last = self.count(groups, s2).min(u64::from(i2));
+        let catchup = u64::from(self.catchup);
+        match previous {
+            None => {
+                let lo = [self.span, self.witnessed]
+                    .iter()
+                    .flatten()
+                    .map(|(a, _)| *a)
+                    .min()
+                    .unwrap_or(s2);
+                let before = s2
+                    .checked_sub(1)
+                    .map_or(0, |b| self.slots(lo, b))
+                    .saturating_mul(catchup);
+                before.saturating_add(last)
+            }
+            Some((s1, i1)) => match s1.cmp(&s2) {
+                Ordering::Equal => last.saturating_sub(u64::from(i1).saturating_add(1)),
+                Ordering::Less => {
+                    let first = self
+                        .count(groups, s1)
+                        .saturating_sub(u64::from(i1).saturating_add(1));
+                    let between = match (s1.checked_add(1), s2.checked_sub(1)) {
+                        (Some(a), Some(b)) => self.slots(a, b).saturating_mul(catchup),
+                        _ => 0,
+                    };
+                    first.saturating_add(between).saturating_add(last)
+                }
+                Ordering::Greater => 0,
+            },
+        }
+    }
+}
+
 /// The frame rules of one link (VC-078): the per-frame findings, whether
-/// each frame's signature verified, and the slots that fell short.
+/// each frame's signature verified, the slots that fell short, and the
+/// slots of the span no window covers.
 #[allow(clippy::too_many_lines)] // One rule after another, as the module docs list them.
 fn judge_frames(
     work: &LinkWork<'_>,
@@ -1212,23 +1424,20 @@ fn judge_frames(
         problem,
     };
     // Signatures, numbers, windows, opening and close, padding proofs.
-    let mut slots: BTreeMap<u64, (bool, bool, BTreeSet<u16>)> = BTreeMap::new();
+    let mut slots: SlotGroups = BTreeMap::new();
     let mut reached = 0u8;
     for f in &work.frames {
         let e = &f.entry;
-        let header = e.header(link);
+        let header = frame_header(link, e, &f.objects);
         let signed = key.as_ref().is_some_and(|k| {
-            header_hash(&header).is_some_and(|(_, buf)| {
-                buf.get(..HEADER_LEN.saturating_add(151))
-                    .is_some_and(|obj| {
-                        verify_record(
-                            k,
-                            RecordPurpose::UplinkFrame,
-                            obj,
-                            &RecordSignature::from_bytes(*e.frame_sig),
-                        )
-                        .is_ok()
-                    })
+            header_hash(&header).is_some_and(|(_, obj)| {
+                verify_record(
+                    k,
+                    RecordPurpose::UplinkFrame,
+                    &obj,
+                    &RecordSignature::from_bytes(*e.frame_sig),
+                )
+                .is_ok()
             })
         });
         valid.push(signed);
@@ -1288,22 +1497,45 @@ fn judge_frames(
         }
         group.2.insert(e.index);
     }
-    // The slots that fell short of their shape, between the first and last
-    // slot of a frame that is not a witnessed resend.
-    let span: Vec<u64> = work
+    // The slots the device must send in: from the box's opening (the
+    // first frame's slot when no opening is known) to its close (or the
+    // last frame that is not a witnessed resend, if later); the witnessed
+    // resends' own slots.
+    let sent: Vec<u64> = work
         .frames
         .iter()
         .filter(|f| f.entry.kind != FrameKind::WitnessedResend)
         .map(|f| f.entry.slot)
         .collect();
-    let first = span.iter().min().copied();
-    let last = span.iter().max().copied();
+    let first = sent.iter().min().copied();
+    let last = sent.iter().max().copied();
     report.slots = first.zip(last);
+    let span_start = ctx.opening.or(first);
+    let span_end = match (ctx.span_end, last) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    let witnessed: Vec<u64> = work
+        .frames
+        .iter()
+        .filter(|f| f.entry.kind == FrameKind::WitnessedResend)
+        .map(|f| f.entry.slot)
+        .collect();
+    let shape = Shape {
+        normal,
+        catchup,
+        span: span_start.zip(span_end).filter(|(a, b)| a <= b),
+        witnessed: witnessed
+            .iter()
+            .min()
+            .copied()
+            .zip(witnessed.iter().max().copied()),
+    };
     // Each window holds at most six slots, so this walks a bounded number
     // of slots whatever the frames claim.
     let mut short = BTreeSet::new();
     let mut gap = 0u64;
-    if let (Some(a), Some(b)) = (first, last) {
+    if let Some((a, b)) = shape.span {
         for (start, end) in windows {
             for s in a.max(*start)..=b.min(*end) {
                 // A slot is whole when it holds every number of its shape;
@@ -1324,52 +1556,118 @@ fn judge_frames(
         .unwrap_or(u64::MAX)
         .saturating_add(gap);
     // Stream offsets: from 0, each frame where the previous ended, or later
-    // across a slot that fell short or that no window covers.
-    let mut expected: Option<(u64, u64)> = None;
+    // only across positions no frame took, by at most a full payload each.
+    let most = u64::try_from(MAX_PAYLOAD_LEN).unwrap_or(u64::MAX);
+    let mut previous: Option<(u64, u16, u64)> = None;
     for f in &work.frames {
         let e = &f.entry;
-        let ok = match expected {
-            None => e.stream_offset == 0,
-            Some((end, slot)) => match e.stream_offset.cmp(&end) {
-                Ordering::Equal => true,
-                Ordering::Greater => {
-                    slot <= e.slot
-                        && (short.range(slot..=e.slot).next().is_some()
-                            || uncovered(windows, slot, e.slot) > 0)
-                }
-                Ordering::Less => false,
-            },
+        let end = previous.map_or(0, |p| p.2);
+        let ok = match e.stream_offset.cmp(&end) {
+            Ordering::Equal => true,
+            Ordering::Less => false,
+            Ordering::Greater => {
+                let absent = shape.absent(&slots, previous.map(|p| (p.0, p.1)), (e.slot, e.index));
+                absent > 0 && e.stream_offset.saturating_sub(end) <= absent.saturating_mul(most)
+            }
         };
         if !ok {
             report.findings.push(finding(f, LinkProblem::Offset));
         }
-        expected = Some((
-            e.stream_offset.saturating_add(u64::from(e.payload_len)),
+        previous = Some((
             e.slot,
+            e.index,
+            e.stream_offset.saturating_add(u64::from(e.payload_len)),
         ));
     }
     (valid, short, gap)
 }
 
-/// The object rules of one link (VC-079), and the chunk checks.
+/// One object a frame lists, as the stage tracks it.
+#[derive(Debug, Clone, Copy)]
+struct Listed {
+    object: StreamObject,
+    /// The log of the first frame that lists it.
+    log: Seq,
+    /// Whether every chunk of every frame that holds bytes of it was
+    /// recomputed and matched.
+    verified: bool,
+}
+
+/// The object rules of one link (VC-079) over its frames whose signature
+/// verified, and the chunk checks; returns the objects included: received
+/// whole, every chunk of them recomputed and matched (by schema and hash).
 #[allow(clippy::too_many_lines)] // One rule after another, as the module docs list them.
 fn judge_objects(
     work: &LinkWork<'_>,
     ctx: &LinkContext<'_, '_>,
     valid: &[bool],
     report: &mut LinkReport<'_>,
-) -> Vec<(u64, u64)> {
-    let paired: Vec<(Frame<'_>, bool)> = work
+) -> BTreeSet<(u32, [u8; 64])> {
+    let frames: Vec<&Frame<'_>> = work
         .frames
         .iter()
-        .copied()
-        .zip(valid.iter().copied())
+        .zip(valid)
+        .filter(|(_, ok)| **ok)
+        .map(|(f, _)| f)
         .collect();
-    let received = received_ranges(&paired);
-    let received_end = received.last().map_or(0, |r| r.1);
+    let received = received_ranges(&frames);
+    let frame_finding = |f: &Frame<'_>, at: u64, problem| LinkFinding {
+        seq: f.log,
+        slot: Some(f.entry.slot),
+        index: Some(f.entry.index),
+        stream_offset: at,
+        object: None,
+        problem,
+    };
+    // Each frame's tiling; every object once, by where it starts; what one
+    // frame carries out is what the next carries in.
+    let mut listed: BTreeMap<u64, Listed> = BTreeMap::new();
+    let mut previous_data: Option<&Frame<'_>> = None;
+    for f in &frames {
+        let e = &f.entry;
+        if let Some((problem, at)) = tiling(e.stream_offset, e.payload_len, &f.objects).problem {
+            report.findings.push(frame_finding(f, at, problem));
+        }
+        for o in f.objects.iter() {
+            let first = listed.entry(o.stream_offset).or_insert(Listed {
+                object: o,
+                log: f.log,
+                verified: true,
+            });
+            if first.object != o {
+                report
+                    .findings
+                    .push(frame_finding(f, o.stream_offset, LinkProblem::Overlap));
+            }
+        }
+        if e.payload_len == 0 {
+            continue;
+        }
+        if let Some(p) = previous_data {
+            let carried = p.objects.iter().last();
+            let next = f.objects.iter().next();
+            let agrees = match (carried, next) {
+                (Some(c), Some(n)) => {
+                    let c_end = c.end().unwrap_or(u64::MAX);
+                    if c_end > e.stream_offset {
+                        c == n
+                    } else {
+                        n.stream_offset >= c_end
+                    }
+                }
+                (None, _) | (_, None) => true,
+            };
+            if !agrees {
+                report
+                    .findings
+                    .push(frame_finding(f, e.stream_offset, LinkProblem::Overlap));
+            }
+        }
+        previous_data = Some(f);
+    }
+    report.objects = u64::try_from(listed.len()).unwrap_or(u64::MAX);
     let class = work.info.class();
     let carries = ctx.entry.map_or(0, |e| e.carries);
-    report.objects = u64::try_from(work.objects.len()).unwrap_or(u64::MAX);
     let finding = |l: &Listed, problem| LinkFinding {
         seq: l.log,
         slot: None,
@@ -1378,57 +1676,62 @@ fn judge_objects(
         object: Some(l.object.object_hash),
         problem,
     };
-    let mut pos = 0u64;
     let mut group = false;
     let mut last_record: Option<[u8; 64]> = None;
     let mut previous: Option<(SchemaId, Option<Hash512>)> = None;
-    for l in &work.objects {
+    let mut previous_end: Option<u64> = None;
+    for l in listed.values() {
         let o = &l.object;
-        let end = o.end().unwrap_or(u64::MAX);
-        let bytes = ctx.public.get(&o.object_hash.0).copied();
-        let bytes_of_schema = bytes.filter(|(s, _)| *s == o.schema).map(|(_, b)| b);
-        // Kind.
-        let needs = allowed(class, o.schema);
-        let kind_ok = needs.is_some_and(|bit| carries & bit != 0)
-            && (o.schema != SCHEMA_WITNESSED_EVENT || witnessed_ok(bytes_of_schema));
+        let hash = o.object_hash;
+        let bytes = ctx
+            .public
+            .get(&hash.0)
+            .filter(|(s, _)| *s == o.schema)
+            .map(|(_, b)| *b);
+        // Kind, length, whose.
+        let kind_ok = allowed(class, o.schema).is_some_and(|bit| carries & bit != 0)
+            && (o.schema != SCHEMA_WITNESSED_EVENT || witnessed_ok(bytes));
         if !kind_ok {
             report.findings.push(finding(l, LinkProblem::Kind));
         }
-        // Order, listing and tiling.
-        if o.stream_offset < pos {
-            report.findings.push(finding(l, LinkProblem::Overlap));
-        } else if o.stream_offset > pos && covered(&received, pos, o.stream_offset) {
-            report.findings.push(finding(l, LinkProblem::NotObject));
-        }
-        if o.stream_offset >= l.received_by {
-            report.findings.push(finding(l, LinkProblem::Early));
-        }
-        pos = pos.max(end);
-        // Length.
-        if bytes_of_schema.is_some_and(|b| u64::try_from(b.len()).ok() != Some(u64::from(o.len))) {
+        if bytes.is_some_and(|b| u64::try_from(b.len()).ok() != Some(u64::from(o.len))) {
             report.findings.push(finding(l, LinkProblem::Length));
         }
-        // Batches and packages.
+        if ctx
+            .scopes
+            .get(&hash.0)
+            .is_some_and(|scope| !mine(*scope, &work.info))
+        {
+            report.findings.push(finding(l, LinkProblem::Foreign));
+        }
+        // Batches and packages. Across bytes not received, the objects
+        // between are not known: what follows may be the tail of a batch
+        // whose start was lost.
+        let continuous = match previous_end {
+            None => o.stream_offset == 0,
+            Some(end) => end >= o.stream_offset || covered(&received, end, o.stream_offset),
+        };
+        if !continuous {
+            group = true;
+            last_record = None;
+            previous = None;
+        }
         let schema = o.schema;
-        // A share package the record right before it names: sealed, so not
-        // on the ledger itself, but named by the record that is.
-        let named = schema == SCHEMA_SHARE_PACKAGE
-            && previous.is_some_and(|(s, package)| {
-                s == SCHEMA_CAST_RECORD && package == Some(o.object_hash)
-            });
         if schema == SCHEMA_BATCH_ATTEST {
             group = true;
             last_record = None;
         } else if schema == SCHEMA_CAST_RECORD {
-            if !group || last_record.is_some_and(|r| r >= o.object_hash.0) {
+            if !group || last_record.is_some_and(|r| r >= hash.0) {
                 report.findings.push(finding(l, LinkProblem::Batch));
             }
-            last_record = Some(o.object_hash.0);
+            last_record = Some(hash.0);
         } else if schema == SCHEMA_SHARE_PACKAGE {
-            let follows = previous.is_some_and(|(s, package)| {
-                s == SCHEMA_CAST_RECORD && package.is_none_or(|p| p == o.object_hash)
+            // Right after the record that names it (when that record is
+            // known), and no longer than the election allows.
+            let follows = previous.is_none_or(|(s, package)| {
+                s == SCHEMA_CAST_RECORD && package.is_none_or(|p| p == hash)
             });
-            if !follows {
+            if !follows || u64::from(o.len) > ctx.package_len {
                 report.findings.push(finding(l, LinkProblem::Package));
             }
         } else {
@@ -1436,7 +1739,7 @@ fn judge_objects(
             last_record = None;
         }
         let package = if schema == SCHEMA_CAST_RECORD {
-            bytes_of_schema.and_then(|b| {
+            bytes.and_then(|b| {
                 decode_object::<CastRecord<'_>>(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, b)
                     .ok()
                     .map(|r| *r.body().share_package_hash())
@@ -1445,48 +1748,72 @@ fn judge_objects(
             None
         };
         previous = Some((schema, package));
-        // On the ledger, once the gateway closed (a share package through
-        // the record that names it).
-        if ctx.closed
-            && covered(&received, o.stream_offset, end)
-            && !ctx.on_ledger.contains(&o.object_hash.0)
-            && !named
-        {
+        previous_end = o.end();
+        // On the ledger, once the gateway closed: a frame of the ledger
+        // names it (a share package, an accepted record of the box).
+        let named = ctx.on_ledger.contains(&hash.0)
+            || (schema == SCHEMA_SHARE_PACKAGE && ctx.packages.contains(&hash.0));
+        if ctx.closed && !named {
             report.findings.push(finding(l, LinkProblem::NotOnLedger));
         }
     }
-    if ctx.closed
-        && pos < received_end
-        && covered(&received, pos, received_end)
-        && let Some(l) = work.objects.last()
-    {
-        report.findings.push(finding(l, LinkProblem::NotObject));
-    }
-    // Chunks.
-    for (f, ok) in &paired {
-        if !ok {
-            continue;
-        }
+    // Chunks: every data chunk whose bytes are all public objects (and the
+    // zero fill around packages) is recomputed; an object counts as
+    // checked when every chunk that holds bytes of it was.
+    for f in &frames {
+        let objects: Vec<StreamObject> = f.objects.iter().collect();
+        let mut from = 0usize;
         for (j, leaf) in f.leaves.iter().enumerate() {
-            match public_leaf(&f.entry, j, &work.objects, ctx.public) {
-                Some(mine) => {
-                    report.checked_chunks = report.checked_chunks.saturating_add(1);
-                    if mine != leaf {
-                        report.findings.push(LinkFinding {
-                            seq: f.log,
-                            slot: Some(f.entry.slot),
-                            index: Some(f.entry.index),
-                            stream_offset: f.entry.stream_offset,
-                            object: None,
-                            problem: LinkProblem::Chunk,
-                        });
+            let chunk = u64::try_from(CHUNK_LEN).unwrap_or(u64::MAX);
+            let into = u64::try_from(j).unwrap_or(u64::MAX).saturating_mul(chunk);
+            let lo = f.entry.stream_offset.saturating_add(into);
+            let data_end = f
+                .entry
+                .stream_offset
+                .saturating_add(u64::from(f.entry.payload_len));
+            let hi = lo.saturating_add(chunk).min(data_end);
+            let ok = if let Some(mine) = public_leaf(lo, hi, &objects, ctx.public) {
+                report.checked_chunks = report.checked_chunks.saturating_add(1);
+                if mine != leaf {
+                    report
+                        .findings
+                        .push(frame_finding(f, lo, LinkProblem::Chunk));
+                }
+                mine == leaf
+            } else {
+                report.opaque_chunks = report.opaque_chunks.saturating_add(1);
+                false
+            };
+            // The objects before `from` end before this chunk.
+            while objects
+                .get(from)
+                .is_some_and(|o| o.end().is_some_and(|end| end <= lo))
+            {
+                from = from.saturating_add(1);
+            }
+            if !ok {
+                for o in objects
+                    .iter()
+                    .skip(from)
+                    .take_while(|o| o.stream_offset < hi)
+                {
+                    if let Some(l) = listed.get_mut(&o.stream_offset) {
+                        l.verified = false;
                     }
                 }
-                None => report.opaque_chunks = report.opaque_chunks.saturating_add(1),
             }
         }
     }
-    received
+    listed
+        .values()
+        .filter(|l| {
+            l.verified
+                && l.object
+                    .end()
+                    .is_some_and(|end| covered(&received, l.object.stream_offset, end))
+        })
+        .map(|l| (l.object.schema.get(), l.object.object_hash.0))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1553,23 +1880,23 @@ fn hold<'a>(
     }
 }
 
-/// Whether the audit stage compared every record of `box_id`: some style
-/// audits it and every style that does compared all its records.
-fn fully_compared(audit: &AuditStage<'_>, box_id: &[u8]) -> bool {
-    let devices: Vec<_> = audit
-        .styles()
-        .iter()
-        .flat_map(|s| s.devices.iter())
-        .filter(|d| d.box_id.as_bytes() == box_id)
-        .collect();
-    !devices.is_empty() && devices.iter().all(|d| d.compared == d.records)
+/// Per box the audit stage audits, whether it compared every record: some
+/// style audits the box and every style that does compared all its
+/// records.
+fn fully_compared<'a>(audit: &AuditStage<'a>) -> BTreeMap<&'a [u8], bool> {
+    let mut out: BTreeMap<&'a [u8], bool> = BTreeMap::new();
+    for d in audit.styles().iter().flat_map(|s| s.devices.iter()) {
+        let all = out.entry(d.box_id.as_bytes()).or_insert(true);
+        *all = *all && d.compared == d.records;
+    }
+    out
 }
 
 /// Reads one incident (VC-083).
 fn incident<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
-    audit: &AuditStage<'a>,
+    compared: &BTreeMap<&'a [u8], bool>,
     seq: Seq,
     event: &WitnessedEvent<'a>,
 ) -> Option<IncidentReport<'a>> {
@@ -1578,7 +1905,7 @@ fn incident<'a>(
         .ok()?;
     let parts = *body.parts();
     let state = index.state_at(seq);
-    let signed = people_signed(genesis, state, event);
+    let signers = people_signed(genesis, state, event);
     // The box is at that station (in some state). The index already
     // refuses an event naming a station or box no state has (§14 3), and
     // the decoder a box without its station.
@@ -1590,10 +1917,21 @@ fn incident<'a>(
         }),
         (Some(_) | None, None) | (None, Some(_)) => true,
     };
-    let refused = if !signed {
+    // Clerks sign on site, at the station the incident names; the whole
+    // election is the committee's to name.
+    let scope_ok = signers.as_ref().is_some_and(|s| match parts.station_id {
+        Some(station) => s
+            .clerk_stations
+            .iter()
+            .all(|c| c.is_some_and(|c| c.as_bytes() == station.as_bytes())),
+        None => s.committee && s.clerk_stations.is_empty(),
+    });
+    let refused = if signers.is_none() {
         Some(IncidentProblem::Signers)
     } else if !subject_ok {
         Some(IncidentProblem::Subject)
+    } else if !scope_ok {
+        Some(IncidentProblem::Scope)
     } else {
         None
     };
@@ -1608,7 +1946,7 @@ fn incident<'a>(
     let full_comparison = if refused.is_none() && parts.commitment_unit {
         boxes
             .iter()
-            .map(|b| (*b, fully_compared(audit, b.as_bytes())))
+            .map(|b| (*b, compared.get(b.as_bytes()).copied().unwrap_or(false)))
             .collect()
     } else {
         Vec::new()
@@ -1622,43 +1960,60 @@ fn incident<'a>(
     })
 }
 
-/// Whether the people of `event` are registered and their signatures
+/// Who signed an incident whose people are registered.
+struct Signers<'a> {
+    /// Whether the committee signed.
+    committee: bool,
+    /// The station each clerk is registered at.
+    clerk_stations: Vec<Option<StationId<'a>>>,
+}
+
+/// The people of `event` if they are registered and their signatures
 /// verify: the committee under the genesis key, every clerk and observer
 /// under a key the roster of `state` or an earlier state registers for
 /// that signer, role and organisation (`ityv_state::check_incident_signers`).
-fn people_signed(genesis: &VerifiedGenesis<'_>, state: usize, event: &WitnessedEvent<'_>) -> bool {
-    let Some(purpose) = Purpose::new(event.purpose()) else {
-        return false;
-    };
-    let rosters: Vec<Vec<RosterEntry<'_>>> = (0..=state).map(|k| genesis.roster_at(k)).collect();
-    let Some(in_force) = rosters.last() else {
-        return false;
-    };
+fn people_signed<'a>(
+    genesis: &VerifiedGenesis<'a>,
+    state: usize,
+    event: &WitnessedEvent<'_>,
+) -> Option<Signers<'a>> {
+    let purpose = Purpose::new(event.purpose())?;
+    let rosters: Vec<Vec<RosterEntry<'a>>> = (0..=state).map(|k| genesis.roster_at(k)).collect();
+    let in_force = rosters.last()?;
     let committee = genesis.genesis().committee_key();
-    let mut keys: Vec<RosterEntry<'_>> = Vec::new();
+    let mut keys: Vec<RosterEntry<'a>> = Vec::new();
     let mut pairs = Vec::new();
+    let mut out = Signers {
+        committee: false,
+        clerk_stations: Vec::new(),
+    };
     for s in event.sigs() {
         if s.role == EventRole::Committee {
+            out.committee = true;
             pairs.push((s.sig, committee));
             continue;
         }
-        let found = rosters.iter().rev().flatten().find(|r| {
+        let entry = *rosters.iter().rev().flatten().find(|r| {
             r.get().signer_id.as_bytes() == s.signer_id.as_bytes()
                 && Material::new(core::iter::once((s.sig, r.get().key)))
                     .is_some_and(|m| m.verify(&purpose, event.body_bytes()).is_some())
-        });
-        let Some(entry) = found else {
-            return false;
-        };
-        keys.push(*entry);
+        })?;
+        if s.role == EventRole::Clerk {
+            // The roster entry in force names the clerk's station.
+            let station = in_force
+                .iter()
+                .map(ityv_state::Entry::get)
+                .find(|r| {
+                    r.signer_id.as_bytes() == s.signer_id.as_bytes() && r.role == RosterRole::Clerk
+                })
+                .and_then(|r| r.station_id);
+            out.clerk_stations.push(station);
+        }
+        keys.push(entry);
         pairs.push((s.sig, entry.get().key));
     }
-    let Some(material) = Material::new(pairs.into_iter()) else {
-        return false;
-    };
-    let Some(tokens) = material.verify(&purpose, event.body_bytes()) else {
-        return false;
-    };
+    let material = Material::new(pairs.into_iter())?;
+    let tokens = material.verify(&purpose, event.body_bytes())?;
     check_incident_signers(
         &Signed {
             event,
@@ -1668,7 +2023,8 @@ fn people_signed(genesis: &VerifiedGenesis<'_>, state: usize, event: &WitnessedE
         &keys,
         committee,
     )
-    .is_ok()
+    .ok()?;
+    Some(out)
 }
 
 /// Runs the connectivity stage over `index` against `genesis`, with the
@@ -1695,6 +2051,7 @@ pub fn verify_connectivity<'a>(
         stations: BTreeMap::new(),
         logs: BTreeMap::new(),
     };
+    let compared = fully_compared(audit);
     let mut incidents = Vec::new();
     let mut refused_logs: Vec<(StationId<'a>, Seq, u32, SessionProblem)> = Vec::new();
     for e in index.events() {
@@ -1743,7 +2100,7 @@ pub fn verify_connectivity<'a>(
                 continue;
             };
             if w.body_schema() == SCHEMA_CONNECTIVITY_INCIDENT_BODY
-                && let Some(report) = incident(genesis, index, audit, e.seq, &w)
+                && let Some(report) = incident(genesis, index, &compared, e.seq, &w)
             {
                 incidents.push(report);
             }
@@ -1769,11 +2126,14 @@ pub fn verify_connectivity<'a>(
             .find(seq, k.1, None, SessionProblem::LogDangling);
     }
 
-    // The ledger's public objects and every hash a frame names.
+    // The ledger's public objects, whom each concerns, and every hash a
+    // frame names.
     let mut public: BTreeMap<[u8; 64], (SchemaId, &'a [u8])> = BTreeMap::new();
+    let mut scopes: BTreeMap<[u8; 64], Scope<'a>> = BTreeMap::new();
     let mut on_ledger: BTreeSet<[u8; 64]> = BTreeSet::new();
     for e in index.events() {
         on_ledger.insert(e.hash.0);
+        scopes.entry(e.hash.0).or_insert(e.scope);
         if let Some(b) = e.bytes {
             public.insert(e.hash.0, (e.schema, b));
         }
@@ -1783,16 +2143,25 @@ pub fn verify_connectivity<'a>(
             on_ledger.insert(h.0);
         }
     }
+    let members = genesis.trustees().count();
+    let package_len = u64::try_from(max_package_len(members)).unwrap_or(u64::MAX);
+    let no_packages = BTreeSet::new();
 
     // Every station of the last state, then any other with sessions.
     let mut order: Vec<StationId<'a>> = genesis.stations().map(StationEntry::station_id).collect();
+    let listed: BTreeSet<&[u8]> = order.iter().map(StationId::as_bytes).collect();
     for s in work.stations.values() {
-        if !order
-            .iter()
-            .any(|o| o.as_bytes() == s.station_id.as_bytes())
-        {
+        if !listed.contains(s.station_id.as_bytes()) {
             order.push(s.station_id);
         }
+    }
+    // Each station's links, by link hash.
+    let mut by_station: BTreeMap<&'a [u8], Vec<([u8; 64], LinkWork<'a>)>> = BTreeMap::new();
+    for (k, w) in core::mem::take(&mut work.per_link) {
+        by_station
+            .entry(w.info.station.as_bytes())
+            .or_default()
+            .push((k, w));
     }
     let mut stations = Vec::with_capacity(order.len());
     for station_id in order {
@@ -1804,40 +2173,79 @@ pub fn verify_connectivity<'a>(
         let mut findings = st.findings;
         let mut links_out = Vec::new();
         let mut station_holds = HoldSet::empty();
-        // Links of the station, by link hash.
-        let station_links: Vec<([u8; 64], LinkWork<'a>)> = work
-            .per_link
-            .iter()
-            .filter(|(_, w)| w.info.station.as_bytes() == station_id.as_bytes())
-            .map(|(k, w)| (*k, w.clone()))
-            .collect();
-        let mut received_by_link: BTreeMap<[u8; 64], Vec<(u64, u64)>> = BTreeMap::new();
+        let station_links = by_station.remove(station_id.as_bytes()).unwrap_or_default();
+        let mut included: BTreeMap<[u8; 64], BTreeSet<(u32, [u8; 64])>> = BTreeMap::new();
         let windows: Vec<(u64, u64)> = st
             .sessions
             .iter()
             .map(|s| (s.start_slot, s.end_slot))
             .collect();
+        let last_window = windows.last().map(|w| w.1);
+        let station_boxes: Vec<&'a [u8]> = genesis
+            .station(station_id.as_bytes())
+            .map(|s| s.boxes().map(|b| b.as_bytes()).collect())
+            .unwrap_or_default();
+        let openings: Vec<u64> = station_boxes
+            .iter()
+            .filter_map(|b| opening_slot(index, b))
+            .collect();
+        let box_closes: Vec<Option<u64>> = station_boxes
+            .iter()
+            .filter(|b| opening_slot(index, b).is_some())
+            .map(|b| close_slot(index, b))
+            .collect();
         for (key, lw) in &station_links {
-            let (opening, close) = match lw.info.device {
-                LinkDevice::Box(b) => (
-                    opening_slot(index, b.as_bytes()),
-                    close_slot(index, b.as_bytes()),
-                ),
-                LinkDevice::Unit(_) => (
-                    genesis.station(station_id.as_bytes()).and_then(|s| {
-                        s.boxes()
-                            .filter_map(|b| opening_slot(index, b.as_bytes()))
-                            .min()
-                    }),
-                    None,
-                ),
+            let mut packages = BTreeSet::new();
+            let (opening, close, span_end) = match lw.info.device {
+                LinkDevice::Box(b) => {
+                    for e in index.box_events(b.as_bytes()) {
+                        if e.schema == SCHEMA_CAST_RECORD
+                            && let Some(r) = e.bytes.and_then(|bytes| {
+                                decode_object::<CastRecord<'_>>(
+                                    SCHEMA_CAST_RECORD,
+                                    SCHEMA_VERSION_1,
+                                    bytes,
+                                )
+                                .ok()
+                            })
+                        {
+                            packages.insert(r.body().share_package_hash().0);
+                        }
+                    }
+                    let close = close_slot(index, b.as_bytes());
+                    (
+                        opening_slot(index, b.as_bytes()),
+                        close,
+                        close.or(last_window),
+                    )
+                }
+                LinkDevice::Unit(_) => {
+                    // The station's last close once every opened box closed,
+                    // its last session's last slot while one is open.
+                    let all_closed =
+                        !box_closes.is_empty() && box_closes.iter().all(Option::is_some);
+                    let span_end = if all_closed {
+                        box_closes.iter().flatten().max().copied()
+                    } else {
+                        last_window
+                    };
+                    (openings.iter().min().copied(), None, span_end)
+                }
             };
             let ctx = LinkContext {
                 entry: manifest.frame_link(lw.info.class()),
                 opening,
                 close,
+                span_end,
                 public: &public,
                 on_ledger: &on_ledger,
+                scopes: &scopes,
+                packages: if packages.is_empty() {
+                    &no_packages
+                } else {
+                    &packages
+                },
+                package_len,
                 closed,
             };
             let mut report = LinkReport {
@@ -1856,15 +2264,15 @@ pub fn verify_connectivity<'a>(
                 findings: Vec::new(),
             };
             let (valid, short, gap) = judge_frames(lw, &ctx, &windows, &mut report);
-            let received = judge_objects(lw, &ctx, &valid, &mut report);
+            included.insert(*key, judge_objects(lw, &ctx, &valid, &mut report));
             // Missing slots against every session's declaration (none when
             // the session does not list the link).
             for session in &st.sessions {
                 let declared = st
                     .declared
-                    .iter()
-                    .find(|d| d.link == *key && d.session_index == session.session_index)
-                    .map_or(0, |d| d.missing);
+                    .get(&(*key, session.session_index))
+                    .copied()
+                    .unwrap_or(0);
                 let counted = if session.start_slot <= session.end_slot {
                     short.range(session.start_slot..=session.end_slot).count()
                 } else {
@@ -1894,7 +2302,6 @@ pub fn verify_connectivity<'a>(
             for f in &report.findings {
                 hold(genesis, &mut boxes, &mut ledger, scope, f.problem.hold());
             }
-            received_by_link.insert(*key, received);
             links_out.push(report);
         }
         if !findings.is_empty() {
@@ -1912,33 +2319,13 @@ pub fn verify_connectivity<'a>(
         if closed {
             let device_events = index
                 .station_events(station_id.as_bytes())
-                .chain(
-                    genesis
-                        .station(station_id.as_bytes())
-                        .into_iter()
-                        .flat_map(StationEntry::boxes)
-                        .flat_map(|b| index.box_events(b.as_bytes())),
-                )
+                .chain(station_boxes.iter().flat_map(|b| index.box_events(b)))
                 .filter(|e| DEVICE_EVENTS.contains(&e.schema));
             for e in device_events {
-                let mine = |info: &LinkInfo<'_>| match (e.scope, info.device) {
-                    (Scope::Box(b), LinkDevice::Box(d)) => b.as_bytes() == d.as_bytes(),
-                    (Scope::Station(_), LinkDevice::Unit(_)) => true,
-                    (Scope::Box(_), LinkDevice::Unit(_))
-                    | (Scope::Station(_), LinkDevice::Box(_))
-                    | (Scope::Election, _) => false,
-                };
+                let wanted = (e.schema.get(), e.hash.0);
                 let found = station_links.iter().find(|(key, lw)| {
-                    mine(&lw.info)
-                        && lw.objects.iter().any(|l| {
-                            l.object.object_hash == e.hash
-                                && l.object.schema == e.schema
-                                && l.object.end().is_some_and(|end| {
-                                    received_by_link
-                                        .get(key)
-                                        .is_some_and(|r| covered(r, l.object.stream_offset, end))
-                                })
-                        })
+                    mine(e.scope, &lw.info)
+                        && included.get(key).is_some_and(|set| set.contains(&wanted))
                 });
                 if let Some((key, _)) = found {
                     if let Some(r) = links_out.iter_mut().find(|r| r.link_id_hash.0 == *key) {
@@ -1971,8 +2358,8 @@ pub fn verify_connectivity<'a>(
         }
         let pending_logs = work
             .logs
-            .keys()
-            .filter(|(s, _, _)| *s == station_id.as_bytes())
+            .range((station_id.as_bytes(), 0, [0u8; 64])..)
+            .take_while(|((s, _, _), _)| *s == station_id.as_bytes())
             .count();
         findings.sort_by_key(|f| f.seq.get());
         stations.push(StationUplink {

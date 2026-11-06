@@ -17,11 +17,12 @@
 //!   capture lacks between the first and last slot it captured of their
 //!   link are listed too (injected, or the tap missed them). The
 //!   captured bytes are reassembled into the link's stream, and every
-//!   published object they hold whole must hash to its published hash and
-//!   be a canonical object of its schema's header; captured bytes outside
-//!   every published object are not objects. A tap sees the sealed share
-//!   packages too, so this is where their framing and the fill around them
-//!   are checked.
+//!   object the captured frames list (the device signed the lists) that
+//!   they hold whole must hash to its listed hash and start with a
+//!   canonical header of its schema; captured bytes no listed object
+//!   covers, and fill around a share package that is not zero, are not
+//!   objects. A tap sees the sealed share packages too, so this is where
+//!   their bytes and the fill after them are checked.
 //! * [`compare_carrier`]: the carrier's connection records, which the
 //!   committee receives and publishes (`LEGAL_ANNEX.md` amendment 8,
 //!   §181-2 ⑤), against the sessions: on a gateway's outer line the bytes
@@ -32,18 +33,19 @@
 //!   exactly; the layer the gateway counts at is the carrier's (fixed by
 //!   sub-regulation and the gateway reference design, M8).
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use ityv_crypto::uplink::{capture_hash, link_id, payload_root_of};
+use ityv_crypto::uplink::{capture_hash, link_id, objects_hash, payload_root_of};
 use ityv_crypto::{RecordPurpose, RecordSignature, RecordVerifyingKey, object_hash, verify_record};
 use ityv_encoding::{
-    Hash512, ObjectHeader, Reader, SCHEMA_UPLINK_FRAME, SCHEMA_UPLINK_FRAME_HEADER,
-    SCHEMA_UPLINK_FRAME_LOG, SCHEMA_VERSION_1, SCHEMA_VERSION_UPLINK, SchemaId, StationKind,
-    UplinkFrame, UplinkFrameHeader, UplinkFrameLog, decode_object, encode_object,
+    FRAME_HEADER_LEN, FrameObjects, HEADER_LEN, Hash512, ObjectHeader, Reader, SCHEMA_UPLINK_FRAME,
+    SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_UPLINK_FRAME_LOG, SCHEMA_VERSION_1, SCHEMA_VERSION_UPLINK,
+    StationKind, StreamObject, UplinkFrame, UplinkFrameHeader, UplinkFrameLog, decode_object,
+    encode_object,
 };
 
-use crate::connectivity::{ConnectivityStage, close_slot, opening_slot};
+use crate::connectivity::{ConnectivityStage, close_slot, opening_slot, tiling};
 use crate::genesis::VerifiedGenesis;
 use crate::index::LedgerIndex;
 
@@ -69,10 +71,11 @@ pub enum CaptureProblem {
     /// A captured frame whose header is not the published one of the same
     /// link, slot and number.
     Differs,
-    /// Captured bytes at a published object do not hash to it, or are not
+    /// Captured bytes at a listed object do not hash to it, or are not
     /// a canonical header of its schema.
     ObjectDiffers,
-    /// Captured bytes outside every published object.
+    /// Captured bytes no listed object covers, or fill around a share
+    /// package that is not zero.
     NotObject,
 }
 
@@ -126,17 +129,12 @@ impl CaptureComparison {
     }
 }
 
-/// A published frame: its header hash and stream position.
+/// A published frame's header hash, by link, slot and number.
 type Published = BTreeMap<([u8; 64], u64, u16), Hash512>;
 
-/// One published object of a link: schema, hash, offset, length.
-type ObjectAt = (SchemaId, Hash512, u64, u32);
-
-/// The published frames and objects of every link, from the ledger's
-/// frame logs.
-fn published(index: &LedgerIndex<'_>) -> (Published, BTreeMap<[u8; 64], Vec<ObjectAt>>) {
+/// The published frames of every link, from the ledger's frame logs.
+fn published(index: &LedgerIndex<'_>) -> Published {
     let mut frames = BTreeMap::new();
-    let mut objects: BTreeMap<[u8; 64], Vec<ObjectAt>> = BTreeMap::new();
     for e in index.events() {
         if e.schema != SCHEMA_UPLINK_FRAME_LOG {
             continue;
@@ -146,33 +144,35 @@ fn published(index: &LedgerIndex<'_>) -> (Published, BTreeMap<[u8; 64], Vec<Obje
         }) else {
             continue;
         };
-        let p = log.parts();
-        for f in p.frames.iter() {
-            if let Some(h) = header_hash(&f.header(p.link_id_hash)) {
-                frames.insert((p.link_id_hash.0, f.slot, f.index), h);
+        let link = log.parts().link_id_hash;
+        for f in log.frames_with() {
+            let header = f.entry.header(link, objects_hash(f.objects.as_bytes()));
+            if let Some((h, _)) = header_object(&header) {
+                frames.insert((link.0, f.entry.slot, f.entry.index), h);
             }
         }
-        let list = objects.entry(p.link_id_hash.0).or_default();
-        for o in p.objects.iter() {
-            list.push((o.schema, o.object_hash, o.stream_offset, o.len));
-        }
     }
-    (frames, objects)
+    frames
 }
 
-fn header_hash(parts: &ityv_encoding::UplinkFrameHeaderParts) -> Option<Hash512> {
+/// The length of an encoded frame header object.
+const HEADER_OBJECT_LEN: usize = HEADER_LEN + FRAME_HEADER_LEN;
+
+/// The header object of `parts` and its hash.
+fn header_object(
+    parts: &ityv_encoding::UplinkFrameHeaderParts,
+) -> Option<(Hash512, [u8; HEADER_OBJECT_LEN])> {
     let h = UplinkFrameHeader::new(parts).ok()?;
-    let mut buf = [0u8; 167];
+    let mut buf = [0u8; HEADER_OBJECT_LEN];
     let len = encode_object(SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1, &h, &mut buf).ok()?;
-    Some(object_hash(buf.get(..len)?))
+    Some((object_hash(buf.get(..len)?), buf))
 }
 
-/// The header object bytes of `parts`.
-fn header_object(parts: &ityv_encoding::UplinkFrameHeaderParts) -> Option<[u8; 167]> {
-    let h = UplinkFrameHeader::new(parts).ok()?;
-    let mut buf = [0u8; 167];
-    encode_object(SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1, &h, &mut buf).ok()?;
-    Some(buf)
+/// One captured frame's data and object list.
+struct Piece<'f> {
+    offset: u64,
+    data: &'f [u8],
+    objects: FrameObjects<'f>,
 }
 
 /// Compares an observer's capture `file` with the frame logs `index`
@@ -200,7 +200,7 @@ pub fn compare_capture(
             }
         }
     }
-    let (published_frames, published_objects) = published(index);
+    let published_frames = published(index);
     let mut out = CaptureComparison {
         capture_hash: capture_hash(file),
         frames: Vec::new(),
@@ -208,8 +208,9 @@ pub fn compare_capture(
         objects_matched: 0,
         findings: Vec::new(),
     };
-    // The captured stream of each link: (offset, data) of every frame.
-    let mut streams: BTreeMap<[u8; 64], Vec<(u64, &[u8])>> = BTreeMap::new();
+    // The captured stream of each link: every frame's data and list.
+    let mut streams: BTreeMap<[u8; 64], Vec<Piece<'_>>> = BTreeMap::new();
+    let mut captured: BTreeSet<([u8; 64], u64, u16)> = BTreeSet::new();
     let mut r = Reader::new(file);
     while !r.is_empty() {
         let Ok(len) = r.read_u32() else {
@@ -231,6 +232,7 @@ pub fn compare_capture(
         };
         let mut parts = *frame.fields();
         parts.payload_root = payload_root_of(frame.payload());
+        parts.objects_hash = objects_hash(frame.objects().as_bytes());
         let link = parts.link_id_hash;
         let at = Some((parts.slot, parts.index));
         let Some(key) = keys.get(&link.0) else {
@@ -238,7 +240,7 @@ pub fn compare_capture(
                 .push(finding(Some(link), at, None, CaptureProblem::UnknownLink));
             continue;
         };
-        let (Some(hash), Some(object)) = (header_hash(&parts), header_object(&parts)) else {
+        let Some((hash, object)) = header_object(&parts) else {
             out.findings
                 .push(finding(Some(link), at, None, CaptureProblem::NotFrame));
             continue;
@@ -262,6 +264,7 @@ pub fn compare_capture(
             index: parts.index,
             header_hash: hash,
         });
+        captured.insert((link.0, parts.slot, parts.index));
         match published_frames.get(&(link.0, parts.slot, parts.index)) {
             None => out
                 .findings
@@ -272,10 +275,11 @@ pub fn compare_capture(
             }
             Some(_) => out.matched = out.matched.saturating_add(1),
         }
-        streams
-            .entry(link.0)
-            .or_default()
-            .push((parts.stream_offset, frame.data()));
+        streams.entry(link.0).or_default().push(Piece {
+            offset: parts.stream_offset,
+            data: frame.data(),
+            objects: frame.objects(),
+        });
     }
     // Published frames the capture lacks, in the slots it covers on their
     // link (a recorder that started late or stopped early reaches no
@@ -294,11 +298,7 @@ pub fn compare_capture(
         let reached = reach
             .get(link)
             .is_some_and(|(lo, hi)| *lo <= *slot && *slot <= *hi);
-        let captured = out
-            .frames
-            .iter()
-            .any(|f| f.link_id_hash.0 == *link && f.slot == *slot && f.index == *idx);
-        if reached && !captured {
+        if reached && !captured.contains(&(*link, *slot, *idx)) {
             out.findings.push(finding(
                 Some(Hash512(*link)),
                 Some((*slot, *idx)),
@@ -307,63 +307,64 @@ pub fn compare_capture(
             ));
         }
     }
-    // The stream: published objects held whole, and bytes outside objects.
+    // The stream: each frame's list tiles its data with zero fill, and
+    // every listed object held whole hashes to its listed hash.
     for (link, mut pieces) in streams {
-        pieces.sort_by_key(|(offset, _)| *offset);
-        let objects = published_objects.get(&link).map_or(&[][..], Vec::as_slice);
-        for (schema, hash, offset, len) in objects {
-            let Some(bytes) = assemble(&pieces, *offset, u64::from(*len)) else {
+        pieces.sort_by_key(|p| p.offset);
+        let mut objects: BTreeMap<u64, StreamObject> = BTreeMap::new();
+        for p in &pieces {
+            let len = u32::try_from(p.data.len()).unwrap_or(u32::MAX);
+            let t = tiling(p.offset, len, &p.objects);
+            if let Some((_, at)) = t.problem {
+                out.findings.push(finding(
+                    Some(Hash512(link)),
+                    None,
+                    Some(at),
+                    CaptureProblem::NotObject,
+                ));
+            }
+            for (lo, hi) in t.fill {
+                let zero = assemble(&pieces, lo, hi.saturating_sub(lo))
+                    .is_none_or(|b| b.iter().all(|x| *x == 0));
+                if !zero {
+                    out.findings.push(finding(
+                        Some(Hash512(link)),
+                        None,
+                        Some(lo),
+                        CaptureProblem::NotObject,
+                    ));
+                }
+            }
+            for o in p.objects.iter() {
+                objects.entry(o.stream_offset).or_insert(o);
+            }
+        }
+        for o in objects.values() {
+            let Some(bytes) = assemble(&pieces, o.stream_offset, u64::from(o.len)) else {
                 continue;
             };
             let header_ok = {
                 let mut hr = Reader::new(&bytes);
-                ObjectHeader::read(&mut hr).is_ok_and(|h| h.schema_id() == *schema)
+                ObjectHeader::read(&mut hr).is_ok_and(|h| h.schema_id() == o.schema)
             };
-            if header_ok && object_hash(&bytes) == *hash {
+            if header_ok && object_hash(&bytes) == o.object_hash {
                 out.objects_matched = out.objects_matched.saturating_add(1);
             } else {
                 out.findings.push(finding(
                     Some(Hash512(link)),
                     None,
-                    Some(*offset),
+                    Some(o.stream_offset),
                     CaptureProblem::ObjectDiffers,
                 ));
-            }
-        }
-        for (offset, data) in &pieces {
-            let Some(end) = offset.checked_add(u64::try_from(data.len()).unwrap_or(u64::MAX))
-            else {
-                continue;
-            };
-            let mut at = *offset;
-            // Each step passes the end of the object that holds `at`, which
-            // no later step can find again: at most one step per object,
-            // and the walk ends whatever the published objects are.
-            let mut steps = 0..=objects.len();
-            while at < end && steps.next().is_some() {
-                let next = objects
-                    .iter()
-                    .find(|(_, _, o, l)| *o <= at && at < o.saturating_add(u64::from(*l)));
-                if let Some((_, _, o, l)) = next {
-                    at = o.saturating_add(u64::from(*l)).min(end);
-                } else {
-                    out.findings.push(finding(
-                        Some(Hash512(link)),
-                        None,
-                        Some(at),
-                        CaptureProblem::NotObject,
-                    ));
-                    break;
-                }
             }
         }
     }
     out
 }
 
-/// The bytes `[offset, offset + len)` of the captured stream, if every
-/// byte was captured.
-fn assemble(pieces: &[(u64, &[u8])], offset: u64, len: u64) -> Option<Vec<u8>> {
+/// The bytes `[offset, offset + len)` of the captured stream (`pieces`
+/// sorted by offset), if every byte was captured.
+fn assemble(pieces: &[Piece<'_>], offset: u64, len: u64) -> Option<Vec<u8>> {
     let end = offset.checked_add(len)?;
     let mut out = Vec::new();
     let mut at = offset;
@@ -372,17 +373,15 @@ fn assemble(pieces: &[(u64, &[u8])], offset: u64, len: u64) -> Option<Vec<u8>> {
     // finds none.
     let mut steps = 0..=pieces.len();
     while at < end && steps.next().is_some() {
-        let (start, data) = pieces.iter().find(|(start, data)| {
-            *start <= at
-                && u64::try_from(data.len())
-                    .ok()
-                    .and_then(|n| start.checked_add(n))
-                    .is_some_and(|e| at < e)
-        })?;
-        let from = usize::try_from(at.checked_sub(*start)?).ok()?;
-        let piece_end = start.checked_add(u64::try_from(data.len()).ok()?)?;
-        let to = usize::try_from(end.min(piece_end).checked_sub(*start)?).ok()?;
-        out.extend_from_slice(data.get(from..to)?);
+        let after = pieces.partition_point(|p| p.offset <= at);
+        let p = pieces.get(after.checked_sub(1)?)?;
+        let piece_end = p.offset.checked_add(u64::try_from(p.data.len()).ok()?)?;
+        if at >= piece_end {
+            return None;
+        }
+        let from = usize::try_from(at.checked_sub(p.offset)?).ok()?;
+        let to = usize::try_from(end.min(piece_end).checked_sub(p.offset)?).ok()?;
+        out.extend_from_slice(p.data.get(from..to)?);
         at = end.min(piece_end);
     }
     Some(out)

@@ -52,7 +52,7 @@ pub const fn max_package_len(members: usize) -> usize {
     } else {
         MAX_ENTRIES
     };
-    MAX_FIXED_LEN + n * MAX_ENTRY_LEN
+    MAX_FIXED_LEN.saturating_add(n.saturating_mul(MAX_ENTRY_LEN))
 }
 
 /// Chamber code of a share entry (PROTOCOL.md §4.1, ADR-0019).
