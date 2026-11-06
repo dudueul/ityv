@@ -681,6 +681,14 @@ struct LinkInfo<'a> {
     device: LinkDevice<'a>,
     station: StationId<'a>,
     frame_key: &'a [u8; ityv_encoding::FRAME_KEY_LEN],
+    /// Whether the link is its device's from the start: the box's frame
+    /// key in the first state that has the box, or the in-service unit of
+    /// the first state that has the station. It must send from the
+    /// opening.
+    original: bool,
+    /// Whether the link is its device's in the last state: the box's frame
+    /// key, or the station's in-service unit. It must send to the close.
+    current: bool,
 }
 
 impl LinkInfo<'_> {
@@ -693,24 +701,37 @@ impl LinkInfo<'_> {
 }
 
 /// Every link of every genesis state, by link hash (the earliest state
-/// that has it).
+/// that has it; a frame key names one device in every state, ADR-0041
+/// decision 2), with whether it is its device's from the start and in the
+/// last state.
 fn links<'a>(genesis: &VerifiedGenesis<'a>) -> BTreeMap<[u8; 64], LinkInfo<'a>> {
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<[u8; 64], LinkInfo<'a>> = BTreeMap::new();
+    // The devices seen so far: a box or a station's in-service unit.
+    let mut seen: BTreeSet<(bool, &'a [u8])> = BTreeSet::new();
+    let last = genesis.state_count().saturating_sub(1);
     for state in 0..genesis.state_count() {
         for b in genesis.boxes_at(state) {
-            out.entry(link_id(b.frame_key).0).or_insert(LinkInfo {
+            let first = seen.insert((true, b.box_id.as_bytes()));
+            let info = out.entry(link_id(b.frame_key).0).or_insert(LinkInfo {
                 device: LinkDevice::Box(b.box_id),
                 station: b.station_id,
                 frame_key: b.frame_key,
+                original: first,
+                current: false,
             });
+            info.current |= state == last;
         }
         for s in genesis.stations_at(state) {
-            for unit in [s.primary(), s.spare()] {
-                out.entry(link_id(unit.frame_key).0).or_insert(LinkInfo {
+            let first = seen.insert((false, s.station_id().as_bytes()));
+            for (unit, in_service) in [(s.primary(), true), (s.spare(), false)] {
+                let info = out.entry(link_id(unit.frame_key).0).or_insert(LinkInfo {
                     device: LinkDevice::Unit(unit.unit_id),
                     station: s.station_id(),
                     frame_key: unit.frame_key,
+                    original: first && in_service,
+                    current: false,
                 });
+                info.current |= state == last && in_service;
             }
         }
     }
@@ -749,8 +770,9 @@ struct StationWork<'a> {
     sessions: Vec<SessionReport>,
     findings: Vec<SessionFinding>,
     /// The missing slots each session declares, by link and session
-    /// number.
-    declared: BTreeMap<([u8; 64], u32), u32>,
+    /// number; `None` where the session's record of the link was refused
+    /// (its frames are not taken, so its count is not compared).
+    declared: BTreeMap<([u8; 64], u32), Option<u32>>,
 }
 
 impl<'a> StationWork<'a> {
@@ -969,13 +991,16 @@ impl<'a> Work<'_, 'a> {
                 stream_end: 0,
                 frames: Vec::new(),
             });
-            declared.push(((link.0, index), l.missing_slots));
+            declared.push(((link.0, index), Some(l.missing_slots)));
             let frames: Vec<LoggedFrame<'a>> = log
                 .map(|(_, lg)| lg.frames_with().collect())
                 .unwrap_or_default();
             let head = chain_over(work.head, &link, frames.iter().copied());
             if head != Some(l.chain_head) {
                 findings.push((Some(link), SessionProblem::ChainHead));
+                if let Some(d) = declared.last_mut() {
+                    d.1 = None;
+                }
                 continue;
             }
             let normal = u64::try_from(
@@ -1510,10 +1535,18 @@ fn judge_frames(
     let first = sent.iter().min().copied();
     let last = sent.iter().max().copied();
     report.slots = first.zip(last);
-    let span_start = ctx.opening.or(first);
-    let span_end = match (ctx.span_end, last) {
-        (Some(a), Some(b)) => Some(a.max(b)),
-        (a, b) => a.or(b),
+    // A link that is its device's from the start sends from the opening, a
+    // device swapped in from its first frame; one that is its device's in
+    // the last state sends to the close, a device swapped out to its last
+    // frame. A link with no frame (a spare never used) has no span.
+    let span_start = if work.info.original {
+        ctx.opening.or(first)
+    } else {
+        first
+    };
+    let span_end = match (work.info.current, ctx.span_end, last) {
+        (true, Some(a), Some(b)) => Some(a.max(b)),
+        (true | false, _, b) => b,
     };
     let witnessed: Vec<u64> = work
         .frames
@@ -1550,7 +1583,14 @@ fn judge_frames(
                 }
             }
         }
-        gap = uncovered(windows, a, b);
+        // Slots after the last session taken may still come, until the
+        // gateway's final session.
+        let reported = if ctx.closed {
+            Some(b)
+        } else {
+            windows.last().map(|w| w.1.min(b))
+        };
+        gap = reported.map_or(0, |b| uncovered(windows, a, b));
     }
     report.missing_slots = u64::try_from(short.len())
         .unwrap_or(u64::MAX)
@@ -1623,10 +1663,14 @@ fn judge_objects(
     // frame carries out is what the next carries in.
     let mut listed: BTreeMap<u64, Listed> = BTreeMap::new();
     let mut previous_data: Option<&Frame<'_>> = None;
+    // The frames whose list does not tile their data: their chunks are not
+    // recomputed.
+    let mut untiled: BTreeSet<(u64, u16)> = BTreeSet::new();
     for f in &frames {
         let e = &f.entry;
         if let Some((problem, at)) = tiling(e.stream_offset, e.payload_len, &f.objects).problem {
             report.findings.push(frame_finding(f, at, problem));
+            untiled.insert((e.slot, e.index));
         }
         for o in f.objects.iter() {
             let first = listed.entry(o.stream_offset).or_insert(Listed {
@@ -1646,11 +1690,12 @@ fn judge_objects(
         if let Some(p) = previous_data {
             let carried = p.objects.iter().last();
             let next = f.objects.iter().next();
+            // Where they start: what they list there is compared above.
             let agrees = match (carried, next) {
                 (Some(c), Some(n)) => {
                     let c_end = c.end().unwrap_or(u64::MAX);
                     if c_end > e.stream_offset {
-                        c == n
+                        n.stream_offset == c.stream_offset
                     } else {
                         n.stream_offset >= c_end
                     }
@@ -1758,10 +1803,12 @@ fn judge_objects(
         }
     }
     // Chunks: every data chunk whose bytes are all public objects (and the
-    // zero fill around packages) is recomputed; an object counts as
-    // checked when every chunk that holds bytes of it was.
+    // zero fill around packages) is recomputed, in a frame whose list tiles
+    // its data; an object counts as checked when every chunk that holds
+    // bytes of it was.
     for f in &frames {
         let objects: Vec<StreamObject> = f.objects.iter().collect();
+        let tiled = !untiled.contains(&(f.entry.slot, f.entry.index));
         let mut from = 0usize;
         for (j, leaf) in f.leaves.iter().enumerate() {
             let chunk = u64::try_from(CHUNK_LEN).unwrap_or(u64::MAX);
@@ -1772,7 +1819,12 @@ fn judge_objects(
                 .stream_offset
                 .saturating_add(u64::from(f.entry.payload_len));
             let hi = lo.saturating_add(chunk).min(data_end);
-            let ok = if let Some(mine) = public_leaf(lo, hi, &objects, ctx.public) {
+            let mine = if tiled {
+                public_leaf(lo, hi, &objects, ctx.public)
+            } else {
+                None
+            };
+            let ok = if let Some(mine) = mine {
                 report.checked_chunks = report.checked_chunks.saturating_add(1);
                 if mine != leaf {
                     report
@@ -2268,11 +2320,14 @@ pub fn verify_connectivity<'a>(
             // Missing slots against every session's declaration (none when
             // the session does not list the link).
             for session in &st.sessions {
-                let declared = st
+                let Some(declared) = st
                     .declared
                     .get(&(*key, session.session_index))
                     .copied()
-                    .unwrap_or(0);
+                    .unwrap_or(Some(0))
+                else {
+                    continue;
+                };
                 let counted = if session.start_slot <= session.end_slot {
                     short.range(session.start_slot..=session.end_slot).count()
                 } else {
@@ -2743,14 +2798,164 @@ mod tests {
 
     #[test]
     fn a_span_lies_wholly_in_the_received_ranges() {
-        let ranges = [(0, 10), (20, 30)];
+        let ranges = [(0, 10), (20, 30), (40, 50)];
         assert!(covered(&ranges, 0, 10));
         assert!(covered(&ranges, 22, 25));
+        assert!(covered(&ranges, 40, 50));
         assert!(covered(&ranges, 15, 15));
         assert!(covered(&[], 7, 3));
         assert!(!covered(&ranges, 5, 21));
         assert!(!covered(&ranges, 10, 11));
+        assert!(!covered(&ranges, 45, 51));
+        assert!(!covered(&ranges, 35, 36));
         assert!(!covered(&[], 0, 1));
+        assert_eq!(overlap(None, 0, 9), 0);
+        assert_eq!(overlap(Some((5, 7)), 0, 9), 3);
+        assert_eq!(overlap(Some((5, 7)), 6, 6), 1);
+        assert_eq!(overlap(Some((5, 7)), 8, 9), 0);
+    }
+
+    fn object(schema: SchemaId, offset: u64, len: u32) -> StreamObject {
+        StreamObject {
+            schema,
+            object_hash: Hash512([1; 64]),
+            stream_offset: offset,
+            len,
+        }
+    }
+
+    fn list(objects: &[StreamObject]) -> FrameObjects<'static> {
+        let mut bytes = std::vec::Vec::new();
+        for o in objects {
+            let mut buf = std::vec![0u8; 80];
+            o.encode(&mut ityv_encoding::Writer::new(&mut buf)).unwrap();
+            bytes.extend_from_slice(&buf);
+        }
+        FrameObjects::new(std::boxed::Box::leak(bytes.into_boxed_slice())).unwrap()
+    }
+
+    #[test]
+    fn a_list_tiles_its_frames_data() {
+        use LinkProblem as L;
+        let r = SCHEMA_CAST_RECORD;
+        let p = SCHEMA_SHARE_PACKAGE;
+        let problem =
+            |start, len, objects: &[StreamObject]| tiling(start, len, &list(objects)).problem;
+        // Carried in, packages on chunk boundaries of the frame, carried out.
+        let frame = [
+            object(r, 900, 1200),
+            object(p, 1000 + 4096, 100),
+            object(r, 1000 + 8192, 50),
+            object(p, 1000 + 12_288, 5000),
+        ];
+        let t = tiling(1000, 13_000, &list(&frame));
+        assert_eq!(t.problem, None);
+        assert_eq!(
+            t.fill,
+            [
+                (2100, 1000 + 4096),
+                (1000 + 4196, 1000 + 8192),
+                (1000 + 8242, 1000 + 12_288)
+            ]
+        );
+        // No data, no list; data, no list; a list without data.
+        assert_eq!(problem(5, 0, &[]), None);
+        assert_eq!(problem(5, 10, &[]), Some((L::NotObject, 5)));
+        assert_eq!(problem(5, 0, &[object(r, 5, 16)]), Some((L::NotObject, 5)));
+        // The first entry starts after the data or ends before it.
+        assert_eq!(
+            problem(100, 50, &[object(r, 101, 49)]),
+            Some((L::NotObject, 100))
+        );
+        assert_eq!(
+            problem(100, 50, &[object(r, 50, 50)]),
+            Some((L::NotObject, 50))
+        );
+        // A gap, an entry past the data's end, a tail no entry covers.
+        assert_eq!(
+            problem(0, 100, &[object(r, 0, 40), object(r, 41, 59)]),
+            Some((L::NotObject, 41))
+        );
+        assert_eq!(
+            problem(0, 40, &[object(r, 0, 40), object(r, 40, 16)]),
+            Some((L::NotObject, 40))
+        );
+        assert_eq!(
+            problem(0, 100, &[object(r, 0, 99)]),
+            Some((L::NotObject, 99))
+        );
+        assert_eq!(problem(0, 100, &[object(r, 0, 100)]), None);
+        assert_eq!(problem(0, 100, &[object(r, 0, 101)]), None);
+        // A package right after a record, or a record right after a
+        // package, off the boundary.
+        assert_eq!(
+            problem(0, 5000, &[object(r, 0, 100), object(p, 100, 4900)]),
+            Some((L::Alignment, 100))
+        );
+        assert_eq!(
+            problem(0, 5000, &[object(p, 0, 100), object(r, 100, 4900)]),
+            Some((L::Alignment, 100))
+        );
+        assert_eq!(
+            problem(0, 5000, &[object(p, 0, 100), object(r, 4096, 904)]),
+            None
+        );
+        // A package carried in at the frame's start needs no boundary; one
+        // that ends where the data end needs none after it.
+        assert_eq!(problem(10, 90, &[object(p, 0, 100)]), None);
+        assert_eq!(
+            problem(0, 100, &[object(r, 0, 60), object(p, 4096, 40)]),
+            Some((L::NotObject, 4096))
+        );
+        // A frame past the end of the stream.
+        assert_eq!(problem(u64::MAX, 2, &[]), Some((L::NotObject, u64::MAX)));
+        assert_eq!(next_start(1000, 1000, true), Some(1000));
+        assert_eq!(next_start(1000, 1001, true), Some(1000 + 4096));
+        assert_eq!(next_start(1000, 1000 + 4096, true), Some(1000 + 4096));
+        assert_eq!(next_start(1000, 1001, false), Some(1001));
+        assert_eq!(next_start(1000, 999, true), None);
+    }
+
+    #[test]
+    fn a_skip_needs_positions_no_frame_took() {
+        let mut groups: SlotGroups = BTreeMap::new();
+        groups.insert(10, (false, false, BTreeSet::from([0])));
+        groups.insert(12, (true, false, BTreeSet::from([0, 1])));
+        groups.insert(30, (true, true, BTreeSet::from([1])));
+        let shape = Shape {
+            normal: 2,
+            catchup: 5,
+            span: Some((10, 20)),
+            witnessed: Some((30, 31)),
+        };
+        // Slots the device must send in.
+        assert_eq!(shape.slots(10, 20), 11);
+        assert_eq!(shape.slots(5, 9), 0);
+        assert_eq!(shape.slots(19, 32), 2 + 2);
+        assert_eq!(shape.slots(21, 20), 0);
+        // Their counts: the group's shape, the catch-up count for a slot
+        // with no frame, none outside.
+        assert_eq!(shape.count(&groups, 10), 2);
+        assert_eq!(shape.count(&groups, 12), 5);
+        assert_eq!(shape.count(&groups, 11), 5);
+        assert_eq!(shape.count(&groups, 25), 0);
+        // Before the first frame: the slots from the start, then the
+        // numbers before it.
+        assert_eq!(shape.absent(&groups, None, (10, 0)), 0);
+        assert_eq!(shape.absent(&groups, None, (10, 1)), 1);
+        assert_eq!(shape.absent(&groups, None, (12, 1)), 2 * 5 + 1);
+        // In one slot: the numbers strictly between.
+        assert_eq!(shape.absent(&groups, Some((12, 0)), (12, 1)), 0);
+        assert_eq!(shape.absent(&groups, Some((12, 0)), (12, 4)), 3);
+        assert_eq!(shape.absent(&groups, Some((12, 3)), (12, 9)), 1);
+        // Across slots: the rest of the first, the slots between, the
+        // numbers before the last.
+        assert_eq!(shape.absent(&groups, Some((10, 0)), (12, 0)), 1 + 5);
+        assert_eq!(shape.absent(&groups, Some((10, 1)), (11, 0)), 0);
+        assert_eq!(shape.absent(&groups, Some((12, 4)), (30, 0)), 8 * 5);
+        assert_eq!(shape.absent(&groups, Some((20, 0)), (30, 1)), 4 + 1);
+        // Going back takes no position.
+        assert_eq!(shape.absent(&groups, Some((12, 0)), (10, 1)), 0);
     }
 
     #[test]

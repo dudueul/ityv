@@ -545,9 +545,22 @@ pub fn device_frames(
     last: u64,
     per_slot: u16,
 ) -> (Vec<Built>, Vec<StreamObject>) {
+    device_frames_of(key, objects, first, last, per_slot, MAX_PAYLOAD_LEN)
+}
+
+/// As [`device_frames`], each frame holding at most `capacity` bytes:
+/// the stream spread over more frames.
+pub fn device_frames_of(
+    key: u16,
+    objects: &[&'static [u8]],
+    first: u64,
+    last: u64,
+    per_slot: u16,
+    capacity: usize,
+) -> (Vec<Built>, Vec<StreamObject>) {
     let link = link(key);
     let count = (last - first + 1) as usize * usize::from(per_slot);
-    let (stream, listed, spans) = layout(objects, MAX_PAYLOAD_LEN, count);
+    let (stream, listed, spans) = layout(objects, capacity, count);
     let mut out = Vec::new();
     let mut spans = spans.into_iter();
     for slot in first..=last {
