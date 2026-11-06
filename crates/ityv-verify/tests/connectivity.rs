@@ -1071,6 +1071,33 @@ fn a_stream_ends_whole_only_with_its_last_object_received_whole() {
         "{:?}",
         found(&r, scanner())
     );
+
+    // The same device with no close resend at all: its close slot is taken
+    // whole (one normal frame here), so every position after the last frame
+    // was taken and the stream's end is the run's. Its last object, the
+    // second record, ends at the stream's end but was still not received
+    // whole: still no `Batch`, only the close resend's absence (`Resend`).
+    let mut links = honest_links();
+    links[SCANNER] = Link::new(day().links[SCANNER].key, &objects[..3], 150, 212, 1);
+    let links = cut(
+        links,
+        SCANNER,
+        &[(150, 0), (151, o[2].stream_offset as usize + 10)],
+    );
+    let lose = |l: usize, f: &Built| {
+        if l == SCANNER && f.slot == 150 {
+            None
+        } else {
+            window(f.slot)
+        }
+    };
+    let declare = declare_one(1);
+    let mut plan = Plan::new(ST, links);
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    let r = verify(plan.events());
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(found(&r, scanner()), [LinkProblem::Resend]);
 }
 
 // ---------------------------------------------------------------------------
