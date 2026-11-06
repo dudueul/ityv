@@ -708,7 +708,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             (
                 "기록 바꿔치기(표갈이)",
                 "한빛초등학교 체육관 투표함의 두 번째 기록을, 다른 선택으로 새로 만든 본문에 원래 기록의 장치·모듈 서명을 붙여 실었다.",
-                "그 기록은 장치 서명이 맞지 않아 거부(RecordRejected)되고, 배치·마감 기록 집합·집계 범위가 줄줄이 어긋난다. HOLD_REVIEW.",
+                "그 기록은 장치 서명이 맞지 않아 거부(RecordRejected)되고, 배치·마감 기록 집합·집계 범위가 줄줄이 어긋난다. 업링크로 나간 배치의 묶음에도 그 배치가 갖지 않는 기록이 끼어 있다(UplinkObjectInvalid). HOLD_REVIEW.",
             ),
             hold(&[
                 H::RecordRejected,
@@ -717,6 +717,7 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::RecordSetMismatch,
                 H::TallyScopeMismatch,
                 H::AggregateMismatch,
+                H::UplinkObjectInvalid,
             ]),
             Vec::new(),
         ));
@@ -1246,7 +1247,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             (
                 "법적 승인이 없는 장부",
                 "genesis가 고정한 법적 승인 객체(SignedLegalAuthorization)를 장부에 싣지 않았다.",
-                "권한이 필요한 어떤 단계도 받을 수 없어 장부 전체가 HOLD_REVIEW(AuthorizationMissing), 그 위의 이벤트도 줄줄이 거부된다.",
+                "권한이 필요한 어떤 단계도 받을 수 없어 장부 전체가 HOLD_REVIEW(AuthorizationMissing), 그 위의 이벤트도 줄줄이 거부된다. 투표함 이벤트가 거부되어 기록 단계가 받은 배치가 없으므로, 업링크의 기록은 장부의 어느 배치에도 속하지 않는다(UplinkObjectInvalid).",
             ),
             hold(&[
                 H::AuthorizationMissing,
@@ -1255,6 +1256,7 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::ReceiptResolutionRefused,
                 H::TallyScopeRefused,
                 H::AggregateRefused,
+                H::UplinkObjectInvalid,
             ]),
             Vec::new(),
         ));
@@ -1703,6 +1705,50 @@ fn connectivity_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
             Vec::new(),
         ));
     }
+    // Each record in a run of its own (review 2 of 2i, G).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(&mut bld, st, None, Fault::Singled { device: scanner });
+        out.push(bld.scenario(
+            "attack-uplink-singled-records",
+            q,
+            a,
+            (
+                "기록마다 다시 보낸 배치 증명",
+                "한빛초등학교 체육관 스캐너가 마감 배치를 보내면서 둘째 기록부터 기록마다 그 배치 증명을 다시 앞에 붙였다. 묶음마다 기록이 하나라 묶음 안 순서 규칙을 피하고, 기록을 아무 순서로나 보낼 수 있는 모양이다.",
+                "묶음은 장부가 정한 그 배치의 기록을 첫 기록부터 마지막 기록까지 차례로 담아야 하므로 기록 하나로 끝난 묶음이 위반이고, 배치 증명이 허용된 횟수보다 많이 나갔다. 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid).",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
+    // Covert bytes under the hash of a ledger event of another schema
+    // (review 2 of 2i, A).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let (_, close) = e.link_slots(scanner);
+        uplink_fault(
+            &mut bld,
+            st,
+            None,
+            Fault::Mislabel {
+                device: scanner,
+                slot: close,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-mislabeled-object",
+            q,
+            a,
+            (
+                "다른 스키마로 적은 장부 해시",
+                "한빛초등학교 체육관 스캐너가 마감 슬롯에서 share 패키지로 끝나는 프레임 뒤에 3,000바이트의 숨은 바이트를 붙이고, 객체 목록에는 그 바이트를 진행 기록으로, 해시는 같은 프레임의 배치 증명의 것으로 적어 서명했다. 장부에 있는 해시라서 '장부에 없는 객체'를 피하고, 스키마가 달라 공개 바이트와 대조되지 않는 모양이다.",
+                "장부가 그 해시를 다른 스키마로 싣고 있으므로 목록의 항목이 위반이고, 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid).",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
     // A frame lost on the line, declared (VC-080).
     {
         let mut bld = Builder::new(e, Until::Tallied);
@@ -1826,9 +1872,9 @@ fn connectivity_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
             (
                 "링크를 거치지 않은 기록",
                 "한빛초등학교 체육관 투표함의 세 번째 기록은 장부에 있지만 스캐너의 업링크로 오지 않았다(숨은 경로). 배치 증명은 그 기록을 그대로 센다.",
-                "장치 출처 객체가 어느 세션의 받은 프레임에도 없어 그 투표함이 HOLD_REVIEW(UplinkObjectOutside, VC-080).",
+                "장치 출처 객체가 어느 세션의 받은 프레임에도 없어 그 투표함이 HOLD_REVIEW(UplinkObjectOutside, VC-080). 잃은 바이트 없이 이어진 배치의 묶음에서 그 기록이 빠져 다음 기록이 배치의 차례가 아니다(UplinkObjectInvalid).",
             ),
-            hold(&[H::UplinkObjectOutside]),
+            hold(&[H::UplinkObjectInvalid, H::UplinkObjectOutside]),
             Vec::new(),
         ));
     }

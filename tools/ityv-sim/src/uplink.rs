@@ -140,6 +140,22 @@ pub enum Fault {
         /// The device.
         device: Device,
     },
+    /// The device sends its batch attestation again before each record
+    /// but the first, so each run holds one record (review 2 of 2i, G).
+    Singled {
+        /// The device.
+        device: Device,
+    },
+    /// After the share package that ends the first frame of `slot` that
+    /// carries one, the device sends 3,000 covert bytes listed as a
+    /// progress tick under the hash of the frame's batch attestation (a
+    /// ledger event of another schema, review 2 of 2i, A).
+    Mislabel {
+        /// The device.
+        device: Device,
+        /// The slot.
+        slot: u64,
+    },
     /// The device event whose object hash this is never travels its link:
     /// it reaches the ledger by another path. (On any window: it applies to
     /// the whole ledger.)
@@ -163,7 +179,9 @@ impl Fault {
             | Self::Fill { .. }
             | Self::Extra { .. }
             | Self::AfterClose { .. }
-            | Self::Unordered { .. } => None,
+            | Self::Unordered { .. }
+            | Self::Singled { .. }
+            | Self::Mislabel { .. } => None,
         }
     }
 }
@@ -549,6 +567,28 @@ fn relisted(list: &[StreamObject]) -> Vec<StreamObject> {
     out
 }
 
+/// Sends each batch's attestation again before each of its records but
+/// the first (each record with its share package after it).
+fn singled(batches: &[&'static [u8]]) -> Vec<&'static [u8]> {
+    let mut out = Vec::new();
+    let mut attestation: Option<&'static [u8]> = None;
+    let mut first = false;
+    for o in batches {
+        let schema = schema_of(o);
+        if schema == Some(SCHEMA_BATCH_ATTEST) {
+            attestation = Some(o);
+            first = true;
+        } else if schema == Some(SCHEMA_CAST_RECORD) {
+            if let (false, Some(a)) = (first, attestation) {
+                out.push(a);
+            }
+            first = false;
+        }
+        out.push(o);
+    }
+    out
+}
+
 /// Reverses the records of each batch in `batches` (each with its share
 /// package after it): records out of record-hash order.
 fn reverse_records(batches: &mut [&'static [u8]]) {
@@ -742,6 +782,7 @@ impl<'e> Gateways<'e> {
             };
             let gateway_label = e.gateway_label(s);
             let unordered = w.faults.contains(&Fault::Unordered { device: d });
+            let singly = w.faults.contains(&Fault::Singled { device: d });
             let link = self.links.get_mut(&d).unwrap();
             // The objects of the window, in transmission order: the others,
             // then the closed batches (a batch starts a frame of its own).
@@ -749,6 +790,9 @@ impl<'e> Gateways<'e> {
             let mut batches: Vec<&'static [u8]> = std::mem::take(&mut link.batches);
             if unordered {
                 reverse_records(&mut batches);
+            }
+            if singly {
+                batches = singled(&batches);
             }
             link.sent_batches.extend(batches.iter().copied());
             let mut batches: VecDeque<&'static [u8]> = batches.into();
@@ -772,6 +816,7 @@ impl<'e> Gateways<'e> {
                 let shape = if closing { catchup } else { fps };
                 let extra = w.faults.contains(&Fault::Extra { device: d, slot });
                 let covert = w.faults.contains(&Fault::Covert { device: d, slot });
+                let mut mislabel = w.faults.contains(&Fault::Mislabel { device: d, slot });
                 let mut logged = 0u16;
                 for i in 0..shape + u16::from(extra) {
                     if silent {
@@ -792,6 +837,43 @@ impl<'e> Gateways<'e> {
                     } else {
                         let (data, list) = link.fill(&mut resend, MAX_PAYLOAD_LEN);
                         (kind_of(closing, FrameKind::CloseResend), data, list)
+                    };
+                    let (data, list) = match list.last() {
+                        // Covert bytes after a package that ends the frame,
+                        // on the next chunk boundary, listed as a tick under
+                        // the hash of the frame's attestation.
+                        Some(p)
+                            if mislabel
+                                && p.schema == SCHEMA_SHARE_PACKAGE
+                                && link.carry.is_none()
+                                && data.len().div_ceil(CHUNK_LEN) * CHUNK_LEN + 3000
+                                    <= MAX_PAYLOAD_LEN =>
+                        {
+                            mislabel = false;
+                            let start = link.offset - data.len() as u64;
+                            let mut data = data;
+                            let mut list = list.clone();
+                            let at = data.len().div_ceil(CHUNK_LEN) * CHUNK_LEN;
+                            let named = list
+                                .iter()
+                                .find(|o| o.schema == SCHEMA_BATCH_ATTEST)
+                                .unwrap_or(&list[0])
+                                .object_hash;
+                            data.resize(at, 0);
+                            data.extend(
+                                (0..3000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8),
+                            );
+                            list.push(StreamObject {
+                                schema: ityv_encoding::SCHEMA_PROGRESS_TICK,
+                                object_hash: named,
+                                stream_offset: start + at as u64,
+                                len: 3000,
+                            });
+                            link.offset = start + data.len() as u64;
+                            link.after_package = false;
+                            (data, list)
+                        }
+                        _ => (data, list),
                     };
                     let take = data.len();
                     let stream_offset = link.offset - take as u64;
