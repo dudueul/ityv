@@ -326,6 +326,11 @@ pub(crate) fn witnessed_seeded(
 }
 
 pub(crate) fn opened(bx: Bx) -> &'static [u8] {
+    opened_at(bx, OPEN_BUCKET)
+}
+
+/// As [`opened`], in time bucket `bucket`.
+pub(crate) fn opened_at(bx: Bx, bucket: u64) -> &'static [u8] {
     let names: Vec<&'static [u8]> = bx.mods.iter().map(|m| m.0).collect();
     let body = BoxOpenedBody::new(&BoxOpenedParts {
         election_id: common::election(),
@@ -334,7 +339,7 @@ pub(crate) fn opened(bx: Bx) -> &'static [u8] {
         seal_digest: SEAL,
         seals_match: true,
         initial_count: 0,
-        time_bucket: TimeBucket::new(OPEN_BUCKET),
+        time_bucket: TimeBucket::new(bucket),
     });
     let body = object(SCHEMA_BOX_OPENED_BODY, SCHEMA_VERSION_1, &body);
     let mut who = PEOPLE.to_vec();

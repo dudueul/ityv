@@ -44,20 +44,32 @@
 //!    session's window; no frame precedes the slot of the box's first
 //!    opening (the station's first, for a check-in unit); no normal or
 //!    catch-up frame of a box follows the slot after its first close's
-//!    time bucket, and no frame of a device a swap took out of service
-//!    follows the swap's slot; a catch-up group comes only after a slot
-//!    of the span fell short or in the close slot, a close resend only
-//!    from the close slot for the slots the stream before it needs at the
-//!    catch-up shape; nothing but resends follows a close resend and
-//!    nothing but witnessed resends follows a witnessed resend; the
+//!    time bucket; no frame of a device a swap took out of service
+//!    follows the swap's slot, none of one a swap brought in precedes it,
+//!    and (once the gateway closed) none comes from one no swap brought
+//!    in; a catch-up group comes only after a slot of the span fell short
+//!    (the first slot of a link a swap brought in counts as one), after a
+//!    whole catch-up group of full frames, or in the close slot; a close
+//!    resend only from the close slot (or the slot after, when the close
+//!    slot's frames went untaken) for the slots the stream before it needs
+//!    at the catch-up shape; a witnessed resend only after the close, in
+//!    no more slots than its bytes need at the catch-up shape and its
+//!    slots that fell short. The close is the box's (the station's last,
+//!    for a check-in unit), laid, or while it is not as the device's
+//!    frames state it (its first close resend, or its first catch-up group
+//!    nothing explains); while neither says, the kinds' slots wait.
+//!    Nothing but resends follows a close resend and nothing but
+//!    witnessed resends follows a witnessed resend; the
 //!    payload root rebuilt from the published data leaves and the zero
 //!    leaf is the signed one (the padding proof); and the stream starts at
 //!    0 and each frame starts where the previous ended, or later only
 //!    across positions (slot, number) no frame was taken in, by at most a
 //!    full payload each. The positions run over the slots the device must
 //!    send in: from the opening for a link that is its device's from the
-//!    start (from the slot of the swap that brought it in for one swapped
-//!    in, the opening without one), to the close for one in service at the
+//!    start or that an amendment laid before the opening brought in, from
+//!    the slot of the swap that brought it in for one swapped in (for a
+//!    box's frame key, the first `BoxUnitSwap` laid in a state that
+//!    carries it), to the close for one in service at the
 //!    end (to the slot before the swap that took it out, or its last
 //!    frame), and over its witnessed resends' slots from the first of the
 //!    session that took the first of them; a slot with frames taken has
@@ -78,16 +90,26 @@
 //!    no hash the ledger names under another schema; a public object of
 //!    the ledger with the ledger's length; each object listed no more
 //!    often than its kind allows (a batch's objects twice in normal and
-//!    catch-up frames, anything else once; once in close resends and in
-//!    each run of witnessed slots); cast records only in runs of their
-//!    batch as the record stage takes it: after an attestation, that
-//!    batch's records one after another in hash order from the first, to
-//!    the last where nothing was lost; after bytes not received, one
-//!    stretch of one batch's records; batches first sent in batch-index
-//!    order; nothing before its time (a batch before the first slot of its
-//!    time bucket, a tick before its slot or after a later tick); a share
-//!    package right after the record that names it (when that record is
-//!    known) and no longer than the election allows; and, once the
+//!    catch-up frames, anything else once; once in the close resend; in
+//!    witnessed resends once, and again after each listing there not
+//!    received whole); cast records only in runs of their batch as the
+//!    record stage takes it: after an attestation, that batch's records
+//!    one after another in hash order from the first, to the last where
+//!    nothing was lost; after bytes not received, one stretch of one
+//!    batch's records; in each group (normal and catch-up frames, the
+//!    close resend, each run of witnessed slots) batches first sent in
+//!    batch-index order, in normal and catch-up frames a batch first
+//!    received after one of a higher index only where each such one was
+//!    first received in the slot before, after a loss there; the close
+//!    resend the box's batches again in batch-index order from the first,
+//!    skipping one or stopping early only where something was lost, and
+//!    nothing else; a witnessed resend (once the gateway closed) only what
+//!    normal, catch-up and close-resend frames did not bring whole;
+//!    nothing before its time (a batch before the first slot of its time
+//!    bucket, a tick before its slot or after a later tick in its group);
+//!    a share package right after the record that names it (when that
+//!    record is known; never first in the stream) and no longer than the
+//!    election allows; and, once the
 //!    gateway sent its final session, every listed object, received whole
 //!    or not, a frame of the ledger names under its schema (a share
 //!    package through an accepted record of its box). Every data chunk
@@ -114,6 +136,15 @@
 //!    compared every record. Otherwise it is refused and holds the ledger
 //!    (`ConnectivityIncidentRefused`). The verifier never lifts the hold:
 //!    the paper is the legal result of those boxes.
+//!
+//! No hold waits on an event not laid yet (a ledger read mid-day): until
+//! the gateway sent its final session, a record the ledger has in no
+//! batch, an object not on the ledger, a link no swap brought in, the
+//! slots of a window before a link's start the ledger does not give yet
+//! and after its last frame, a run's shape while a challenge opening may
+//! be missing (bytes lost, or an opening listed and not laid), and the
+//! station's opening and close while a box's opening is not laid are not
+//! judged; the kinds' slots wait for the close as above.
 //!
 //! The stage is complete ([`ConnectivityStage::complete`]) when every
 //! station of the genesis's last state has a final session taken: the
@@ -1920,6 +1951,16 @@ fn judge_frames(
         .saturating_mul(u64::try_from(MAX_PAYLOAD_LEN).unwrap_or(u64::MAX))
         .max(1);
     let decided = ctx.closing.is_some() || ctx.closed;
+    // A link a swap brought in may open with a catch-up group: its first
+    // slot follows the slots its device could not send in while the
+    // transmitter it replaced was out.
+    let explain_from = span_start.map(|a| {
+        if ctx.swapped_in.is_some() {
+            a.saturating_sub(1)
+        } else {
+            a
+        }
+    });
     let first_resend = work
         .frames
         .iter()
@@ -1954,7 +1995,7 @@ fn judge_frames(
         let ok = match f.entry.kind {
             FrameKind::Normal => true,
             FrameKind::CatchUp => {
-                c == Some(s) || facts.explained(s, span_start, normal, catchup) || !decided
+                c == Some(s) || facts.explained(s, explain_from, normal, catchup) || !decided
             }
             FrameKind::CloseResend => {
                 c.is_some_and(|c| {
@@ -2259,6 +2300,21 @@ fn judge_objects(
         v.sort_unstable();
         v
     };
+    // Until the gateway closed, a batch member may be a record the device
+    // opened for a challenge whose opening the ledger does not have yet
+    // (lost on the link, or listed and not laid): the record stage counts
+    // it a member until then, and the device sends it outside every run
+    // (PROTOCOL.md §8 item 3). While that may be, a run may skip members
+    // or end early and a record may go outside every run: the close
+    // decides.
+    let gap = received.len() > 1 || received.first().is_some_and(|(a, _)| *a > 0);
+    let unlaid_opening = listed.values().any(|l| {
+        l.object.schema == SCHEMA_CHALLENGE_OPENING
+            && !ctx
+                .on_ledger
+                .contains(&(l.object.object_hash.0, SCHEMA_CHALLENGE_OPENING.get()))
+    });
+    let unsettled = !ctx.closed && (gap || unlaid_opening);
     let mut walk = Walk::Outside;
     // What came right before: at the stream's start no record, after a
     // loss nothing known.
@@ -2439,7 +2495,7 @@ fn judge_objects(
         }
         let record = schema == SCHEMA_CAST_RECORD && !batches.challenged.contains(&hash.0);
         if schema == SCHEMA_BATCH_ATTEST {
-            if !walk.complete() {
+            if !walk.complete() && !unsettled {
                 report.findings.push(finding(l, LinkProblem::Batch));
             }
             // A batch the record stage did not take holds no record.
@@ -2481,17 +2537,31 @@ fn judge_objects(
                         Some(list) => {
                             let next = at.map_or(0, |a| a.saturating_add(1));
                             let here = list.binary_search(&hash.0).ok();
-                            (here == Some(next), here.or(at))
+                            let fits = if unsettled {
+                                here.is_some_and(|h| h >= next)
+                            } else {
+                                here == Some(next)
+                            };
+                            (fits, here.or(at))
                         }
                         None => (last.is_none_or(|r| r < hash.0), None),
                     };
-                    if !ok {
+                    if ok {
+                        Walk::Run {
+                            list,
+                            at,
+                            last: Some(hash.0),
+                        }
+                    } else if unsettled {
+                        // Perhaps a challenged record after the run.
+                        Walk::Outside
+                    } else {
                         report.findings.push(finding(l, LinkProblem::Batch));
-                    }
-                    Walk::Run {
-                        list,
-                        at,
-                        last: Some(hash.0),
+                        Walk::Run {
+                            list,
+                            at,
+                            last: Some(hash.0),
+                        }
                     }
                 }
                 // After a loss, one stretch of one batch's records.
@@ -2512,7 +2582,9 @@ fn judge_objects(
                     },
                 },
                 Walk::Outside => {
-                    report.findings.push(finding(l, LinkProblem::Batch));
+                    if !unsettled {
+                        report.findings.push(finding(l, LinkProblem::Batch));
+                    }
                     Walk::Outside
                 }
             };
@@ -2525,7 +2597,7 @@ fn judge_objects(
                 report.findings.push(finding(l, LinkProblem::Package));
             }
         } else {
-            if !walk.complete() {
+            if !walk.complete() && !unsettled {
                 report.findings.push(finding(l, LinkProblem::Batch));
             }
             walk = Walk::Outside;
@@ -3303,14 +3375,26 @@ pub fn verify_connectivity<'a>(
             .iter()
             .filter_map(|b| opening_of(index, b).map(|(seq, slot)| (*b, seq, slot)))
             .collect();
-        let station_opening = opened.iter().map(|(_, _, s)| *s).min();
-        let station_opened = opened.iter().map(|(_, q, _)| *q).min_by_key(|q| q.get());
+        // Until the gateway closed, a box whose opening is not laid yet may
+        // still open: the station's opening and last close wait for every
+        // box (once it closed, a box that never opened counts for neither).
+        let every_box = closed || opened.len() == station_boxes.len();
+        let station_opening = opened
+            .iter()
+            .map(|(_, _, s)| *s)
+            .min()
+            .filter(|_| every_box);
+        let station_opened = opened
+            .iter()
+            .map(|(_, q, _)| *q)
+            .min_by_key(|q| q.get())
+            .filter(|_| every_box);
         // The station's last close once every opened box closed.
         let box_closes: Vec<Option<u64>> = opened
             .iter()
             .map(|(b, _, slot)| close_of(b, Some(*slot)))
             .collect();
-        let last_close = if box_closes.iter().all(Option::is_some) {
+        let last_close = if every_box && box_closes.iter().all(Option::is_some) {
             box_closes.iter().flatten().max().copied()
         } else {
             None
@@ -3441,8 +3525,15 @@ pub fn verify_connectivity<'a>(
             let judged = judge_frames(lw, &ctx, &windows, &mut report);
             included.insert(*key, judge_objects(lw, &ctx, &judged, &mut report));
             let (short, gap) = (judged.short, judged.gap);
+            let first_frame = report.slots.map(|(a, _)| a);
+            let last_frame = report.slots.map(|(_, b)| b);
             // Missing slots against every session's declaration (none when
-            // the session does not list the link).
+            // the session does not list the link). While the link's start
+            // is not the ledger's (its opening or swap not laid yet), the
+            // slots of a window before its first frame may be its own and
+            // lost: the session may count them too. While the gateway has
+            // not closed, a swap that ends the link may not be laid yet:
+            // the session need not count its slots after its last frame.
             for session in &st.sessions {
                 let Some(declared) = st
                     .declared
@@ -3457,7 +3548,32 @@ pub fn verify_connectivity<'a>(
                 } else {
                     0
                 };
-                if u64::try_from(counted).ok() != Some(u64::from(declared)) {
+                let counted = u64::try_from(counted).unwrap_or(u64::MAX);
+                let unknown = match first_frame {
+                    Some(f) if !ctx.start_known => f.saturating_sub(session.start_slot).min(
+                        session
+                            .end_slot
+                            .saturating_sub(session.start_slot)
+                            .saturating_add(1),
+                    ),
+                    _ => 0,
+                };
+                let trailing = match last_frame {
+                    Some(b) if !closed => {
+                        let from = session.start_slot.max(b.saturating_add(1));
+                        if from <= session.end_slot {
+                            short.range(from..=session.end_slot).count()
+                        } else {
+                            0
+                        }
+                    }
+                    _ => 0,
+                };
+                let trailing = u64::try_from(trailing).unwrap_or(u64::MAX);
+                let declared = u64::from(declared);
+                if declared < counted.saturating_sub(trailing)
+                    || declared > counted.saturating_add(unknown)
+                {
                     findings.push(SessionFinding {
                         seq: session.seq,
                         session_index: session.session_index,

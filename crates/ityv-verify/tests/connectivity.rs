@@ -4394,7 +4394,9 @@ fn r3_3b_a_transmitter_replaced_alone_on_the_day_has_an_honest_path() {
         }
         (g_old, g_new)
     };
-    let run = |swap: bool| {
+    // `catchup`: the new transmitter's slot that is a catch-up group (two
+    // frames here), if any.
+    let run = |swap: bool, catchup: Option<u64>| {
         let book = if swap {
             book_swapped(w, amendment, 181)
         } else {
@@ -4405,19 +4407,31 @@ fn r3_3b_a_transmitter_replaced_alone_on_the_day_has_an_honest_path() {
         let (g_old, g_new) = groups(swap);
         let mut links = honest_links();
         links[SCANNER] = link_of(old_key, &g_old, 1);
-        links.push(link_of(new_key, &g_new, 1));
+        let mut new = link_of(new_key, &g_new, 1);
+        if let Some(slot) = catchup {
+            reseal(&mut new, slot, |f| f.kind = FrameKind::CatchUp);
+            add(&mut new, slot, |f| f.index = 1);
+        }
+        links.push(new);
         verify_book(book, Plan::new(ST, links).events())
     };
-    let r = run(true);
-    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
-    assert_eq!(r.connectivity().holds(), HoldSet::empty());
-    assert!(
-        r.status().holds().is_empty(),
-        "{:?} {:?}",
-        r.status().holds(),
-        r.progress()
-    );
-    let r = run(false);
+    // Its first slot may be a catch-up group: the device could not send
+    // while the old transmitter was out.
+    for catchup in [None, Some(181)] {
+        let r = run(true, catchup);
+        assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+        assert_eq!(r.connectivity().holds(), HoldSet::empty());
+        assert!(
+            r.status().holds().is_empty(),
+            "{:?} {:?}",
+            r.status().holds(),
+            r.progress()
+        );
+    }
+    // A later one, after a whole slot: out of its kind's place.
+    let r = run(true, Some(182));
+    assert_eq!(found(&r, link(new_key)), [LinkProblem::KindOrder; 2]);
+    let r = run(false, None);
     assert!(found(&r, link(new_key)).contains(&LinkProblem::BeforeSwap));
 }
 
@@ -4671,6 +4685,254 @@ fn r3_6_no_loss_pattern_of_three_batches_holds_an_honest_device() {
             sessions_found(&r)
         );
         assert_eq!(r.connectivity().holds(), HoldSet::empty(), "{lost:?}");
+    }
+}
+
+#[test]
+fn r3_7_a_challenged_record_whose_opening_is_not_laid_yet_holds_nothing() {
+    // The audit for finding 4. BOX-1's batch takes counters 1–4; one of
+    // its records (the second by hash) was opened for a challenge, so no
+    // batch attests it. The record and its opening go out in slot 150,
+    // outside every run; the batch and the other three in 151. Until the
+    // opening is laid the record stage counts the challenged record a
+    // member, and the run skips it. Mid-day, with slot 150 lost (declared)
+    // or the opening listed and not laid: nothing. Once the gateway closed
+    // with the opening never laid: `Batch`.
+    let casts: Vec<Cast> = (1..=4).map(|i| cast(B1, i, 1)).collect();
+    let mut sorted = casts.clone();
+    sorted.sort_by_key(|c| ityv_crypto::object_hash(c.event).0);
+    let challenged = sorted[1];
+    let opening = challenge(B1, &challenged);
+    let rest: Vec<Cast> = sorted
+        .iter()
+        .copied()
+        .filter(|c| c.counter != challenged.counter)
+        .collect();
+    let attestation = batch(B1, 0, 1, 4, &codes(&rest));
+    let make_book = |laid: bool| {
+        let mut book = Book::new(election_world());
+        book.w(opened(B1));
+        for c in &casts {
+            book.push(ityv_encoding::SCHEMA_CAST_RECORD, c.event);
+        }
+        if laid {
+            book.push(ityv_encoding::SCHEMA_CHALLENGE_OPENING, opening);
+        }
+        book.push(ityv_encoding::SCHEMA_BATCH_ATTEST, attestation);
+        book
+    };
+    let mut run = std::vec![attestation];
+    run.extend(rest.iter().map(|c| c.event));
+    let links = links_of(&make_book(true));
+    let key = links[SCANNER].key;
+    let unit = links[UNIT].clone();
+    let last = links[SCANNER].frames.last().unwrap().slot;
+    let mut groups = std::vec![
+        (
+            150u64,
+            FrameKind::Normal,
+            with_packages(&[opening, challenged.event]),
+        ),
+        (151, FrameKind::Normal, with_packages(&run)),
+    ];
+    for slot in 152..=last {
+        groups.push((slot, FrameKind::Normal, Vec::new()));
+    }
+    let scanner_link = link_of(key, &groups, 1);
+    // (slot 150 lost, the gateway closed)
+    for (lose, closed) in [(true, false), (false, false), (false, true)] {
+        let drop150 = move |l: usize, f: &Built| {
+            if lose && l == SCANNER && f.slot == 150 {
+                None
+            } else {
+                window(f.slot)
+            }
+        };
+        let declare = move |i: u32, e: &mut SessionLink| {
+            if lose && i == 1 && e.link_id_hash == link(key) {
+                e.missing_slots = 1;
+            }
+        };
+        let mut plan = Plan::new(ST, std::vec![scanner_link.clone(), unit.clone()]);
+        plan.assign = Some(&drop150);
+        plan.tweak_link = Some(&declare);
+        if !closed {
+            plan.tweak_body = Some(&not_final);
+        }
+        let r = verify_book(make_book(false), plan.events());
+        let f = found(&r, link(key));
+        if closed {
+            assert!(f.contains(&LinkProblem::Batch), "{f:?}");
+        } else {
+            assert!(f.is_empty(), "{lose}: {f:?}");
+            assert_eq!(r.connectivity().holds(), HoldSet::empty());
+        }
+    }
+}
+
+#[test]
+fn r3_8_until_a_links_start_is_laid_a_lost_first_slot_may_be_declared() {
+    // The audit for finding 4. Mid-day, BOX-1's opening not laid yet: the
+    // scanner's first slot (150) was lost and the first session declares
+    // it. Until the ledger says where the link starts, the slots of a
+    // window before its first frame may be its own: nothing. The session
+    // may declare no more than those (`MissingSlots`), and once the
+    // opening is laid the count is exact.
+    let make_book = |laid: bool| {
+        let mut book = Book::new(election_world());
+        if laid {
+            book.w(opened(B1));
+        }
+        book
+    };
+    let links = links_of(&make_book(true));
+    let key = links[SCANNER].key;
+    let unit = links[UNIT].clone();
+    let last = links[SCANNER].frames.last().unwrap().slot;
+    let groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=last)
+        .map(|s| (s, FrameKind::Normal, Vec::new()))
+        .collect();
+    let scanner_link = link_of(key, &groups, 1);
+    // (the opening laid, the slots declared, refused)
+    for (laid, declared, refused) in [
+        (false, 1, false),
+        (false, 2, true),
+        (true, 1, false),
+        (true, 0, true),
+    ] {
+        let drop150 = |l: usize, f: &Built| {
+            if l == SCANNER && f.slot == 150 {
+                None
+            } else {
+                window(f.slot)
+            }
+        };
+        let declare = move |i: u32, e: &mut SessionLink| {
+            if i == 1 && e.link_id_hash == link(key) {
+                e.missing_slots = declared;
+            }
+        };
+        let mut plan = Plan::new(ST, std::vec![scanner_link.clone(), unit.clone()]);
+        plan.assign = Some(&drop150);
+        plan.tweak_link = Some(&declare);
+        plan.tweak_body = Some(&not_final);
+        let r = verify_book(make_book(laid), plan.events());
+        let s = sessions_found(&r);
+        assert_eq!(
+            s.contains(&(1, SessionProblem::MissingSlots)),
+            refused,
+            "{laid} {declared}: {s:?}"
+        );
+        if !refused {
+            assert!(s.is_empty(), "{s:?}");
+            assert_eq!(r.connectivity().holds(), HoldSet::empty());
+        }
+    }
+}
+
+#[test]
+fn r3_9_the_stations_opening_waits_for_every_box() {
+    // The audit for finding 4. ST-1 with two boxes; only BOX-2's opening
+    // is laid, two buckets after the opening (BOX-1's is not laid yet). The
+    // check-in unit sends from slot 150. Until every box's opening is laid
+    // the station's opening is not known: mid-day, nothing is before it.
+    // Once the gateway closed with BOX-1 never opened, the unit's frames
+    // before BOX-2's opening are `BeforeOpening`.
+    let w = two_unit_world();
+    let make_book = || {
+        let mut book = Book::new(w);
+        book.w(opened_at(B2, OPEN_BUCKET + 2));
+        book
+    };
+    let links = station_links(w.genesis, &make_book().ledger.events)
+        .remove(0)
+        .1;
+    let unit_key = links[UNIT].key;
+    let first = links[UNIT].frames[0].slot;
+    assert!(first > 150);
+    let per_slot = u16::try_from(
+        links[UNIT]
+            .frames
+            .iter()
+            .filter(|f| f.slot == first)
+            .count(),
+    )
+    .unwrap();
+    // Both links to the end of the last session's window (sessions of six
+    // slots from 150), BOX-2's scanner from its opening.
+    let last = links[UNIT].frames.last().unwrap().slot;
+    let last = 150 + (last - 150) / 6 * 6 + 5;
+    let empty = |from: u64| -> Vec<(u64, FrameKind, Vec<&'static [u8]>)> {
+        (from..=last)
+            .map(|s| (s, FrameKind::Normal, Vec::new()))
+            .collect()
+    };
+    let scanner = link_of(links[SCANNER].key, &empty(first), 1);
+    let unit = link_of(unit_key, &empty(150), per_slot);
+    for closed in [false, true] {
+        let mut plan = Plan::new(ST, std::vec![scanner.clone(), unit.clone()]);
+        if !closed {
+            plan.tweak_body = Some(&not_final);
+        }
+        let r = verify_book(make_book(), plan.events());
+        let f = found(&r, link(unit_key));
+        assert_eq!(f.contains(&LinkProblem::BeforeOpening), closed, "{f:?}");
+        if !closed {
+            assert!(f.is_empty(), "{f:?}");
+            assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+            assert_eq!(r.connectivity().holds(), HoldSet::empty());
+        }
+    }
+}
+
+#[test]
+fn r3_10_until_the_gateway_closed_a_link_may_end_unannounced() {
+    // The audit for finding 4. Mid-day, BOX-1's scanner stops after slot
+    // 161 (its transmitter failed, say, and the swap that replaces it is
+    // not laid yet); the check-in unit sends on to 167. The session over
+    // 162–167 need not count the scanner's slots: a swap that ends its
+    // span may still come. Once the gateway closed they are its missing
+    // slots.
+    let make_book = || {
+        let mut book = Book::new(election_world());
+        book.w(opened(B1));
+        book
+    };
+    let links = links_of(&make_book());
+    let key = links[SCANNER].key;
+    let unit_key = links[UNIT].key;
+    let first = links[UNIT].frames[0].slot;
+    let per_slot = u16::try_from(
+        links[UNIT]
+            .frames
+            .iter()
+            .filter(|f| f.slot == first)
+            .count(),
+    )
+    .unwrap();
+    let empty = |to: u64| -> Vec<(u64, FrameKind, Vec<&'static [u8]>)> {
+        (150..=to)
+            .map(|s| (s, FrameKind::Normal, Vec::new()))
+            .collect()
+    };
+    let scanner = link_of(key, &empty(161), 1);
+    let unit = link_of(unit_key, &empty(167), per_slot);
+    for closed in [false, true] {
+        let mut plan = Plan::new(ST, std::vec![scanner.clone(), unit.clone()]);
+        if !closed {
+            plan.tweak_body = Some(&not_final);
+        }
+        let r = verify_book(make_book(), plan.events());
+        let s = sessions_found(&r);
+        assert_eq!(
+            s.contains(&(3, SessionProblem::MissingSlots)),
+            closed,
+            "{s:?}"
+        );
+        if !closed {
+            assert!(s.is_empty(), "{s:?}");
+            assert_eq!(r.connectivity().holds(), HoldSet::empty());
+        }
     }
 }
 
