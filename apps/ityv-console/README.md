@@ -16,7 +16,7 @@ node scripts/screens.cjs <출력 디렉터리>   # 화면 캡처 검사(아래)
 node scripts/races.cjs                    # 요청 경쟁·오류 경로·CSP 검사(아래)
 ```
 
-`bun run dev`와 `bun run build`는 먼저 `scripts/data.ts`를 돌린다. 이 스크립트는 저장소 루트에서 `cargo build --locked -p ityv-wasm --target wasm32-unknown-unknown --release`와 `cargo run --locked --profile release -p ityv-sim -- public/bundles`를 실행하고 WASM을 `public/`에 복사한다. `ITYV_SIM_SET=quick`이면 빠른 묶음(60개)만, 기본은 전체(63개)를 만든다. `ITYV_SIM_PROFILE`로 cargo 프로필을 바꾼다(`dev`, `test`). 포트는 `PORT`, 주소는 `HOST`(기본 127.0.0.1). `rustup target add wasm32-unknown-unknown`이 먼저 필요하다. 만든 파일(`public/ityv_wasm.wasm`, `public/bundles/`, `dist/`)은 저장소에 넣지 않는다. CI는 `bun run build` 한 경로로 WASM, 빠른 번들, `dist/`를 만든다.
+`bun run dev`와 `bun run build`는 먼저 `scripts/data.ts`를 돌린다. 이 스크립트는 저장소 루트에서 `cargo build --locked -p ityv-wasm --target wasm32-unknown-unknown --release`와 `cargo run --locked --profile release -p ityv-sim -- public/bundles`를 실행하고 WASM을 `public/`에 복사한다. `ITYV_SIM_SET=quick`이면 빠른 묶음(61개)만, 기본은 전체(64개)를 만든다. `ITYV_SIM_PROFILE`로 cargo 프로필을 바꾼다(`dev`, `test`). 포트는 `PORT`, 주소는 `HOST`(기본 127.0.0.1). `rustup target add wasm32-unknown-unknown`이 먼저 필요하다. 만든 파일(`public/ityv_wasm.wasm`, `public/bundles/`, `dist/`)은 저장소에 넣지 않는다. CI는 `bun run build` 한 경로로 WASM, 빠른 번들, `dist/`를 만든다.
 
 ## 무엇을 믿는가
 

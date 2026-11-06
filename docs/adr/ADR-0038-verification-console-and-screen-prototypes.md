@@ -108,3 +108,9 @@
 1. **시뮬레이터.** 배치는 앞 배치 뒤의 카운터를 이으므로 링크의 배치는 가장 오래 기다린 기록을 담는다(출력은 그대로). 장애 `Singled`(기록마다 배치 증명을 다시 붙임)와 `Mislabel`(패키지 뒤의 숨은 바이트를 다른 스키마의 장부 해시로 적음)을 더했다.
 2. **시나리오 2개.** `attack-uplink-singled-records`(82), `attack-uplink-mislabeled-object`(82). 빠른 묶음 60개, 전체 63개. 세 시나리오가 `UplinkObjectInvalid`를 더 건다: `attack-hidden-path-record`(업링크로 오지 않은 기록 자리에서 잃은 바이트 없이 배치의 묶음이 끊김), `attack-tampered-record`(묶음에 기록 단계가 거부해 어느 배치에도 들지 않는 기록), `attack-no-authorization`(투표함 이벤트가 거부되어 기록 단계가 받은 배치가 없으므로 링크의 기록이 어느 배치에도 들지 않음). 나머지 기대 결과는 그대로다.
 3. **콘솔.** 링크 판정 어휘에 `AfterSwap`·`Schema`·`Repeat`·`Time`을 더하고 `KindOrder`·`Batch`의 설명을 넓혔다(23개).
+
+## 개정 6 (2026-11-06, 종류의 자리와 재전송, ADR-0041 2i 셋째 검토)
+
+1. **시뮬레이터.** 닫힌 배치를 다음 창의 첫 슬롯에서 무엇보다 먼저 한 번 더 보낸다(둘째 사본, PROTOCOL §5.8 4항). 마감 슬롯에 나간 배치는 마감 재전송이 둘째 사본이다. 기대 결과는 하나도 바뀌지 않았다. 장애 `WitnessedMidday`(투표 중의 입회 재전송 묶음)를 더했다.
+2. **시나리오 1개.** `attack-uplink-witnessed-midday`(81). 빠른 묶음 61개, 전체 64개. 나머지 기대 결과는 그대로다. 무시 시험 `no_cut_of_an_honest_ledger_holds_a_link`는 정직한 장부를 프레임마다 잘라 연결 보류가 없음을 본다.
+3. **콘솔.** 링크 판정 어휘에 `BeforeSwap`·`Resend`를 더하고 `KindOrder`·`Batch`·`Package`의 설명을 고쳤다(25개).
