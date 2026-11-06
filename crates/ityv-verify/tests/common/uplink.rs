@@ -894,9 +894,10 @@ pub fn with_packages(stream: &[&'static [u8]]) -> Vec<&'static [u8]> {
 }
 
 /// A box's stream from its ledger events in order: each batch attestation
-/// followed by its records (the last `record_count` seen before it) in
-/// record-hash order; progress ticks and challenge openings where they
-/// come.
+/// followed by its records (the first `record_count` seen before it that
+/// no earlier batch took: a batch takes the counters after the previous
+/// one's) in record-hash order; progress ticks and challenge openings
+/// where they come.
 pub fn box_stream(events: &[&'static [u8]]) -> Vec<&'static [u8]> {
     let mut out = Vec::new();
     let mut pending: Vec<&'static [u8]> = Vec::new();
@@ -908,7 +909,7 @@ pub fn box_stream(events: &[&'static [u8]]) -> Vec<&'static [u8]> {
             let n = decode_object::<BatchAttest<'_>>(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, e)
                 .map_or(pending.len(), |b| usize::from(b.body().record_count()));
             let take = n.min(pending.len());
-            let mut group: Vec<&'static [u8]> = pending.split_off(pending.len() - take);
+            let mut group: Vec<&'static [u8]> = pending.drain(..take).collect();
             group.sort_by_key(|r| object_hash(r).0);
             out.push(*e);
             out.extend(group);

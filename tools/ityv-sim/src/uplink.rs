@@ -695,9 +695,10 @@ impl<'e> Gateways<'e> {
             Some(s) if s == SCHEMA_BATCH_ATTEST => {
                 let n = decode_object::<BatchAttest<'_>>(s, schema_version(s), event)
                     .map_or(0, |b| usize::from(b.body().record_count()));
+                // The batch takes the counters after the previous one's:
+                // the oldest records no batch has taken.
                 let take = n.min(link.unbatched.len());
-                let at = link.unbatched.len() - take;
-                let mut records = link.unbatched.split_off(at);
+                let mut records: Vec<&'static [u8]> = link.unbatched.drain(..take).collect();
                 records.sort_by_key(|r| object_hash(r).0);
                 link.batches.push(event);
                 for r in records {
