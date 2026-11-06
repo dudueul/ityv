@@ -810,9 +810,46 @@ fn session_keys<'a>(
         .collect()
 }
 
+/// Every genesis state's roster, proved once, with each signer's entries.
+struct Rosters<'a> {
+    states: Vec<Vec<RosterEntry<'a>>>,
+    by_signer: Vec<BTreeMap<&'a [u8], Vec<usize>>>,
+}
+
+impl<'a> Rosters<'a> {
+    fn new(genesis: &VerifiedGenesis<'a>) -> Self {
+        let states: Vec<Vec<RosterEntry<'a>>> = (0..genesis.state_count())
+            .map(|k| genesis.roster_at(k))
+            .collect();
+        let by_signer = states
+            .iter()
+            .map(|roster| {
+                let mut map: BTreeMap<&'a [u8], Vec<usize>> = BTreeMap::new();
+                for (i, r) in roster.iter().enumerate() {
+                    map.entry(r.get().signer_id.as_bytes()).or_default().push(i);
+                }
+                map
+            })
+            .collect();
+        Self { states, by_signer }
+    }
+
+    /// The entries of signer `id` in state `state`.
+    fn signer<'s>(&'s self, state: usize, id: &[u8]) -> impl Iterator<Item = &'s RosterEntry<'a>> {
+        let roster = self.states.get(state);
+        self.by_signer
+            .get(state)
+            .and_then(|m| m.get(id))
+            .into_iter()
+            .flatten()
+            .filter_map(move |i| roster.and_then(|r| r.get(*i)))
+    }
+}
+
 struct Work<'g, 'a> {
     genesis: &'g VerifiedGenesis<'a>,
     index: &'g LedgerIndex<'a>,
+    rosters: &'g Rosters<'a>,
     links: BTreeMap<[u8; 64], LinkInfo<'a>>,
     per_link: BTreeMap<[u8; 64], LinkWork<'a>>,
     stations: BTreeMap<&'a [u8], StationWork<'a>>,
@@ -906,10 +943,9 @@ impl<'a> Work<'_, 'a> {
                 return false;
             }
             (0..=state).any(|k| {
-                self.genesis.roster_at(k).iter().any(|r| {
+                self.rosters.signer(k, o.observer_id.as_bytes()).any(|r| {
                     let r = r.get();
-                    r.signer_id.as_bytes() == o.observer_id.as_bytes()
-                        && r.role == RosterRole::Observer
+                    r.role == RosterRole::Observer
                         && r.org_id.as_bytes() == o.org_id.as_bytes()
                         && r.station_id.is_some_and(|s| s.as_bytes() == station)
                         && Material::new(core::iter::once((o.sig, r.key)))
@@ -1948,6 +1984,7 @@ fn fully_compared<'a>(audit: &AuditStage<'a>) -> BTreeMap<&'a [u8], bool> {
 fn incident<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
+    rosters: &Rosters<'a>,
     compared: &BTreeMap<&'a [u8], bool>,
     seq: Seq,
     event: &WitnessedEvent<'a>,
@@ -1957,7 +1994,7 @@ fn incident<'a>(
         .ok()?;
     let parts = *body.parts();
     let state = index.state_at(seq);
-    let signers = people_signed(genesis, state, event);
+    let signers = people_signed(genesis, rosters, state, event);
     // The box is at that station (in some state). The index already
     // refuses an event naming a station or box no state has (§14 3), and
     // the decoder a box without its station.
@@ -2026,12 +2063,12 @@ struct Signers<'a> {
 /// that signer, role and organisation (`ityv_state::check_incident_signers`).
 fn people_signed<'a>(
     genesis: &VerifiedGenesis<'a>,
+    rosters: &Rosters<'a>,
     state: usize,
     event: &WitnessedEvent<'_>,
 ) -> Option<Signers<'a>> {
     let purpose = Purpose::new(event.purpose())?;
-    let rosters: Vec<Vec<RosterEntry<'a>>> = (0..=state).map(|k| genesis.roster_at(k)).collect();
-    let in_force = rosters.last()?;
+    let in_force = rosters.states.get(state)?;
     let committee = genesis.genesis().committee_key();
     let mut keys: Vec<RosterEntry<'a>> = Vec::new();
     let mut pairs = Vec::new();
@@ -2045,19 +2082,19 @@ fn people_signed<'a>(
             pairs.push((s.sig, committee));
             continue;
         }
-        let entry = *rosters.iter().rev().flatten().find(|r| {
-            r.get().signer_id.as_bytes() == s.signer_id.as_bytes()
-                && Material::new(core::iter::once((s.sig, r.get().key)))
+        let entry = *(0..=state)
+            .rev()
+            .flat_map(|k| rosters.signer(k, s.signer_id.as_bytes()))
+            .find(|r| {
+                Material::new(core::iter::once((s.sig, r.get().key)))
                     .is_some_and(|m| m.verify(&purpose, event.body_bytes()).is_some())
-        })?;
+            })?;
         if s.role == EventRole::Clerk {
             // The roster entry in force names the clerk's station.
-            let station = in_force
-                .iter()
+            let station = rosters
+                .signer(state, s.signer_id.as_bytes())
                 .map(ityv_state::Entry::get)
-                .find(|r| {
-                    r.signer_id.as_bytes() == s.signer_id.as_bytes() && r.role == RosterRole::Clerk
-                })
+                .find(|r| r.role == RosterRole::Clerk)
                 .and_then(|r| r.station_id);
             out.clerk_stations.push(station);
         }
@@ -2095,9 +2132,11 @@ pub fn verify_connectivity<'a>(
         HoldReason::ConnectivityManifest,
     );
     let mut boxes: BTreeMap<&'a [u8], HoldSet> = BTreeMap::new();
+    let rosters = Rosters::new(genesis);
     let mut work = Work {
         genesis,
         index,
+        rosters: &rosters,
         links: links(genesis),
         per_link: BTreeMap::new(),
         stations: BTreeMap::new(),
@@ -2152,7 +2191,7 @@ pub fn verify_connectivity<'a>(
                 continue;
             };
             if w.body_schema() == SCHEMA_CONNECTIVITY_INCIDENT_BODY
-                && let Some(report) = incident(genesis, index, &compared, e.seq, &w)
+                && let Some(report) = incident(genesis, index, &rosters, &compared, e.seq, &w)
             {
                 incidents.push(report);
             }
