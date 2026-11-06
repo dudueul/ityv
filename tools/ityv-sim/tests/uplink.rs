@@ -64,15 +64,24 @@ fn every_clean_ledger_has_whole_sessions_from_every_gateway() {
             for l in &st.links {
                 assert!(l.findings.is_empty(), "{name}: {:?}", l.findings);
                 assert_eq!(l.missing_slots, 0);
-                assert_eq!(l.opaque_chunks, 0);
                 assert!(l.included > 0);
-                // Every slot whole: the reference shape of 16 or 4 frames.
+                // Every slot whole: the reference shape of 16 or 4 frames;
+                // a scanner's last slot (its closing tick's) is a catch-up
+                // slot of 64, the close resend of its batches. Only its
+                // share packages are sealed.
                 let (first, last) = l.slots.unwrap();
-                let per_slot = match l.device {
-                    ityv_verify::LinkDevice::Box(_) => 16,
-                    ityv_verify::LinkDevice::Unit(_) => 4,
-                };
-                assert_eq!(l.frames, (last - first + 1) * per_slot);
+                match l.device {
+                    ityv_verify::LinkDevice::Box(_) => {
+                        assert_eq!(l.frames, (last - first) * 16);
+                        assert_eq!(l.catchup_frames, 64);
+                        assert!(l.opaque_chunks > 0, "{name}");
+                    }
+                    ityv_verify::LinkDevice::Unit(_) => {
+                        assert_eq!(l.frames, (last - first + 1) * 4);
+                        assert_eq!(l.catchup_frames, 0);
+                        assert_eq!(l.opaque_chunks, 0);
+                    }
+                }
             }
         }
     }
@@ -119,7 +128,8 @@ fn each_connectivity_scenario_shows_what_it_injected() {
         ("attack-uplink-injected-frame", LinkProblem::Signature, 1),
         ("fault-uplink-padding", LinkProblem::Fill, 1),
         ("fault-uplink-extra-frame", LinkProblem::Index, 1),
-        ("fault-uplink-after-close", LinkProblem::AfterClose, 16),
+        ("attack-uplink-covert-bytes", LinkProblem::NotObject, 1),
+        ("attack-uplink-relisted-object", LinkProblem::Signature, 1),
     ] {
         let r = report(&all[name]);
         let found = link_problems(&r, "ST-HB-1");
@@ -127,6 +137,32 @@ fn each_connectivity_scenario_shows_what_it_injected() {
         assert!(found.iter().all(|p| *p == problem), "{name}: {found:?}");
         assert!(station(&r, "ST-HB-1").findings.is_empty(), "{name}");
     }
+    // Normal frames after the close resend: after the close, and after a
+    // resend.
+    let r = report(&all["fault-uplink-after-close"]);
+    let found = link_problems(&r, "ST-HB-1");
+    assert_eq!(found.len(), 32, "{found:?}");
+    assert_eq!(
+        found
+            .iter()
+            .filter(|p| **p == LinkProblem::AfterClose)
+            .count(),
+        16
+    );
+    assert!(
+        found
+            .iter()
+            .all(|p| matches!(p, LinkProblem::AfterClose | LinkProblem::KindOrder))
+    );
+    // A frame of the closing batch lost and declared: the close resend
+    // brings the batch again, and nothing holds.
+    let r = report(&all["fault-uplink-recovered-loss"]);
+    let s = station(&r, "ST-HB-1");
+    assert!(s.findings.is_empty(), "{:?}", s.findings);
+    assert!(s.outside.is_empty(), "{:?}", s.outside);
+    assert!(link_problems(&r, "ST-HB-1").is_empty());
+    assert_eq!(s.links[0].missing_slots + s.links[1].missing_slots, 1);
+    assert_eq!(r.connectivity().holds(), ityv_state::HoldSet::empty());
 
     let r = report(&all["attack-uplink-batch-order"]);
     let found = link_problems(&r, "ST-HB-1");

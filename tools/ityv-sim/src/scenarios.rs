@@ -842,7 +842,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             (
                 "미러 사본의 바뀐 바이트",
                 "프레임은 그대로 두고, 함께 공표한 이벤트 가운데 기록 하나의 마지막 바이트를 바꿨다(미러가 사본을 고친 경우).",
-                "프레임이 가리키는 해시의 이벤트가 없어 그 프레임이 거부되고 장부 전체가 HOLD_REVIEW(LedgerUnchecked). 그 기록이 빠지므로 배치·마감 수량·교부 등식·집계 범위도 함께 어긋난다.",
+                "프레임이 가리키는 해시의 이벤트가 없어 그 프레임이 거부되고 장부 전체가 HOLD_REVIEW(LedgerUnchecked). 그 기록이 빠지므로 배치·마감 수량·교부 등식·집계 범위도 함께 어긋난다. 스캐너가 그 기록 뒤에 보낸 봉인 share 패키지는 받아들여진 기록 어느 것도 가리키지 않으므로 UplinkObjectInvalid(NotOnLedger)도 걸린다.",
             ),
             hold(&[
                 H::LedgerUnchecked,
@@ -853,6 +853,7 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::RecordSetMismatch,
                 H::TallyScopeMismatch,
                 H::AggregateMismatch,
+                H::UplinkObjectInvalid,
             ]),
             Vec::new(),
         ));
@@ -1712,6 +1713,7 @@ fn connectivity_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
             Fault::Lose {
                 device: scanner,
                 slot: open + 5,
+                index: 0,
             },
         );
         out.push(bld.scenario(
@@ -1720,10 +1722,88 @@ fn connectivity_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
             a,
             (
                 "잃어버린 프레임",
-                "한빛초등학교 체육관 스캐너의 첫 세션 마지막 슬롯 첫 프레임이 회선에서 사라졌다. 게이트웨이는 그 슬롯을 빠진 슬롯으로 정직하게 적었지만, 그 프레임이 나르던 진행 기록은 다시 오지 않았다.",
+                "한빛초등학교 체육관 스캐너의 첫 세션 마지막 슬롯 첫 프레임이 회선에서 사라졌다. 게이트웨이는 그 슬롯을 빠진 슬롯으로 정직하게 적었지만, 그 프레임이 나르던 진행 기록은 다시 오지 않았다(진행 기록은 자기 슬롯에 한 번만 보낸다).",
                 "세션은 받는다. 그러나 장부의 그 진행 기록들이 장치의 받은 프레임 어디에도 없어 그 투표함이 HOLD_REVIEW(UplinkObjectOutside).",
             ),
             hold(&[H::UplinkObjectOutside]),
+            Vec::new(),
+        ));
+    }
+    // A frame of the closing batch lost, declared, and brought again by the
+    // close resend (honest line loss, VC-078–080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let close = e.link_slots(scanner).1;
+        uplink_fault(
+            &mut bld,
+            st,
+            None,
+            Fault::Lose {
+                device: scanner,
+                slot: close,
+                index: 1,
+            },
+        );
+        out.push(bld.scenario(
+            "fault-uplink-recovered-loss",
+            q,
+            a,
+            (
+                "되찾은 프레임",
+                "한빛초등학교 체육관 스캐너의 마감 슬롯에서 마감 배치(배치 증명, 기록, 봉인 share 패키지)를 실은 프레임이 회선에서 사라졌다. 게이트웨이는 그 슬롯을 빠진 슬롯으로 정직하게 적었고, 같은 슬롯의 마감 재전송이 그 배치를 다시 실어 왔다.",
+                "CRYPTO_TALLY_VERIFIED. 보류 없음. 흐름은 잃은 프레임만큼 건너뛰고(그 자리의 번호는 받지 못했다), 잃은 범위 뒤의 기록은 증명을 잃은 배치의 꼬리로 읽히며, 모든 기록이 재전송의 받은 프레임 안에 있고 그 덩어리가 장부의 객체로 다시 계산된다.",
+            ),
+            expected(Status::CryptoTallyVerified, &[]),
+            Vec::new(),
+        ));
+    }
+    // Bytes that are no object, next to a silent slot (ADR-0041 decision 3).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Covert {
+                device: scanner,
+                slot: open + 3,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-covert-bytes",
+            q,
+            a,
+            (
+                "건너뛴 슬롯 옆의 숨은 바이트",
+                "한빛초등학교 체육관 스캐너가 넷째 슬롯 첫 프레임에 어느 객체도 아닌 3,000바이트를 싣고 객체 목록에는 아무것도 적지 않은 채 서명했다. 다음 슬롯에는 아무것도 보내지 않고, 그다음 슬롯은 그 바이트보다 한 바이트 뒤에서 이어 갔다. 게이트웨이는 빈 슬롯을 빠진 슬롯으로 정직하게 적었다.",
+                "프레임의 서명된 목록이 데이터를 덮지 않아 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid). 건너뛴 한 바이트는 받지 못한 자리를 넘지 않으므로 위반이 아니다.",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
+    // The gateway's own list for a frame the device signed (VC-078, VC-080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Relist {
+                device: scanner,
+                slot: open + 5,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-relisted-object",
+            q,
+            a,
+            (
+                "게이트웨이가 바꿔 적은 객체",
+                "한빛초등학교 체육관 게이트웨이가 첫 세션 마지막 슬롯의 데이터 프레임을 기록하면서 장치가 적은 객체 목록의 첫 객체를 다른 해시로 바꿔 적고, 그 머리로 사슬을 이었다.",
+                "장치의 서명은 장치가 적은 목록의 해시를 덮으므로 그 프레임은 서명이 맞지 않아 받은 프레임이 아니다. 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid), 그 프레임이 나르던 진행 기록이 받은 프레임 어디에도 없어 UplinkObjectOutside.",
+            ),
+            hold(&[H::UplinkFrameInvalid, H::UplinkObjectOutside]),
             Vec::new(),
         ));
     }

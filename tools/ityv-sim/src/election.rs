@@ -1627,7 +1627,10 @@ impl Election {
             commitments: Commitments::new(&points).unwrap(),
             proof: leak_slice(buf),
             module_counters: ModuleCounters::new(&counters).unwrap(),
-            share_package_hash: hash_of("share-package", &tag),
+            share_package_hash: object_hash(crate::util::share_package(
+                bx.id.as_bytes(),
+                &points.iter().flat_map(|p| p.0).collect::<Vec<u8>>(),
+            )),
             transport_flags: 0,
         })
         .unwrap();
