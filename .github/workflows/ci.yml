@@ -158,7 +158,10 @@ jobs:
     # on one machine against a872df7: the rebuild 75.3 s both times, the
     # tests 41.9 to 52.3 s): about 1.15 times the work, so ityv-verify has sixteen
     # shards of about 3.2 hours, the slowest about 3.8. ityv-state has 783
-    # (781), so its two shards stay.
+    # (781), so its two shards stay. The fourth review brings ityv-verify
+    # to 2,298 mutants and ityv-state to 784, each about 1.02 times as dear
+    # (against 20758e8: the rebuild 72.5-73.1 to 72.7-75.2 s, the tests
+    # 51.9 to 53.1 s): about 1.03 times the work, so the shards stay.
     strategy:
       fail-fast: false
       matrix:
