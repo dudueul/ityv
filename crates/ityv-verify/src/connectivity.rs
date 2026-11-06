@@ -56,8 +56,8 @@
 //!    no more slots than its bytes need at the catch-up shape and its
 //!    slots that fell short. The close is the box's (the station's last,
 //!    for a check-in unit), laid, or while it is not as the device's
-//!    frames state it (its first close resend, or its first catch-up group
-//!    nothing explains); while neither says, the kinds' slots wait.
+//!    frames state it (its first close resend); while neither says, the
+//!    kinds' slots wait.
 //!    Nothing but resends follows a close resend and nothing but
 //!    witnessed resends follows a witnessed resend; the
 //!    payload root rebuilt from the published data leaves and the zero
@@ -1777,26 +1777,13 @@ impl SlotFacts {
 }
 
 /// The slot a device's own frames say it closed in: its first close
-/// resend, or its first catch-up group that no slot before explains
-/// (PROTOCOL.md §5.8 item 3: the catch-up shape at the close).
-fn close_statement(
-    frames: &[Frame<'_>],
-    start: Option<u64>,
-    normal: u16,
-    catchup: u16,
-) -> Option<u64> {
-    let facts = SlotFacts::of(frames.iter());
-    let resend = frames
+/// resend (PROTOCOL.md §5.8 item 3). A catch-up group says nothing until
+/// the close is known: it may follow a slot that fell short.
+fn close_statement(frames: &[Frame<'_>]) -> Option<u64> {
+    frames
         .iter()
         .find(|f| f.entry.kind == FrameKind::CloseResend)
-        .map(|f| f.entry.slot);
-    let unexplained = facts
-        .backlog
-        .iter()
-        .filter(|(s, (k, _))| *k && !facts.explained(**s, start, normal, catchup))
-        .map(|(s, _)| *s)
-        .next();
-    resend.into_iter().chain(unexplained).min()
+        .map(|f| f.entry.slot)
 }
 
 /// The frame rules of one link (VC-078): the per-frame findings, whether
@@ -1826,7 +1813,7 @@ fn judge_frames(
     // Signatures, numbers, windows, opening, close and swaps, padding
     // proofs.
     let mut reached = 0u8;
-    let mut shapes: BTreeMap<u64, (bool, bool)> = BTreeMap::new();
+    let mut shapes: BTreeMap<u64, u8> = BTreeMap::new();
     // Whether each frame kept the order of kinds (the kinds' slots are
     // judged below, once the span is known).
     let mut in_order = Vec::with_capacity(work.frames.len());
@@ -1900,7 +1887,13 @@ fn judge_frames(
         if root != Some(e.payload_root) {
             report.findings.push(finding(f, LinkProblem::Fill));
         }
-        let shape = (e.kind.uses_catchup(), e.kind == FrameKind::WitnessedResend);
+        // The slot's kind group: normal; catch-up and close resend;
+        // witnessed resend.
+        let shape = match e.kind {
+            FrameKind::Normal => 0u8,
+            FrameKind::CatchUp | FrameKind::CloseResend => 1,
+            FrameKind::WitnessedResend => 2,
+        };
         if *shapes.entry(e.slot).or_insert(shape) != shape {
             report.findings.push(finding(f, LinkProblem::Shape));
         }
@@ -3357,19 +3350,14 @@ pub fn verify_connectivity<'a>(
         // Each opened box: its first `BoxOpened`'s frame and slot, and its
         // close slot, laid or (while it is not) as its device's frames
         // state it.
-        let scanner_shape = manifest
-            .frame_link(DeviceClass::CommitmentUnit)
-            .map_or((0, 0), |e| (e.frames_per_slot, e.catchup_frames_per_slot));
-        let close_of = |b: &[u8], opening: Option<u64>| {
+        let close_of = |b: &[u8]| {
             close_slot(index, b).or_else(|| {
                 station_links
                     .iter()
                     .filter(
                         |(_, lw)| matches!(lw.info.device, LinkDevice::Box(x) if x.as_bytes() == b),
                     )
-                    .filter_map(|(_, lw)| {
-                        close_statement(&lw.frames, opening, scanner_shape.0, scanner_shape.1)
-                    })
+                    .filter_map(|(_, lw)| close_statement(&lw.frames))
                     .max()
             })
         };
@@ -3392,10 +3380,7 @@ pub fn verify_connectivity<'a>(
             .min_by_key(|q| q.get())
             .filter(|_| every_box);
         // The station's last close once every opened box closed.
-        let box_closes: Vec<Option<u64>> = opened
-            .iter()
-            .map(|(b, _, slot)| close_of(b, Some(*slot)))
-            .collect();
+        let box_closes: Vec<Option<u64>> = opened.iter().map(|(b, _, _)| close_of(b)).collect();
         let last_close = if every_box && box_closes.iter().all(Option::is_some) {
             box_closes.iter().flatten().max().copied()
         } else {
@@ -3425,7 +3410,7 @@ pub fn verify_connectivity<'a>(
                     let close = close_slot(index, b.as_bytes());
                     let first = opening_of(index, b.as_bytes());
                     let opening = first.map(|(_, slot)| slot);
-                    let closing = opening.and_then(|o| close_of(b.as_bytes(), Some(o)));
+                    let closing = opening.and(close_of(b.as_bytes()));
                     // Each frame key from the event that brought it in to
                     // the one that brought in the next.
                     let keys = box_keys(genesis, index, b.as_bytes(), first.map(|(seq, _)| seq));
