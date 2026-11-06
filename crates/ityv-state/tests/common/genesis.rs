@@ -190,6 +190,7 @@ fn genesis_box(
     profile: CaptureProfile,
     route: &'static [u8],
     device: &'static [u8; HYBRID_VK_LEN],
+    frame: u8,
 ) -> GenesisBox<'static> {
     GenesisBox {
         box_id: BoxId::new(id).unwrap(),
@@ -200,25 +201,29 @@ fn genesis_box(
         reporting_unit_id: ReportingUnitId::new(b"RU-1").unwrap(),
         device_key: device,
         attest_key: registered(90),
-        frame_key: frame_key(device[0]),
+        frame_key: frame_key(frame),
         modules: modules(),
     }
 }
 
-/// A frame key, distinct per seed (`ityv-state` does not read it).
+/// A frame key, distinct per seed (a box stream keeps it across a swap).
 fn frame_key(seed: u8) -> &'static [u8; 32] {
     leak([seed; 32])
 }
 
+/// The boxes, `BOX-001` with device key `device`. Its transmitter (frame
+/// key) stays across the amendment that replaces its device: the swap
+/// changes the device key alone.
 fn boxes(profile: CaptureProfile, device: &'static [u8; HYBRID_VK_LEN]) -> Set {
     Set::of(std::vec![
-        genesis_box(BOX, STATION, profile, b"R-1", device),
+        genesis_box(BOX, STATION, profile, b"R-1", device, 50),
         genesis_box(
             b"BOX-002",
             b"ST-2",
             CaptureProfile::InPerson,
             b"R-2",
-            registered(66)
+            registered(66),
+            66
         ),
     ])
 }
