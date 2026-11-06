@@ -2826,13 +2826,14 @@ enum Intro {
 }
 
 /// Whether the amendment that created genesis state `state` (none for the
-/// genesis) is laid before frame `before`.
+/// genesis) is laid before frame `before` (never the same frame: one
+/// frame holds one event).
 fn amended_before(index: &LedgerIndex<'_>, state: usize, before: Option<Seq>) -> bool {
     state
         .checked_sub(1)
         .and_then(|k| index.amendment_frames().get(k).copied())
         .zip(before)
-        .is_some_and(|(a, b)| a.get() < b.get())
+        .is_some_and(|(a, b)| a.get().cmp(&b.get()) == Ordering::Less)
 }
 
 /// The links of `box_id`'s frame keys in the order the genesis states
