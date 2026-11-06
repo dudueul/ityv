@@ -5306,6 +5306,7 @@ fn r3_8_until_a_links_start_is_laid_a_lost_first_slot_may_be_declared() {
         (false, 2, true),
         (true, 1, false),
         (true, 0, true),
+        (true, 2, true),
     ] {
         let drop150 = |l: usize, f: &Built| {
             if l == SCANNER && f.slot == 150 {
