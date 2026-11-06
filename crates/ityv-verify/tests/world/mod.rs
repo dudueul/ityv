@@ -1522,7 +1522,7 @@ pub(crate) fn roll() -> Vec<(SchemaId, &'static [u8])> {
 }
 
 /// The draft of [`election_world`].
-fn election_draft() -> Draft {
+pub(crate) fn election_draft() -> Draft {
     let mut d = draft();
     d.boxes.retain(|b| b.box_id.as_bytes() == B1.id);
     d.stations.truncate(1);
