@@ -254,9 +254,11 @@ impl<const N: usize> Stream<N> {
         Ok(true)
     }
 
-    /// Continues after a device swap from the counts the swap record
-    /// confirms; the slots of the swap itself are excused.
-    fn swap(&mut self, at_slot: u64, counts: [u64; N]) {
+    /// Continues after a swap from the counts the swap record confirms.
+    /// After a new device (`new_device`) the slots of the swap itself are
+    /// excused; a transmitter replaced alone leaves the same device
+    /// running, which still owes every tick.
+    fn swap(&mut self, at_slot: u64, counts: [u64; N], new_device: bool) {
         if self.closed || at_slot < self.next_slot.saturating_sub(1) {
             self.hold();
         }
@@ -268,7 +270,9 @@ impl<const N: usize> Stream<N> {
             self.hold();
         }
         self.last = counts;
-        self.next_slot = self.next_slot.max(at_slot);
+        if new_device {
+            self.next_slot = self.next_slot.max(at_slot);
+        }
     }
 
     /// The holds at close: the stream's own and a final mismatch.
@@ -351,7 +355,8 @@ impl<'a> BoxStream<'a> {
     /// later state of the genesis the stream was opened with (PROTOCOL.md
     /// §4.3), and the slot and sheets-in count the on-site `swap` record
     /// confirms (§7.10 item 8). A count the signers could not read holds
-    /// the stream.
+    /// the stream. A spare unit continues from the swap's slot; the same
+    /// unit with a spare transmitter still owes a tick for every slot.
     ///
     /// # Errors
     /// [`Error::StaleEntry`] unless `amended` is a later state of the
@@ -376,10 +381,11 @@ impl<'a> BoxStream<'a> {
         {
             return Err(Error::Mismatch);
         }
+        let new_device = e.device_key != self.key;
         self.anchor = anchor;
         self.key = e.device_key;
         self.frame_key = e.frame_key;
-        self.inner.swap(p.at_slot, [p.sheets_in]);
+        self.inner.swap(p.at_slot, [p.sheets_in], new_device);
         self.inner.holds = self
             .inner
             .holds
@@ -501,7 +507,7 @@ impl<'a> CheckinStream<'a> {
         }
         self.unit_id = self.spare.unit_id;
         self.key = self.spare.key;
-        self.inner.swap(p.at_slot, p.counts());
+        self.inner.swap(p.at_slot, p.counts(), true);
         self.inner.holds = self
             .inner
             .holds

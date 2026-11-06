@@ -215,8 +215,14 @@ fn frame_key(seed: u8) -> &'static [u8; 32] {
 /// key) stays across the amendment that replaces its device: the swap
 /// changes the device key alone.
 fn boxes(profile: CaptureProfile, device: &'static [u8; HYBRID_VK_LEN]) -> Set {
+    boxes_with(profile, device, 50)
+}
+
+/// The boxes, `BOX-001` with device key `device` and the frame key of
+/// seed `frame`.
+fn boxes_with(profile: CaptureProfile, device: &'static [u8; HYBRID_VK_LEN], frame: u8) -> Set {
     Set::of(std::vec![
-        genesis_box(BOX, STATION, profile, b"R-1", device, 50),
+        genesis_box(BOX, STATION, profile, b"R-1", device, frame),
         genesis_box(
             b"BOX-002",
             b"ST-2",
@@ -355,6 +361,7 @@ pub(crate) struct Built {
     pub(crate) sets: Vec<Set>,
     pub(crate) profile: CaptureProfile,
     amended: OnceLock<(&'static Genesis<'static>, Entry<GenesisBox<'static>>)>,
+    transmitter: OnceLock<(&'static Genesis<'static>, Entry<GenesisBox<'static>>)>,
 }
 
 /// Signatures of the commission, the committee and the witnesses `who`
@@ -466,6 +473,11 @@ impl Built {
     /// The amendment body that registers the spare device for `BOX-001`.
     pub(crate) fn amendment_body(&self, seq: u64, previous: Hash512) -> &'static [u8] {
         let new_boxes = boxes(self.profile, key_bytes(&spare_device_key().verifying_key()));
+        self.amendment_of(seq, previous, &new_boxes)
+    }
+
+    /// The amendment body that replaces the box set with `new_boxes`.
+    fn amendment_of(&self, seq: u64, previous: Hash512, new_boxes: &Set) -> &'static [u8] {
         let mut sets = [SetCommitment {
             count: 0,
             root: Hash512::ZERO,
@@ -502,14 +514,30 @@ impl Built {
     }
 
     fn amend_once(&self) -> (&'static Genesis<'static>, Entry<GenesisBox<'static>>) {
-        let body = self.amendment_body(1, self.pin);
+        let new_boxes = boxes(self.profile, key_bytes(&spare_device_key().verifying_key()));
+        self.amend_to(&new_boxes)
+    }
+
+    /// The genesis amended to a spare transmitter for `BOX-001` (a new
+    /// frame key, the same device key), and the new box entry.
+    pub(crate) fn transmitter(&self) -> (&'static Genesis<'static>, Entry<GenesisBox<'static>>) {
+        *self.transmitter.get_or_init(|| {
+            self.amend_to(&boxes_with(
+                self.profile,
+                key_bytes(&device_key().verifying_key()),
+                51,
+            ))
+        })
+    }
+
+    fn amend_to(&self, new_boxes: &Set) -> (&'static Genesis<'static>, Entry<GenesisBox<'static>>) {
+        let body = self.amendment_of(1, self.pin, new_boxes);
         let (signed, tokens) = seal(body, b"genesis-amendment", &SIGNERS);
         let amended = leak(
             self.genesis
                 .amend(signed, tokens, self.witnesses(&SIGNERS))
                 .unwrap(),
         );
-        let new_boxes = boxes(self.profile, key_bytes(&spare_device_key().verifying_key()));
         let (bytes, index, proof) = new_boxes.find(BOX);
         let entry = amended.entry(bytes, index, proof).unwrap();
         (amended, entry)
@@ -664,6 +692,7 @@ pub(crate) fn built(legal: Hash512, profile: CaptureProfile) -> &'static Built {
         sets,
         profile,
         amended: OnceLock::new(),
+        transmitter: OnceLock::new(),
     };
     let built: &'static Built = Box::leak(Box::new(built));
     cache.push((key, built));
