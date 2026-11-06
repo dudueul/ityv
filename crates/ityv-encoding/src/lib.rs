@@ -156,7 +156,7 @@ pub use schema::scan_count::{
 };
 pub use schema::share_package::{
     ChamberCode, MAX_CIPHERTEXT_LEN, MAX_ENTRIES, MAX_SECRETS, MemberShare, ShareEntry,
-    SharePackage, Transport, pad_fields_valid, transport_code_valid,
+    SharePackage, Transport, max_package_len, pad_fields_valid, transport_code_valid,
 };
 pub use schema::slip::{MAX_SLIP_BODY_LEN, MAX_TRACKING_CODES, Slip, SlipBody};
 pub use schema::tally::{

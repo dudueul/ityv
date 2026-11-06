@@ -31,6 +31,30 @@ pub const MAX_CIPHERTEXT_LEN: usize = 4096;
 /// Maximum number of secrets shared with one member (7 modules × 8 chunks + 2).
 pub const MAX_SECRETS: usize = 58;
 
+/// The longest encoded entry: a 64-byte trustee identifier with its length
+/// prefix, the chamber and transport codes, the pad fields, a 4,096-byte
+/// ciphertext with its length prefix and the tag.
+const MAX_ENTRY_LEN: usize = (4 + 64) + 1 + 1 + 4 + 8 + (4 + MAX_CIPHERTEXT_LEN) + TAG_LEN;
+
+/// The longest encoded package without entries: the object header, two
+/// 64-byte identifiers with their length prefixes, eight commitments with
+/// their count, and the entry count.
+const MAX_FIXED_LEN: usize = crate::HEADER_LEN + 2 * (4 + 64) + (4 + 8 * 32) + 4;
+
+/// The longest `SharePackage` object (header included) with at most
+/// `members` entries, `members` capped at [`MAX_ENTRIES`]: what an
+/// election of that many trustee members allows a sealed package on an
+/// uplink to be (ADR-0041 decision 6).
+#[must_use]
+pub const fn max_package_len(members: usize) -> usize {
+    let n = if members < MAX_ENTRIES {
+        members
+    } else {
+        MAX_ENTRIES
+    };
+    MAX_FIXED_LEN + n * MAX_ENTRY_LEN
+}
+
 /// Chamber code of a share entry (PROTOCOL.md §4.1, ADR-0019).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u8)]
