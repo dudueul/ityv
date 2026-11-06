@@ -182,6 +182,16 @@ fn each_connectivity_scenario_shows_what_it_injected() {
         "{found:?}"
     );
     assert!(station(&r, "ST-HB-1").outside.is_empty());
+    // A witnessed-resend group during voting (review 3 of 2i, finding 1):
+    // it and every normal frame after it are out of their kind's place.
+    let r = report(&all["attack-uplink-witnessed-midday"]);
+    let found = link_problems(&r, "ST-HB-1");
+    assert!(found.len() > 64, "{}", found.len());
+    assert!(
+        found.iter().all(|p| *p == LinkProblem::KindOrder),
+        "{found:?}"
+    );
+    assert!(station(&r, "ST-HB-1").outside.is_empty());
     // Covert bytes under the hash of a ledger event of another schema
     // (review 2 of 2i, A).
     let r = report(&all["attack-uplink-mislabeled-object"]);

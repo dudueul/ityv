@@ -149,6 +149,15 @@ pub enum Fault {
         /// The device.
         device: Device,
     },
+    /// In `slot`, during voting, the device sends a witnessed-resend group
+    /// (the catch-up shape, nothing in it) as if it were at the counting
+    /// centre (review 3 of 2i, finding 1).
+    WitnessedMidday {
+        /// The device.
+        device: Device,
+        /// The slot.
+        slot: u64,
+    },
     /// After the share package that ends the first frame of `slot` that
     /// carries one, the device sends 3,000 covert bytes listed as a
     /// progress tick under the hash of the frame's batch attestation (a
@@ -184,6 +193,7 @@ impl Fault {
             | Self::AfterClose { .. }
             | Self::Unordered { .. }
             | Self::Singled { .. }
+            | Self::WitnessedMidday { .. }
             | Self::Mislabel { .. } => None,
         }
     }
@@ -828,7 +838,10 @@ impl<'e> Gateways<'e> {
                 if closing {
                     resend = link.sent_batches.iter().copied().collect();
                 }
-                let shape = if closing { catchup } else { fps };
+                let midday = w
+                    .faults
+                    .contains(&Fault::WitnessedMidday { device: d, slot });
+                let shape = if closing || midday { catchup } else { fps };
                 let extra = w.faults.contains(&Fault::Extra { device: d, slot });
                 let covert = w.faults.contains(&Fault::Covert { device: d, slot });
                 let mut mislabel = w.faults.contains(&Fault::Mislabel { device: d, slot });
@@ -841,6 +854,8 @@ impl<'e> Gateways<'e> {
                         // Bytes that are no object, listing none.
                         link.offset += 3000;
                         (FrameKind::Normal, vec![0xC5u8; 3000], Vec::new())
+                    } else if midday {
+                        (FrameKind::WitnessedResend, Vec::new(), Vec::new())
                     } else if slot == lo && (link.carry.is_some() || !second.is_empty()) {
                         let (data, list) = link.fill(&mut second, MAX_PAYLOAD_LEN);
                         (kind_of(closing, FrameKind::CatchUp), data, list)

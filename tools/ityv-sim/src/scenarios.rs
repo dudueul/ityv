@@ -1722,6 +1722,31 @@ fn connectivity_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
             Vec::new(),
         ));
     }
+    // A witnessed-resend group during voting (review 3 of 2i, finding 1).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::WitnessedMidday {
+                device: scanner,
+                slot: open + 2,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-witnessed-midday",
+            q,
+            a,
+            (
+                "투표 중의 입회 재전송",
+                "한빛초등학교 체육관 스캐너가 투표 중인 셋째 슬롯에 입회 재전송(종류 3) 묶음을 따라잡기 모양(64개)으로 보냈다. 입회 재전송은 봉인 장치를 개표소로 옮긴 뒤에만 오므로, 그 모양을 아무 때나 쓰면 프레임마다 실을 양을 고르는 길이 네 배가 된다.",
+                "마감 전의 입회 재전송과 그 뒤의 일반 프레임이 종류의 자리를 어겨 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid).",
+            ),
+            hold(&[H::UplinkFrameInvalid]),
+            Vec::new(),
+        ));
+    }
     // Covert bytes under the hash of a ledger event of another schema
     // (review 2 of 2i, A).
     {
