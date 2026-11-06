@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use ityv_sim::ledger::Ledger;
 use ityv_sim::scenarios::{Group, Scenario, Set, scenarios};
 use ityv_sim::{ledger, verify};
 use ityv_verify::{
@@ -247,4 +248,93 @@ fn each_connectivity_scenario_shows_what_it_injected() {
         r.connectivity().incidents()[0].refused,
         Some(IncidentProblem::Signers)
     );
+}
+
+/// `ledger` cut after its first `k` frames (`at` gives where each frame
+/// starts in the stream, and the stream's end last).
+fn cut(ledger: &Ledger, at: &[usize], k: usize) -> &'static Ledger {
+    Box::leak(Box::new(Ledger {
+        frames: ledger.frames[..at[k]].to_vec(),
+        events: ledger.events[..k].to_vec(),
+        size: k as u64,
+        last_checkpoint_bucket: ledger.last_checkpoint_bucket,
+        last_checkpoint_hash: ledger.last_checkpoint_hash,
+    }))
+}
+
+/// Where each frame of `ledger`'s stream starts, then the stream's end.
+fn frame_starts(ledger: &Ledger) -> Vec<usize> {
+    let mut at = vec![0];
+    let mut i = 0;
+    while i < ledger.frames.len() {
+        let len = u32::from_be_bytes(ledger.frames[i..i + 4].try_into().unwrap());
+        i += 4 + len as usize;
+        at.push(i);
+    }
+    assert_eq!(at.len() as u64, ledger.size + 1);
+    at
+}
+
+/// The connectivity holds (79 to 85) the verifier gives `s`'s ledger cut
+/// after each of `ks` frames, with the findings behind them; and how many
+/// of the cuts fall during the day, with frames of a station not yet
+/// closed on the ledger.
+fn holds_at_cuts(s: &Scenario, ks: impl Iterator<Item = usize>) -> (Vec<String>, usize) {
+    let whole = ledger(s);
+    let at = frame_starts(whole);
+    let mut out = Vec::new();
+    let mut midday = 0;
+    for k in ks {
+        let r = verify(s, cut(whole, &at, k));
+        let c = r.connectivity();
+        if c.stations()
+            .iter()
+            .any(|st| st.final_session.is_none() && st.links.iter().any(|l| l.frames > 0))
+        {
+            midday += 1;
+        }
+        if c.holds() != ityv_state::HoldSet::empty() {
+            let found: Vec<String> = c
+                .stations()
+                .iter()
+                .flat_map(|st| {
+                    let links = st.links.iter().flat_map(|l| {
+                        l.findings.iter().map(move |f| {
+                            format!("{:?} slot {:?} {:?}", l.device, f.slot, f.problem)
+                        })
+                    });
+                    st.findings
+                        .iter()
+                        .map(|f| format!("{f:?}"))
+                        .chain(links)
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            out.push(format!("{} after {k} of {}: {found:?}", s.name, whole.size));
+        }
+    }
+    (out, midday)
+}
+
+/// No connectivity hold depends on an event not yet laid (third review of
+/// 2i, finding 4): an honest ledger cut after any frame gives none, though
+/// the stage cannot yet judge what the rest would show. quick-clean is cut
+/// after every frame, local-clean after a sample of 64.
+#[test]
+#[ignore = "slow: one verifier run per cut (about four minutes in release)"]
+fn no_cut_of_an_honest_ledger_holds_a_link() {
+    let all = by_name();
+    let quick = &all["quick-clean"];
+    let size = ledger(quick).size as usize;
+    let (mut held, midday) = holds_at_cuts(quick, 1..=size);
+    eprintln!("quick-clean: {midday} of {size} cuts during the day");
+    assert!(midday > size / 4, "{midday} of {size}");
+    let full = scenarios(Set::Full);
+    let local = full.iter().find(|s| s.name == "local-clean").unwrap();
+    let size = ledger(local).size as usize;
+    let (more, midday) = holds_at_cuts(local, (1..=64).map(|i| i * size / 64));
+    eprintln!("local-clean: {midday} of 64 cuts during the day");
+    assert!(midday > 16, "{midday} of 64");
+    held.extend(more);
+    assert!(held.is_empty(), "{held:#?}");
 }
