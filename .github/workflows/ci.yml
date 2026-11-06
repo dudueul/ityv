@@ -147,7 +147,12 @@ jobs:
     # dear as before (measured on one machine against 1651298: ityv-verify
     # 65.7 to 68.3 s rebuild, 39.1 to 39.2 s tests; ityv-encoding 21.1 to
     # 21.4 s rebuild): about 1.05 and 1.04 times the work, so the shards
-    # stay, about 3.0 hours each, the slowest about 3.5.
+    # stay, about 3.0 hours each, the slowest about 3.5. The second review
+    # of 2i (runs held to the ledger's batches) adds 102 ityv-verify
+    # mutants (2,151), each about 1.02 times as dear (measured on one
+    # machine against c54717b: 72.0 to 73.2 s rebuild, 38.1 to 39.2 s
+    # tests): about 1.07 times the work, so the shards stay, about 3.2
+    # hours each, the slowest about 3.8.
     strategy:
       fail-fast: false
       matrix:
