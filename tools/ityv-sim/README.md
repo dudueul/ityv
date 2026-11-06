@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나(와 그 변형 셋) 위의 58개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 61개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
+`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나(와 그 변형 셋) 위의 60개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 63개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
 
 TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바뀌지 않는다. 시뮬레이터가 만든 장부는 검증기가 그대로 검증하고, 시나리오의 기대와 검증기의 판정이 다르면 테스트와 콘솔이 불일치로 보인다. 의존성은 워크스페이스 크레이트와, 가상의 시점확인 기관 둘(`tsa`, 정부 운영과 정부 밖)을 위한 P-256 서명과 SHA-2(`ityv-tsa`가 이미 쓰는 같은 판)뿐이다. ECDSA 서명은 RFC 6979로 결정적이고 키는 다른 키처럼 이름표와 고정 씨앗으로 정한다. 서명의 hedged 난수와 커밋먼트·증명의 난수는 `ityv-cunit`의 SHA3 카운터 생성기(`DeviceRng::for_signing`)에 입력에서 유도한 씨앗을 넣어 얻는다. 키는 이름표와 고정 씨앗(`util::SEED`)의 SHA3-512로 정한다. 그래서 두 번 돌리면 같은 바이트가 나온다(`tests/scenarios.rs`의 `bundles_are_byte_identical_across_runs`).
 
@@ -49,7 +49,9 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 - `attack-uplink-batch-order`: 마감 배치의 기록을 해시 내림차순으로 보냈다. `UplinkObjectInvalid`(82).
 - `attack-uplink-covert-bytes`: 스캐너가 객체 목록에 적지 않은 3,000바이트를 보내고 다음 슬롯을 비운 뒤 한 바이트 건너 이어 갔다. `UplinkObjectInvalid`(82).
 - `attack-uplink-relisted-object`: 게이트웨이가 장치가 서명한 객체 목록의 한 항목을 바꿔 적었다. 장치 서명이 맞지 않아 `UplinkFrameInvalid`(81), 그 프레임의 진행 기록은 `UplinkObjectOutside`(83).
-- `fault-uplink-lost-frame`, `attack-hidden-path-record`: 회선에서 사라진 데이터 프레임(정직하게 빠진 슬롯으로 적음)의 진행 기록(자기 슬롯에 한 번만 보낸다), 업링크로 오지 않은 기록. `UplinkObjectOutside`(83).
+- `attack-uplink-singled-records`: 마감 배치를 보내며 둘째 기록부터 기록마다 배치 증명을 다시 앞에 붙였다(묶음마다 기록 하나). 묶음은 장부의 배치를 첫 기록부터 마지막 기록까지 담아야 하고 배치 증명은 허용보다 많이 나갔다. `UplinkObjectInvalid`(82).
+- `attack-uplink-mislabeled-object`: 마감 슬롯에서 share 패키지로 끝나는 프레임 뒤에 3,000바이트를 붙이고 목록에는 진행 기록으로, 해시는 그 프레임의 배치 증명의 것으로 적었다. 장부가 그 해시를 다른 스키마로 싣는다. `UplinkObjectInvalid`(82).
+- `fault-uplink-lost-frame`, `attack-hidden-path-record`: 회선에서 사라진 데이터 프레임(정직하게 빠진 슬롯으로 적음)의 진행 기록(자기 슬롯에 한 번만 보낸다), 업링크로 오지 않은 기록. `UplinkObjectOutside`(83). 업링크로 오지 않은 기록은 잃은 바이트 없이 이어진 배치의 묶음을 끊으므로 `UplinkObjectInvalid`(82)도 건다.
 - `fault-uplink-recovered-loss`: 마감 배치를 실은 프레임이 사라졌고(정직하게 빠진 슬롯으로 적음) 같은 슬롯의 마감 재전송이 그 배치를 다시 실어 왔다. 보류 없음.
 - `fault-roll-line-incident`, `fault-capture-mismatch`: 위원회와 참관인이 실은 명부 회선 사건(투표소 전체), 사무원과 참관인이 실은 캡처 불일치 사건(투표함, 커밋먼트 유닛 연루, 전수 대조 대상). `ConnectivityIncident`(84).
 - `attack-incident-forged`: 한 참관인의 서명을 다른 참관인의 키로 만든 사건. 장부 전체 `ConnectivityIncidentRefused`(85).
@@ -90,7 +92,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `local-clean` | 정상(큰) | `CRYPTO_TALLY_VERIFIED` | 없음 |
 | `local-voting` | 정상(큰) | `LOG_CONSISTENT` | 없음 |
 | `national-clean` | 정상(큰) | `CRYPTO_TALLY_VERIFIED` | 없음 |
-| `attack-tampered-record` | 공격 | `HOLD_REVIEW` | IssuanceMismatch, RecordRejected, BatchInvalid, RecordSetMismatch, TallyScopeMismatch, AggregateMismatch |
+| `attack-tampered-record` | 공격 | `HOLD_REVIEW` | IssuanceMismatch, RecordRejected, BatchInvalid, RecordSetMismatch, TallyScopeMismatch, AggregateMismatch, UplinkObjectInvalid |
 | `attack-checkpoint-fork` | 공격 | `HOLD_REVIEW` | StepFailed, CheckpointInvalid |
 | `attack-replayed-record` | 공격 | `HOLD_REVIEW` | EventReplayed |
 | `attack-conflicting-scope` | 공격 | `HOLD_REVIEW` | TallyScopeRefused |
@@ -110,7 +112,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `fault-open-dispute` | 장애 | `HOLD_REVIEW` | OpenDispute |
 | `fault-seal-mismatch` | 장애 | `HOLD_REVIEW` | SealMismatch |
 | `fault-board-late` | 장애 | `HOLD_REVIEW` | PublicationLate |
-| `attack-no-authorization` | 공격 | `HOLD_REVIEW` | ProgressStream, BoxEventRefused, AuthorizationMissing, TallyScopeRefused, AggregateRefused, ReceiptResolutionRefused |
+| `attack-no-authorization` | 공격 | `HOLD_REVIEW` | ProgressStream, BoxEventRefused, AuthorizationMissing, TallyScopeRefused, AggregateRefused, ReceiptResolutionRefused, UplinkObjectInvalid |
 | `attack-overflow-progress` | 공격 | `HOLD_REVIEW` | ProgressStream, ProgressUnresolved |
 | `attack-checkpoint-backdated` | 공격 | `HOLD_REVIEW` | StepFailed, TimestampMismatch |
 | `fault-anchor-missed` | 장애 | `UNVERIFIED` | 없음 |
@@ -131,11 +133,13 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `fault-uplink-extra-frame` | 장애 | `HOLD_REVIEW` | UplinkFrameInvalid |
 | `fault-uplink-after-close` | 장애 | `HOLD_REVIEW` | UplinkFrameInvalid |
 | `attack-uplink-batch-order` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid |
+| `attack-uplink-singled-records` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid |
+| `attack-uplink-mislabeled-object` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid |
 | `fault-uplink-lost-frame` | 장애 | `HOLD_REVIEW` | UplinkObjectOutside |
 | `fault-uplink-recovered-loss` | 장애 | `CRYPTO_TALLY_VERIFIED` | — |
 | `attack-uplink-covert-bytes` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid |
 | `attack-uplink-relisted-object` | 공격 | `HOLD_REVIEW` | UplinkFrameInvalid, UplinkObjectOutside |
-| `attack-hidden-path-record` | 공격 | `HOLD_REVIEW` | UplinkObjectOutside |
+| `attack-hidden-path-record` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid, UplinkObjectOutside |
 | `fault-roll-line-incident` | 장애 | `HOLD_REVIEW` | ConnectivityIncident |
 | `fault-capture-mismatch` | 장애 | `HOLD_REVIEW` | ConnectivityIncident |
 | `attack-incident-forged` | 공격 | `HOLD_REVIEW` | ConnectivityIncidentRefused |
@@ -200,7 +204,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | 79 | `ConnectivityManifest` | `attack-manifest-two-way` |
 | 80 | `UplinkSessionRefused` | `attack-uplink-hidden-frame` |
 | 81 | `UplinkFrameInvalid` | `attack-uplink-injected-frame`, `fault-uplink-padding`, `fault-uplink-extra-frame`, `fault-uplink-after-close`, `attack-uplink-relisted-object` |
-| 82 | `UplinkObjectInvalid` | `attack-uplink-batch-order`, `attack-uplink-covert-bytes`, `attack-mirror-tampered` |
+| 82 | `UplinkObjectInvalid` | `attack-uplink-batch-order`, `attack-uplink-covert-bytes`, `attack-mirror-tampered`, `attack-uplink-singled-records`, `attack-uplink-mislabeled-object`, `attack-hidden-path-record`, `attack-tampered-record`, `attack-no-authorization` |
 | 83 | `UplinkObjectOutside` | `fault-uplink-lost-frame`, `attack-hidden-path-record`, `attack-uplink-relisted-object` |
 | 84 | `ConnectivityIncident` | `fault-roll-line-incident`, `fault-capture-mismatch` |
 | 85 | `ConnectivityIncidentRefused` | `attack-incident-forged` |
@@ -248,7 +252,7 @@ sets    = list(boxes) ‖ list(stations) ‖ list(progress_policies) ‖ list(re
 
 ## 검증
 
-- `cargo test -p ityv-sim`: 빠른 시나리오 58개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다.
+- `cargo test -p ityv-sim`: 빠른 시나리오 60개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다.
 - `tests/robustness.rs`(`ityv-wasm`의 견고성): 모든 보고서가 올바른 JSON이다. 빠른 번들의 비트를 뒤집고(56번) 자르고 바이트를 덧붙여도 패닉하지 않는다. 적대적인 시나리오 이름(HTML, 따옴표, 제어 문자, U+2028/2029)이 한 문자열로 이스케이프된다. 두 투표함이 같은 칸에 2^63을, 한 투표함이 u64::MAX를 적어 합이 넘쳐도 트랩 없이 `overflow`로 보고되고 상태는 `ityv-verify`와 같다. 보고 단위가 장부보다 높게 읽히는 것은 장부의 보류가 모두 다른 단위의 투표함·집계·투표양식 감사 탓일 때뿐이고, 단위가 `PAPER_AUDITED`로 읽히는 것은 그 투표양식의 감사가 끝났을 때뿐이다. 시나리오에서 나오는 모든 집계·감사 거부가 검증기가 공개한 표(`TallyEvent::hold`, `AuditEvent::hold`)의 보류로 장부에 남는다. 콘솔의 보류 이름 표(`apps/ityv-console/src/vocab.ts`)가 `ityv-state`의 이름과 같다.
 - `tests/audit.rs`: 감사 시나리오마다 검증기의 감사 단계가 시나리오가 말한 것(라운드, 확대, 전수 대조와 발견, 수검표, 보관 보류, 공격마다의 거부 `Late`·`Backdated`·`Premature`·`Conflict`·`Unstamped`, 고정 체크포인트와 공표의 간격)을 보인다. 비콘 관찰 없이는 집계 상태, 제한 열기를 넘기면 모두 재구성. 콘솔 보고서에 제한 열기의 바이트·cast id·난수가 없다.
 - `tests/uplink.rs`: 깨끗한 장부마다 모든 게이트웨이의 세션을 받고(`final` 세션에 참관인 캡처 서명 둘, 슬롯마다 기준값의 프레임과 스캐너 마감 슬롯의 따라잡기 64개, 봉인된 덩어리는 패키지의 것뿐, 모든 장치 이벤트 포함), 투표 중에는 포함을 묻지 않으며, 연결 시나리오마다 검증기가 주입한 것(목록의 어긴 규칙, 세션 발견, 프레임·객체 발견, 링크 밖 이벤트, 되찾은 손실의 무보류, 사건과 전수 대조 대상, 받지 않은 사건)을 보인다.

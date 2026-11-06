@@ -102,3 +102,9 @@
 2. **시나리오 3개.** `fault-uplink-recovered-loss`(보류 없음), `attack-uplink-covert-bytes`(82), `attack-uplink-relisted-object`(81, 83). 빠른 묶음 58개, 전체 61개. `attack-mirror-tampered`는 `UplinkObjectInvalid`를 더 건다: 미러가 바꾼 기록은 거부된 프레임이라 그 뒤의 share 패키지를 받아들여진 기록이 가리키지 않는다. `fault-uplink-after-close`는 같은 보류에 `KindOrder` 발견 16개가 더 붙는다(마감 재전송 뒤의 일반 프레임). 나머지 기대 결과는 그대로다.
 3. **콘솔.** 링크 판정 어휘에서 `Early`를 빼고 `Alignment`·`Foreign`을, 사건 판정에 `Scope`를 더했다.
 
+
+## 개정 5 (2026-11-06, 배치를 따르는 묶음, ADR-0041 2i 둘째 검토)
+
+1. **시뮬레이터.** 배치는 앞 배치 뒤의 카운터를 이으므로 링크의 배치는 가장 오래 기다린 기록을 담는다(출력은 그대로). 장애 `Singled`(기록마다 배치 증명을 다시 붙임)와 `Mislabel`(패키지 뒤의 숨은 바이트를 다른 스키마의 장부 해시로 적음)을 더했다.
+2. **시나리오 2개.** `attack-uplink-singled-records`(82), `attack-uplink-mislabeled-object`(82). 빠른 묶음 60개, 전체 63개. 세 시나리오가 `UplinkObjectInvalid`를 더 건다: `attack-hidden-path-record`(업링크로 오지 않은 기록 자리에서 잃은 바이트 없이 배치의 묶음이 끊김), `attack-tampered-record`(묶음에 기록 단계가 거부해 어느 배치에도 들지 않는 기록), `attack-no-authorization`(투표함 이벤트가 거부되어 기록 단계가 받은 배치가 없으므로 링크의 기록이 어느 배치에도 들지 않음). 나머지 기대 결과는 그대로다.
+3. **콘솔.** 링크 판정 어휘에 `AfterSwap`·`Schema`·`Repeat`·`Time`을 더하고 `KindOrder`·`Batch`의 설명을 넓혔다(23개).
