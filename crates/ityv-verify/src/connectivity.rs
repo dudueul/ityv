@@ -44,20 +44,26 @@
 //!    session's window; no frame precedes the slot of the box's first
 //!    opening (the station's first, for a check-in unit); no normal or
 //!    catch-up frame of a box follows the slot after its first close's
-//!    time bucket; nothing but resends follows a close resend and nothing
-//!    but witnessed resends follows a witnessed resend; the payload root
-//!    rebuilt from the published data leaves and the zero leaf is the
-//!    signed one (the padding proof); and the stream starts at 0 and each
-//!    frame starts where the previous ended, or later only across
-//!    positions (slot, number) no frame was taken in, by at most a full
-//!    payload each. The positions run over the slots the device must send
-//!    in: from the opening for a link that is its device's from the start
-//!    (from its first frame for one swapped in), to the close for one that
-//!    is its device's in the last state (to its last frame for one swapped
-//!    out), and over its witnessed resends' slots; a slot with frames
-//!    taken has its group's count of positions, one without the catch-up
-//!    count. A frame that breaks a rule is listed and holds the device's
-//!    box, or every box of the station for a check-in unit
+//!    time bucket, and no frame of a device a swap took out of service
+//!    follows the swap's slot; a catch-up group comes only after a slot
+//!    of the span fell short or in the close slot, a close resend only
+//!    from the close slot for the slots the stream before it needs at the
+//!    catch-up shape; nothing but resends follows a close resend and
+//!    nothing but witnessed resends follows a witnessed resend; the
+//!    payload root rebuilt from the published data leaves and the zero
+//!    leaf is the signed one (the padding proof); and the stream starts at
+//!    0 and each frame starts where the previous ended, or later only
+//!    across positions (slot, number) no frame was taken in, by at most a
+//!    full payload each. The positions run over the slots the device must
+//!    send in: from the opening for a link that is its device's from the
+//!    start (from the slot of the swap that brought it in for one swapped
+//!    in, the opening without one), to the close for one in service at the
+//!    end (to the slot before the swap that took it out, or its last
+//!    frame), and over its witnessed resends' slots from the first of the
+//!    session that took the first of them; a slot with frames taken has
+//!    its group's count of positions, one without the catch-up count. A
+//!    frame that breaks a rule is listed and holds the device's box, or
+//!    every box of the station for a check-in unit
 //!    (`UplinkFrameInvalid`).
 //! 4. **Objects (VC-079).** Per link, over every frame whose signature
 //!    verified: its list tiles its data (the first entry starts at or
@@ -68,19 +74,26 @@
 //!    frames list the same object at one position, and what one frame
 //!    carries out the next carries in; a kind the device may send and the
 //!    manifest lets it carry (never a check-in counter or a contested
-//!    check-in); a ledger event of the link's own box or station; a public
-//!    object of the ledger with the ledger's length; cast records only in
-//!    runs right after a batch attestation, in strictly ascending record
-//!    hash (after bytes not received, the tail of a batch whose
-//!    attestation was lost, still ascending); a share package right after
-//!    the record that names it (when that record is known) and no longer
-//!    than the election allows; and, once the gateway sent its final
-//!    session, every listed object, received whole or not, a frame of the
-//!    ledger names (a share package through an accepted record of its
-//!    box). Every data chunk that holds no package byte is recomputed from
-//!    the ledger's objects and the zero fill, in a frame whose list tiles
-//!    its data. A break is listed and holds like a frame
-//!    (`UplinkObjectInvalid`).
+//!    check-in); a public ledger event of the link's own box or station;
+//!    no hash the ledger names under another schema; a public object of
+//!    the ledger with the ledger's length; each object listed no more
+//!    often than its kind allows (a batch's objects twice in normal and
+//!    catch-up frames, anything else once; once in close resends and in
+//!    each run of witnessed slots); cast records only in runs of their
+//!    batch as the record stage takes it: after an attestation, that
+//!    batch's records one after another in hash order from the first, to
+//!    the last where nothing was lost; after bytes not received, one
+//!    stretch of one batch's records; batches first sent in batch-index
+//!    order; nothing before its time (a batch before the first slot of its
+//!    time bucket, a tick before its slot or after a later tick); a share
+//!    package right after the record that names it (when that record is
+//!    known) and no longer than the election allows; and, once the
+//!    gateway sent its final session, every listed object, received whole
+//!    or not, a frame of the ledger names under its schema (a share
+//!    package through an accepted record of its box). Every data chunk
+//!    that holds no package byte is recomputed from the ledger's objects
+//!    and the zero fill, in a frame whose list tiles its data. A break is
+//!    listed and holds like a frame (`UplinkObjectInvalid`).
 //! 5. **Inclusion (VC-080).** Once a station's gateway sent its final
 //!    session, every accepted cast record, batch attestation, challenge
 //!    opening, progress tick and participation set of the station must be
@@ -110,8 +123,10 @@
 //! What this stage does not prove: that the manifest is the hardware
 //! (teardown samples and radio checks, VC-082); the sealed bytes and the
 //! fill after them in a package's last chunk (taps, VC-081:
-//! [`crate::compare_capture`]); how much of a frame a device fills; when a device closed a batch or sent a
-//! tick (only the order and unit are visible); the carrier's records
+//! [`crate::compare_capture`]); how much of a frame a device fills; how
+//! long after its time bucket or slot a device sent a batch or a tick
+//! (only the earliest and the order are checked); where a run starts
+//! again after a position no frame was taken in; the carrier's records
 //! ([`crate::compare_carrier`]); anything about the paper.
 
 use alloc::collections::{BTreeMap, BTreeSet};
