@@ -152,7 +152,13 @@ jobs:
     # mutants (2,151), each about 1.02 times as dear (measured on one
     # machine against c54717b: 72.0 to 73.2 s rebuild, 38.1 to 39.2 s
     # tests): about 1.07 times the work, so the shards stay, about 3.2
-    # hours each, the slowest about 3.8.
+    # hours each, the slowest about 3.8. The third review of 2i (the
+    # kinds' slots, resends, mid-day ledgers) brings ityv-verify to 2,270
+    # mutants (2,148 at a872df7), each about 1.09 times as dear (measured
+    # on one machine against a872df7: the rebuild 75.3 s both times, the
+    # tests 41.9 to 52.3 s): about 1.15 times the work, so ityv-verify has sixteen
+    # shards of about 3.2 hours, the slowest about 3.8. ityv-state has 783
+    # (781), so its two shards stay.
     strategy:
       fail-fast: false
       matrix:
@@ -170,20 +176,22 @@ jobs:
           - { crate: ityv-cunit, shard: 3/4 }
           - { crate: ityv-state, shard: 0/2 }
           - { crate: ityv-state, shard: 1/2 }
-          - { crate: ityv-verify, shard: 0/14 }
-          - { crate: ityv-verify, shard: 1/14 }
-          - { crate: ityv-verify, shard: 2/14 }
-          - { crate: ityv-verify, shard: 3/14 }
-          - { crate: ityv-verify, shard: 4/14 }
-          - { crate: ityv-verify, shard: 5/14 }
-          - { crate: ityv-verify, shard: 6/14 }
-          - { crate: ityv-verify, shard: 7/14 }
-          - { crate: ityv-verify, shard: 8/14 }
-          - { crate: ityv-verify, shard: 9/14 }
-          - { crate: ityv-verify, shard: 10/14 }
-          - { crate: ityv-verify, shard: 11/14 }
-          - { crate: ityv-verify, shard: 12/14 }
-          - { crate: ityv-verify, shard: 13/14 }
+          - { crate: ityv-verify, shard: 0/16 }
+          - { crate: ityv-verify, shard: 1/16 }
+          - { crate: ityv-verify, shard: 2/16 }
+          - { crate: ityv-verify, shard: 3/16 }
+          - { crate: ityv-verify, shard: 4/16 }
+          - { crate: ityv-verify, shard: 5/16 }
+          - { crate: ityv-verify, shard: 6/16 }
+          - { crate: ityv-verify, shard: 7/16 }
+          - { crate: ityv-verify, shard: 8/16 }
+          - { crate: ityv-verify, shard: 9/16 }
+          - { crate: ityv-verify, shard: 10/16 }
+          - { crate: ityv-verify, shard: 11/16 }
+          - { crate: ityv-verify, shard: 12/16 }
+          - { crate: ityv-verify, shard: 13/16 }
+          - { crate: ityv-verify, shard: 14/16 }
+          - { crate: ityv-verify, shard: 15/16 }
           - { crate: ityv-tsa, shard: 0/1 }
     steps:
       - uses: actions/checkout@v4.2.2
