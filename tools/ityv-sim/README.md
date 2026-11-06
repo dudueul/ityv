@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나(와 그 변형 셋) 위의 55개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 58개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
+`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나(와 그 변형 셋) 위의 58개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 61개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
 
 TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바뀌지 않는다. 시뮬레이터가 만든 장부는 검증기가 그대로 검증하고, 시나리오의 기대와 검증기의 판정이 다르면 테스트와 콘솔이 불일치로 보인다. 의존성은 워크스페이스 크레이트와, 가상의 시점확인 기관 둘(`tsa`, 정부 운영과 정부 밖)을 위한 P-256 서명과 SHA-2(`ityv-tsa`가 이미 쓰는 같은 판)뿐이다. ECDSA 서명은 RFC 6979로 결정적이고 키는 다른 키처럼 이름표와 고정 씨앗으로 정한다. 서명의 hedged 난수와 커밋먼트·증명의 난수는 `ityv-cunit`의 SHA3 카운터 생성기(`DeviceRng::for_signing`)에 입력에서 유도한 씨앗을 넣어 얻는다. 키는 이름표와 고정 씨앗(`util::SEED`)의 SHA3-512로 정한다. 그래서 두 번 돌리면 같은 바이트가 나온다(`tests/scenarios.rs`의 `bundles_are_byte_identical_across_runs`).
 
@@ -18,7 +18,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `audit` | 집계 뒤의 감사(PROTOCOL §12, ADR-0036): 투표양식마다 동결, 감사 약정, 약정 직후의 고정 체크포인트, 비콘 공표 뒤의 시드, 검증기와 같은 표본, 감사가 부르는 순서의 열기 흔적과 대조(`ityv_state::audit_phase`로 라운드를 따름), 코드 1·2 장치의 전수 대조와 발견, 모든 라운드를 넘으면 단위별 수검표 |
 | `ledger` | 계획의 단계를 프레임과 증인 체크포인트로 깔기, 체크포인트마다 두 기관의 시점확인 기록 |
 | `tsa` | 가상의 시점확인 기관 둘: 키, 자체 서명 인증서(필수 EKU timeStamping), `ityv-tsa`가 받는 RFC 3161 토큰 |
-| `uplink` | 연결 감사(ADR-0041): genesis가 고정하는 연결 목록, 장치 링크의 프레임(슬롯마다 연결 목록의 수, 데이터 덩어리 잎과 탑재부 root, 프레임 키 서명), 게이트웨이의 프레임 기록과 세션(여섯 슬롯 창, 사슬 head, 마지막은 `final`과 참관인 캡처 서명), 세션에 붙이는 장애 |
+| `uplink` | 연결 감사(ADR-0041): genesis가 고정하는 연결 목록, 장치 링크의 프레임(슬롯마다 연결 목록의 수, 프레임마다 장치가 서명하는 객체 목록, 경계에 놓는 share 패키지, 데이터 덩어리 잎과 탑재부 root, 프레임 키 서명, 스캐너 마감 슬롯의 마감 재전송), 게이트웨이의 프레임 기록과 세션(여섯 슬롯 창, 사슬 head, 마지막은 `final`과 참관인 캡처 서명), 세션에 붙이는 장애 |
 | `scenarios` | 이름 붙은 시나리오와 기대 결과 |
 | `bundle`, `meta` | 번들 인코더와 `index.json` |
 
@@ -41,13 +41,16 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 
 ## 연결 감사
 
-모든 투표소에 게이트웨이(하이브리드 키·증명 키)가, 모든 스캐너와 카운터·가명 유닛에 프레임 키가 genesis에 있다. 연결 목록은 기준값(스캐너 16, 유닛 4, 따라잡기 64)을 쓰고 한 방향 규칙을 지킨다. 장치는 투표소 개시 슬롯부터 마감 구간 다음 슬롯까지 슬롯마다 그 수의 일반 프레임을 보내고, 앞 세션 뒤에 만든 객체(배치 증명과 그 기록을 기록 해시 순서로, 진행 기록, 참관인 확인 수, 참여 집합)를 창의 마지막 슬롯 첫 프레임들에 싣는다. 배치에 들지 않은 기록은 보내지 않는다. 게이트웨이는 개시부터 여섯 슬롯마다 프레임 기록과 세션을, 참여 집합 뒤에 남은 창과 `final` 세션을 싣고, 투표소의 두 참관인이 `final` 세션에 캡처 서명을 한다(캡처 해시는 고정 자료다. 시뮬레이터는 캡처 파일을 만들지 않는다). 세션은 계획의 단계(`Step::Uplink`)라 장부를 깔 때 그때까지 깐 장치 이벤트로 만들어지고, 장부를 바꾼 공격도 바뀐 장부를 그대로 나른다. 그래서 기존 시나리오의 기대 결과는 그대로다(`attack-record-after-close`의 마감 뒤 기록은 색인이 무효로 하므로 포함을 따로 묻지 않는다).
+모든 투표소에 게이트웨이(하이브리드 키·증명 키)가, 모든 스캐너와 카운터·가명 유닛에 프레임 키가 genesis에 있다. 연결 목록은 기준값(스캐너 16, 유닛 4, 따라잡기 64)을 쓰고 한 방향 규칙을 지킨다. 장치는 투표소 개시 슬롯부터 마감 구간 다음 슬롯까지 슬롯마다 그 수의 일반 프레임을 보내고, 앞 세션 뒤에 만든 객체를 창의 마지막 슬롯 프레임들에 싣는다: 먼저 진행 기록·검증 공개(유닛은 참관인 확인 수와 참여 집합), 다음 프레임부터 닫힌 배치(배치 증명, 기록 해시 순서의 기록, 기록마다 바로 뒤에 그 기록이 가리키는 봉인 share 패키지). 배치에 들지 않은 기록은 보내지 않는다. 프레임마다 데이터에 걸친 모든 객체를 목록으로 적어 머리와 함께 서명하고, share 패키지와 그 바로 뒤 객체는 프레임의 4 KiB 경계에서 시작한다(사이는 0). 스캐너의 마지막 슬롯(마감 진행 기록의 슬롯)은 따라잡기 묶음 64개로, 남은 객체 다음에 그때까지 보낸 모든 배치를 마감 재전송으로 다시 싣는다. share 패키지는 그 투표함과 기록의 커밋먼트로 만든 대리 객체이고(시뮬레이터는 아무것도 봉인하지 않는다), 기록의 `share_package_hash`가 그 해시다. 게이트웨이는 개시부터 여섯 슬롯마다 프레임 기록과 세션을, 참여 집합 뒤에 남은 창과 `final` 세션을 싣고, 투표소의 두 참관인이 `final` 세션에 캡처 서명을 한다(캡처 해시는 고정 자료다. 시뮬레이터는 캡처 파일을 만들지 않는다). 세션은 계획의 단계(`Step::Uplink`)라 장부를 깔 때 그때까지 깐 장치 이벤트로 만들어지고, 장부를 바꾼 공격도 바뀐 장부를 그대로 나른다. 그래서 기존 시나리오의 기대 결과는 그대로다(`attack-record-after-close`의 마감 뒤 기록은 색인이 무효로 하므로 포함을 따로 묻지 않는다). 하나만 다르다: `attack-mirror-tampered`는 `UplinkObjectInvalid`도 건다. 미러가 바꾼 기록은 거부된 프레임이라, 스캐너가 그 뒤에 보낸 share 패키지를 받아들여진 기록이 가리키지 않기 때문이다(ADR-0041 구현 6).
 
 - `attack-manifest-two-way`: 연결 목록이 스캐너 업링크 포트를 양방향으로 적었다. 장부 전체 `ConnectivityManifest`(79).
 - `attack-uplink-hidden-frame`: 게이트웨이가 한 프레임을 기록과 사슬에서 빼고 빠진 슬롯으로 적지 않았다. `UplinkSessionRefused`(80).
 - `attack-uplink-injected-frame`, `fault-uplink-padding`, `fault-uplink-extra-frame`, `fault-uplink-after-close`: 게이트웨이가 서명한 프레임, 데이터 뒤 0이 아닌 채움, 슬롯당 수를 넘는 번호, 마감 뒤 슬롯의 일반 프레임. `UplinkFrameInvalid`(81).
 - `attack-uplink-batch-order`: 마감 배치의 기록을 해시 내림차순으로 보냈다. `UplinkObjectInvalid`(82).
-- `fault-uplink-lost-frame`, `attack-hidden-path-record`: 회선에서 사라진 데이터 프레임(정직하게 빠진 슬롯으로 적음)의 진행 기록, 업링크로 오지 않은 기록. `UplinkObjectOutside`(83).
+- `attack-uplink-covert-bytes`: 스캐너가 객체 목록에 적지 않은 3,000바이트를 보내고 다음 슬롯을 비운 뒤 한 바이트 건너 이어 갔다. `UplinkObjectInvalid`(82).
+- `attack-uplink-relisted-object`: 게이트웨이가 장치가 서명한 객체 목록의 한 항목을 바꿔 적었다. 장치 서명이 맞지 않아 `UplinkFrameInvalid`(81), 그 프레임의 진행 기록은 `UplinkObjectOutside`(83).
+- `fault-uplink-lost-frame`, `attack-hidden-path-record`: 회선에서 사라진 데이터 프레임(정직하게 빠진 슬롯으로 적음)의 진행 기록(자기 슬롯에 한 번만 보낸다), 업링크로 오지 않은 기록. `UplinkObjectOutside`(83).
+- `fault-uplink-recovered-loss`: 마감 배치를 실은 프레임이 사라졌고(정직하게 빠진 슬롯으로 적음) 같은 슬롯의 마감 재전송이 그 배치를 다시 실어 왔다. 보류 없음.
 - `fault-roll-line-incident`, `fault-capture-mismatch`: 위원회와 참관인이 실은 명부 회선 사건(투표소 전체), 사무원과 참관인이 실은 캡처 불일치 사건(투표함, 커밋먼트 유닛 연루, 전수 대조 대상). `ConnectivityIncident`(84).
 - `attack-incident-forged`: 한 참관인의 서명을 다른 참관인의 키로 만든 사건. 장부 전체 `ConnectivityIncidentRefused`(85).
 
@@ -92,7 +95,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `attack-replayed-record` | 공격 | `HOLD_REVIEW` | EventReplayed |
 | `attack-conflicting-scope` | 공격 | `HOLD_REVIEW` | TallyScopeRefused |
 | `attack-record-after-close` | 공격 | `HOLD_REVIEW` | RecordAfterClose |
-| `attack-mirror-tampered` | 공격 | `HOLD_REVIEW` | ObservedCountMismatch, IssuanceMismatch, StepFailed, LedgerUnchecked, BatchInvalid, RecordSetMismatch, TallyScopeMismatch, AggregateMismatch |
+| `attack-mirror-tampered` | 공격 | `HOLD_REVIEW` | ObservedCountMismatch, IssuanceMismatch, StepFailed, LedgerUnchecked, BatchInvalid, RecordSetMismatch, TallyScopeMismatch, AggregateMismatch, UplinkObjectInvalid |
 | `attack-unknown-event` | 공격 | `HOLD_REVIEW` | StepFailed, LedgerUnchecked |
 | `fault-missing-coverage` | 장애 | `UNVERIFIED` | 없음 |
 | `attack-paper-mismatch` | 공격 | `HOLD_REVIEW` | PaperCountMismatch |
@@ -129,6 +132,9 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `fault-uplink-after-close` | 장애 | `HOLD_REVIEW` | UplinkFrameInvalid |
 | `attack-uplink-batch-order` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid |
 | `fault-uplink-lost-frame` | 장애 | `HOLD_REVIEW` | UplinkObjectOutside |
+| `fault-uplink-recovered-loss` | 장애 | `CRYPTO_TALLY_VERIFIED` | — |
+| `attack-uplink-covert-bytes` | 공격 | `HOLD_REVIEW` | UplinkObjectInvalid |
+| `attack-uplink-relisted-object` | 공격 | `HOLD_REVIEW` | UplinkFrameInvalid, UplinkObjectOutside |
 | `attack-hidden-path-record` | 공격 | `HOLD_REVIEW` | UplinkObjectOutside |
 | `fault-roll-line-incident` | 장애 | `HOLD_REVIEW` | ConnectivityIncident |
 | `fault-capture-mismatch` | 장애 | `HOLD_REVIEW` | ConnectivityIncident |
@@ -193,9 +199,9 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | 74 | `RollEventRefused` | `attack-roll-extract-after-freeze` |
 | 79 | `ConnectivityManifest` | `attack-manifest-two-way` |
 | 80 | `UplinkSessionRefused` | `attack-uplink-hidden-frame` |
-| 81 | `UplinkFrameInvalid` | `attack-uplink-injected-frame`, `fault-uplink-padding`, `fault-uplink-extra-frame`, `fault-uplink-after-close` |
-| 82 | `UplinkObjectInvalid` | `attack-uplink-batch-order` |
-| 83 | `UplinkObjectOutside` | `fault-uplink-lost-frame`, `attack-hidden-path-record` |
+| 81 | `UplinkFrameInvalid` | `attack-uplink-injected-frame`, `fault-uplink-padding`, `fault-uplink-extra-frame`, `fault-uplink-after-close`, `attack-uplink-relisted-object` |
+| 82 | `UplinkObjectInvalid` | `attack-uplink-batch-order`, `attack-uplink-covert-bytes`, `attack-mirror-tampered` |
+| 83 | `UplinkObjectOutside` | `fault-uplink-lost-frame`, `attack-hidden-path-record`, `attack-uplink-relisted-object` |
 | 84 | `ConnectivityIncident` | `fault-roll-line-incident`, `fault-capture-mismatch` |
 | 85 | `ConnectivityIncidentRefused` | `attack-incident-forged` |
 
@@ -242,15 +248,15 @@ sets    = list(boxes) ‖ list(stations) ‖ list(progress_policies) ‖ list(re
 
 ## 검증
 
-- `cargo test -p ityv-sim`: 빠른 시나리오 55개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다.
+- `cargo test -p ityv-sim`: 빠른 시나리오 58개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다.
 - `tests/robustness.rs`(`ityv-wasm`의 견고성): 모든 보고서가 올바른 JSON이다. 빠른 번들의 비트를 뒤집고(56번) 자르고 바이트를 덧붙여도 패닉하지 않는다. 적대적인 시나리오 이름(HTML, 따옴표, 제어 문자, U+2028/2029)이 한 문자열로 이스케이프된다. 두 투표함이 같은 칸에 2^63을, 한 투표함이 u64::MAX를 적어 합이 넘쳐도 트랩 없이 `overflow`로 보고되고 상태는 `ityv-verify`와 같다. 보고 단위가 장부보다 높게 읽히는 것은 장부의 보류가 모두 다른 단위의 투표함·집계·투표양식 감사 탓일 때뿐이고, 단위가 `PAPER_AUDITED`로 읽히는 것은 그 투표양식의 감사가 끝났을 때뿐이다. 시나리오에서 나오는 모든 집계·감사 거부가 검증기가 공개한 표(`TallyEvent::hold`, `AuditEvent::hold`)의 보류로 장부에 남는다. 콘솔의 보류 이름 표(`apps/ityv-console/src/vocab.ts`)가 `ityv-state`의 이름과 같다.
 - `tests/audit.rs`: 감사 시나리오마다 검증기의 감사 단계가 시나리오가 말한 것(라운드, 확대, 전수 대조와 발견, 수검표, 보관 보류, 공격마다의 거부 `Late`·`Backdated`·`Premature`·`Conflict`·`Unstamped`, 고정 체크포인트와 공표의 간격)을 보인다. 비콘 관찰 없이는 집계 상태, 제한 열기를 넘기면 모두 재구성. 콘솔 보고서에 제한 열기의 바이트·cast id·난수가 없다.
-- `tests/uplink.rs`: 깨끗한 장부마다 모든 게이트웨이의 세션을 받고(`final` 세션에 참관인 캡처 서명 둘, 슬롯마다 기준값의 프레임, 모든 장치 이벤트 포함), 투표 중에는 포함을 묻지 않으며, 연결 시나리오마다 검증기가 주입한 것(목록의 어긴 규칙, 세션 발견, 프레임·객체 발견, 링크 밖 이벤트, 사건과 전수 대조 대상, 받지 않은 사건)을 보인다.
+- `tests/uplink.rs`: 깨끗한 장부마다 모든 게이트웨이의 세션을 받고(`final` 세션에 참관인 캡처 서명 둘, 슬롯마다 기준값의 프레임과 스캐너 마감 슬롯의 따라잡기 64개, 봉인된 덩어리는 패키지의 것뿐, 모든 장치 이벤트 포함), 투표 중에는 포함을 묻지 않으며, 연결 시나리오마다 검증기가 주입한 것(목록의 어긴 규칙, 세션 발견, 프레임·객체 발견, 링크 밖 이벤트, 되찾은 손실의 무보류, 사건과 전수 대조 대상, 받지 않은 사건)을 보인다.
 - 큰 시나리오: `cargo test -p ityv-sim --release -- --ignored`(약 1분).
 
 ## 하지 않는 것
 
 - 검증기가 옳다는 것을 증명하지 않는다. 시나리오가 기대한 대로 검증기가 말하는지만 본다.
 - 장치 동작은 모델이다. 커밋먼트 유닛의 typestate나 펌웨어를 거치지 않고 같은 형식의 객체를 직접 만든다.
-- 소프트웨어 증명(DeviceAttestation) 이벤트는 만들지 않는다. 검증기에 그 단계가 아직 없다. 연결 감사의 프레임은 실제 1 MiB 탑재부를 만들지 않고 데이터 덩어리의 잎과 root만 계산하며(0 덩어리는 0 부분 트리로), 따라잡기·마감 재전송·입회 재전송은 만들지 않는다(정직한 게이트웨이가 모두 받는다). 참관인 캡처 파일과 통신사 기록은 만들지 않는다.
+- 소프트웨어 증명(DeviceAttestation) 이벤트는 만들지 않는다. 검증기에 그 단계가 아직 없다. 연결 감사의 프레임은 실제 1 MiB 탑재부를 만들지 않고 데이터 덩어리의 잎과 root만 계산하며(0 덩어리는 0 부분 트리로), 닫힌 배치의 두 번째 송신(닫힌 슬롯의 다음 슬롯)과 입회 재전송은 만들지 않는다. share 패키지는 실제 크기(신뢰기관 수 × 약 4 KiB)가 아닌 수백 바이트의 대리 객체다. 참관인 캡처 파일과 통신사 기록은 만들지 않는다.
 - 비콘을 관찰하지 않는다. 비콘 공표는 고정 자료다. 표본 크기를 위험 한도 공식에서 계산하지 않는다(라운드는 손으로 정한 정수다, ADR-0036 9항). 큰 선거에는 감사를 싣지 않았다.

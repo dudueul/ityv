@@ -165,8 +165,8 @@ offset  size  field
 | 0x0054 | `RollCustodyReceiptBody` | 1 | 보관 영수증(`RollCustodyReceipt`): 보관 기관이 다시 계산한 값과 답하는 동결·변경 본문 해시(§8.79). 서명은 `WitnessedEvent` |
 | 0x0055 | `RollAmendmentBody` | 1 | 동결 뒤 변경(`RollAmendment`): 번호, 앞 본문 해시, 사유와 그 출처 기관, 근거 해시, 변경 뒤 값(§8.80). 서명은 `WitnessedEvent` |
 | 0x0056 | `ContestedCheckin` | 1 | 이의 투표의 확인 기록(restricted): 투표소, 유닛, 가명, 봉투 라벨과 유닛·정당 모듈 서명(§8.81, PROTOCOL §6.2). 공개 장부는 프레임만 싣는다 |
-| 0x0057 | `UplinkFrameHeader` | 1 | 프레임 머리: 링크, 슬롯, 번호, 종류, 흐름 오프셋, 데이터 길이, 탑재부 root(§8.82, ADR-0041). 장치가 서명하고 게이트웨이가 사슬로 묶는 대상 |
-| 0x0058 | `UplinkFrameLog` | 1 | 게이트웨이의 프레임 기록: 세션·링크마다 프레임 머리 필드·서명, 데이터 덩어리 잎, 객체 목록(§8.83). 장부 이벤트 |
+| 0x0057 | `UplinkFrameHeader` | 1 | 프레임 머리: 링크, 슬롯, 번호, 종류, 흐름 오프셋, 데이터 길이, 탑재부 root, 객체 목록 해시(§8.82, ADR-0041). 장치가 서명하고 게이트웨이가 사슬로 묶는 대상 |
+| 0x0058 | `UplinkFrameLog` | 1 | 게이트웨이의 프레임 기록: 세션·링크마다 프레임 머리 필드·서명, 데이터 덩어리 잎, 프레임마다 장치가 서명한 객체 목록(§8.83). 장부 이벤트 |
 | 0x0059 | `ConnectivityIncidentBody` | 1 | 연결 사건 본문: 투표소·투표함, 종류, 슬롯 구간, 커밋먼트 유닛 연루, 증거 해시(§8.84). 서명은 `WitnessedEvent` |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
@@ -444,11 +444,13 @@ genesis 본문이 객체 해시로 고정하고(`connectivity_manifest_hash`) ge
 | 3 | `index` | `u16` | 슬롯 안 순번, 64 미만(아니면 `ValueOutOfRange`). 일반은 연결 목록의 `frames_per_slot` 미만, 그 밖은 `catchup_frames_per_slot` 미만(검증기) |
 | 4 | `kind` | `u8` | 0 일반, 1 따라잡기, 2 마감 재전송, 3 입회 재전송. 그 외 값은 `ValueOutOfRange` |
 | 5 | `stream_offset` | `u64` | 이 링크 바이트 흐름에서 `payload` 첫 바이트의 위치 |
-| 6 | `payload_len` | `u32` | 1,048,425 이하(아니면 `ValueOutOfRange`) |
-| 7 | `payload` | `[u8; 1048425]` | 앞 `payload_len` 바이트가 흐름의 연속 구간. 나머지는 0이어야 하며 아니면 처음 0이 아닌 바이트의 위치에 `InvariantViolation` |
-| 8 | `frame_sig` | `[u8; 64]` | `frame_key`의 Ed25519 서명(purpose `uplink-frame`), 이 프레임의 `UplinkFrameHeader` 객체(§8.82)에 대해 |
+| 6 | `payload_len` | `u32` | 966,503 이하(아니면 `ValueOutOfRange`) |
+| 7 | `object_count` | `u16` | 1,024 이하(아니면 `ValueOutOfRange`) |
+| 8 | `objects` | `[u8; 81920]` | 앞 `object_count`개의 80바이트 항목 `{schema_id: u32, object_hash: Hash512, stream_offset: u64, len: u32}`가 이 프레임의 데이터에 걸친 모든 객체(앞 프레임에서 이어 온 것과 다음 프레임으로 넘기는 것 포함)를 흐름 순서로 적는다. 항목마다 `len` 16 이상(`ValueOutOfRange`), 끝이 `u64` 안(`ValueOutOfRange`), 앞 항목의 끝 이상에서 시작(`InvariantViolation`). 나머지 자리는 0이어야 하며 아니면 처음 0이 아닌 바이트의 위치에 `InvariantViolation` |
+| 9 | `payload` | `[u8; 966503]` | 앞 `payload_len` 바이트가 흐름의 연속 구간. 나머지는 0이어야 하며 아니면 처음 0이 아닌 바이트의 위치에 `InvariantViolation` |
+| 10 | `frame_sig` | `[u8; 64]` | `frame_key`의 Ed25519 서명(purpose `uplink-frame`), 이 프레임의 `UplinkFrameHeader` 객체(§8.82)에 대해 |
 
-머리 객체의 `payload_root`는 탑재부를 1,048,576바이트로 0 확장해 4,096바이트 덩어리 256개로 나눈 완전 이진 트리의 root다. 잎은 `SHA3-512("ityv:uplink-chunk:v1" ‖ 0x00 ‖ 덩어리)`, 마디는 `SHA3-512("ityv:uplink-node:v1" ‖ 0x00 ‖ 왼쪽 ‖ 오른쪽)`. 수신자가 탑재부에서 계산하므로 선 위의 프레임은 root를 싣지 않는다. 흐름은 정규 객체의 연접이며 장치가 보낼 수 있는 스키마만 담는다. 수신자는 흐름을 이어 붙여 객체 경계를 복원하고, 정규 객체가 아닌 바이트나 허용되지 않은 스키마를 위반으로 기록한다(PROTOCOL §5.8 10항). 1 MiB 프레임은 시험 벡터 파일로 공표하지 않고 규칙마다 `tests/m5_connectivity.rs`가 확인한다. 버전 1은 서명이 필드 1–7 전체를 덮는 명세 초안이었고 인코딩된 적이 없다.
+머리 객체의 `payload_root`는 탑재부를 1,048,576바이트로 0 확장해 4,096바이트 덩어리 256개로 나눈 완전 이진 트리의 root다. 잎은 `SHA3-512("ityv:uplink-chunk:v1" ‖ 0x00 ‖ 덩어리)`, 마디는 `SHA3-512("ityv:uplink-node:v1" ‖ 0x00 ‖ 왼쪽 ‖ 오른쪽)`. 머리 객체의 `objects_hash`는 `SHA3-512("ityv:uplink-objects:v1" ‖ 0x00 ‖ 항목들)`이고 항목들은 필드 8의 앞 `object_count`개 항목을 이은 바이트다. 수신자가 계산하므로 선 위의 프레임은 둘 다 싣지 않는다. 흐름은 정규 객체의 연접이며 장치가 보낼 수 있는 스키마만 담는다. share 패키지와 그 바로 뒤의 객체는 그것이 시작하는 프레임의 4,096바이트 경계에서 시작하고(앞 프레임에서 이어 오면 그 프레임의 0), 사이 바이트는 0이다. 목록이 데이터를 그렇게 덮는지는 검증기가 확인한다(`ityv-verify`, ADR-0041 6항). 장치는 목록이 1,024개에 이르면 그 프레임을 더 채우지 않는다. 1 MiB 프레임은 시험 벡터 파일로 공표하지 않고 규칙마다 `tests/m5_connectivity.rs`가 확인한다. 버전 1은 서명이 필드 1–7 전체를 덮는 명세 초안이었고 인코딩된 적이 없다. 2i 검토 전의 버전 2 초안(목록 없이 탑재부 1,048,425바이트)은 이 가지 밖으로 나간 적이 없다.
 
 ### 8.23 `UplinkSessionBody` (`schema_id` 0x001E, `schema_version` 2)
 
@@ -1240,7 +1242,7 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 
 ### 8.82–8.84 연결 감사 (ADR-0022, ADR-0041)
 
-> English summary: what the public needs to recompute the gateway's chain and check device-origin inclusion without the 1 MiB frames (sealed share packages travel in them): the 151-byte frame header the device signs and the gateway chains, the gateway's per-session and per-link frame log (header fields, payload root, device signature, the leaves of the data chunks, the objects that start in the frames), and the incident body.
+> English summary: what the public needs to recompute the gateway's chain and check device-origin inclusion without the 1 MiB frames (sealed share packages travel in them): the 215-byte frame header the device signs and the gateway chains (its payload root and the hash of its own object list), the gateway's per-session and per-link frame log (header fields, object count, payload root, device signature, the leaves of the data chunks, each frame's object list as the device signed it), and the incident body.
 
 #### 8.82 `UplinkFrameHeader` (0x0057)
 
@@ -1249,8 +1251,9 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 | 1 | `link_id_hash` | `Hash512` | §8.22 |
 | 2–6 | `slot`, `index`, `kind`, `stream_offset`, `payload_len` | §8.22 필드 2–6 | 같은 규칙(`ValueOutOfRange`) |
 | 7 | `payload_root` | `Hash512` | 탑재부 트리의 root(§8.22) |
+| 8 | `objects_hash` | `Hash512` | 프레임 객체 목록의 해시(§8.22) |
 
-본문은 151바이트, 객체는 167바이트다. 장치의 `frame_sig`(purpose `uplink-frame`)와 게이트웨이 사슬의 `frame_hash`(§8.23)가 이 객체를 덮는다. 선 위의 프레임과 프레임 기록은 이 필드들을 담고, 수신자와 검증기가 이 객체를 다시 만든다.
+본문은 215바이트, 객체는 231바이트다. 장치의 `frame_sig`(purpose `uplink-frame`)와 게이트웨이 사슬의 `frame_hash`(§8.23)가 이 객체를 덮는다. 선 위의 프레임과 프레임 기록은 이 필드들을 담고, 수신자와 검증기가 이 객체를 다시 만든다.
 
 #### 8.83 `UplinkFrameLog` (0x0058)
 
@@ -1261,11 +1264,11 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 | 3 | `gateway_id` | `Ident<64>` | |
 | 4 | `session_index` | `u32` | 이 프레임들을 받은 세션. 0이면 `ValueOutOfRange` |
 | 5 | `link_id_hash` | `Hash512` | |
-| 6 | `frames` | `Array<{slot: u64, index: u16, kind: u8, stream_offset: u64, payload_len: u32, payload_root: Hash512, frame_sig: [u8; 64]}, 384>` | 1개 이상(0이면 개수 접두사 위치에 `InvariantViolation`), (`slot`, `index`) 엄격 오름차순(`NotSorted`, `Duplicate`), 필드는 §8.22와 같은 규칙. 항목은 151바이트 |
+| 6 | `frames` | `Array<{slot: u64, index: u16, kind: u8, stream_offset: u64, payload_len: u32, object_count: u16, payload_root: Hash512, frame_sig: [u8; 64]}, 384>` | 1개 이상(0이면 개수 접두사 위치에 `InvariantViolation`), (`slot`, `index`) 엄격 오름차순(`NotSorted`, `Duplicate`), 필드는 §8.22와 같은 규칙(`object_count` 1,024 이하). 항목은 153바이트 |
 | 7 | `leaves` | `Array<Hash512, 98304>` | 프레임 순서로 프레임마다 `⌈payload_len / 4096⌉`개의 데이터 덩어리 잎. 개수가 다르면 개수 접두사 위치에 `InvariantViolation` |
-| 8 | `objects` | `Array<{schema_id: u32, object_hash: Hash512, stream_offset: u64, len: u32}, 65536>` | 이 프레임들에서 시작하는 객체, 흐름 순서. `len`은 헤더를 포함한 객체 길이로 16 이상(`ValueOutOfRange`), 각 객체는 앞 객체의 끝 이상에서 시작(`InvariantViolation`), 끝이 `u64`를 넘으면 `ValueOutOfRange`. 항목은 80바이트 |
+| 8 | `objects` | `Array<{schema_id: u32, object_hash: Hash512, stream_offset: u64, len: u32}, 393216>` | 프레임 순서로 프레임마다 `object_count`개, 장치가 서명한 그 프레임의 목록(§8.22 필드 8). 개수가 `Σ object_count`가 아니면 개수 접두사 위치에 `InvariantViolation`. 한 프레임의 목록 안에서 `len` 16 이상(`ValueOutOfRange`), 앞 항목의 끝 이상에서 시작(`InvariantViolation`), 끝이 `u64`를 넘으면 `ValueOutOfRange`. 이어 가는 객체는 두 프레임의 목록에 다 있다. 항목은 80바이트 |
 
-자기 서명이 없는 장부 이벤트다. 세션의 사슬 head가 프레임을 덮고, 기록은 그 세션보다 앞 프레임에 싣는다. 검증기는 머리를 다시 만들어 장치 서명과 사슬을 확인하고, 데이터 잎과 0 잎으로 탑재부 root를 다시 만들어 서명된 root와 비교한다(채움 증명: 데이터 뒤가 모두 0). 덩어리의 바이트가 모두 공개 장부 객체면 그 잎도 다시 계산한다(데이터가 그 객체이고 마지막 덩어리의 데이터 뒤가 0임). 봉인 share 패키지가 든 덩어리는 공개 검증기가 열 수 없고 탭 캡처가 확인한다(§8.24, PROTOCOL §5.8 7항).
+자기 서명이 없는 장부 이벤트다. 세션의 사슬 head가 프레임을 덮고, 기록은 그 세션보다 앞 프레임에 싣는다. 검증기는 머리(목록 해시 포함)를 다시 만들어 장치 서명과 사슬을 확인하고, 데이터 잎과 0 잎으로 탑재부 root를 다시 만들어 서명된 root와 비교한다(채움 증명: 데이터 뒤가 모두 0). 목록이 데이터를 덮는지 보고, 패키지가 없는 덩어리는 공개 장부 객체와 0 채움으로 잎을 다시 계산한다. 봉인 share 패키지가 든 덩어리는 공개 검증기가 열 수 없고 탭 캡처가 확인한다(§8.24, PROTOCOL §5.8 7항). 게이트웨이는 목록을 바꿀 수 없다: 바꾸면 장치 서명이 맞지 않는다.
 
 #### 8.84 `ConnectivityIncidentBody` (0x0059)
 

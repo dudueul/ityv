@@ -48,7 +48,7 @@ rustup target add wasm32-unknown-unknown
 cd apps/ityv-console && bun install --frozen-lockfile && bun run dev
 ```
 
-http://127.0.0.1:3000/ 을 연다. 첫 실행은 WASM 검증기와 시뮬레이터를 빌드하고 시나리오 58개를 만드느라 몇 분 걸린다. 주소와 포트는 `HOST`, `PORT`로 바꾸고(기본 127.0.0.1:3000), `ITYV_SIM_SET=quick`이면 빠른 묶음 55개만 만든다. 화면 구성, 정적 빌드(`bun run build`), 검사 방법은 `apps/ityv-console/README.md`를 본다.
+http://127.0.0.1:3000/ 을 연다. 첫 실행은 WASM 검증기와 시뮬레이터를 빌드하고 시나리오 61개를 만드느라 몇 분 걸린다. 주소와 포트는 `HOST`, `PORT`로 바꾸고(기본 127.0.0.1:3000), `ITYV_SIM_SET=quick`이면 빠른 묶음 58개만 만든다. 화면 구성, 정적 빌드(`bun run build`), 검사 방법은 `apps/ityv-console/README.md`를 본다.
 
 ## 계보
 
