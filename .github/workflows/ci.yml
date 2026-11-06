@@ -141,7 +141,13 @@ jobs:
     # 1.47 times the work, so ityv-verify has fourteen shards of about 2.9
     # hours, the slowest about 3.3. It adds 249 ityv-encoding mutants (1,990
     # to 2,239), each about 1.1 times as dear: about 1.23 times the work,
-    # so ityv-encoding has four shards of about 2.9 hours.
+    # so ityv-encoding has four shards of about 2.9 hours. The review
+    # fixes of 2i (frames that list their objects) add 41 ityv-verify
+    # mutants (2,049) and 61 ityv-encoding mutants (2,300), each about as
+    # dear as before (measured on one machine against 1651298: ityv-verify
+    # 65.7 to 68.3 s rebuild, 39.1 to 39.2 s tests; ityv-encoding 21.1 to
+    # 21.4 s rebuild): about 1.05 and 1.04 times the work, so the shards
+    # stay, about 3.0 hours each, the slowest about 3.5.
     strategy:
       fail-fast: false
       matrix:
