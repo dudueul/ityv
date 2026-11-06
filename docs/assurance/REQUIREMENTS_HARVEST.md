@@ -113,7 +113,8 @@
 | ITYV-REQ-PUB-007 | KB-PUB-007 | PUB | 공개 배포본마다 해시·서명·데이터셋 버전을 제공한다 | deployable-now | 0 | 바이트 수정 시 검증 실패 | ADR-0006 |
 | ITYV-REQ-PUB-008 | KB-PUB-008 | PUB | 시민 검증 UI는 접근성·다국어 규칙을 지킨다 | deployable-now | 0 | 스크린리더·고대비 확인 | — |
 | ITYV-REQ-PUB-009 | KB-PUB-009 | PUB | 신고자 신원을 보호하며 제보·처리 현황을 관리한다 | deployable-now | 0 | 공개 미러 노출 방지 | ADR-0011 |
-| ITYV-REQ-INF-001 | KB-INF-001 | INF | 현장 장치는 분리를 안전성의 근거로 삼지 않는다. 바깥 연결은 genesis가 고정하는 연결 목록에 선언되고, TCB 장치에는 들어오는 경로가 없으며, 송신은 게이트웨이의 서명된 사슬과 탭 캡처·통신사 기록으로 감사된다 | needs-statute | 2 | 역방향 시험, 연결 목록·세션·프레임·객체·포함 검사(VC-077..080, `crates/ityv-verify/tests/connectivity.rs`), 캡처·통신사 대조(VC-081) | CONSTITUTION §4.3, ADR-0022, ADR-0041 |
+| ITYV-REQ-INF-001 | KB-INF-001 | INF | 현장 장치는 분리를 안전성의 근거로 삼지 않으며 어떤 장비도 분리되어 있다고 주장하지 않는다. 바깥 연결은 genesis가 고정하는 연결 목록에 선언되고, TCB 장치에는 들어오는 경로가 없으며, 송신은 장치가 객체 목록까지 서명한 프레임과 게이트웨이의 서명된 사슬로 공개 감사되고 참관인 탭 캡처로 대조된다 | deployable-now | 0 | 역방향 시험, 연결 목록·세션·프레임·객체·포함 검사(VC-077..080, `crates/ityv-verify/tests/connectivity.rs`), 캡처 대조(VC-081, `compare_capture`) | CONSTITUTION §4.3, ADR-0022, ADR-0041 |
+| ITYV-REQ-INF-001C | KB-INF-001 | INF | 투표소 회선의 송신은 독립검증위원회가 전기통신사업자에게서 직접 받아 공개하는 접속 기록과 대조된다(통신사 대조) | needs-statute | 2 | 통신사 기록 대조(VC-081, `compare_carrier`) | ADR-0022, ADR-0041, LEGAL_ANNEX 개정안 8(제181조의2 ⑤)·11(제278조의4 ⑤) |
 | ITYV-REQ-INF-002 | KB-INF-002 | INF | 현장 장치에 무선 기능이 없다 | needs-rule | 2 | RF 시험 | CONSTITUTION §4.3 |
 | ITYV-REQ-INF-003 | KB-INF-003 | INF | 측정 부팅과 펌웨어 해시 검증 경로를 제공한다 | needs-rule | 2 | 변조 이미지 부팅 차단 | CONSTITUTION §4.3 |
 | ITYV-REQ-INF-004 | KB-INF-004 | INF | 재현 이중 빌드, SBOM, in-toto 증명, 하이브리드 서명 릴리스 | deployable-now | 0 | 독립 재현 빌드 해시 일치 | CONSTITUTION §3 |
@@ -172,9 +173,11 @@
 
 | 법적 상태 | 건수 |
 |---|---|
-| deployable-now | 103 |
-| needs-rule | 25 |
-| needs-statute | 25 |
+| deployable-now | 104 |
+| needs-rule | 24 |
+| needs-statute | 26 |
+
+KB-INF-001은 둘로 나눴다(154행): 연결 목록과 장치·게이트웨이 기록의 공개 감사는 현행 절차로 0단계부터(ITYV-REQ-INF-001), 통신사 접속 기록 대조는 개정안 8·11이 필요한 2단계(ITYV-REQ-INF-001C).
 
 ## 2. E2E 계층 신규 요구사항 (37)
 
