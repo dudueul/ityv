@@ -159,6 +159,8 @@ pub struct Finding<'a> {
     pub offset: usize,
     /// The event hash the frame names, when the record could be read.
     pub event_hash: Option<Hash512>,
+    /// The event schema the frame names, when the record could be read.
+    pub event_schema: Option<SchemaId>,
     /// Whom the finding puts under review.
     pub scope: Scope<'a>,
     /// What is wrong.
@@ -671,6 +673,7 @@ impl<'a> Builder<'_, 'a> {
             seq: None,
             offset,
             event_hash: None,
+            event_schema: None,
             scope: Scope::Election,
             kind,
         };
@@ -690,6 +693,7 @@ impl<'a> Builder<'_, 'a> {
             seq: Some(frame.seq()),
             offset: record.offset(),
             event_hash: Some(*frame.event_hash()),
+            event_schema: Some(frame.event_schema_id()),
             scope: Scope::Election,
             kind: FindingKind::ChainBroken,
         };
