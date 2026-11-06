@@ -7,14 +7,17 @@
 //!   and port; the instances are the genesis's device entries, which carry
 //!   each device's frame key (ADR-0041 decisions 1 and 2).
 //! * [`UplinkFrameHeader`] (schema `0x0057`): what a frame's signature and
-//!   the gateway's chain cover: the frame's fields and the root of its
-//!   payload's chunk tree (ADR-0041 decision 3).
+//!   the gateway's chain cover: the frame's fields, the root of its
+//!   payload's chunk tree and the hash of its object list (ADR-0041
+//!   decision 3).
 //! * [`UplinkFrame`] (schema `0x001D`, version 2): the 1,048,576-byte wire
-//!   frame. Not a ledger event; tap observers capture it.
+//!   frame: its fields, its object list (every object that overlaps its
+//!   data, at most [`MAX_FRAME_OBJECTS`]), its payload and its signature.
+//!   Not a ledger event; tap observers capture it.
 //! * [`UplinkSessionBody`] and [`UplinkSession`] (schemas `0x001E`,
 //!   `0x001F`, version 2): a gateway's signed record of up to six slots.
 //! * [`UplinkFrameLog`] (schema `0x0058`): the frames of one link in one
-//!   session, their data-chunk leaves and the objects that start in them.
+//!   session, their data-chunk leaves and each frame's object list.
 //! * [`ConnectivityIncidentBody`] (schema `0x0059`, a witnessed body).
 //!
 //! This crate checks form only. The one-way rules of the manifest, the
@@ -41,9 +44,19 @@ use crate::writer::Writer;
 /// The fixed body length of an uplink frame (ADR-0022 decision 4).
 pub const FRAME_BODY_LEN: usize = 1_048_576;
 
+/// The most objects one frame lists: every object that overlaps its data,
+/// the one carried in from the frame before and the one carried out to the
+/// frame after included. A device stops filling a frame at this bound.
+pub const MAX_FRAME_OBJECTS: usize = 1024;
+
+/// The object list region of a wire frame: [`MAX_FRAME_OBJECTS`] entries
+/// of [`OBJECT_ENTRY_LEN`] bytes, the unused ones zero.
+pub const FRAME_OBJECTS_LEN: usize = MAX_FRAME_OBJECTS * OBJECT_ENTRY_LEN;
+
 /// The payload of an uplink frame: the body less the header fields (87
+/// bytes), the object count (2 bytes), the object list region (81,920
 /// bytes) and the signature (64 bytes).
-pub const MAX_PAYLOAD_LEN: usize = 1_048_425;
+pub const MAX_PAYLOAD_LEN: usize = 966_503;
 
 /// The length of one chunk of the payload tree.
 pub const CHUNK_LEN: usize = 4096;
@@ -87,11 +100,14 @@ pub const MAX_LOG_FRAMES: usize = 384;
 /// The most data-chunk leaves one log carries.
 pub const MAX_LOG_LEAVES: usize = MAX_LOG_FRAMES * PAYLOAD_CHUNKS;
 
-/// The most objects one log lists.
-pub const MAX_LOG_OBJECTS: usize = 65_536;
+/// The most object entries one log carries: every frame's list.
+pub const MAX_LOG_OBJECTS: usize = MAX_LOG_FRAMES * MAX_FRAME_OBJECTS;
 
 /// The encoded length of one frame entry of a log.
-pub const FRAME_ENTRY_LEN: usize = 151;
+pub const FRAME_ENTRY_LEN: usize = 153;
+
+/// The encoded length of a frame header's body.
+pub const FRAME_HEADER_LEN: usize = 215;
 
 /// The encoded length of one object entry of a log.
 pub const OBJECT_ENTRY_LEN: usize = 80;
@@ -648,6 +664,9 @@ pub struct UplinkFrameHeaderParts {
     pub payload_len: u32,
     /// The root of the payload's chunk tree (ADR-0041 decision 3).
     pub payload_root: Hash512,
+    /// The hash of the frame's object list
+    /// (`ityv_crypto::uplink::objects_hash` of its encoded entries).
+    pub objects_hash: Hash512,
 }
 
 impl UplinkFrameHeaderParts {
@@ -719,7 +738,7 @@ fn write_position(w: &mut Writer<'_>, p: &UplinkFrameHeaderParts) -> Result<(), 
 }
 
 /// Reads slot, index, kind, stream offset and payload length, with
-/// `link_id_hash` and a zero root.
+/// `link_id_hash` and a zero root and object hash.
 fn read_position(
     r: &mut Reader<'_>,
     link_id_hash: Hash512,
@@ -745,17 +764,19 @@ fn read_position(
         stream_offset,
         payload_len,
         payload_root: Hash512::ZERO,
+        objects_hash: Hash512::ZERO,
     })
 }
 
 impl Encode for UplinkFrameHeader {
     fn encoded_len(&self) -> usize {
-        FRAME_ENTRY_LEN
+        FRAME_HEADER_LEN
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
         write_frame_fields(w, &self.parts)?;
-        self.parts.payload_root.encode(w)
+        self.parts.payload_root.encode(w)?;
+        self.parts.objects_hash.encode(w)
     }
 }
 
@@ -764,6 +785,7 @@ impl<'a> Decode<'a> for UplinkFrameHeader {
         let link_id_hash = Hash512::decode(r)?;
         let mut parts = read_position(r, link_id_hash)?;
         parts.payload_root = Hash512::decode(r)?;
+        parts.objects_hash = Hash512::decode(r)?;
         Ok(Self { parts })
     }
 }
@@ -772,15 +794,20 @@ impl<'a> Decode<'a> for UplinkFrameHeader {
 // 0x001D UplinkFrame
 
 /// An uplink frame on the wire (schema `0x001D`, version 2): the header
-/// fields, the 1,048,425-byte payload and the device's signature over the
-/// frame's [`UplinkFrameHeader`] (purpose `uplink-frame`).
+/// fields, the object count and the 81,920-byte object list region, the
+/// 966,503-byte payload and the device's signature over the frame's
+/// [`UplinkFrameHeader`] (purpose `uplink-frame`), whose `objects_hash` is
+/// the hash of the listed entries.
 ///
 /// Rules: the header fields as [`UplinkFrameHeader`] (`ValueOutOfRange`);
-/// every payload byte from `payload_len` on is zero (`InvariantViolation`
-/// at the first that is not).
+/// at most [`MAX_FRAME_OBJECTS`] objects (`ValueOutOfRange` at the count),
+/// listed as [`FrameObjects`] requires; every byte of the region after the
+/// listed entries is zero, and every payload byte from `payload_len` on is
+/// zero (`InvariantViolation` at the first that is not).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UplinkFrame<'a> {
     parts: UplinkFrameHeaderParts,
+    objects: FrameObjects<'a>,
     payload: &'a [u8; MAX_PAYLOAD_LEN],
     frame_sig: &'a [u8; ED25519_SIG_LEN],
 }
@@ -793,14 +820,16 @@ fn first_nonzero(payload: &[u8], from: usize) -> Option<usize> {
 }
 
 impl<'a> UplinkFrame<'a> {
-    /// Builds a frame. The header's `payload_root` is ignored (the wire
-    /// frame does not carry it; the receiver computes it).
+    /// Builds a frame. The header's `payload_root` and `objects_hash` are
+    /// ignored (the wire frame does not carry them; the receiver computes
+    /// them).
     ///
     /// # Errors
     /// `ValueOutOfRange` at 0 for a header field out of range,
     /// `InvariantViolation` at 0 if a byte after `payload_len` is not zero.
     pub fn new(
         parts: &UplinkFrameHeaderParts,
+        objects: FrameObjects<'a>,
         payload: &'a [u8; MAX_PAYLOAD_LEN],
         frame_sig: &'a [u8; ED25519_SIG_LEN],
     ) -> Result<Self, Error> {
@@ -813,17 +842,25 @@ impl<'a> UplinkFrame<'a> {
         }
         let mut parts = *parts;
         parts.payload_root = Hash512::ZERO;
+        parts.objects_hash = Hash512::ZERO;
         Ok(Self {
             parts,
+            objects,
             payload,
             frame_sig,
         })
     }
 
-    /// The header fields, with a zero `payload_root`.
+    /// The header fields, with a zero `payload_root` and `objects_hash`.
     #[must_use]
     pub const fn fields(&self) -> &UplinkFrameHeaderParts {
         &self.parts
+    }
+
+    /// The object list.
+    #[must_use]
+    pub const fn objects(&self) -> FrameObjects<'a> {
+        self.objects
     }
 
     /// The whole payload.
@@ -853,6 +890,12 @@ impl Encode for UplinkFrame<'_> {
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
         write_frame_fields(w, &self.parts)?;
+        let count = self.objects.len();
+        w.write_u16(u16::try_from(count).map_err(|_| Error::new(Kind::CountExceedsMax, 0))?)?;
+        w.write_slice(self.objects.bytes)?;
+        for _ in count..MAX_FRAME_OBJECTS {
+            w.write_array(&[0u8; OBJECT_ENTRY_LEN])?;
+        }
         w.write_array(self.payload)?;
         w.write_array(self.frame_sig)
     }
@@ -862,6 +905,7 @@ impl<'a> Decode<'a> for UplinkFrame<'a> {
     fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
         let link_id_hash = Hash512::decode(r)?;
         let parts = read_position(r, link_id_hash)?;
+        let objects = read_object_region(r)?;
         let payload_at = r.position();
         let payload = read_fixed::<MAX_PAYLOAD_LEN>(r)?;
         let len = usize::try_from(parts.payload_len).map_err(|_| invalid(payload_at))?;
@@ -870,10 +914,33 @@ impl<'a> Decode<'a> for UplinkFrame<'a> {
         }
         Ok(Self {
             parts,
+            objects,
             payload,
             frame_sig: read_fixed::<ED25519_SIG_LEN>(r)?,
         })
     }
+}
+
+/// Reads a wire frame's object count and region: the listed entries as
+/// [`FrameObjects`] requires, then zeros to the region's end.
+fn read_object_region<'a>(r: &mut Reader<'a>) -> Result<FrameObjects<'a>, Error> {
+    let count_at = r.position();
+    let count = usize::from(r.read_u16()?);
+    if count > MAX_FRAME_OBJECTS {
+        return Err(Error::new(Kind::ValueOutOfRange, count_at));
+    }
+    let start = r.position();
+    read_frame_objects(r, count)?;
+    let objects = FrameObjects {
+        bytes: r.consumed_from(start)?,
+    };
+    let rest_at = r.position();
+    let used = objects.bytes.len();
+    let rest = r.take(FRAME_OBJECTS_LEN.saturating_sub(used))?;
+    if let Some(at) = first_nonzero(rest, 0) {
+        return Err(invalid(rest_at.saturating_add(at)));
+    }
+    Ok(objects)
 }
 
 // ---------------------------------------------------------------------------
@@ -1338,8 +1405,9 @@ impl<'a> Decode<'a> for UplinkSession<'a> {
 // ---------------------------------------------------------------------------
 // 0x0058 UplinkFrameLog
 
-/// One frame of a log: its header fields (the link is the log's), its
-/// payload root and the device's signature.
+/// One frame of a log: its header fields (the link is the log's), the
+/// number of objects it lists, its payload root and the device's
+/// signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FrameEntry<'a> {
     /// The slot.
@@ -1352,6 +1420,8 @@ pub struct FrameEntry<'a> {
     pub stream_offset: u64,
     /// How many payload bytes are data.
     pub payload_len: u32,
+    /// How many objects the frame lists (at most [`MAX_FRAME_OBJECTS`]).
+    pub object_count: u16,
     /// The root of the payload's chunk tree, as the device signed it.
     pub payload_root: Hash512,
     /// The device's signature over the frame's header.
@@ -1359,9 +1429,14 @@ pub struct FrameEntry<'a> {
 }
 
 impl FrameEntry<'_> {
-    /// The frame's header under `link_id_hash`.
+    /// The frame's header under `link_id_hash`, with `objects_hash` the
+    /// hash of its object list.
     #[must_use]
-    pub const fn header(&self, link_id_hash: Hash512) -> UplinkFrameHeaderParts {
+    pub const fn header(
+        &self,
+        link_id_hash: Hash512,
+        objects_hash: Hash512,
+    ) -> UplinkFrameHeaderParts {
         UplinkFrameHeaderParts {
             link_id_hash,
             slot: self.slot,
@@ -1370,6 +1445,7 @@ impl FrameEntry<'_> {
             stream_offset: self.stream_offset,
             payload_len: self.payload_len,
             payload_root: self.payload_root,
+            objects_hash,
         }
     }
 }
@@ -1380,7 +1456,8 @@ impl Encode for FrameEntry<'_> {
     }
 
     fn encode(&self, w: &mut Writer<'_>) -> Result<(), Error> {
-        write_position(w, &self.header(Hash512::ZERO))?;
+        write_position(w, &self.header(Hash512::ZERO, Hash512::ZERO))?;
+        w.write_u16(self.object_count)?;
         self.payload_root.encode(w)?;
         w.write_array(self.frame_sig)
     }
@@ -1389,12 +1466,18 @@ impl Encode for FrameEntry<'_> {
 impl<'a> Decode<'a> for FrameEntry<'a> {
     fn decode(r: &mut Reader<'a>) -> Result<Self, Error> {
         let p = read_position(r, Hash512::ZERO)?;
+        let count_at = r.position();
+        let object_count = r.read_u16()?;
+        if usize::from(object_count) > MAX_FRAME_OBJECTS {
+            return Err(Error::new(Kind::ValueOutOfRange, count_at));
+        }
         Ok(Self {
             slot: p.slot,
             index: p.index,
             kind: p.kind,
             stream_offset: p.stream_offset,
             payload_len: p.payload_len,
+            object_count,
             payload_root: Hash512::decode(r)?,
             frame_sig: read_fixed::<ED25519_SIG_LEN>(r)?,
         })
@@ -1408,9 +1491,12 @@ pub struct LogFrames<'a> {
     bytes: &'a [u8],
 }
 
-fn read_frames(r: &mut Reader<'_>, count: usize) -> Result<u64, Error> {
+/// Reads `count` frame entries; returns their data chunks and listed
+/// objects.
+fn read_frames(r: &mut Reader<'_>, count: usize) -> Result<(u64, u64), Error> {
     let mut previous: Option<(u64, u16)> = None;
     let mut chunks = 0u64;
+    let mut objects = 0u64;
     for _ in 0..count {
         let at = r.position();
         let f = FrameEntry::decode(r)?;
@@ -1427,8 +1513,11 @@ fn read_frames(r: &mut Reader<'_>, count: usize) -> Result<u64, Error> {
         chunks = chunks
             .checked_add(n)
             .ok_or_else(|| Error::new(Kind::ArithmeticOverflow, at))?;
+        objects = objects
+            .checked_add(u64::from(f.object_count))
+            .ok_or_else(|| Error::new(Kind::ArithmeticOverflow, at))?;
     }
-    Ok(chunks)
+    Ok((chunks, objects))
 }
 
 impl<'a> LogFrames<'a> {
@@ -1472,6 +1561,14 @@ impl<'a> LogFrames<'a> {
     pub fn data_chunks(&self) -> usize {
         self.iter().fold(0usize, |acc, f| {
             acc.saturating_add(data_chunks(f.payload_len))
+        })
+    }
+
+    /// The objects every frame lists: `Σ object_count`.
+    #[must_use]
+    pub fn objects(&self) -> usize {
+        self.iter().fold(0usize, |acc, f| {
+            acc.saturating_add(usize::from(f.object_count))
         })
     }
 
@@ -1584,14 +1681,11 @@ impl<'a> Decode<'a> for StreamObject {
     }
 }
 
-/// The objects of a log, borrowed as [`OBJECT_ENTRY_LEN`]-byte entries in
-/// stream order, none overlapping the one before.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LogObjects<'a> {
-    bytes: &'a [u8],
-}
-
-fn read_objects(r: &mut Reader<'_>, count: usize) -> Result<(), Error> {
+/// Reads `count` entries of one frame's object list: each in form (at
+/// least 16 bytes long, `ValueOutOfRange`; its end within `u64`,
+/// `ValueOutOfRange`) and starting at or after the end of the one before
+/// (`InvariantViolation`).
+fn read_frame_objects(r: &mut Reader<'_>, count: usize) -> Result<(), Error> {
     let mut previous_end: Option<u64> = None;
     for _ in 0..count {
         let at = r.position();
@@ -1607,21 +1701,32 @@ fn read_objects(r: &mut Reader<'_>, count: usize) -> Result<(), Error> {
     Ok(())
 }
 
-impl<'a> LogObjects<'a> {
-    /// No object.
-    pub const EMPTY: LogObjects<'static> = LogObjects { bytes: &[] };
+/// One frame's object list (ADR-0041 decision 3), borrowed as
+/// [`OBJECT_ENTRY_LEN`]-byte entries in stream order, none overlapping the
+/// one before: every object that overlaps the frame's data, the one
+/// carried in from the frame before and the one carried out to the frame
+/// after included. Whether the list tiles the frame's data is the
+/// verifier's rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FrameObjects<'a> {
+    bytes: &'a [u8],
+}
 
-    /// The objects in `bytes`. `None` unless whole entries, at most
-    /// [`MAX_LOG_OBJECTS`], each at least 16 bytes long and starting at or
-    /// after the end of the one before.
+impl<'a> FrameObjects<'a> {
+    /// No object.
+    pub const EMPTY: FrameObjects<'static> = FrameObjects { bytes: &[] };
+
+    /// The list in `bytes`. `None` unless whole entries, at most
+    /// [`MAX_FRAME_OBJECTS`], each at least 16 bytes long and starting at
+    /// or after the end of the one before.
     #[must_use]
     pub fn new(bytes: &'a [u8]) -> Option<Self> {
         let count = fixed_count::<OBJECT_ENTRY_LEN>(bytes);
-        if bytes.len().checked_rem(OBJECT_ENTRY_LEN) != Some(0) || count > MAX_LOG_OBJECTS {
+        if bytes.len().checked_rem(OBJECT_ENTRY_LEN) != Some(0) || count > MAX_FRAME_OBJECTS {
             return None;
         }
         let mut r = Reader::new(bytes);
-        read_objects(&mut r, count).ok()?;
+        read_frame_objects(&mut r, count).ok()?;
         Some(Self { bytes })
     }
 
@@ -1652,6 +1757,64 @@ impl<'a> LogObjects<'a> {
     }
 }
 
+/// The object lists of a log's frames, one after another, borrowed as
+/// [`OBJECT_ENTRY_LEN`]-byte entries. An object carried from one frame to
+/// the next is in both lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LogObjects<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> LogObjects<'a> {
+    /// No object.
+    pub const EMPTY: LogObjects<'static> = LogObjects { bytes: &[] };
+
+    /// The entries in `bytes`. `None` unless whole entries, at most
+    /// [`MAX_LOG_OBJECTS`], each at least 16 bytes long with its end
+    /// within `u64`. How they divide into frames is the log's.
+    #[must_use]
+    pub fn new(bytes: &'a [u8]) -> Option<Self> {
+        let count = fixed_count::<OBJECT_ENTRY_LEN>(bytes);
+        if bytes.len().checked_rem(OBJECT_ENTRY_LEN) != Some(0) || count > MAX_LOG_OBJECTS {
+            return None;
+        }
+        let in_form = bytes.chunks_exact(OBJECT_ENTRY_LEN).all(|c| {
+            let mut r = Reader::new(c);
+            StreamObject::decode(&mut r).is_ok_and(|o| o.end().is_some())
+        });
+        in_form.then_some(Self { bytes })
+    }
+
+    /// The encoded entries.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// The number of entries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        fixed_count::<OBJECT_ENTRY_LEN>(self.bytes)
+    }
+
+    /// Whether there is none.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+/// One frame of a log with its data-chunk leaves and its object list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LoggedFrame<'a> {
+    /// The frame.
+    pub entry: FrameEntry<'a>,
+    /// Its `⌈payload_len / 4096⌉` data-chunk leaves.
+    pub leaves: LogLeaves<'a>,
+    /// Its `object_count` objects.
+    pub objects: FrameObjects<'a>,
+}
+
 /// The fields of a frame log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UplinkFrameLogParts<'a> {
@@ -1669,7 +1832,7 @@ pub struct UplinkFrameLogParts<'a> {
     pub frames: LogFrames<'a>,
     /// The leaves of every data chunk of the frames, in frame order.
     pub leaves: LogLeaves<'a>,
-    /// The objects that start in the frames, in stream order.
+    /// Every frame's object list, in frame order.
     pub objects: LogObjects<'a>,
 }
 
@@ -1677,12 +1840,13 @@ pub struct UplinkFrameLogParts<'a> {
 /// own: the session's chain head covers its frames).
 ///
 /// Rules: the session number is at least 1 (`ValueOutOfRange`); one to 384
-/// frames strictly ascending by (slot, index), each in form
-/// (`InvariantViolation` for none, `CountExceedsMax`, `NotSorted`,
-/// `Duplicate`, `ValueOutOfRange`); exactly `Σ ⌈payload_len / 4096⌉` leaves
-/// (`InvariantViolation` at the leaf count); objects at least 16 bytes long
-/// (`ValueOutOfRange`), each starting at or after the end of the one before
-/// (`InvariantViolation`).
+/// frames strictly ascending by (slot, index), each in form, listing at
+/// most [`MAX_FRAME_OBJECTS`] objects (`InvariantViolation` for none,
+/// `CountExceedsMax`, `NotSorted`, `Duplicate`, `ValueOutOfRange`); exactly
+/// `Σ ⌈payload_len / 4096⌉` leaves (`InvariantViolation` at the leaf
+/// count); exactly `Σ object_count` object entries (`InvariantViolation` at
+/// the object count), each frame's list as [`FrameObjects`] requires
+/// (`ValueOutOfRange`, `InvariantViolation`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UplinkFrameLog<'a> {
     parts: UplinkFrameLogParts<'a>,
@@ -1693,21 +1857,46 @@ impl<'a> UplinkFrameLog<'a> {
     ///
     /// # Errors
     /// `ValueOutOfRange` at 0 for session 0, `InvariantViolation` at 0 if
-    /// the leaves do not match the frames.
+    /// the leaves or the objects do not match the frames.
     pub fn new(parts: &UplinkFrameLogParts<'a>) -> Result<Self, Error> {
         if parts.session_index == 0 {
             return Err(Error::new(Kind::ValueOutOfRange, 0));
         }
-        if parts.leaves.len() != parts.frames.data_chunks() {
+        if parts.leaves.len() != parts.frames.data_chunks()
+            || parts.objects.len() != parts.frames.objects()
+        {
             return Err(invalid(0));
         }
-        Ok(Self { parts: *parts })
+        let log = Self { parts: *parts };
+        let lists_ok = log
+            .frames_with()
+            .all(|f| FrameObjects::new(f.objects.bytes).is_some());
+        if lists_ok { Ok(log) } else { Err(invalid(0)) }
     }
 
     /// The fields.
     #[must_use]
     pub const fn parts(&self) -> &UplinkFrameLogParts<'a> {
         &self.parts
+    }
+
+    /// Each frame with its leaves and its object list, in order.
+    pub fn frames_with(&self) -> impl Iterator<Item = LoggedFrame<'a>> + use<'a> {
+        let mut leaves = self.parts.leaves.bytes;
+        let mut objects = self.parts.objects.bytes;
+        self.parts.frames.iter().map(move |entry| {
+            let n = data_chunks(entry.payload_len).saturating_mul(64);
+            let (mine, rest) = leaves.split_at_checked(n).unwrap_or((leaves, &[]));
+            leaves = rest;
+            let m = usize::from(entry.object_count).saturating_mul(OBJECT_ENTRY_LEN);
+            let (listed, rest) = objects.split_at_checked(m).unwrap_or((objects, &[]));
+            objects = rest;
+            LoggedFrame {
+                entry,
+                leaves: LogLeaves { bytes: mine },
+                objects: FrameObjects { bytes: listed },
+            }
+        })
     }
 }
 
@@ -1757,7 +1946,7 @@ impl<'a> Decode<'a> for UplinkFrameLog<'a> {
             return Err(invalid(frames_at));
         }
         let start = r.position();
-        let chunks = read_frames(r, frame_count)?;
+        let (chunks, listed) = read_frames(r, frame_count)?;
         let frames = LogFrames {
             bytes: r.consumed_from(start)?,
         };
@@ -1772,9 +1961,15 @@ impl<'a> Decode<'a> for UplinkFrameLog<'a> {
         let leaves = LogLeaves {
             bytes: r.take(length)?,
         };
+        let objects_at = r.position();
         let object_count = r.read_count(MAX_LOG_OBJECTS)?;
+        if u64::try_from(object_count).ok() != Some(listed) {
+            return Err(invalid(objects_at));
+        }
         let start = r.position();
-        read_objects(r, object_count)?;
+        for f in frames.iter() {
+            read_frame_objects(r, usize::from(f.object_count))?;
+        }
         let objects = LogObjects {
             bytes: r.consumed_from(start)?,
         };

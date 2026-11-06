@@ -35,15 +35,16 @@ use ityv_encoding::{
     BoxId, CARRIES_MASK, CARRY_LEDGER, CARRY_PUBLIC, CARRY_SEALED, CARRY_SESSION, CaptureMessage,
     CaptureSig, ConnectivityIncidentBody, ConnectivityIncidentParts, ConnectivityManifest, Decode,
     DeviceClass, Direction, ED25519_SIG_LEN, ElectionId, Encode, ErrorKind, FRAME_BODY_LEN,
-    FRAME_ENTRY_LEN, FrameEntry, FrameKind, GatewayId, HEADER_LEN, HYBRID_SIG_LEN, Hash512, Ident,
-    IncidentKind, LogFrames, LogLeaves, LogObjects, MAX_CAPTURE_SIGS, MAX_FRAMES_PER_SLOT,
-    MAX_PAYLOAD_LEN, MAX_SESSION_BODY_LEN, MAX_SESSION_LINKS, ManifestEntries, ManifestEntry,
-    Medium, OBJECT_ENTRY_LEN, OrgId, SCHEMA_CONNECTIVITY_INCIDENT_BODY,
-    SCHEMA_CONNECTIVITY_MANIFEST, SCHEMA_UPLINK_FRAME, SCHEMA_UPLINK_FRAME_HEADER,
-    SCHEMA_UPLINK_FRAME_LOG, SCHEMA_UPLINK_SESSION, SCHEMA_UPLINK_SESSION_BODY, SCHEMA_VERSION_1,
-    SCHEMA_VERSION_UPLINK, SESSION_LINK_LEN, Schedule, SchemaId, SessionLink, SessionLinks,
-    SignerId, StationId, StreamObject, UplinkFrame, UplinkFrameHeader, UplinkFrameHeaderParts,
-    UplinkFrameLog, UplinkFrameLogParts, UplinkSession, UplinkSessionBody, UplinkSessionParts,
+    FRAME_ENTRY_LEN, FRAME_HEADER_LEN, FRAME_OBJECTS_LEN, FrameEntry, FrameKind, FrameObjects,
+    GatewayId, HEADER_LEN, HYBRID_SIG_LEN, Hash512, Ident, IncidentKind, LogFrames, LogLeaves,
+    LogObjects, MAX_CAPTURE_SIGS, MAX_FRAME_OBJECTS, MAX_FRAMES_PER_SLOT, MAX_PAYLOAD_LEN,
+    MAX_SESSION_BODY_LEN, MAX_SESSION_LINKS, ManifestEntries, ManifestEntry, Medium,
+    OBJECT_ENTRY_LEN, OrgId, SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_CONNECTIVITY_MANIFEST,
+    SCHEMA_UPLINK_FRAME, SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_UPLINK_FRAME_LOG,
+    SCHEMA_UPLINK_SESSION, SCHEMA_UPLINK_SESSION_BODY, SCHEMA_VERSION_1, SCHEMA_VERSION_UPLINK,
+    SESSION_LINK_LEN, Schedule, SchemaId, SessionLink, SessionLinks, SignerId, StationId,
+    StreamObject, UplinkFrame, UplinkFrameHeader, UplinkFrameHeaderParts, UplinkFrameLog,
+    UplinkFrameLogParts, UplinkSession, UplinkSessionBody, UplinkSessionParts,
     WITNESSED_BODY_SCHEMAS, Writer, data_chunks, decode_object, purpose_of, schema_version,
 };
 use proptest::prelude::*;
@@ -154,11 +155,18 @@ fn the_schemas_are_registered_with_their_versions() {
         purpose_of(SCHEMA_CONNECTIVITY_INCIDENT_BODY),
         Some(b"connectivity-incident".as_slice())
     );
-    // The fixed widths.
-    assert_eq!(FRAME_ENTRY_LEN, 151);
+    // The fixed widths: a frame is its header fields (87 bytes), the
+    // object count and region, the payload and the signature.
+    assert_eq!(FRAME_ENTRY_LEN, 153);
+    assert_eq!(FRAME_HEADER_LEN, 215);
     assert_eq!(OBJECT_ENTRY_LEN, 80);
     assert_eq!(SESSION_LINK_LEN, 156);
-    assert_eq!(MAX_PAYLOAD_LEN + 151 - 64 + 64, FRAME_BODY_LEN);
+    assert_eq!(MAX_FRAME_OBJECTS, 1024);
+    assert_eq!(FRAME_OBJECTS_LEN, 81_920);
+    assert_eq!(
+        87 + 2 + FRAME_OBJECTS_LEN + MAX_PAYLOAD_LEN + 64,
+        FRAME_BODY_LEN
+    );
 }
 
 #[test]
@@ -188,7 +196,7 @@ fn every_code_round_trips_and_nothing_else_decodes() {
     assert_eq!(data_chunks(1), 1);
     assert_eq!(data_chunks(4096), 1);
     assert_eq!(data_chunks(4097), 2);
-    assert_eq!(data_chunks(MAX_PAYLOAD_LEN as u32), 256);
+    assert_eq!(data_chunks(MAX_PAYLOAD_LEN as u32), 236);
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +450,7 @@ fn header_parts() -> UplinkFrameHeaderParts {
         stream_offset: 4_000_000,
         payload_len: 9000,
         payload_root: patterned64(0x22),
+        objects_hash: patterned64(0x33),
     }
 }
 
@@ -451,7 +460,7 @@ fn a_header_round_trips_and_keeps_its_fields_in_range() {
     assert_eq!(*h.parts(), header_parts());
     assert_eq!(h.parts().data_chunks(), 3);
     let bytes = encode_to_vec(SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1, &h);
-    assert_eq!(bytes.len(), HEADER_LEN + FRAME_ENTRY_LEN);
+    assert_eq!(bytes.len(), HEADER_LEN + FRAME_HEADER_LEN);
     let back: UplinkFrameHeader =
         decode_object(SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1, &bytes).unwrap();
     assert_eq!(back, h);
@@ -507,10 +516,10 @@ fn header_vectors() -> Vec<Vector> {
     b.pop();
     fix_len(&mut b);
     v.push(invalid(
-        "a root cut short",
+        "an object hash cut short",
         b,
         "UnexpectedEnd",
-        HEADER_LEN + 64 + 23,
+        HEADER_LEN + 64 + 23 + 64,
     ));
     v
 }
@@ -533,17 +542,30 @@ fn header_vectors_are_current_and_self_consistent() {
     });
 }
 
+/// The object list of the frame of [`header_parts`] (9,000 bytes from
+/// 4,000,000): one object carried in from before it, one carried out past
+/// its end.
+fn frame_objects() -> FrameObjects<'static> {
+    let list: Vec<u8> = [object(0x44, 3_999_000, 5000), object(0x45, 4_004_000, 8000)]
+        .iter()
+        .flat_map(bytes_of)
+        .collect();
+    FrameObjects::new(leak(list)).unwrap()
+}
+
 #[test]
-fn a_frame_carries_its_data_and_zeros_after_it() {
+fn a_frame_carries_its_objects_its_data_and_zeros_after_them() {
     let mut payload: Box<[u8; MAX_PAYLOAD_LEN]> = std::vec![0u8; MAX_PAYLOAD_LEN]
         .into_boxed_slice()
         .try_into()
         .unwrap();
     payload[..9000].fill(0x5A);
-    let frame = UplinkFrame::new(&header_parts(), &payload, &FRAME_SIG).unwrap();
-    // The wire frame carries no root.
+    let frame = UplinkFrame::new(&header_parts(), frame_objects(), &payload, &FRAME_SIG).unwrap();
+    // The wire frame carries no root and no object hash.
     assert_eq!(frame.fields().payload_root, Hash512::ZERO);
+    assert_eq!(frame.fields().objects_hash, Hash512::ZERO);
     assert_eq!(frame.fields().slot, 150);
+    assert_eq!(frame.objects(), frame_objects());
     assert_eq!(frame.data().len(), 9000);
     assert_eq!(frame.payload().len(), MAX_PAYLOAD_LEN);
     assert_eq!(frame.frame_sig(), &FRAME_SIG);
@@ -552,34 +574,92 @@ fn a_frame_carries_its_data_and_zeros_after_it() {
     let back: UplinkFrame<'_> =
         decode_object(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_UPLINK, &bytes).unwrap();
     assert_eq!(back, frame);
+    assert_eq!(
+        back.objects().iter().nth(1),
+        Some(object(0x45, 4_004_000, 8000))
+    );
     // Version 1 is not this frame.
     assert_eq!(
         kind_at::<UplinkFrame<'_>>(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_1, &bytes).0,
         ErrorKind::UnsupportedVersion
     );
 
+    let count_at = HEADER_LEN + 87;
+    let region_at = count_at + 2;
+    let payload_at = region_at + FRAME_OBJECTS_LEN;
+    let decode =
+        |b: &[u8]| kind_at::<UplinkFrame<'_>>(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_UPLINK, b);
     // A nonzero byte after the data: the first one is reported.
-    let payload_at = HEADER_LEN + 64 + 23;
     let mut b = bytes.clone();
     b[payload_at + 9000 + 7] = 1;
     b[payload_at + 500_000] = 1;
     assert_eq!(
-        kind_at::<UplinkFrame<'_>>(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_UPLINK, &b),
+        decode(&b),
         (ErrorKind::InvariantViolation, payload_at + 9007)
     );
     let mut b = bytes.clone();
     b[payload_at + MAX_PAYLOAD_LEN - 1] = 1;
     assert_eq!(
-        kind_at::<UplinkFrame<'_>>(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_UPLINK, &b),
+        decode(&b),
         (
             ErrorKind::InvariantViolation,
             payload_at + MAX_PAYLOAD_LEN - 1
         )
     );
-    // The constructor refuses the same.
+    // A nonzero byte in the region after the listed objects.
+    let mut b = bytes.clone();
+    b[region_at + 2 * OBJECT_ENTRY_LEN + 3] = 1;
+    assert_eq!(
+        decode(&b),
+        (
+            ErrorKind::InvariantViolation,
+            region_at + 2 * OBJECT_ENTRY_LEN + 3
+        )
+    );
+    let mut b = bytes.clone();
+    b[payload_at - 1] = 1;
+    assert_eq!(decode(&b), (ErrorKind::InvariantViolation, payload_at - 1));
+    // More objects than a frame lists.
+    let mut b = bytes.clone();
+    b[count_at..count_at + 2].copy_from_slice(&1025u16.to_be_bytes());
+    assert_eq!(decode(&b), (ErrorKind::ValueOutOfRange, count_at));
+    // Listed objects that overlap, or one shorter than a header.
+    let second = region_at + OBJECT_ENTRY_LEN;
+    let mut b = bytes.clone();
+    b[second + 68..second + 76].copy_from_slice(&4_003_999u64.to_be_bytes());
+    assert_eq!(decode(&b), (ErrorKind::InvariantViolation, second));
+    let mut b = bytes.clone();
+    b[second + 76..second + 80].copy_from_slice(&15u32.to_be_bytes());
+    assert_eq!(decode(&b), (ErrorKind::ValueOutOfRange, second + 76));
+    // An entry beyond the count is not part of the list but bytes of the
+    // region that must be zero (its schema's last byte is the first that
+    // is not).
+    let mut b = bytes.clone();
+    b[count_at..count_at + 2].copy_from_slice(&1u16.to_be_bytes());
+    assert_eq!(decode(&b), (ErrorKind::InvariantViolation, second + 3));
+    // A full region: 1,024 objects of 16 bytes.
+    let full: Vec<u8> = (0..MAX_FRAME_OBJECTS as u64)
+        .flat_map(|i| bytes_of(&object(1, 4_000_000 + 16 * i, 16)))
+        .collect();
+    let full = FrameObjects::new(leak(full)).unwrap();
+    assert_eq!(full.len(), MAX_FRAME_OBJECTS);
+    let mut p = header_parts();
+    p.payload_len = 16 * 1024;
+    let mut many: Box<[u8; MAX_PAYLOAD_LEN]> = std::vec![0u8; MAX_PAYLOAD_LEN]
+        .into_boxed_slice()
+        .try_into()
+        .unwrap();
+    many[..16 * 1024].fill(7);
+    let f = UplinkFrame::new(&p, full, &many, &FRAME_SIG).unwrap();
+    let fb = encode_to_vec(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_UPLINK, &f);
+    assert_eq!(fb.len(), HEADER_LEN + FRAME_BODY_LEN);
+    let back: UplinkFrame<'_> =
+        decode_object(SCHEMA_UPLINK_FRAME, SCHEMA_VERSION_UPLINK, &fb).unwrap();
+    assert_eq!(back.objects().len(), MAX_FRAME_OBJECTS);
+    // The constructor refuses a nonzero byte after the data.
     payload[9000] = 1;
     assert_eq!(
-        UplinkFrame::new(&header_parts(), &payload, &FRAME_SIG).unwrap_err(),
+        UplinkFrame::new(&header_parts(), frame_objects(), &payload, &FRAME_SIG).unwrap_err(),
         ityv_encoding::Error::new(ErrorKind::InvariantViolation, 0)
     );
     payload[9000] = 0;
@@ -587,7 +667,7 @@ fn a_frame_carries_its_data_and_zeros_after_it() {
     let mut p = header_parts();
     p.index = 64;
     assert_eq!(
-        UplinkFrame::new(&p, &payload, &FRAME_SIG)
+        UplinkFrame::new(&p, frame_objects(), &payload, &FRAME_SIG)
             .unwrap_err()
             .kind(),
         ErrorKind::ValueOutOfRange
@@ -596,7 +676,7 @@ fn a_frame_carries_its_data_and_zeros_after_it() {
     let mut full = header_parts();
     full.payload_len = MAX_PAYLOAD_LEN as u32;
     payload[MAX_PAYLOAD_LEN - 1] = 9;
-    let f = UplinkFrame::new(&full, &payload, &FRAME_SIG).unwrap();
+    let f = UplinkFrame::new(&full, FrameObjects::EMPTY, &payload, &FRAME_SIG).unwrap();
     assert_eq!(f.data().len(), MAX_PAYLOAD_LEN);
 }
 
@@ -926,13 +1006,14 @@ fn session_vectors_are_current_and_self_consistent() {
 // ---------------------------------------------------------------------------
 // 0x0058 UplinkFrameLog.
 
-fn frame_entry(slot: u64, index: u16, offset: u64, len: u32) -> FrameEntry<'static> {
+fn frame_entry(slot: u64, index: u16, offset: u64, len: u32, objects: u16) -> FrameEntry<'static> {
     FrameEntry {
         slot,
         index,
         kind: FrameKind::Normal,
         stream_offset: offset,
         payload_len: len,
+        object_count: objects,
         payload_root: patterned64(0x33),
         frame_sig: &FRAME_SIG,
     }
@@ -947,17 +1028,27 @@ fn object(seed: u8, offset: u64, len: u32) -> StreamObject {
     }
 }
 
+/// Two frames of 5,000 and 2,000 bytes: the first lists an object it
+/// holds whole and one it carries out, the second lists the one carried
+/// in.
 fn log_parts() -> UplinkFrameLogParts<'static> {
-    let frames = [frame_entry(150, 0, 0, 5000), frame_entry(150, 1, 5000, 0)];
+    let frames = [
+        frame_entry(150, 0, 0, 5000, 2),
+        frame_entry(150, 1, 5000, 2000, 1),
+    ];
     let frames: Vec<u8> = frames.iter().flat_map(bytes_of).collect();
-    let leaves: Vec<u8> = [patterned64(0x50), patterned64(0x51)]
+    let leaves: Vec<u8> = [patterned64(0x50), patterned64(0x51), patterned64(0x52)]
         .iter()
         .flat_map(|h| h.0)
         .collect();
-    let objects: Vec<u8> = [object(0x60, 0, 3000), object(0x61, 3000, 2000)]
-        .iter()
-        .flat_map(bytes_of)
-        .collect();
+    let objects: Vec<u8> = [
+        object(0x60, 0, 3000),
+        object(0x61, 3000, 4000),
+        object(0x61, 3000, 4000),
+    ]
+    .iter()
+    .flat_map(bytes_of)
+    .collect();
     UplinkFrameLogParts {
         election_id: e(),
         station_id: st(),
@@ -981,11 +1072,12 @@ fn a_frame_log_round_trips_and_follows_its_rules() {
     let p = back.parts();
     assert_eq!(p.frames.len(), 2);
     assert!(!p.frames.is_empty());
-    assert_eq!(p.frames.data_chunks(), 2);
+    assert_eq!(p.frames.data_chunks(), 3);
+    assert_eq!(p.frames.objects(), 3);
     let frames: Vec<FrameEntry<'_>> = p.frames.iter().collect();
-    assert_eq!(frames[1], frame_entry(150, 1, 5000, 0));
+    assert_eq!(frames[1], frame_entry(150, 1, 5000, 2000, 1));
     assert_eq!(
-        frames[0].header(patterned64(0x11)),
+        frames[0].header(patterned64(0x11), patterned64(0x34)),
         UplinkFrameHeaderParts {
             link_id_hash: patterned64(0x11),
             slot: 150,
@@ -994,20 +1086,39 @@ fn a_frame_log_round_trips_and_follows_its_rules() {
             stream_offset: 0,
             payload_len: 5000,
             payload_root: patterned64(0x33),
+            objects_hash: patterned64(0x34),
         }
     );
-    assert_eq!(p.leaves.len(), 2);
+    assert_eq!(p.leaves.len(), 3);
     assert!(!p.leaves.is_empty());
     assert!(LogLeaves::EMPTY.is_empty());
     assert_eq!(p.leaves.iter().nth(1), Some(patterned64(0x51)));
-    assert_eq!(p.objects.len(), 2);
+    assert_eq!(p.objects.len(), 3);
     assert!(!p.objects.is_empty());
     assert!(LogObjects::EMPTY.is_empty());
-    assert_eq!(p.objects.iter().nth(1), Some(object(0x61, 3000, 2000)));
     assert_eq!(object(0x61, 3000, 2000).end(), Some(5000));
     assert_eq!(object(1, u64::MAX, 16).end(), None);
+    // Each frame with its leaves and its list.
+    let with: Vec<_> = back.frames_with().collect();
+    assert_eq!(with.len(), 2);
+    assert_eq!(with[0].entry, frames[0]);
+    assert_eq!(with[0].leaves.len(), 2);
+    assert_eq!(with[1].leaves.iter().next(), Some(patterned64(0x52)));
+    assert_eq!(with[0].objects.len(), 2);
+    assert_eq!(
+        with[0].objects.iter().nth(1),
+        Some(object(0x61, 3000, 4000))
+    );
+    assert_eq!(with[1].objects.len(), 1);
+    assert_eq!(
+        with[1].objects.iter().next(),
+        Some(object(0x61, 3000, 4000))
+    );
+    assert!(!with[1].objects.is_empty());
+    assert!(FrameObjects::EMPTY.is_empty());
 
-    // The constructor: session 0, leaves that do not match the frames.
+    // The constructor: session 0, leaves or objects that do not match the
+    // frames, a frame's list out of order.
     let mut q = log_parts();
     q.session_index = 0;
     assert_eq!(
@@ -1020,33 +1131,72 @@ fn a_frame_log_round_trips_and_follows_its_rules() {
         UplinkFrameLog::new(&q).unwrap_err().kind(),
         ErrorKind::InvariantViolation
     );
+    let mut q = log_parts();
+    q.objects = LogObjects::EMPTY;
+    assert_eq!(
+        UplinkFrameLog::new(&q).unwrap_err().kind(),
+        ErrorKind::InvariantViolation
+    );
+    let mut q = log_parts();
+    let swapped: Vec<u8> = [
+        object(0x61, 3000, 4000),
+        object(0x60, 0, 3000),
+        object(0x61, 3000, 4000),
+    ]
+    .iter()
+    .flat_map(bytes_of)
+    .collect();
+    q.objects = LogObjects::new(leak(swapped)).unwrap();
+    assert_eq!(
+        UplinkFrameLog::new(&q).unwrap_err().kind(),
+        ErrorKind::InvariantViolation
+    );
     // The views.
-    let one = bytes_of(&frame_entry(150, 0, 0, 5000));
+    let one = bytes_of(&frame_entry(150, 0, 0, 5000, 0));
     assert_eq!(LogFrames::new(&[]), None);
-    assert_eq!(LogFrames::new(&one[..150]), None);
+    assert_eq!(LogFrames::new(&one[..152]), None);
     let twice: Vec<u8> = one.iter().chain(&one).copied().collect();
     assert_eq!(LogFrames::new(&twice), None);
-    let down: Vec<u8> = bytes_of(&frame_entry(151, 0, 0, 0))
+    let down: Vec<u8> = bytes_of(&frame_entry(151, 0, 0, 0, 0))
         .into_iter()
         .chain(one.clone())
         .collect();
     assert_eq!(LogFrames::new(&down), None);
+    let too_many = bytes_of(&frame_entry(150, 0, 0, 5000, 1025));
+    assert_eq!(LogFrames::new(&too_many), None);
+    assert!(LogFrames::new(&bytes_of(&frame_entry(150, 0, 0, 5000, 1024))).is_some());
     assert_eq!(LogLeaves::new(&[0u8; 63]), None);
     assert!(LogLeaves::new(&[0u8; 128]).is_some());
     let o = bytes_of(&object(1, 100, 16));
+    assert_eq!(FrameObjects::new(&o[..79]), None);
     assert_eq!(LogObjects::new(&o[..79]), None);
     let overlap: Vec<u8> = o
         .iter()
         .copied()
         .chain(bytes_of(&object(2, 115, 16)))
         .collect();
-    assert_eq!(LogObjects::new(&overlap), None);
+    assert_eq!(FrameObjects::new(&overlap), None);
+    // A log's entries are lists one after another: no order across them.
+    assert_eq!(LogObjects::new(&overlap).map(|l| l.len()), Some(2));
     let touching: Vec<u8> = o
         .iter()
         .copied()
         .chain(bytes_of(&object(2, 116, 16)))
         .collect();
-    assert!(LogObjects::new(&touching).is_some());
+    assert_eq!(FrameObjects::new(&touching).map(|l| l.len()), Some(2));
+    let short = bytes_of(&object(1, 100, 15));
+    assert_eq!(LogObjects::new(&short), None);
+    let past = bytes_of(&object(1, u64::MAX - 15, 16));
+    assert_eq!(LogObjects::new(&past), None);
+    assert!(LogObjects::new(&bytes_of(&object(1, u64::MAX - 16, 16))).is_some());
+    let full: Vec<u8> = (0..1025u64)
+        .flat_map(|i| bytes_of(&object(1, 16 * i, 16)))
+        .collect();
+    assert_eq!(FrameObjects::new(&full), None);
+    assert_eq!(
+        FrameObjects::new(&full[..1024 * 80]).map(|l| l.len()),
+        Some(1024)
+    );
 }
 
 fn log_vectors() -> Vec<Vector> {
@@ -1057,10 +1207,13 @@ fn log_vectors() -> Vec<Vector> {
     let first = frames_at + 4;
     let second = first + FRAME_ENTRY_LEN;
     let leaves_at = second + FRAME_ENTRY_LEN;
-    let objects_at = leaves_at + 4 + 2 * 64;
+    let objects_at = leaves_at + 4 + 3 * 64;
     let first_object = objects_at + 4;
     let second_object = first_object + OBJECT_ENTRY_LEN;
-    let mut v = std::vec![valid("two frames, one with data", bytes.clone())];
+    let mut v = std::vec![valid(
+        "two frames, an object carried from the first into the second",
+        bytes.clone()
+    )];
 
     let mut b = bytes.clone();
     b[at..at + 4].copy_from_slice(&0u32.to_be_bytes());
@@ -1084,7 +1237,15 @@ fn log_vectors() -> Vec<Vector> {
     b[first + 8 + 2] = 4;
     v.push(invalid("kind four", b, "ValueOutOfRange", first + 10));
     let mut b = bytes.clone();
-    b[leaves_at..leaves_at + 4].copy_from_slice(&1u32.to_be_bytes());
+    b[first + 23..first + 25].copy_from_slice(&1025u16.to_be_bytes());
+    v.push(invalid(
+        "a frame listing 1,025 objects",
+        b,
+        "ValueOutOfRange",
+        first + 23,
+    ));
+    let mut b = bytes.clone();
+    b[leaves_at..leaves_at + 4].copy_from_slice(&2u32.to_be_bytes());
     v.push(invalid(
         "one leaf short",
         b,
@@ -1092,9 +1253,17 @@ fn log_vectors() -> Vec<Vector> {
         leaves_at,
     ));
     let mut b = bytes.clone();
+    b[objects_at..objects_at + 4].copy_from_slice(&2u32.to_be_bytes());
+    v.push(invalid(
+        "one object entry short",
+        b,
+        "InvariantViolation",
+        objects_at,
+    ));
+    let mut b = bytes.clone();
     b[second_object + 68..second_object + 76].copy_from_slice(&2999u64.to_be_bytes());
     v.push(invalid(
-        "objects overlapping",
+        "objects of one frame overlapping",
         b,
         "InvariantViolation",
         second_object,
@@ -1281,6 +1450,7 @@ proptest! {
         offset in any::<u64>(),
         len in 0..=MAX_PAYLOAD_LEN as u32,
         root in common::hash64(),
+        objects in common::hash64(),
     ) {
         let h = UplinkFrameHeader::new(&UplinkFrameHeaderParts {
             link_id_hash: Hash512(link),
@@ -1290,6 +1460,7 @@ proptest! {
             stream_offset: offset,
             payload_len: len,
             payload_root: Hash512(root),
+            objects_hash: Hash512(objects),
         })
         .unwrap();
         let bytes = encode_to_vec(SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_VERSION_1, &h);
@@ -1338,6 +1509,7 @@ proptest! {
         let _ = SessionLinks::new(&bytes);
         let _ = LogFrames::new(&bytes);
         let _ = LogObjects::new(&bytes);
+        let _ = FrameObjects::new(&bytes);
     }
 
     #[test]
@@ -1438,7 +1610,7 @@ fn the_constants_are_the_specs() {
         SCHEMA_VERSION_DEVICE_ENTRY, SLOT_MINUTES,
     };
     assert_eq!(FRAME_BODY_LEN, 1_048_576);
-    assert_eq!(MAX_PAYLOAD_LEN, 1_048_425);
+    assert_eq!(MAX_PAYLOAD_LEN, 966_503);
     assert_eq!((CHUNK_LEN, PAYLOAD_CHUNKS), (4096, 256));
     assert_eq!(CHUNK_LEN * PAYLOAD_CHUNKS, FRAME_BODY_LEN);
     assert_eq!((SLOT_MINUTES, MAX_SESSION_SLOTS), (10, 6));
@@ -1453,7 +1625,7 @@ fn the_constants_are_the_specs() {
     );
     assert_eq!(
         (MAX_LOG_FRAMES, MAX_LOG_LEAVES, MAX_LOG_OBJECTS),
-        (384, 98_304, 65_536)
+        (384, 98_304, 393_216)
     );
     assert_eq!(MIN_OBJECT_LEN as usize, HEADER_LEN);
     assert_eq!(

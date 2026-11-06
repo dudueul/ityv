@@ -1056,8 +1056,8 @@ static P1: Ident<'static> = match Ident::new(b"P", 32) {
 };
 
 /// A frame header with symbolic fields is built exactly when its index is
-/// below 64 and its payload length at most 1,048,425, and survives an
-/// object-level round trip.
+/// below 64 and its payload length at most 966,503, and survives an
+/// object-level round trip (215-byte body).
 #[kani::proof]
 #[kani::unwind(70)] // 64-byte array comparisons unroll to 64 iterations plus slack.
 fn uplink_frame_header_round_trip() {
@@ -1072,6 +1072,7 @@ fn uplink_frame_header_round_trip() {
         stream_offset: kani::any(),
         payload_len: kani::any(),
         payload_root: Hash512(kani::any()),
+        objects_hash: Hash512(kani::any()),
     };
     let ok = parts.index < 64 && (parts.payload_len as usize) <= MAX_PAYLOAD_LEN;
     let built = UplinkFrameHeader::new(&parts);
@@ -1079,11 +1080,11 @@ fn uplink_frame_header_round_trip() {
     let Ok(header) = built else {
         return;
     };
-    let mut buf = [0u8; 16 + 151];
+    let mut buf = [0u8; 16 + 215];
     let Ok(len) = encode(SCHEMA_UPLINK_FRAME_HEADER, V1, &header, &mut buf) else {
-        unreachable!("167 bytes hold a header");
+        unreachable!("231 bytes hold a header");
     };
-    assert_eq!(len, 16 + 151);
+    assert_eq!(len, 16 + 215);
     let decoded: Result<UplinkFrameHeader, _> = decode(SCHEMA_UPLINK_FRAME_HEADER, V1, &buf);
     assert_eq!(decoded, Ok(header));
 }
