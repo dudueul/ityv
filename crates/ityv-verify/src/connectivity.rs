@@ -2088,11 +2088,7 @@ fn judge_frames(
         .is_none_or(|(a, b)| short.range(a..=b).next().is_some() || uncovered(windows, a, b) > 0);
     let close_slot = ctx
         .closing
-        .filter(|c| {
-            matches!(ctx.end, SpanEnd::To(_))
-                && shape.span.is_some_and(|(a, b)| a <= *c && *c <= b)
-                && full(slots.get(c), normal, catchup)
-        })
+        .filter(|c| matches!(ctx.end, SpanEnd::To(_)) && full(slots.get(c), normal, catchup))
         .and_then(|c| {
             work.frames
                 .iter()

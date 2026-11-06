@@ -6696,7 +6696,8 @@ fn r5_1_a_transmitter_put_back_before_the_opening_serves_from_it() {
 
     // Three keys before the opening (600, 650, 651) and, on the day, a swap
     // back to 650: one replaced before the opening never served, so the
-    // box stage refuses the swap and its frames are `BeforeSwap`; 651
+    // box stage refuses the swap and its frames are `BeforeSwap`. The
+    // refused swap ends nothing: 651, which keeps sending to slot 211,
     // ends at its last frame. Nothing else holds.
     let (k1, k2) = (spare, common::uplink::BOX_FRAME_BASE + 51);
     let (w, a) = amended_keys(&[k1, k2, k1]);
@@ -6719,7 +6720,7 @@ fn r5_1_a_transmitter_put_back_before_the_opening_serves_from_it() {
     }
     let o = scanner_objects();
     let honest = with_packages(&o);
-    let g2: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=181u64)
+    let g2: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=211u64)
         .map(|s| {
             let objs = if s == 150 {
                 honest[..honest.len() - 1].to_vec()
@@ -6751,6 +6752,29 @@ fn r5_1_a_transmitter_put_back_before_the_opening_serves_from_it() {
     assert_eq!(
         r.connectivity().holds(),
         only(HoldReason::UplinkFrameInvalid)
+    );
+
+    // 600 replaced before the opening by 650, which a swap at 181 replaces
+    // by 651 on the day; 600 still sends the whole day. It never served:
+    // every frame of it is `BeforeSwap`, none `AfterSwap` (no later key's
+    // swap ends what never began).
+    let (w, a1, a2) = twice_amended(k1, k2);
+    let mut book = Book::new(w);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a1);
+    for (schema, event) in &events[..close] {
+        book.push(*schema, event);
+    }
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a2);
+    let (schema, event) = box_swap(181);
+    book.push(schema, event);
+    for (schema, event) in &events[close..] {
+        book.push(*schema, event);
+    }
+    let r = verify_book(book, Plan::new(ST, honest_links()).events());
+    let f = found(&r, link(old));
+    assert!(
+        !f.is_empty() && f.iter().all(|p| *p == LinkProblem::BeforeSwap),
+        "{f:?}"
     );
 }
 
@@ -6853,13 +6877,30 @@ fn r5_2_the_close_resend_is_the_box_s_in_its_close_slot() {
             (212, 1, FrameKind::CatchUp, Vec::new()),
         ],
     );
-    let r = verify_with(old, new);
+    let r = verify_with(old.clone(), new);
     assert!(
         found(&r, link(old_key)).is_empty(),
         "{:?}",
         found(&r, link(old_key))
     );
     assert_eq!(found(&r, link(new_key)), [LinkProblem::Resend]);
+    // A close resend of no batch (the closing tick again) is none: the
+    // tick there, the close resend stopping before the box's last batch,
+    // and the close slot are each `Resend`.
+    let mut new = Link {
+        key: new_key,
+        frames: Vec::new(),
+        objects: Vec::new(),
+    };
+    extend_link(
+        &mut new,
+        &[
+            (212, 0, FrameKind::CatchUp, std::vec![closing]),
+            (212, 1, FrameKind::CloseResend, std::vec![closing]),
+        ],
+    );
+    let r = verify_with(old, new);
+    assert_eq!(found(&r, link(new_key)), [LinkProblem::Resend; 3]);
 }
 
 #[test]
@@ -6877,8 +6918,10 @@ fn r5_3_midday_a_silent_link_declares_any_count_until_its_start_is_laid() {
     for (opened_laid, missing, clean) in [
         (false, 6, true),
         (false, 3, true),
+        (false, 9, true),
         (true, 6, true),
         (true, 3, false),
+        (true, 9, false),
     ] {
         let silent = move |p: &mut UplinkSessionParts<'static>| {
             p.is_final = false;
