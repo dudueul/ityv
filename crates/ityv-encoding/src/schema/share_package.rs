@@ -46,13 +46,8 @@ const MAX_FIXED_LEN: usize = crate::HEADER_LEN + 2 * (4 + 64) + (4 + 8 * 32) + 4
 /// election of that many trustee members allows a sealed package on an
 /// uplink to be (ADR-0041 decision 6).
 #[must_use]
-pub const fn max_package_len(members: usize) -> usize {
-    let n = if members < MAX_ENTRIES {
-        members
-    } else {
-        MAX_ENTRIES
-    };
-    MAX_FIXED_LEN.saturating_add(n.saturating_mul(MAX_ENTRY_LEN))
+pub fn max_package_len(members: usize) -> usize {
+    MAX_FIXED_LEN.saturating_add(members.min(MAX_ENTRIES).saturating_mul(MAX_ENTRY_LEN))
 }
 
 /// Chamber code of a share entry (PROTOCOL.md §4.1, ADR-0019).
