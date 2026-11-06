@@ -4330,6 +4330,67 @@ fn r3_1d_a_close_resend_sends_the_boxs_batches_again_in_order() {
 }
 
 #[test]
+fn r3_1e_a_batch_with_a_lost_record_is_still_missing() {
+    // Batch 0's second record went alone in slot 150's next slot, which
+    // was lost (declared); its attestation, the other records and every
+    // package arrived. The batch was not received whole, so a witnessed
+    // resend may carry all of it: nothing.
+    let (book, s) = two_batches();
+    let first = with_packages(&s[..4]);
+    // first: attestation, record A, package A, record B, package B,
+    // record C, package C.
+    let mut links = links_of(&book);
+    let key = links[SCANNER].key;
+    let mut groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = std::vec![
+        (150, FrameKind::Normal, first[..3].to_vec()),
+        (151, FrameKind::Normal, std::vec![first[3]]),
+        (
+            152,
+            FrameKind::Normal,
+            [
+                first[4..].to_vec(),
+                with_packages(&s[4..8]),
+                std::vec![s[8]]
+            ]
+            .concat(),
+        ),
+    ];
+    for slot in 153..=212 {
+        groups.push((slot, FrameKind::Normal, Vec::new()));
+    }
+    let mut l = link_of(key, &groups, 1);
+    let mut at = l.frames.last().unwrap().stream_offset;
+    let none: Vec<&'static [u8]> = Vec::new();
+    for (index, objs) in [(0, &first), (1, &none)] {
+        let f = make_frame(key, 220, index, FrameKind::WitnessedResend, at, objs);
+        at += u64::from(f.payload_len);
+        l.frames.push(f);
+    }
+    links[SCANNER] = l;
+    let mut plan = Plan::new(ST, links);
+    plan.windows = resend_windows(220);
+    let lose = |k: usize, f: &Built| {
+        if k == SCANNER && f.slot == 151 {
+            None
+        } else if f.slot >= 220 {
+            Some(11)
+        } else {
+            window(f.slot)
+        }
+    };
+    let declare = declare_one(1);
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    let r = verify_book(book, plan.events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+}
+
+#[test]
 fn r3_1e_a_witnessed_resend_carries_only_what_is_still_missing() {
     // After the close, a witnessed resend of the batch the normal frames
     // carried whole: `Resend` for each of its objects. Listed again in a
@@ -4979,12 +5040,14 @@ fn r3_6_no_loss_pattern_of_three_batches_holds_an_honest_device() {
 fn r3_7_a_challenged_record_whose_opening_is_not_laid_yet_holds_nothing() {
     // The audit for finding 4. BOX-1's batch takes counters 1–4; one of
     // its records (the second by hash) was opened for a challenge, so no
-    // batch attests it. The record and its opening go out in slot 150,
-    // outside every run; the batch and the other three in 151. Until the
-    // opening is laid the record stage counts the challenged record a
-    // member, and the run skips it. Mid-day, with slot 150 lost (declared)
-    // or the opening listed and not laid: nothing. Once the gateway closed
-    // with the opening never laid: `Batch`.
+    // batch attests it. A tick goes out in slot 150; the record and its
+    // opening in 151, outside every run; the batch and the other three in
+    // 152. Until the opening is laid the record stage counts the
+    // challenged record a member, and the run skips it. Mid-day, with slot
+    // 151 lost (declared: the stream resumes after a gap), slots 150 and
+    // 151 lost (it starts after one), or the opening listed and not laid:
+    // nothing. Once the gateway closed with the opening never laid:
+    // `Batch`.
     let casts: Vec<Cast> = (1..=4).map(|i| cast(B1, i, 1)).collect();
     let mut sorted = casts.clone();
     sorted.sort_by_key(|c| ityv_crypto::object_hash(c.event).0);
@@ -4996,9 +5059,11 @@ fn r3_7_a_challenged_record_whose_opening_is_not_laid_yet_holds_nothing() {
         .filter(|c| c.counter != challenged.counter)
         .collect();
     let attestation = batch(B1, 0, 1, 4, &codes(&rest));
+    let tick150 = box_tick_in(150, ityv_encoding::BoxProgressState::Casting);
     let make_book = |laid: bool| {
         let mut book = Book::new(election_world());
         book.w(opened(B1));
+        book.push(SCHEMA_PROGRESS_TICK, tick150);
         for c in &casts {
             book.push(ityv_encoding::SCHEMA_CAST_RECORD, c.event);
         }
@@ -5015,33 +5080,39 @@ fn r3_7_a_challenged_record_whose_opening_is_not_laid_yet_holds_nothing() {
     let unit = links[UNIT].clone();
     let last = links[SCANNER].frames.last().unwrap().slot;
     let mut groups = std::vec![
+        (150u64, FrameKind::Normal, std::vec![tick150]),
         (
-            150u64,
+            151,
             FrameKind::Normal,
             with_packages(&[opening, challenged.event]),
         ),
-        (151, FrameKind::Normal, with_packages(&run)),
+        (152, FrameKind::Normal, with_packages(&run)),
     ];
-    for slot in 152..=last {
+    for slot in 153..=last {
         groups.push((slot, FrameKind::Normal, Vec::new()));
     }
     let scanner_link = link_of(key, &groups, 1);
-    // (slot 150 lost, the gateway closed)
-    for (lose, closed) in [(true, false), (false, false), (false, true)] {
-        let drop150 = move |l: usize, f: &Built| {
-            if lose && l == SCANNER && f.slot == 150 {
+    // (the slots lost, the gateway closed)
+    for (lose, closed) in [
+        (&[151u64][..], false),
+        (&[150, 151][..], false),
+        (&[][..], false),
+        (&[][..], true),
+    ] {
+        let drop151 = move |l: usize, f: &Built| {
+            if l == SCANNER && lose.contains(&f.slot) {
                 None
             } else {
                 window(f.slot)
             }
         };
         let declare = move |i: u32, e: &mut SessionLink| {
-            if lose && i == 1 && e.link_id_hash == link(key) {
-                e.missing_slots = 1;
+            if i == 1 && e.link_id_hash == link(key) {
+                e.missing_slots = u32::try_from(lose.len()).unwrap();
             }
         };
         let mut plan = Plan::new(ST, std::vec![scanner_link.clone(), unit.clone()]);
-        plan.assign = Some(&drop150);
+        plan.assign = Some(&drop151);
         plan.tweak_link = Some(&declare);
         if !closed {
             plan.tweak_body = Some(&not_final);
@@ -5051,7 +5122,7 @@ fn r3_7_a_challenged_record_whose_opening_is_not_laid_yet_holds_nothing() {
         if closed {
             assert!(f.contains(&LinkProblem::Batch), "{f:?}");
         } else {
-            assert!(f.is_empty(), "{lose}: {f:?}");
+            assert!(f.is_empty(), "{lose:?}: {f:?}");
             assert_eq!(r.connectivity().holds(), HoldSet::empty());
         }
     }
