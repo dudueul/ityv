@@ -6947,6 +6947,35 @@ fn r5_3_midday_a_silent_link_declares_any_count_until_its_start_is_laid() {
 }
 
 #[test]
+fn r5_4_a_close_resend_carries_no_tick_even_mid_day() {
+    // Before the gateway's final session, the close resend in the close
+    // slot carries the box's two batches and then a tick. A tick is no
+    // batch's object, so it is judged at once (not only once the gateway
+    // closed, as a batch-schema object of no batch is): `Resend` on the
+    // tick's listing, and nothing else. (A witnessed resend's non-batch
+    // rule waits for the gateway's close either way.)
+    let (mut book, s) = two_batches();
+    let tick200 = box_tick_in(200, ityv_encoding::BoxProgressState::Casting);
+    book.push(SCHEMA_PROGRESS_TICK, tick200);
+    let key = links_of(&book)[SCANNER].key;
+    let mut resend = with_packages(&s[..8]);
+    resend.push(tick200);
+    let mut links = links_of(&book);
+    links[SCANNER] = close_resend_link(key, &s, tick200, &resend);
+    let mut plan = Plan::new(ST, links);
+    plan.tweak_body = Some(&not_final);
+    let r = verify_book(book, plan.events());
+    assert!(station(&r).final_session.is_none());
+    let f = &link_report(&r, scanner()).findings;
+    assert_eq!(
+        f.iter().map(|x| x.problem).collect::<Vec<_>>(),
+        [LinkProblem::Resend],
+        "{f:?}"
+    );
+    assert_eq!(f[0].object, Some(ityv_crypto::object_hash(tick200)));
+}
+
+#[test]
 fn held5_a_transmitter_dead_all_day_resends_under_witness_without_a_hold() {
     // BOX-1's transmitter sends nothing all day; the gateway lists its link
     // in every session with every slot of its span missing (150–212). At
