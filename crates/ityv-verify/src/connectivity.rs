@@ -1147,11 +1147,11 @@ struct LinkContext<'c, 'a> {
 }
 
 /// The received ranges of a link: merged `[start, end)` of every frame
-/// given.
+/// given (a frame without data gives an empty range, which covers
+/// nothing).
 fn received_ranges(frames: &[&Frame<'_>]) -> Vec<(u64, u64)> {
     let mut ranges: Vec<(u64, u64)> = frames
         .iter()
-        .filter(|f| f.entry.payload_len > 0)
         .map(|f| {
             let start = f.entry.stream_offset;
             (start, start.saturating_add(u64::from(f.entry.payload_len)))
@@ -1412,11 +1412,11 @@ impl Shape {
         if a > b {
             return 0;
         }
+        // Where the two meet (an empty meeting overlaps nothing).
         let both = self
             .span
             .zip(self.witnessed)
-            .map(|((p, q), (r, s))| (p.max(r), q.min(s)))
-            .filter(|(lo, hi)| lo <= hi);
+            .map(|((p, q), (r, s))| (p.max(r), q.min(s)));
         overlap(self.span, a, b)
             .saturating_add(overlap(self.witnessed, a, b))
             .saturating_sub(overlap(both, a, b))
@@ -1661,9 +1661,11 @@ fn judge_frames(
         let ok = match e.stream_offset.cmp(&end) {
             Ordering::Equal => true,
             Ordering::Less => false,
+            // A skip of at least one byte needs at least one untaken
+            // position, and at most a payload for each.
             Ordering::Greater => {
                 let absent = shape.absent(&slots, previous.map(|p| (p.0, p.1)), (e.slot, e.index));
-                absent > 0 && e.stream_offset.saturating_sub(end) <= absent.saturating_mul(most)
+                e.stream_offset.saturating_sub(end) <= absent.saturating_mul(most)
             }
         };
         if !ok {
@@ -2027,13 +2029,14 @@ fn incident<'a>(
         (Some(_) | None, None) | (None, Some(_)) => true,
     };
     // Clerks sign on site, at the station the incident names; the whole
-    // election is the committee's to name.
+    // election is the committee's to name (the envelope never mixes the
+    // committee with clerks).
     let scope_ok = signers.as_ref().is_some_and(|s| match parts.station_id {
         Some(station) => s
             .clerk_stations
             .iter()
             .all(|c| c.is_some_and(|c| c.as_bytes() == station.as_bytes())),
-        None => s.committee && s.clerk_stations.is_empty(),
+        None => s.committee,
     });
     let refused = if signers.is_none() {
         Some(IncidentProblem::Signers)
@@ -2944,6 +2947,9 @@ mod tests {
             Some((L::NotObject, 99))
         );
         assert_eq!(problem(0, 100, &[object(r, 0, 100)]), None);
+        // Objects end to end leave no fill.
+        let t = tiling(0, 300, &list(&[object(r, 0, 100), object(r, 100, 200)]));
+        assert_eq!((t.problem, t.fill.len()), (None, 0));
         assert_eq!(problem(0, 100, &[object(r, 0, 101)]), None);
         // A package right after a record, or a record right after a
         // package, off the boundary.
@@ -3015,6 +3021,13 @@ mod tests {
         assert_eq!(shape.absent(&groups, Some((20, 0)), (30, 1)), 4 + 1);
         // Going back takes no position.
         assert_eq!(shape.absent(&groups, Some((12, 0)), (10, 1)), 0);
+        // Slots in both ranges count once.
+        let both = Shape {
+            witnessed: Some((18, 25)),
+            ..shape
+        };
+        assert_eq!(both.slots(10, 25), 11 + 8 - 3);
+        assert_eq!(both.slots(19, 19), 1);
     }
 
     #[test]
