@@ -72,8 +72,8 @@ test("every connectivity finding of ityv-verify and ityv-encoding has Korean tex
   for (const [name, table, n] of [
     ["ManifestProblem", MANIFEST_PROBLEMS, 11],
     ["SessionProblem", SESSION_PROBLEMS, 17],
-    ["LinkProblem", LINK_PROBLEMS, 18],
-    ["IncidentProblem", INCIDENT_PROBLEMS, 2],
+    ["LinkProblem", LINK_PROBLEMS, 19],
+    ["IncidentProblem", INCIDENT_PROBLEMS, 3],
   ] as const) {
     const vs = variants(verify, name);
     expect(vs.length).toBe(n);

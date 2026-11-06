@@ -306,16 +306,17 @@ export const LINK_PROBLEMS: Record<string, string> = {
   BeforeOpening: "개시 전 프레임",
   AfterClose: "마감 뒤의 일반·따라잡기 프레임",
   KindOrder: "재전송 뒤의 일반 프레임",
-  Offset: "흐름 오프셋이 이어지지 않음",
+  Offset: "흐름 오프셋이 이어지지 않음(받지 못한 자리 없이 건너뜀)",
   Fill: "데이터 뒤 채움이 0이 아님(채움 증명 실패)",
   Chunk: "공개 객체로 다시 만든 덩어리와 다른 잎",
   Kind: "그 장치가 보낼 수 없는 종류",
-  Overlap: "앞 객체와 겹침",
-  Early: "받기 전에 적힌 객체",
-  NotObject: "어느 객체에도 속하지 않는 바이트",
+  Overlap: "두 프레임이 한 자리에 다른 객체를 적음",
+  NotObject: "프레임의 객체 목록이 데이터를 덮지 않음",
+  Alignment: "덩어리 경계에 놓이지 않은 share 패키지",
+  Foreign: "다른 투표함·투표소의 객체",
   Length: "장부와 다른 길이",
   Batch: "닫힌 배치 밖이나 해시 순서가 아닌 기록",
-  Package: "기록 바로 뒤가 아닌 share 패키지",
+  Package: "기록 바로 뒤가 아니거나 너무 긴 share 패키지",
   NotOnLedger: "장부에 없는 객체",
 };
 
@@ -337,6 +338,7 @@ export const INCIDENT_KINDS: Record<string, string> = {
 export const INCIDENT_PROBLEMS: Record<string, string> = {
   Signers: "등록된 서명자 조합이 아님",
   Subject: "투표함이 그 투표소의 것이 아님",
+  Scope: "사무원이 그 투표소 소속이 아니거나 선거 전체 사건에 위원회가 없음",
 };
 
 /** Korean name of the alarm kinds. */
