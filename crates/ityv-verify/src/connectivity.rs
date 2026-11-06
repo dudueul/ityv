@@ -1940,8 +1940,9 @@ fn judge_frames(
     // slot when none is known) to its end, or to the last frame that is
     // not a witnessed resend if later; and from the first slot of the
     // session that took its first witnessed resend to its last witnessed
-    // resend. A link with no frame (a spare never used) has no span; one
-    // with witnessed resends alone has its start and end.
+    // resend. A link with no normal, catch-up or close-resend frame has
+    // its start and end (a day lost whole owes every slot); a spare never
+    // brought in has no end, so no span.
     let sent: Vec<u64> = work
         .frames
         .iter()
@@ -1959,7 +1960,6 @@ fn judge_frames(
         // frames after it are `AfterSwap`, the slots between them none of
         // its own.
         (Some(b), SpanEnd::Swap(at)) => Some(at.saturating_sub(1).max(b.min(at))),
-        (None, _) if work.frames.is_empty() => None,
         (None, SpanEnd::To(Some(a))) => Some(a),
         (None, SpanEnd::Swap(at)) => at.checked_sub(1),
         (None, SpanEnd::To(None) | SpanEnd::LastFrame) => None,

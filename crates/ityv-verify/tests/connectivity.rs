@@ -5955,8 +5955,18 @@ fn r4_1a_a_witnessed_resend_carries_nothing_where_nothing_was_lost() {
     let mut plan = Plan::new(ST, links);
     plan.windows = windows_then(&[(210, 212), (213, 218)]);
     let r = verify(plan.events());
+    // Each of the run's seven listings in the witnessed resend, and the
+    // close slot's last frame (the close resend is missing).
     let f = found(&r, scanner());
-    assert!(f.contains(&LinkProblem::Resend), "{f:?}");
+    assert_eq!(f, [LinkProblem::Resend; 8]);
+    assert!(
+        link_report(&r, scanner())
+            .findings
+            .iter()
+            .any(|x| x.problem == LinkProblem::Resend && x.slot == Some(212)),
+        "{:?}",
+        link_report(&r, scanner()).findings
+    );
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     assert!(box_holds(&r).contains(HoldReason::UplinkObjectInvalid));
     // The batch in the day and again in the close resend; the closing
@@ -5979,6 +5989,78 @@ fn r4_1a_a_witnessed_resend_carries_nothing_where_nothing_was_lost() {
     let r = verify(plan.events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Resend]);
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+}
+
+#[test]
+fn r4_1a_a_link_of_witnessed_resends_alone_owes_its_day() {
+    // Every normal, catch-up and close-resend frame of the scanner is
+    // lost (or never sent); a witnessed resend after the close carries
+    // the day. The link's slots still run from the opening to the close:
+    // left undeclared, every session of the day disagrees.
+    let o = scanner_objects();
+    let mut links = honest_links();
+    let end = link_end(&links[SCANNER]);
+    add_witnessed(
+        &mut links,
+        &with_packages(&o),
+        end,
+        (220, 220),
+        MAX_PAYLOAD_LEN,
+    );
+    let mut plan = Plan::new(ST, links);
+    plan.windows = resend_windows(220);
+    let lose = |l: usize, f: &Built| {
+        if l == SCANNER && f.kind != FrameKind::WitnessedResend {
+            None
+        } else if f.kind == FrameKind::WitnessedResend {
+            Some(11)
+        } else {
+            window(f.slot)
+        }
+    };
+    plan.assign = Some(&lose);
+    let r = verify(plan.events());
+    assert_eq!(link_report(&r, scanner()).missing_slots, 63);
+    assert_eq!(
+        sessions_found(&r),
+        (1..=11)
+            .map(|i| (i, SessionProblem::MissingSlots))
+            .collect::<Vec<_>>()
+    );
+    // Its objects were lost, so the witnessed resend may carry them.
+    assert!(
+        !found(&r, scanner()).contains(&LinkProblem::Resend),
+        "{:?}",
+        found(&r, scanner())
+    );
+}
+
+#[test]
+fn r4_1a_a_slot_no_window_covers_is_a_loss() {
+    // No session covers slots 156 to 161, and slot 157's frame held the
+    // records and the closing tick. The close resend brings the batch
+    // again; a witnessed resend after the close carries the tick: the
+    // uncovered slots lost it.
+    let o = cut_objects();
+    let mut links = cut_stream(&[(150, 0), (157, o[1].stream_offset as usize)]);
+    let end = link_end(&links[SCANNER]);
+    add_witnessed(
+        &mut links,
+        &[scanner_objects()[4]],
+        end,
+        (220, 220),
+        MAX_PAYLOAD_LEN,
+    );
+    let mut plan = Plan::new(ST, links);
+    plan.windows = resend_windows(220);
+    plan.windows.remove(1);
+    let r = verify(plan.events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert!(station(&r).outside.is_empty(), "{:?}", station(&r).outside);
 }
 
 #[test]
