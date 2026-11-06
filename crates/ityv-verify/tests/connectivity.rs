@@ -3532,6 +3532,18 @@ fn r2_g_runs_of_what_the_ledger_does_not_show() {
             LinkProblem::Batch
         ]
     );
+    // Strictly: one record twice in a row is out of order too.
+    let r = verify(
+        Plan::new(
+            ST,
+            with_stream(SCANNER, &[fake, o[1], o[1], o[2], o[3], o[4]]),
+        )
+        .events(),
+    );
+    assert_eq!(
+        found(&r, scanner()),
+        [LinkProblem::NotOnLedger, LinkProblem::Batch]
+    );
 
     // After a silent slot, a record the ledger does not have starts a run
     // of its own; one the ledger has in no batch (a record refused after
