@@ -68,8 +68,9 @@
 //!    0 and each frame starts where the previous ended, or later only
 //!    across positions (slot, number) no frame was taken in, by at most a
 //!    full payload each. The positions run over the slots the device must
-//!    send in: from the opening for a link that is its device's from the
-//!    start or that an amendment laid before the opening brought in, from
+//!    send in: from the opening for a link in service at the opening (a
+//!    box's frame key in force at its opening: one an amendment replaced
+//!    before the opening never served and has none), from
 //!    the slot of the swap that brought it in for one swapped in (for a
 //!    box's frame key, the first `BoxUnitSwap` laid in a state that
 //!    carries it), to the close for one in service at the
@@ -107,8 +108,9 @@
 //!    first received in the slot before, after a loss there; the close
 //!    resend the box's batches again in batch-index order from the first,
 //!    skipping one or stopping early only where something was lost, and
-//!    nothing else, and there (a close slot taken whole with no batch in
-//!    a close resend is a finding); a witnessed resend (once the gateway
+//!    nothing else, and there (a close slot the link in service at the
+//!    close took whole, with no batch in any close resend of the box, is a
+//!    finding); a witnessed resend (once the gateway
 //!    closed) nothing where normal, catch-up and close-resend frames lost
 //!    nothing, and else only what they did not bring whole (once the
 //!    gateway closed, a batch-schema object of no batch counts as any
@@ -1715,8 +1717,9 @@ struct FrameJudgement {
     /// a slot of their span with a position no frame took, or no such
     /// frame at all. Only then has a witnessed resend anything to carry.
     lost: bool,
-    /// The last frame of the close slot when that slot's frames were all
-    /// taken: where the close resend had to start.
+    /// The last frame of the close slot when the link in service at the
+    /// close took that slot's frames all: where the close resend had to
+    /// start (none once one of the box's links sent it).
     close_slot: Option<LinkFinding>,
 }
 
@@ -2078,14 +2081,16 @@ fn judge_frames(
         .unwrap_or(u64::MAX)
         .saturating_add(gap);
     // Whether the normal, catch-up and close-resend frames lost anything,
-    // and the close slot's last frame when that slot was taken whole.
+    // and the close slot's last frame when that slot was taken whole by
+    // the link in service at the close (not one a swap took out).
     let lost_any = shape
         .span
         .is_none_or(|(a, b)| short.range(a..=b).next().is_some() || uncovered(windows, a, b) > 0);
     let close_slot = ctx
         .closing
         .filter(|c| {
-            shape.span.is_some_and(|(a, b)| a <= *c && *c <= b)
+            matches!(ctx.end, SpanEnd::To(_))
+                && shape.span.is_some_and(|(a, b)| a <= *c && *c <= b)
                 && full(slots.get(c), normal, catchup)
         })
         .and_then(|c| {
@@ -2702,11 +2707,11 @@ fn judge_objects(
         report.findings.push(finding(l, LinkProblem::Batch));
     }
     // A box that has batches sends them again from its close slot: a close
-    // slot taken whole with no batch in a close resend is `Resend`
-    // (PROTOCOL.md §5.8 item 4).
+    // slot the link in service at the close took whole, with no batch in a
+    // close resend of the box, is `Resend` (PROTOCOL.md §5.8 item 4; the
+    // caller drops the slot when one of the box's links sent it).
     if ctx.closed
         && !resent.is_empty()
-        && resend_batch.is_none()
         && let Some(f) = judged.close_slot
     {
         report.findings.push(f);
@@ -2903,6 +2908,9 @@ enum Intro {
     /// Not known: an amendment laid after the opening (or not laid) and no
     /// swap that carries it.
     Unknown,
+    /// Never: an amendment replaced it before the opening, so it never
+    /// served, and a transmitter is not put back.
+    Never,
 }
 
 /// Whether the amendment that created genesis state `state` (none for the
@@ -2916,42 +2924,52 @@ fn amended_before(index: &LedgerIndex<'_>, state: usize, before: Option<Seq>) ->
         .is_some_and(|(a, b)| a.get().cmp(&b.get()) == Ordering::Less)
 }
 
+/// A box's frame-key links in order, each with how it came into service.
+type KeyIntros = Vec<([u8; 64], Intro)>;
+
 /// The links of `box_id`'s frame keys in the order the genesis states
-/// bring them, each with how it came into service: the box's first key and
-/// a key an amendment laid before the opening at the opening (`opened`,
-/// the frame of the box's first `BoxOpened`); another at the first
-/// `BoxUnitSwap` laid in a state that carries it (ADR-0041 decision 5).
+/// bring them, each with how it came into service (ADR-0041 decision 5):
+/// the key in force at the opening (`opened`, the frame of the box's first
+/// `BoxOpened`) at the opening; another at the first `BoxUnitSwap` laid in
+/// a state that carries it. And the keys an amendment replaced before the
+/// opening: they never served. A key a later state brings back (a
+/// transmitter put back) is not brought in again.
 fn box_keys(
     genesis: &VerifiedGenesis<'_>,
     index: &LedgerIndex<'_>,
     box_id: &[u8],
     opened: Option<Seq>,
-) -> Vec<([u8; 64], Intro)> {
+) -> (KeyIntros, Vec<[u8; 64]>) {
     let swaps = box_swaps(index, box_id);
-    let mut out: Vec<([u8; 64], Intro)> = Vec::new();
+    let mut out: KeyIntros = Vec::new();
+    let mut never: Vec<[u8; 64]> = Vec::new();
     for state in 0..genesis.state_count() {
         let Some(b) = genesis.expected_box_at(state, box_id) else {
             continue;
         };
         let l = link_id(b.frame_key).0;
-        if out.iter().any(|(k, _)| *k == l) {
+        // Before the opening only the key in force at the opening starts:
+        // one replaced before it never served.
+        if out.is_empty() || amended_before(index, state, opened) {
+            never.extend(out.pop().map(|(k, _)| k).filter(|k| *k != l));
+            never.retain(|k| *k != l);
+            out.push((l, Intro::Opening));
             continue;
         }
-        let intro = if out.is_empty() || amended_before(index, state, opened) {
-            Intro::Opening
-        } else {
-            swaps
-                .iter()
-                .find(|(seq, _)| {
-                    genesis
-                        .expected_box_at(index.state_at(*seq), box_id)
-                        .is_some_and(|x| link_id(x.frame_key).0 == l)
-                })
-                .map_or(Intro::Unknown, |(_, at)| Intro::Swap(*at))
-        };
+        if never.contains(&l) || out.iter().any(|(k, _)| *k == l) {
+            continue;
+        }
+        let intro = swaps
+            .iter()
+            .find(|(seq, _)| {
+                genesis
+                    .expected_box_at(index.state_at(*seq), box_id)
+                    .is_some_and(|x| link_id(x.frame_key).0 == l)
+            })
+            .map_or(Intro::Unknown, |(_, at)| Intro::Swap(*at));
         out.push((l, intro));
     }
-    out
+    (out, never)
 }
 
 /// Whether check-in unit `unit` of `station_id` is in service from the
@@ -3009,6 +3027,12 @@ fn start_of(intro: Intro, opening: Option<u64>, closed: bool) -> Start {
             known: closed,
             swapped_in: None,
             never_brought: closed,
+        },
+        Intro::Never => Start {
+            slot: None,
+            known: true,
+            swapped_in: None,
+            never_brought: true,
         },
     }
 }
@@ -3472,7 +3496,7 @@ pub fn verify_connectivity<'a>(
         for (key, lw) in &station_links {
             let mut packages = BTreeSet::new();
             let mut batches = None;
-            let (opening, close, closing, start, end) = match lw.info.device {
+            let (opening, close, closing, start, end, close_resent) = match lw.info.device {
                 LinkDevice::Box(b) => {
                     for e in index.box_events(b.as_bytes()) {
                         if e.schema == SCHEMA_CAST_RECORD
@@ -3495,23 +3519,42 @@ pub fn verify_connectivity<'a>(
                     let closing = opening.and(close_of(b.as_bytes()));
                     // Each frame key from the event that brought it in to
                     // the one that brought in the next.
-                    let keys = box_keys(genesis, index, b.as_bytes(), first.map(|(seq, _)| seq));
+                    let (keys, never) =
+                        box_keys(genesis, index, b.as_bytes(), first.map(|(seq, _)| seq));
                     let k = keys.iter().position(|(l, _)| l == key).unwrap_or(0);
-                    let intro = keys.get(k).map_or(Intro::Opening, |(_, i)| *i);
-                    let end = match keys.get(k.saturating_add(1)) {
-                        Some((_, Intro::Swap(at))) => SpanEnd::Swap(*at),
-                        Some((_, Intro::Opening)) => {
-                            opening.map_or(SpanEnd::LastFrame, SpanEnd::Swap)
-                        }
-                        None if lw.info.current => SpanEnd::To(closing.or(last_window)),
-                        Some((_, Intro::Unknown)) | None => SpanEnd::LastFrame,
+                    let intro = if never.contains(key) {
+                        Intro::Never
+                    } else {
+                        keys.get(k).map_or(Intro::Opening, |(_, i)| *i)
                     };
+                    // Only the first key starts at the opening.
+                    let end = match keys.get(k.saturating_add(1)) {
+                        _ if intro == Intro::Never => SpanEnd::LastFrame,
+                        Some((_, Intro::Swap(at))) => SpanEnd::Swap(*at),
+                        None if lw.info.current => SpanEnd::To(closing.or(last_window)),
+                        Some(_) | None => SpanEnd::LastFrame,
+                    };
+                    // Whether the box's close resend came: a link of the box
+                    // listed a batch attestation in a close-resend frame (a
+                    // swap in the close slot may take the old link; where
+                    // it goes is `KindOrder`'s).
+                    let close_resent = station_links
+                        .iter()
+                        .filter(|(_, l)| {
+                            matches!(l.info.device, LinkDevice::Box(x) if x.as_bytes() == b.as_bytes())
+                        })
+                        .flat_map(|(_, l)| l.frames.iter())
+                        .any(|f| {
+                            f.entry.kind == FrameKind::CloseResend
+                                && f.objects.iter().any(|o| o.schema == SCHEMA_BATCH_ATTEST)
+                        });
                     (
                         opening,
                         close,
                         closing,
                         start_of(intro, opening, closed),
                         end,
+                        close_resent,
                     )
                 }
                 LinkDevice::Unit(u) => {
@@ -3546,6 +3589,7 @@ pub fn verify_connectivity<'a>(
                         last_close,
                         start_of(intro, station_opening, closed),
                         end,
+                        false,
                     )
                 }
             };
@@ -3591,7 +3635,12 @@ pub fn verify_connectivity<'a>(
                 included: 0,
                 findings: Vec::new(),
             };
-            let judged = judge_frames(lw, &ctx, &windows, &mut report);
+            let mut judged = judge_frames(lw, &ctx, &windows, &mut report);
+            // The box's close resend came on one of its links (a swap in the
+            // close slot may take the old one): no close slot owes it.
+            if close_resent {
+                judged.close_slot = None;
+            }
             included.insert(*key, judge_objects(lw, &ctx, &judged, &mut report));
             let (short, gap) = (judged.short, judged.gap);
             let first_frame = report.slots.map(|(a, _)| a);
@@ -3600,9 +3649,10 @@ pub fn verify_connectivity<'a>(
             // the session does not list the link). While the link's start
             // is not the ledger's (its opening or swap not laid yet), the
             // slots of a window before its first frame may be its own and
-            // lost: the session may count them too. While the gateway has
-            // not closed, a swap that ends the link may not be laid yet:
-            // the session need not count its slots after its last frame.
+            // lost: the session may count them too (a link with no frame
+            // yet, any number). While the gateway has not closed, a swap
+            // that ends the link may not be laid yet: the session need not
+            // count its slots after its last frame.
             for session in &st.sessions {
                 let Some(declared) = st
                     .declared
@@ -3625,6 +3675,9 @@ pub fn verify_connectivity<'a>(
                             .saturating_sub(session.start_slot)
                             .saturating_add(1),
                     ),
+                    // No frame and no start laid: any count, until the
+                    // start is laid or the gateway closed.
+                    None if !ctx.start_known => u64::MAX,
                     _ => 0,
                 };
                 let trailing = match last_frame {

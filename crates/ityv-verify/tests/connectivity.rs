@@ -2275,8 +2275,8 @@ fn c2_a_link_that_lists_nothing_still_tiles_its_data() {
 
     // A scanner's frame key from before a swap: an amendment laid before
     // the opening gave BOX-1's scanner a new frame key, and the old one
-    // still sends bytes that are no object (and sends after it was
-    // replaced).
+    // still sends bytes that are no object (and, never in service, sends
+    // at all).
     let new_key = common::uplink::BOX_FRAME_BASE + 50;
     let (w, amendment) = leak(election_amended(|d| {
         d.boxes[0].frame_key = common::uplink::frame_key(new_key);
@@ -2311,9 +2311,9 @@ fn c2_a_link_that_lists_nothing_still_tiles_its_data() {
     assert_eq!(
         problems
             .iter()
-            .filter(|p| **p == LinkProblem::AfterSwap)
+            .filter(|p| **p == LinkProblem::BeforeSwap)
             .count(),
-        62
+        63
     );
 }
 
@@ -4993,20 +4993,30 @@ fn r3_2c_until_the_close_is_laid_the_first_close_resend_states_it() {
 /// The one-box election with two amendments: BOX-1's frame key becomes
 /// `first`, then `second`; with both signed amendments.
 fn twice_amended(first: u16, second: u16) -> (&'static World, &'static [u8], &'static [u8]) {
+    let (w, a) = amended_keys(&[first, second]);
+    (w, a[0], a[1])
+}
+
+/// The one-box election with one amendment per key of `keys`, each giving
+/// BOX-1 that frame key; with the signed amendments.
+fn amended_keys(keys: &[u16]) -> (&'static World, Vec<&'static [u8]>) {
     let d = election_draft();
     let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
     let built = leak(common::sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
         p.legal_authorization_hash = ityv_crypto::object_hash(body);
     }));
-    let mut one = d.clone();
-    one.boxes[0].frame_key = common::uplink::frame_key(first);
-    one.appointments = one.referenced_appointments();
-    let a1 = common::amendment(1, built.pin, &one.raw(), &SIGNERS);
-    let mut two = one.clone();
-    two.boxes[0].frame_key = common::uplink::frame_key(second);
-    two.appointments = two.referenced_appointments();
-    let a2 = common::amendment(2, common::body_hash(a1.signed), &two.raw(), &SIGNERS);
-    let genesis = leak(ityv_verify::verify_genesis(&built.pin, &built.input(), &[a1, a2]).unwrap());
+    let mut draft = d.clone();
+    let mut previous = built.pin;
+    let mut amendments = Vec::new();
+    for (n, key) in keys.iter().enumerate() {
+        draft.boxes[0].frame_key = common::uplink::frame_key(*key);
+        draft.appointments = draft.referenced_appointments();
+        let a = common::amendment(n as u64 + 1, previous, &draft.raw(), &SIGNERS);
+        previous = common::body_hash(a.signed);
+        amendments.push(a);
+    }
+    let genesis =
+        leak(ityv_verify::verify_genesis(&built.pin, &built.input(), &amendments).unwrap());
     (
         leak(World {
             genesis,
@@ -5014,8 +5024,7 @@ fn twice_amended(first: u16, second: u16) -> (&'static World, &'static [u8], &'s
             signed: built.signed,
             authorization,
         }),
-        a1.signed,
-        a2.signed,
+        amendments.iter().map(|a| a.signed).collect(),
     )
 }
 
@@ -6249,8 +6258,8 @@ fn r4_2_a_transmitter_taken_out_is_not_put_back() {
     // Taken out before the opening counts too: an amendment before the
     // opening gives the box key 650, and one on the day brings back 600
     // with a witnessed swap at 181. The box stage refuses the swap, and
-    // 600 was in service from the opening for no slot (650 was): every
-    // frame of it after the opening's slot is `AfterSwap`.
+    // 600 never served (round 5): every frame of it is `BeforeSwap`, and
+    // nothing else holds.
     let (w, a1, a2) = twice_amended(spare, old);
     let mut book = Book::new(w);
     book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a1);
@@ -6267,7 +6276,17 @@ fn r4_2_a_transmitter_taken_out_is_not_put_back() {
     let refusals = &r.boxes().report(B1.id).unwrap().refusals;
     assert_eq!(refusals.len(), 1, "{refusals:?}");
     assert_eq!(refusals[0].refusal, ityv_verify::Refusal::OutOfOrder);
-    assert!(found(&r, link(old)).contains(&LinkProblem::AfterSwap));
+    let f = found(&r, link(old));
+    assert!(
+        !f.is_empty() && f.iter().all(|p| *p == LinkProblem::BeforeSwap),
+        "{f:?}"
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(
+        r.connectivity().holds(),
+        only(HoldReason::UplinkFrameInvalid)
+    );
+    assert!(r.status().holds().contains(HoldReason::BoxEventRefused));
 }
 
 /// Frames of link `key` from `first_slot`, one a slot, that carry
@@ -6623,4 +6642,317 @@ fn held4_a_transmitter_swap_cannot_take_another_devices_frame_key() {
         let a1 = common::amendment(1, built.pin, &one.raw(), &SIGNERS);
         assert!(ityv_verify::verify_genesis(&built.pin, &built.input(), &[a1]).is_err());
     }
+}
+
+// ---------------------------------------------------------------------------
+// The fifth check of 2i.
+
+/// The session body `p` with a frameless entry for link `l` declaring
+/// `missing` missing slots (a gateway that heard nothing from that
+/// transmitter in the window).
+fn with_silent_link(p: &mut UplinkSessionParts<'static>, l: Hash512, missing: u32) {
+    use ityv_encoding::Encode;
+    let mut entries: Vec<SessionLink> = p.links.iter().filter(|e| e.link_id_hash != l).collect();
+    entries.push(SessionLink {
+        link_id_hash: l,
+        frames: 0,
+        catchup_frames: 0,
+        missing_slots: missing,
+        stream_end: 0,
+        chain_head: ityv_crypto::uplink::chain_start(&l),
+    });
+    entries.sort_by(|a, b| a.link_id_hash.as_bytes().cmp(b.link_id_hash.as_bytes()));
+    let mut bytes = Vec::new();
+    for e in &entries {
+        let mut buf = std::vec![0u8; e.encoded_len()];
+        e.encode(&mut ityv_encoding::Writer::new(&mut buf)).unwrap();
+        bytes.extend_from_slice(&buf);
+    }
+    p.links = SessionLinks::new(leak_slice(bytes)).unwrap();
+}
+
+#[test]
+fn r5_1_a_transmitter_put_back_before_the_opening_serves_from_it() {
+    // The check for bug5_1. Before the opening BOX-1's transmitter 600 is
+    // replaced by 650 and put back (650 was faulty at setup): two
+    // amendments, no swap. Only the key in force at the opening starts
+    // there; 650 never served. Key 600 sends the honest day: nothing holds.
+    let old = day().links[SCANNER].key;
+    let spare = common::uplink::BOX_FRAME_BASE + 50;
+    let (w, a1, a2) = twice_amended(spare, old);
+    let mut book = Book::new(w);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a1);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a2);
+    for (schema, event) in &day().events {
+        book.push(*schema, event);
+    }
+    let r = verify_book(book, Plan::new(ST, honest_links()).events());
+    assert!(
+        found(&r, link(old)).is_empty(),
+        "{:?}",
+        found(&r, link(old))
+    );
+    assert!(r.status().holds().is_empty(), "{:?}", r.status().holds());
+
+    // Three keys before the opening (600, 650, 651) and, on the day, a swap
+    // back to 650: one replaced before the opening never served, so the
+    // box stage refuses the swap and its frames are `BeforeSwap`; 651
+    // ends at its last frame. Nothing else holds.
+    let (k1, k2) = (spare, common::uplink::BOX_FRAME_BASE + 51);
+    let (w, a) = amended_keys(&[k1, k2, k1]);
+    let events = &day().events;
+    let close = events
+        .iter()
+        .position(|(s, _)| *s == ityv_encoding::SCHEMA_BOX_CLOSE)
+        .unwrap();
+    let mut book = Book::new(w);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a[0]);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a[1]);
+    for (schema, event) in &events[..close] {
+        book.push(*schema, event);
+    }
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a[2]);
+    let (schema, event) = box_swap(181);
+    book.push(schema, event);
+    for (schema, event) in &events[close..] {
+        book.push(*schema, event);
+    }
+    let o = scanner_objects();
+    let honest = with_packages(&o);
+    let g2: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=181u64)
+        .map(|s| {
+            let objs = if s == 150 {
+                honest[..honest.len() - 1].to_vec()
+            } else {
+                Vec::new()
+            };
+            (s, FrameKind::Normal, objs)
+        })
+        .collect();
+    let g1: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (181..=211u64)
+        .map(|s| (s, FrameKind::Normal, Vec::new()))
+        .collect();
+    let mut back = link_of(k1, &g1, 1);
+    extend_link(&mut back, &close_slot(212, std::vec![o[4]], day_runs()));
+    let mut links = honest_links();
+    links[SCANNER] = link_of(k2, &g2, 1);
+    links.push(back);
+    let r = verify_book(book, Plan::new(ST, links).events());
+    let refusals = &r.boxes().report(B1.id).unwrap().refusals;
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert_eq!(refusals[0].refusal, ityv_verify::Refusal::OutOfOrder);
+    let f = found(&r, link(k1));
+    assert!(
+        !f.is_empty() && f.iter().all(|p| *p == LinkProblem::BeforeSwap),
+        "{f:?}"
+    );
+    assert!(found(&r, link(k2)).is_empty(), "{:?}", found(&r, link(k2)));
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(
+        r.connectivity().holds(),
+        only(HoldReason::UplinkFrameInvalid)
+    );
+}
+
+#[test]
+fn r5_2_the_close_resend_is_the_box_s_in_its_close_slot() {
+    // The check for bug5_2. BOX-1's transmitter is replaced alone in its
+    // close slot (212); the old one sends in that slot (a link swapped out
+    // may send in the swap's slot). Three ways the close slot goes:
+    // - the new transmitter sends the close slot's catch-up frame and the
+    //   close resend: nothing (before, the old link's close slot was
+    //   `Resend`);
+    // - the old one sends the close slot's group with the close resend,
+    //   the new one empty catch-up frames: the box's close resend came,
+    //   nothing (the mirror case);
+    // - neither sends it: the link in service at the close (the new one)
+    //   is `Resend`, the old one nothing.
+    let new_key = common::uplink::BOX_FRAME_BASE + 50;
+    let (w, amendment) = leak(election_amended(|d| {
+        d.boxes[0].frame_key = common::uplink::frame_key(new_key);
+    }));
+    let old_key = day().links[SCANNER].key;
+    let o = scanner_objects();
+    let run_of = with_packages(&o[..4]);
+    let closing = box_tick_in(212, ityv_encoding::BoxProgressState::Closed);
+    // The old link to 211, a tick a slot.
+    let old_to = |last: u64| ticked_link(old_key, &run_of, last);
+    let empty = |k: u16, slot: u64| {
+        let mut l = Link {
+            key: k,
+            frames: Vec::new(),
+            objects: Vec::new(),
+        };
+        extend_link(
+            &mut l,
+            &[
+                (slot, 0, FrameKind::CatchUp, Vec::new()),
+                (slot, 1, FrameKind::CatchUp, Vec::new()),
+            ],
+        );
+        l
+    };
+    let verify_with = |old: Link, new: Link| {
+        let mut links = honest_links();
+        links[SCANNER] = old;
+        links.push(new);
+        verify_book(
+            book_swapped(w, amendment, 212),
+            Plan::new(ST, links).events(),
+        )
+    };
+    // The new transmitter sends the close resend.
+    let mut old = old_to(211);
+    extend_link(&mut old, &[(212, 0, FrameKind::Normal, Vec::new())]);
+    let mut new = Link {
+        key: new_key,
+        frames: Vec::new(),
+        objects: Vec::new(),
+    };
+    extend_link(
+        &mut new,
+        &close_slot(212, std::vec![closing], run_of.clone()),
+    );
+    let r = verify_with(old.clone(), new);
+    assert!(
+        found(&r, link(old_key)).is_empty(),
+        "{:?}",
+        found(&r, link(old_key))
+    );
+    assert!(
+        found(&r, link(new_key)).is_empty(),
+        "{:?}",
+        found(&r, link(new_key))
+    );
+    assert!(r.status().holds().is_empty(), "{:?}", r.status().holds());
+    // The mirror: the old transmitter sends it in the swap's slot.
+    let mut mirror = old_to(211);
+    extend_link(
+        &mut mirror,
+        &close_slot(212, std::vec![closing], run_of.clone()),
+    );
+    let r = verify_with(mirror, empty(new_key, 212));
+    assert!(
+        found(&r, link(old_key)).is_empty(),
+        "{:?}",
+        found(&r, link(old_key))
+    );
+    assert!(
+        found(&r, link(new_key)).is_empty(),
+        "{:?}",
+        found(&r, link(new_key))
+    );
+    assert!(r.status().holds().is_empty(), "{:?}", r.status().holds());
+    // Neither.
+    let mut new = empty(new_key, 212);
+    new.frames.clear();
+    extend_link(
+        &mut new,
+        &[
+            (212, 0, FrameKind::CatchUp, std::vec![closing]),
+            (212, 1, FrameKind::CatchUp, Vec::new()),
+        ],
+    );
+    let r = verify_with(old, new);
+    assert!(
+        found(&r, link(old_key)).is_empty(),
+        "{:?}",
+        found(&r, link(old_key))
+    );
+    assert_eq!(found(&r, link(new_key)), [LinkProblem::Resend]);
+}
+
+#[test]
+fn r5_3_midday_a_silent_link_declares_any_count_until_its_start_is_laid() {
+    // The check for bug5_3. Mid-day, BOX-1's transmitter has sent nothing
+    // since the opening; the gateway lists its link in the first session
+    // with missing slots. Before `BoxOpened` is laid, any count stands;
+    // once it is, the count is judged (six slots, 150 to 155).
+    let scanner_key = day().links[SCANNER].key;
+    let unit_key = day().links[UNIT].key;
+    let unit_groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=155u64)
+        .map(|s| (s, FrameKind::Normal, Vec::new()))
+        .collect();
+    let unit = link_of(unit_key, &unit_groups, 1);
+    for (opened_laid, missing, clean) in [
+        (false, 6, true),
+        (false, 3, true),
+        (true, 6, true),
+        (true, 3, false),
+    ] {
+        let silent = move |p: &mut UplinkSessionParts<'static>| {
+            p.is_final = false;
+            with_silent_link(p, link(scanner_key), missing);
+        };
+        let mut book = Book::new(election_world());
+        if opened_laid {
+            book.w(opened(B1));
+        }
+        let mut plan = Plan::new(ST, std::vec![unit.clone()]);
+        plan.tweak_body = Some(&silent);
+        let r = verify_book(book, plan.events());
+        if clean {
+            assert!(
+                sessions_found(&r).is_empty(),
+                "{opened_laid} {missing}: {:?}",
+                sessions_found(&r)
+            );
+        } else {
+            assert_eq!(sessions_found(&r), [(1, SessionProblem::MissingSlots)]);
+        }
+    }
+}
+
+#[test]
+fn held5_a_transmitter_dead_all_day_resends_under_witness_without_a_hold() {
+    // BOX-1's transmitter sends nothing all day; the gateway lists its link
+    // in every session with every slot of its span missing (150–212). At
+    // the counting centre, in a session opened at 219, it resends
+    // everything as a witnessed resend. Kinds 0–2 lost everything, so the
+    // witnessed resend may carry it; the link owes its whole span and the
+    // sessions declared it; the close slot was not taken, so no close
+    // resend is asked. Nothing holds.
+    let key = day().links[SCANNER].key;
+    let o = scanner_objects();
+    let all = with_packages(&o);
+    let mut l = Link {
+        key,
+        frames: Vec::new(),
+        objects: Vec::new(),
+    };
+    l.frames
+        .push(make_frame(key, 219, 0, FrameKind::WitnessedResend, 0, &all));
+    let at = u64::from(l.frames[0].payload_len);
+    l.frames
+        .push(make_frame(key, 219, 1, FrameKind::WitnessedResend, at, &[]));
+    let mut links = honest_links();
+    links[SCANNER] = l;
+    let missing = |i: u32| -> u32 {
+        match i {
+            1..=10 => 6,
+            11 => 3,
+            _ => 0,
+        }
+    };
+    let silent = move |p: &mut UplinkSessionParts<'static>| {
+        if p.session_index <= 11 {
+            with_silent_link(p, link(key), missing(p.session_index));
+        }
+    };
+    let mut plan = Plan::new(ST, links);
+    plan.windows = (150..=210)
+        .step_by(6)
+        .map(|s| (s, s + 5))
+        .chain([(219, 224)])
+        .collect();
+    plan.tweak_body = Some(&silent);
+    let r = verify(plan.events());
+    assert!(
+        found(&r, link(key)).is_empty(),
+        "{:?}",
+        found(&r, link(key))
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(link_report(&r, link(key)).missing_slots, 63);
+    assert!(r.status().holds().is_empty(), "{:?}", r.status().holds());
 }

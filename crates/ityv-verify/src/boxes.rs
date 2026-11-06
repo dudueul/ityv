@@ -596,13 +596,18 @@ impl<'r> Run<'r, '_> {
         let frame_key = |k: usize| self.frame_keys.get(k).copied().flatten();
         let (before, after) = (frame_key(self.state), frame_key(state));
         let replaced = m.spec().device_key() != spec.device_key() || before != after;
+        // Every key of the states passed over that the new state does not
+        // keep (several amendments may lie between two of the box's events,
+        // all before its opening for one).
+        let gone: Vec<&[u8; FRAME_KEY_LEN]> = (self.state..state)
+            .filter_map(frame_key)
+            .filter(|k| Some(*k) != after)
+            .collect();
         let (m, refusal) = m.follow(&spec);
         if refusal.is_none() {
             self.state = state;
             self.swap_due |= open && replaced;
-            if before != after {
-                self.retired.extend(before);
-            }
+            self.retired.extend(gone);
         }
         (m, refusal)
     }
