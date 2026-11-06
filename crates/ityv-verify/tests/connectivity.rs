@@ -928,6 +928,40 @@ fn lost_frames_cut_the_received_stream() {
     assert_eq!(station(&r).outside.len(), 3);
 }
 
+#[test]
+fn a_stream_ends_whole_only_with_its_last_object_received_whole() {
+    // The scanner's stream stops inside its batch's run (the third record
+    // never sent), and the frame that held the start of the second record
+    // (and all before it) was lost (declared). The stream's last object is
+    // not received whole, so whether the run ended there is not known: no
+    // `Batch`.
+    let o = cut_objects();
+    let objects = scanner_objects();
+    let links = cut(
+        with_stream(SCANNER, &objects[..3]),
+        SCANNER,
+        &[(150, 0), (151, o[2].stream_offset as usize + 10)],
+    );
+    let lose = |l: usize, f: &Built| {
+        if l == SCANNER && f.slot == 150 {
+            None
+        } else {
+            window(f.slot)
+        }
+    };
+    let declare = declare_one(1);
+    let mut plan = Plan::new(ST, links);
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    let r = verify(plan.events());
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Frames (VC-078).
 
