@@ -608,6 +608,78 @@ impl Link {
         }
     }
 
+    /// The link of a box's scanner (frame key `key`) as an honest one sends
+    /// it: `objects` from `first` at one frame a slot, and in its close
+    /// slot `close` a catch-up frame and then the close resend of `runs`,
+    /// its batches again (PROTOCOL.md §5.8 item 4), going on into the next
+    /// slot when it needs more frames. Without a batch, or closing in its
+    /// first slot, the link of [`Link::new`].
+    pub fn box_link(
+        key: u16,
+        objects: &[&'static [u8]],
+        first: u64,
+        close: u64,
+        runs: &[&'static [u8]],
+    ) -> Self {
+        if runs.is_empty() || close <= first {
+            return Self::new(key, objects, first, close, SCANNER_FRAMES.0);
+        }
+        let mut l = Self::new(key, objects, first, close - 1, SCANNER_FRAMES.0);
+        let end = l
+            .frames
+            .last()
+            .map_or(0, |f| f.stream_offset + u64::from(f.payload_len));
+        let total: usize = runs.iter().map(|r| r.len() + CHUNK_LEN).sum();
+        let (data, mut listed, mut spans) =
+            layout(runs, MAX_PAYLOAD_LEN, total.div_ceil(MAX_PAYLOAD_LEN) + 1);
+        while spans.len() > 1 && spans.last().is_some_and(|s| s.1 == 0) {
+            spans.pop();
+        }
+        for o in &mut listed {
+            o.stream_offset += end;
+        }
+        let link = link(key);
+        // The catch-up frame (nothing left), then the resend's frames, the
+        // last slot filled to its shape.
+        let mut parts = std::vec![(close, 0u16, FrameKind::CatchUp, end, Vec::new())];
+        for (k, (offset, len)) in spans.into_iter().enumerate() {
+            let at = offset as usize;
+            let position = k as u64 + 1;
+            parts.push((
+                close + position / 2,
+                (position % 2) as u16,
+                FrameKind::CloseResend,
+                end + offset,
+                data[at..at + len as usize].to_vec(),
+            ));
+        }
+        if parts.len() % 2 == 1 {
+            let slot = close + parts.len() as u64 / 2;
+            let at = end + data.len() as u64;
+            parts.push((slot, 1, FrameKind::CloseResend, at, Vec::new()));
+        }
+        for (slot, index, kind, offset, data) in parts {
+            let payload_len = data.len() as u32;
+            let mut f = Built {
+                slot,
+                index,
+                kind,
+                stream_offset: offset,
+                payload_len,
+                data,
+                objects: overlapping(&listed, offset, payload_len),
+                fill: Vec::new(),
+                payload_root: Hash512::ZERO,
+                leaves: Vec::new(),
+                sig: [0; 64],
+            };
+            f.seal(key, link);
+            l.frames.push(f);
+        }
+        l.objects.extend(listed);
+        l
+    }
+
     /// Lists in each frame the stream's objects that overlap it, and seals
     /// every frame again: after a test moved data between frames.
     pub fn relist(&mut self) {
@@ -920,6 +992,21 @@ pub fn box_stream(events: &[&'static [u8]]) -> Vec<&'static [u8]> {
     out
 }
 
+/// The batch runs of a box's stream (as [`box_stream`] orders it): each
+/// attestation and the records after it.
+pub fn batch_runs(stream: &[&'static [u8]]) -> Vec<&'static [u8]> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for o in stream {
+        let schema = schema_of(o);
+        inside = schema == SCHEMA_BATCH_ATTEST || (inside && schema == SCHEMA_CAST_RECORD);
+        if inside {
+            out.push(*o);
+        }
+    }
+    out
+}
+
 /// The election identifier, for tests that build their own bodies.
 pub fn election_id() -> ElectionId<'static> {
     election()
@@ -1131,13 +1218,24 @@ pub fn station_links(
                 .copied()
                 .filter(|e| device_of(e) == Some((true, b.as_bytes())))
                 .collect();
-            links.push(Link::new(
-                key_number(entry.frame_key),
-                &with_packages(&box_stream(&mine)),
-                *open,
-                close.unwrap_or(window_end),
-                SCANNER_FRAMES.0,
-            ));
+            let stream = box_stream(&mine);
+            let key = key_number(entry.frame_key);
+            links.push(match close {
+                Some(c) => Link::box_link(
+                    key,
+                    &with_packages(&stream),
+                    *open,
+                    *c,
+                    &with_packages(&batch_runs(&stream)),
+                ),
+                None => Link::new(
+                    key,
+                    &with_packages(&stream),
+                    *open,
+                    window_end,
+                    SCANNER_FRAMES.0,
+                ),
+            });
         }
         let station_id = station.station_id().as_bytes();
         let mine: Vec<&'static [u8]> = events

@@ -44,8 +44,11 @@
 //!    session's window; no frame precedes the slot of the box's first
 //!    opening (the station's first, for a check-in unit); no normal or
 //!    catch-up frame of a box follows the slot after its first close's
-//!    time bucket; no frame of a device a swap took out of service
-//!    follows the swap's slot, none of one a swap brought in precedes it,
+//!    time bucket, nor of a check-in unit the slot after the station's
+//!    last laid close but where the slot before it was taken whole with
+//!    every frame full or fell short; no frame of a device a swap took
+//!    out of service follows the swap's slot, none of one a swap brought
+//!    in precedes it,
 //!    and (once the gateway closed) none comes from one no swap brought
 //!    in; a catch-up group comes only after a slot of the span fell short
 //!    (the first slot of a link a swap brought in counts as one), after a
@@ -71,8 +74,9 @@
 //!    box's frame key, the first `BoxUnitSwap` laid in a state that
 //!    carries it), to the close for one in service at the
 //!    end (to the slot before the swap that took it out, or its last
-//!    frame), and over its witnessed resends' slots from the first of the
-//!    session that took the first of them; a slot with frames taken has
+//!    frame: a link swapped out to the swap's slot at the latest), and
+//!    over its witnessed resends' slots from the first of the session
+//!    that took the first of them; a slot with frames taken has
 //!    its group's count of positions, one without the catch-up count. A
 //!    frame that breaks a rule is listed and holds the device's box, or
 //!    every box of the station for a check-in unit
@@ -103,8 +107,12 @@
 //!    first received in the slot before, after a loss there; the close
 //!    resend the box's batches again in batch-index order from the first,
 //!    skipping one or stopping early only where something was lost, and
-//!    nothing else; a witnessed resend (once the gateway closed) only what
-//!    normal, catch-up and close-resend frames did not bring whole;
+//!    nothing else, and there (a close slot taken whole with no batch in
+//!    a close resend is a finding); a witnessed resend (once the gateway
+//!    closed) nothing where normal, catch-up and close-resend frames lost
+//!    nothing, and else only what they did not bring whole (once the
+//!    gateway closed, a batch-schema object of no batch counts as any
+//!    other);
 //!    nothing before its time (a batch before the first slot of its time
 //!    bucket, a tick before its slot or after a later tick in its group);
 //!    a share package right after the record that names it (when that
@@ -1301,8 +1309,9 @@ struct LinkContext<'c, 'a> {
     /// The first slot of the box's first opening (the station's first,
     /// for a check-in unit).
     opening: Option<u64>,
-    /// The box's close slot: no normal or catch-up frame after it (none
-    /// for a check-in unit).
+    /// The box's close slot: no normal or catch-up frame after it; the
+    /// station's last, for a check-in unit, after which it sends only in
+    /// the next slot or going on from a slot of full frames.
     close: Option<u64>,
     /// The slot the device closes in, where it uses its catch-up shape and
     /// after which a witnessed resend may come: the box's close slot (the
@@ -1702,6 +1711,13 @@ struct FrameJudgement {
     /// Whether every position after its last frame was taken: its stream
     /// ends where the device's did.
     whole_end: bool,
+    /// Whether its normal, catch-up and close-resend frames lost anything:
+    /// a slot of their span with a position no frame took, or no such
+    /// frame at all. Only then has a witnessed resend anything to carry.
+    lost: bool,
+    /// The last frame of the close slot when that slot's frames were all
+    /// taken: where the close resend had to start.
+    close_slot: Option<LinkFinding>,
 }
 
 /// Whether a slot's frames hold every number of their group's shape.
@@ -1774,6 +1790,19 @@ impl SlotFacts {
         let continued = whole && self.backlog.get(&p).is_some_and(|(k, f)| *k && *f);
         short || continued
     }
+
+    /// Whether a check-in unit may send normal or catch-up frames in
+    /// `slot`, after the station's last close `close`: in the slot after
+    /// it, or after a slot that fell short (its frames may have been full)
+    /// or was taken whole with every frame full (what it sends goes on).
+    fn after_close(&self, slot: u64, close: u64, normal: u16, catchup: u16) -> bool {
+        let Some(p) = slot.checked_sub(1) else {
+            return false;
+        };
+        p == close
+            || !full(self.groups.get(&p), normal, catchup)
+            || self.backlog.get(&p).is_some_and(|(_, f)| *f)
+    }
 }
 
 /// The slot a device's own frames say it closed in: its first close
@@ -1817,6 +1846,9 @@ fn judge_frames(
     // Whether each frame kept the order of kinds (the kinds' slots are
     // judged below, once the span is known).
     let mut in_order = Vec::with_capacity(work.frames.len());
+    let facts = SlotFacts::of(work.frames.iter());
+    let slots = &facts.groups;
+    let unit = matches!(work.info.device, LinkDevice::Unit(_));
     for f in &work.frames {
         let e = &f.entry;
         let header = frame_header(link, e, &f.objects);
@@ -1859,8 +1891,14 @@ fn judge_frames(
         if ctx.opening.map_or(ctx.closed, |open| e.slot < open) {
             report.findings.push(finding(f, LinkProblem::BeforeOpening));
         }
+        // After the close: no normal or catch-up frame of a box; of a
+        // check-in unit, only in the slot after the station's last close
+        // or going on from a slot of full frames there.
         let continuing = matches!(e.kind, FrameKind::Normal | FrameKind::CatchUp);
-        if continuing && ctx.close.is_some_and(|close| e.slot > close) {
+        let after = ctx.close.is_some_and(|close| {
+            e.slot > close && !(unit && facts.after_close(e.slot, close, normal, catchup))
+        });
+        if continuing && after {
             report.findings.push(finding(f, LinkProblem::AfterClose));
         }
         if let SpanEnd::Swap(at) = ctx.end
@@ -1898,13 +1936,12 @@ fn judge_frames(
             report.findings.push(finding(f, LinkProblem::Shape));
         }
     }
-    let facts = SlotFacts::of(work.frames.iter());
-    let slots = &facts.groups;
     // The slots the device must send in: from its start (the first frame's
     // slot when none is known) to its end, or to the last frame that is
     // not a witnessed resend if later; and from the first slot of the
     // session that took its first witnessed resend to its last witnessed
-    // resend. A link with no frame (a spare never used) has no span.
+    // resend. A link with no frame (a spare never used) has no span; one
+    // with witnessed resends alone has its start and end.
     let sent: Vec<u64> = work
         .frames
         .iter()
@@ -1915,11 +1952,18 @@ fn judge_frames(
     let last = sent.iter().max().copied();
     report.slots = first.zip(last);
     let span_start = ctx.start.or(first);
-    let span_end = last.map(|b| match ctx.end {
-        SpanEnd::To(Some(a)) => a.max(b),
-        SpanEnd::To(None) | SpanEnd::LastFrame => b,
-        SpanEnd::Swap(at) => at.saturating_sub(1).max(b),
-    });
+    let span_end = match (last, ctx.end) {
+        (Some(b), SpanEnd::To(Some(a))) => Some(a.max(b)),
+        (Some(b), SpanEnd::To(None) | SpanEnd::LastFrame) => Some(b),
+        // A link swapped out sends in the swap's slot at the latest: its
+        // frames after it are `AfterSwap`, the slots between them none of
+        // its own.
+        (Some(b), SpanEnd::Swap(at)) => Some(at.saturating_sub(1).max(b.min(at))),
+        (None, _) if work.frames.is_empty() => None,
+        (None, SpanEnd::To(Some(a))) => Some(a),
+        (None, SpanEnd::Swap(at)) => at.checked_sub(1),
+        (None, SpanEnd::To(None) | SpanEnd::LastFrame) => None,
+    };
     let witnessed: Vec<&Frame<'_>> = work
         .frames
         .iter()
@@ -2033,6 +2077,24 @@ fn judge_frames(
     report.missing_slots = u64::try_from(short.len())
         .unwrap_or(u64::MAX)
         .saturating_add(gap);
+    // Whether the normal, catch-up and close-resend frames lost anything,
+    // and the close slot's last frame when that slot was taken whole.
+    let lost_any = shape
+        .span
+        .is_none_or(|(a, b)| short.range(a..=b).next().is_some() || uncovered(windows, a, b) > 0);
+    let close_slot = ctx
+        .closing
+        .filter(|c| {
+            shape.span.is_some_and(|(a, b)| a <= *c && *c <= b)
+                && full(slots.get(c), normal, catchup)
+        })
+        .and_then(|c| {
+            work.frames
+                .iter()
+                .filter(|f| f.entry.slot == c)
+                .max_by_key(|f| f.entry.index)
+        })
+        .map(|f| finding(f, LinkProblem::Resend));
     // Stream offsets: from 0, each frame where the previous ended, or later
     // only across positions no frame took, by at most a full payload each.
     // While the link's start is not the ledger's, the first frame's offset
@@ -2092,6 +2154,8 @@ fn judge_frames(
         gap,
         witnessed_run,
         whole_end,
+        lost: lost_any,
+        close_slot,
     }
 }
 
@@ -2445,17 +2509,23 @@ fn judge_objects(
                         resend_batch = Some(b.index);
                     }
                 }
-                FrameKind::WitnessedResend if ctx.closed && batch_whole(b_hash, b) => {
+                FrameKind::WitnessedResend
+                    if ctx.closed && (!judged.lost || batch_whole(b_hash, b)) =>
+                {
                     report.findings.push(finding(l, LinkProblem::Resend));
                 }
                 FrameKind::Normal | FrameKind::CatchUp | FrameKind::WitnessedResend => {}
             }
-        } else if !Batches::batch_object(schema) {
-            // Anything but a batch's objects: never in the close resend,
-            // in a witnessed resend only when not yet received whole.
+        } else if ctx.closed || !Batches::batch_object(schema) {
+            // Anything but a batch's objects (once the gateway closed, a
+            // batch-schema object of no batch too: a challenged record and
+            // its package): never in the close resend, in a witnessed
+            // resend only when not yet received whole.
             let again = match l.kind {
                 FrameKind::CloseResend => true,
-                FrameKind::WitnessedResend => ctx.closed && whole02.contains(&key),
+                FrameKind::WitnessedResend => {
+                    ctx.closed && (!judged.lost || whole02.contains(&key))
+                }
                 FrameKind::Normal | FrameKind::CatchUp => false,
             };
             if again {
@@ -2630,6 +2700,16 @@ fn judge_objects(
         && let Some(l) = listed.values().next_back()
     {
         report.findings.push(finding(l, LinkProblem::Batch));
+    }
+    // A box that has batches sends them again from its close slot: a close
+    // slot taken whole with no batch in a close resend is `Resend`
+    // (PROTOCOL.md §5.8 item 4).
+    if ctx.closed
+        && !resent.is_empty()
+        && resend_batch.is_none()
+        && let Some(f) = judged.close_slot
+    {
+        report.findings.push(f);
     }
     // A close resend the stream ends in stops at the box's last batch (once
     // the gateway closed, as `whole_end` holds: until then its next slot
@@ -3371,13 +3451,23 @@ pub fn verify_connectivity<'a>(
             .map(|(_, q, _)| *q)
             .min_by_key(|q| q.get())
             .filter(|_| every_box);
-        // The station's last close once every opened box closed.
-        let box_closes: Vec<Option<u64>> = opened.iter().map(|(b, _, _)| close_of(b)).collect();
-        let last_close = if every_box && box_closes.iter().all(Option::is_some) {
-            box_closes.iter().flatten().max().copied()
-        } else {
-            None
+        // The station's last close once every opened box closed: as the
+        // ledger or the devices' frames state it, and as the ledger lays
+        // it (after which the unit sends little, PROTOCOL.md §5.8 item 3).
+        let last_of = |closes: Vec<Option<u64>>| {
+            if every_box && closes.iter().all(Option::is_some) {
+                closes.into_iter().flatten().max()
+            } else {
+                None
+            }
         };
+        let last_close = last_of(opened.iter().map(|(b, _, _)| close_of(b)).collect());
+        let laid_close = last_of(
+            opened
+                .iter()
+                .map(|(b, _, _)| close_slot(index, b))
+                .collect(),
+        );
         let no_batches = Batches::default();
         for (key, lw) in &station_links {
             let mut packages = BTreeSet::new();
@@ -3452,7 +3542,7 @@ pub fn verify_connectivity<'a>(
                     };
                     (
                         station_opening,
-                        None,
+                        laid_close,
                         last_close,
                         start_of(intro, station_opening, closed),
                         end,

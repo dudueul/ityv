@@ -32,7 +32,7 @@ use std::sync::OnceLock;
 use std::vec::Vec;
 
 use common::uplink::{
-    Built, Link, Plan, box_stream, capture_file, device_frames_of, device_of, entry_at,
+    Built, Link, Plan, batch_runs, box_stream, capture_file, device_frames_of, device_of, entry_at,
     fake_object, incident_body, link, log_key, relog, schema_of, station_links, stream, wire_frame,
     with_packages,
 };
@@ -142,7 +142,36 @@ fn unit() -> Hash512 {
     link(day().links[UNIT].key)
 }
 
-/// The end of a link's stream when every object is in its first frame.
+/// Where a link's stream ends: the end of its last data.
+fn link_end(l: &Link) -> u64 {
+    l.frames
+        .iter()
+        .map(|f| f.stream_offset + u64::from(f.payload_len))
+        .max()
+        .unwrap_or(0)
+}
+
+/// `l` with every frame after slot `slot`, and the objects from the
+/// first of them on, `by` bytes further along its stream.
+fn skip_after(l: &mut Link, slot: u64, by: u64) {
+    let from = l
+        .frames
+        .iter()
+        .filter(|f| f.slot > slot)
+        .map(|f| f.stream_offset)
+        .min()
+        .unwrap();
+    for f in l.frames.iter_mut().filter(|f| f.slot > slot) {
+        f.stream_offset += by;
+    }
+    for o in l.objects.iter_mut().filter(|o| o.stream_offset >= from) {
+        o.stream_offset += by;
+    }
+    l.relist();
+}
+
+/// The length of the stream the link's first frame carries (an honest
+/// link's whole stream, before its close resend).
 fn stream_len(l: &Link) -> u64 {
     u64::from(l.frames[0].payload_len)
 }
@@ -225,7 +254,8 @@ fn cut(mut links: Vec<Link>, which: usize, cuts: &[(u64, usize)]) -> Vec<Link> {
     let l = &mut links[which];
     let data = l.frames[0].data.clone();
     let mut offset = 0usize;
-    for f in &mut l.frames {
+    // The close slot's frames (the close resend after the stream) stay.
+    for f in l.frames.iter_mut().filter(|f| f.kind == FrameKind::Normal) {
         if let Some(i) = cuts.iter().position(|(s, _)| *s == f.slot) {
             let from = cuts[i].1;
             let to = cuts.get(i + 1).map_or(data.len(), |c| c.1);
@@ -248,16 +278,17 @@ fn cut_objects() -> Vec<StreamObject> {
     stream(&scanner_objects()).1
 }
 
-/// The scanner's link, one frame a slot from 150 to 212: slot `s` of each
-/// `(s, offset, data, listed)` carries `data` from stream offset `offset`
-/// and lists `listed` (the device signs what it lists); the slots in
-/// `silent` send nothing; every other frame carries nothing and starts
-/// where the data before it end.
+/// The scanner's link, one frame a slot from 150 to 211 and an honest
+/// close slot 212 ([`close_slot`]): slot `s` of each `(s, offset, data,
+/// listed)` carries `data` from stream offset `offset` and lists `listed`
+/// (the device signs what it lists); the slots in `silent` send nothing;
+/// every other frame carries nothing and starts where the data before it
+/// end.
 fn scanner_frames(parts: &[(u64, u64, Vec<u8>, Vec<StreamObject>)], silent: &[u64]) -> Link {
     let key = day().links[SCANNER].key;
     let mut frames = Vec::new();
     let mut end = 0u64;
-    for slot in 150..=212 {
+    for slot in 150..=211 {
         if silent.contains(&slot) {
             continue;
         }
@@ -282,11 +313,57 @@ fn scanner_frames(parts: &[(u64, u64, Vec<u8>, Vec<StreamObject>)], silent: &[u6
         end = offset + u64::from(f.payload_len);
         frames.push(f);
     }
-    Link {
+    let mut l = Link {
         key,
         frames,
         objects: Vec::new(),
+    };
+    extend_link(&mut l, &close_slot(212, Vec::new(), day_runs()));
+    l
+}
+
+/// The close slot of an honest scanner: a catch-up frame carrying
+/// `first` (what is left), then the close resend of `runs` (its batches
+/// again, PROTOCOL.md §5.8 item 4).
+fn close_slot(
+    slot: u64,
+    first: Vec<&'static [u8]>,
+    runs: Vec<&'static [u8]>,
+) -> [(u64, u16, FrameKind, Vec<&'static [u8]>); 2] {
+    [
+        (slot, 0, FrameKind::CatchUp, first),
+        (slot, 1, FrameKind::CloseResend, runs),
+    ]
+}
+
+/// A scanner link of `key` from slot 150 to `to`, a tick a slot (of
+/// [`swap_ticks`]), slot 150's after `first`.
+fn ticked_link(key: u16, first: &[&'static [u8]], to: u64) -> Link {
+    let ticks = swap_ticks(to + 1);
+    let groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=to)
+        .zip(&ticks)
+        .map(|(s, t)| {
+            let mut objs = if s == 150 { first.to_vec() } else { Vec::new() };
+            objs.push(*t);
+            (s, FrameKind::Normal, objs)
+        })
+        .collect();
+    link_of(key, &groups, 1)
+}
+
+/// Declares one missing slot of the scanner in session `session` and one
+/// in session 11 (the close slot's: its close resend lost too).
+fn declare_with_close(session: u32) -> impl Fn(u32, &mut SessionLink) {
+    move |i: u32, e: &mut SessionLink| {
+        if (i == session || i == 11) && e.link_id_hash == scanner() {
+            e.missing_slots = 1;
+        }
     }
+}
+
+/// Whether frame `f` is the scanner's close resend in the close slot.
+fn close_resend_frame(f: &Built) -> bool {
+    (f.slot, f.index) == (212, 1) && f.kind == FrameKind::CloseResend
 }
 
 /// Declares one missing slot of the scanner in session `session`.
@@ -325,8 +402,36 @@ fn with_stream(which: usize, objects: &[&'static [u8]]) -> Vec<Link> {
     let l = &links[which];
     let first = l.frames[0].slot;
     let last = l.frames.last().unwrap().slot;
-    links[which] = Link::new(l.key, objects, first, last, 1);
+    links[which] = if which == SCANNER {
+        Link::box_link(l.key, objects, first, last, &day_runs())
+    } else {
+        Link::new(l.key, objects, first, last, 1)
+    };
     links
+}
+
+/// The day's links with the scanner sending `objects` and, in its close
+/// resend, `runs` ([`with_stream`] sends its honest batch again).
+fn with_stream_resent(objects: &[&'static [u8]], runs: &[&'static [u8]]) -> Vec<Link> {
+    let mut links = honest_links();
+    let l = &links[SCANNER];
+    let (first, last) = (l.frames[0].slot, l.frames.last().unwrap().slot);
+    links[SCANNER] = Link::box_link(l.key, objects, first, last, runs);
+    links
+}
+
+/// BOX-1's closing tick as its honest stream lists it.
+fn day_tick() -> StreamObject {
+    *day().links[SCANNER]
+        .objects
+        .iter()
+        .find(|o| o.schema == SCHEMA_PROGRESS_TICK)
+        .unwrap()
+}
+
+/// BOX-1's batches again, as its close resend carries them.
+fn day_runs() -> Vec<&'static [u8]> {
+    with_packages(&batch_runs(&scanner_objects()))
 }
 
 // ---------------------------------------------------------------------------
@@ -370,30 +475,37 @@ fn a_clean_uplink_is_complete_and_includes_every_device_event() {
     assert_eq!(s.holds, HoldSet::empty());
 
     let l = &day().links[SCANNER];
-    let data_chunks = stream_len(l).div_ceil(4096);
+    // The close slot: a catch-up frame, then the close resend.
+    let resend = l.frames.last().unwrap();
+    assert_eq!(resend.kind, FrameKind::CloseResend);
+    let data_chunks = stream_len(l).div_ceil(4096) + u64::from(resend.payload_len).div_ceil(4096);
     let b = link_report(&r, scanner());
     assert_eq!(b.device, LinkDevice::Box(BoxId::new(B1.id).unwrap()));
     assert_eq!(
         (b.frames, b.catchup_frames, b.data_frames, b.missing_slots),
-        (63, 0, 1, 0)
+        (62, 2, 2, 0)
     );
     assert_eq!(b.slots, Some((150, 212)));
-    assert_eq!(b.stream_end, stream_len(l));
+    assert_eq!(
+        b.stream_end,
+        resend.stream_offset + u64::from(resend.payload_len)
+    );
     // The batch attestation, its three records each with its share
-    // package, the closing tick; the five device events included.
-    assert_eq!((b.objects, b.included), (8, 5));
+    // package, the closing tick, and the batch again in the close resend;
+    // the five device events included.
+    assert_eq!((b.objects, b.included), (15, 5));
     // Each package is in a chunk of its own, sealed; every other chunk is
     // recomputed from the ledger (the records' too).
     let packages: Vec<&StreamObject> = l
         .objects
         .iter()
-        .filter(|o| o.schema == SCHEMA_SHARE_PACKAGE)
+        .filter(|o| o.schema == SCHEMA_SHARE_PACKAGE && o.stream_offset < stream_len(l))
         .collect();
     assert_eq!(packages.len() as u64, PACKAGES);
     assert!(packages.iter().all(|p| p.stream_offset % 4096 == 0));
     assert_eq!(
         (b.checked_chunks, b.opaque_chunks),
-        (data_chunks - PACKAGES, PACKAGES)
+        (data_chunks - 2 * PACKAGES, 2 * PACKAGES)
     );
     assert!(b.findings.is_empty(), "{:?}", b.findings);
     let u = link_report(&r, unit());
@@ -671,7 +783,7 @@ fn a_log_is_taken_once_by_its_session() {
     events.insert(first + 1, (SCHEMA_UPLINK_FRAME_LOG, other));
     let r = verify(events);
     assert_eq!(sessions_found(&r), [(1, SessionProblem::LogRepeated)]);
-    assert_eq!(link_report(&r, scanner()).objects, 8);
+    assert_eq!(link_report(&r, scanner()).objects, 15);
 
     // A log of a session already taken.
     let mut events = honest.clone();
@@ -784,7 +896,7 @@ fn a_lost_frame_is_a_missing_slot_the_session_declares() {
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     let b = link_report(&r, scanner());
     assert!(b.findings.is_empty(), "{:?}", b.findings);
-    assert_eq!((b.frames, b.missing_slots), (62, 1));
+    assert_eq!((b.frames, b.missing_slots), (61, 1));
     assert_eq!(r.connectivity().holds(), HoldSet::empty());
 
     // The lost frame carried the closing tick: the stream after it starts
@@ -813,11 +925,7 @@ fn a_lost_frame_is_a_missing_slot_the_session_declares() {
     let most = 2 * MAX_PAYLOAD_LEN as u64;
     for (skip, problems) in [(most, &[][..]), (most + 1, &[LinkProblem::Offset][..])] {
         let mut links = honest_links();
-        let end = stream_len(&links[SCANNER]);
-        for f in links[SCANNER].frames.iter_mut().filter(|f| f.slot > 152) {
-            f.stream_offset = end + skip;
-        }
-        links[SCANNER].relist();
+        skip_after(&mut links[SCANNER], 152, skip);
         let mut plan = Plan::new(ST, links);
         plan.assign = Some(&lose);
         plan.tweak_link = Some(&declare);
@@ -862,7 +970,8 @@ fn slots_no_window_covers_are_an_undeclared_gap() {
         "{:?}",
         found(&r, scanner())
     );
-    assert_eq!(station(&r).outside.len(), 4);
+    // The batch arrives again in the close resend; the closing tick not.
+    assert_eq!(station(&r).outside.len(), 1);
     assert_eq!(
         box_holds(&r),
         only(HoldReason::UplinkSessionRefused).with(HoldReason::UplinkObjectOutside)
@@ -871,15 +980,16 @@ fn slots_no_window_covers_are_an_undeclared_gap() {
 
 #[test]
 fn lost_frames_cut_the_received_stream() {
+    // The close resend lost too, or it would carry the batch again.
     let o = cut_objects();
     let lose = |l: usize, f: &Built| {
-        if l == SCANNER && f.slot == 151 {
+        if l == SCANNER && (f.slot == 151 || close_resend_frame(f)) {
             None
         } else {
             window(f.slot)
         }
     };
-    let declare = declare_one(1);
+    let declare = declare_with_close(1);
     // Slot 151's frame, lost, held the end of the batch attestation and
     // the start of the first record: both are listed (by the frames on
     // either side, which carry them out and in), neither lies whole in the
@@ -934,7 +1044,8 @@ fn a_stream_ends_whole_only_with_its_last_object_received_whole() {
     // never sent), and the frame that held the start of the second record
     // (and all before it) was lost (declared). The stream's last object is
     // not received whole, so whether the run ended there is not known: no
-    // `Batch`.
+    // `Batch`. The close resend is lost too: after it the stream would
+    // show that the run stopped.
     let o = cut_objects();
     let objects = scanner_objects();
     let links = cut(
@@ -943,13 +1054,13 @@ fn a_stream_ends_whole_only_with_its_last_object_received_whole() {
         &[(150, 0), (151, o[2].stream_offset as usize + 10)],
     );
     let lose = |l: usize, f: &Built| {
-        if l == SCANNER && f.slot == 150 {
+        if l == SCANNER && (f.slot == 150 || close_resend_frame(f)) {
             None
         } else {
             window(f.slot)
         }
     };
-    let declare = declare_one(1);
+    let declare = declare_with_close(1);
     let mut plan = Plan::new(ST, links);
     plan.assign = Some(&lose);
     plan.tweak_link = Some(&declare);
@@ -983,12 +1094,13 @@ fn a_frame_not_signed_by_its_devices_frame_key_is_invalid() {
     assert_eq!(found(&r, scanner()), [LinkProblem::Signature]);
 
     // A data frame that does not verify carries nothing: its objects are
-    // outside the received stream.
+    // outside the received stream, but for the batch the close resend
+    // sends again.
     let mut links = honest_links();
     links[SCANNER].frames[0].sig[5] ^= 1;
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Signature]);
-    assert_eq!(station(&r).outside.len(), 5);
+    assert_eq!(station(&r).outside.len(), 1);
     assert_eq!(
         box_holds(&r),
         only(HoldReason::UplinkFrameInvalid).with(HoldReason::UplinkObjectOutside)
@@ -1005,33 +1117,18 @@ fn a_frame_beyond_its_slots_count_or_mixing_kinds_is_invalid() {
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     assert_eq!(box_holds(&r), only(HoldReason::UplinkFrameInvalid));
 
-    // A catch-up frame in a slot of normal frames (the close slot, where
-    // the scanner may use its catch-up shape).
+    // A normal frame in the close slot's catch-up group (the scanner's
+    // close slot is a whole catch-up group of two): its kinds differ.
     let mut links = honest_links();
-    add(&mut links[SCANNER], 212, |f| {
-        f.kind = FrameKind::CatchUp;
-        f.index = 1;
-    });
+    reseal(&mut links[SCANNER], 212, |f| f.kind = FrameKind::Normal);
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Shape]);
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
 
-    // A whole slot of catch-up frames is a shape of its own.
+    // Half a slot of catch-up frames is a missing slot (the close resend
+    // may have been in it).
     let mut links = honest_links();
-    reseal(&mut links[SCANNER], 212, |f| f.kind = FrameKind::CatchUp);
-    add(&mut links[SCANNER], 212, |f| f.index = 1);
-    let r = verify(Plan::new(ST, links).events());
-    assert!(
-        found(&r, scanner()).is_empty(),
-        "{:?}",
-        found(&r, scanner())
-    );
-    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
-    assert_eq!(link_report(&r, scanner()).catchup_frames, 2);
-
-    // Half a slot of catch-up frames is a missing slot.
-    let mut links = honest_links();
-    reseal(&mut links[SCANNER], 212, |f| f.kind = FrameKind::CatchUp);
+    links[SCANNER].frames.pop();
     let r = verify(Plan::new(ST, links).events());
     assert!(
         found(&r, scanner()).is_empty(),
@@ -1077,20 +1174,16 @@ fn a_frame_outside_its_window_or_its_boxs_day_is_invalid() {
     assert_eq!(found(&r, unit()), [LinkProblem::BeforeOpening]);
     assert_eq!(box_holds(&r), only(HoldReason::UplinkFrameInvalid));
 
-    // Normal frames up to the slot after the close (the closing tick's),
-    // then only resends: from the close slot, which is a resend group.
+    // Normal frames up to the close slot, then only resends: the close
+    // slot's group, and a close resend in the slot after it.
     let mut links = honest_links();
-    reseal(&mut links[SCANNER], 212, |f| {
-        f.kind = FrameKind::CloseResend;
-    });
-    add(&mut links[SCANNER], 212, |f| f.index = 1);
-    for index in 0..2 {
-        add(&mut links[SCANNER], 211, |f| {
-            f.slot = 213;
-            f.index = index;
-            f.kind = FrameKind::CloseResend;
-        });
-    }
+    extend_link(
+        &mut links[SCANNER],
+        &[
+            (213, 0, FrameKind::CloseResend, Vec::new()),
+            (213, 1, FrameKind::CloseResend, Vec::new()),
+        ],
+    );
     let r = verify(Plan::new(ST, links.clone()).events());
     assert!(
         found(&r, scanner()).is_empty(),
@@ -1100,7 +1193,10 @@ fn a_frame_outside_its_window_or_its_boxs_day_is_invalid() {
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     assert_eq!(link_report(&r, scanner()).slots, Some((150, 213)));
     // A normal frame after them.
-    add(&mut links[SCANNER], 211, |f| f.slot = 214);
+    extend_link(
+        &mut links[SCANNER],
+        &[(214, 0, FrameKind::Normal, Vec::new())],
+    );
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(
         found(&r, scanner()),
@@ -1161,7 +1257,7 @@ fn resends_come_last() {
 /// bytes a frame: what never arrived, sent again after the close.
 fn witnessed_day(skip: u64, slots: (u64, u64), capacity: usize) -> Vec<Link> {
     let mut links = honest_links();
-    let end = stream_len(&links[SCANNER]);
+    let end = link_end(&links[SCANNER]);
     add_witnessed(
         &mut links,
         &with_packages(&scanner_objects()),
@@ -1173,10 +1269,11 @@ fn witnessed_day(skip: u64, slots: (u64, u64), capacity: usize) -> Vec<Link> {
 }
 
 /// The report over the day with `links`, the session windows `windows`
-/// (the last one the witnessed resend's), the scanner's frame (150, 0) and
-/// the frames `lose` lost on the line; the gateway declares slot 150
-/// missing in session 1 and `declared` missing slots in the witnessed
-/// resend's session.
+/// (the last one the witnessed resend's), the scanner's frames (150, 0)
+/// and (212, 1) (the whole stream and its close resend) and the frames
+/// `lose` lost on the line; the gateway declares slot 150 missing in
+/// session 1, slot 212 in session 11, and `declared` missing slots in the
+/// witnessed resend's session.
 fn run_witnessed(
     links: Vec<Link>,
     windows: Vec<(u64, u64)>,
@@ -1187,7 +1284,8 @@ fn run_witnessed(
     let file = windows.clone();
     let lose = lose.to_vec();
     let assign = move |l: usize, f: &Built| {
-        let lost = (f.slot, f.index) == (150, 0) || lose.contains(&(f.slot, f.index));
+        let lost =
+            [(150, 0), (212, 1)].contains(&(f.slot, f.index)) || lose.contains(&(f.slot, f.index));
         if l == SCANNER && lost {
             None
         } else if f.kind == FrameKind::WitnessedResend {
@@ -1199,7 +1297,7 @@ fn run_witnessed(
     let witnessed = u32::try_from(windows.len()).unwrap();
     let declare = move |i: u32, e: &mut SessionLink| {
         if e.link_id_hash == scanner() {
-            e.missing_slots = if i == 1 {
+            e.missing_slots = if i == 1 || i == 11 {
                 1
             } else if i == witnessed {
                 declared
@@ -1254,9 +1352,9 @@ fn unit_swap(failed: &[u8], spare: &[u8], at: u64) -> (SchemaId, &'static [u8]) 
 }
 
 /// The day's ledger in `world` with `amendment` and a witnessed swap at
-/// slot `at` laid while BOX-1 is open: its tick of slot 150 (casting),
-/// the amendment and the swap, its closing tick of slot `at` and its
-/// close, then the station's record.
+/// slot `at` laid while BOX-1 is open: its ticks of slots 150 to `at - 1`
+/// (casting, [`swap_ticks`]), the amendment and the swap, its closing tick
+/// of slot `at` and its close, then the station's record.
 fn book_swapped(world: &'static World, amendment: &'static [u8], at: u64) -> Book {
     use ityv_encoding::BoxProgressState;
     let mut book = Book::new(world);
@@ -1268,10 +1366,9 @@ fn book_swapped(world: &'static World, amendment: &'static [u8], at: u64) -> Boo
     for (schema, event) in &events[..close] {
         book.push(*schema, event);
     }
-    book.push(
-        SCHEMA_PROGRESS_TICK,
-        box_tick_in(150, BoxProgressState::Casting),
-    );
+    for t in swap_ticks(at) {
+        book.push(SCHEMA_PROGRESS_TICK, t);
+    }
     book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, amendment);
     let (schema, event) = box_swap(at);
     book.push(schema, event);
@@ -1288,6 +1385,14 @@ fn book_swapped(world: &'static World, amendment: &'static [u8], at: u64) -> Boo
         book.push(*schema, event);
     }
     book
+}
+
+/// BOX-1's ticks before a swap at `at`, casting: one for each slot from
+/// 150 (a transmitter replaced alone leaves its device owing every one).
+fn swap_ticks(at: u64) -> Vec<&'static [u8]> {
+    (150..at)
+        .map(|s| box_tick_in(s, ityv_encoding::BoxProgressState::Casting))
+        .collect()
 }
 
 /// A witnessed `BoxUnitSwap` of BOX-1: the spare scanner reports from
@@ -1411,7 +1516,13 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
     book.push(schema, event);
     let old_key = day().links[SCANNER].key;
     let mut links = honest_links();
-    links[SCANNER] = Link::new(new_key, &with_packages(&scanner_objects()), 181, 212, 1);
+    links[SCANNER] = Link::box_link(
+        new_key,
+        &with_packages(&scanner_objects()),
+        181,
+        212,
+        &day_runs(),
+    );
     links.push(Link {
         key: old_key,
         frames: common::uplink::frames(old_key, &[], 150, 180, 1),
@@ -1419,7 +1530,7 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
     });
     let r = verify_book(book, Plan::new(ST, links).events());
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
-    for (key, frames) in [(old_key, 31), (new_key, 32)] {
+    for (key, frames) in [(old_key, 31), (new_key, 31)] {
         let l = report_of(&r, key);
         assert!(l.findings.is_empty(), "{:?}", l.findings);
         assert_eq!((l.frames, l.missing_slots), (frames, 0), "{key}");
@@ -1433,7 +1544,13 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
     let (schema, event) = box_swap(181);
     book.push(schema, event);
     let mut links = honest_links();
-    links[SCANNER] = Link::new(new_key, &with_packages(&scanner_objects()), 181, 212, 1);
+    links[SCANNER] = Link::box_link(
+        new_key,
+        &with_packages(&scanner_objects()),
+        181,
+        212,
+        &day_runs(),
+    );
     links.push(Link {
         key: old_key,
         frames: common::uplink::frames(old_key, &[], 150, 175, 1),
@@ -1447,7 +1564,7 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
 fn the_stream_runs_on_from_zero_without_a_gap() {
     // A frame that starts past the previous one's end with no slot lost.
     let mut links = honest_links();
-    let end = stream_len(&links[SCANNER]);
+    let end = link_end(&links[SCANNER]);
     reseal(&mut links[SCANNER], 160, |f| f.stream_offset = end + 5);
     let r = verify(Plan::new(ST, links).events());
     // It skips, and the next goes back.
@@ -1488,9 +1605,24 @@ fn a_frame_proves_its_fill_zero_and_its_public_chunks() {
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Chunk]);
 
-    // Data that are not the ledger's objects, signed as sent.
+    // Data that are not the ledger's objects, signed as sent (the batch
+    // attestation, which the close resend sends again whole).
     let mut links = honest_links();
     reseal(&mut links[SCANNER], 150, |f| f.data[20] ^= 1);
+    let r = verify(Plan::new(ST, links).events());
+    assert_eq!(found(&r, scanner()), [LinkProblem::Chunk]);
+    assert_eq!(box_holds(&r), only(HoldReason::UplinkFrameInvalid));
+    // The closing tick's bytes changed: it is sent once, so outside.
+    let tick = day().links[SCANNER]
+        .objects
+        .iter()
+        .find(|o| o.schema == SCHEMA_PROGRESS_TICK)
+        .copied()
+        .unwrap();
+    let mut links = honest_links();
+    reseal(&mut links[SCANNER], 150, |f| {
+        f.data[tick.stream_offset as usize + 20] ^= 1;
+    });
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Chunk]);
     assert_eq!(
@@ -1535,12 +1667,17 @@ fn chunks_of(start: u64, end: u64) -> u64 {
 #[test]
 fn a_chunk_is_checked_only_against_objects_that_tile_it() {
     let l = &day().links[SCANNER];
-    let all = stream_len(l).div_ceil(4096);
+    let resend = l.frames.last().unwrap();
+    let all = stream_len(l).div_ceil(4096) + u64::from(resend.payload_len).div_ceil(4096);
     // The device lists its closing tick under another schema it may send:
     // the ledger names that hash as a tick, so the listing is a finding of
     // its own (review 2 of 2i, A); the chunks that hold it are not checked
     // against the ledger's bytes, and the tick is not received.
-    let tick = *l.objects.last().unwrap();
+    let tick = *l
+        .objects
+        .iter()
+        .find(|o| o.schema == SCHEMA_PROGRESS_TICK)
+        .unwrap();
     let mut links = honest_links();
     reseal(&mut links[SCANNER], 150, |f| {
         f.objects.last_mut().unwrap().schema = ityv_encoding::SCHEMA_CHALLENGE_OPENING;
@@ -1555,7 +1692,7 @@ fn a_chunk_is_checked_only_against_objects_that_tile_it() {
     let held = chunks_of(tick.stream_offset, tick.stream_offset + u64::from(tick.len));
     assert_eq!(
         (b.checked_chunks, b.opaque_chunks),
-        (all - PACKAGES - held, PACKAGES + held)
+        (all - 2 * PACKAGES - held, 2 * PACKAGES + held)
     );
     assert_eq!(station(&r).outside.len(), 1);
     assert_eq!(station(&r).outside[0].hash, tick.object_hash);
@@ -1633,7 +1770,7 @@ fn objects_tile_the_received_stream() {
                 o.remove(2);
             },
             &[LinkProblem::NotObject, LinkProblem::Batch],
-            5,
+            1,
         ),
         // The last object left out.
         (
@@ -1641,14 +1778,14 @@ fn objects_tile_the_received_stream() {
                 o.pop();
             },
             &[LinkProblem::NotObject],
-            5,
+            1,
         ),
         // A length that is not the ledger's: the byte after it is no
         // object, and the chunks holding it are not checked.
         (
             |o| o.last_mut().unwrap().len -= 1,
             &[LinkProblem::Length, LinkProblem::NotObject],
-            5,
+            1,
         ),
     ];
     for (change, problems, outside) in cases {
@@ -1667,7 +1804,7 @@ fn objects_tile_the_received_stream() {
     // A frame without data that lists the closing tick: an entry outside
     // its data.
     let mut links = honest_links();
-    let tick = *links[SCANNER].objects.last().unwrap();
+    let tick = day_tick();
     reseal(&mut links[SCANNER], 151, |f| f.objects.push(tick));
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::NotObject]);
@@ -1683,8 +1820,9 @@ fn objects_tile_the_received_stream() {
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Overlap]);
     // The second frame's chunks name an object the ledger does not have:
-    // not recomputed, so the batch in them is not received.
-    assert_eq!(station(&r).outside.len(), 4);
+    // not recomputed, so the batch in them is not received there; the
+    // close resend brings it whole.
+    assert_eq!(station(&r).outside.len(), 0);
     // The next frame starts inside an object the frame before carries out,
     // with another object (of that hash, so of another length too): an
     // attestation again, before any record of the first.
@@ -1748,7 +1886,8 @@ fn records_travel_in_closed_batches_and_packages_after_their_records() {
         found(&r, scanner()),
         [LinkProblem::Package, LinkProblem::NotOnLedger]
     );
-    assert_eq!(link_report(&r, scanner()).opaque_chunks, PACKAGES + 1);
+    // (and the close resend's three).
+    assert_eq!(link_report(&r, scanner()).opaque_chunks, 2 * PACKAGES + 1);
 
     // Each record's own share package right after it: sealed, not on the
     // ledger, but named by the box's record. The records' chunks hold no
@@ -1763,10 +1902,12 @@ fn records_travel_in_closed_batches_and_packages_after_their_records() {
     );
     assert!(station(&r).outside.is_empty());
     let b = link_report(&r, scanner());
-    let data_chunks = stream_len(&with_stream(SCANNER, &stream)[SCANNER]).div_ceil(4096);
+    let l = &with_stream(SCANNER, &stream)[SCANNER];
+    let resend = u64::from(l.frames.last().unwrap().payload_len);
+    let data_chunks = stream_len(l).div_ceil(4096) + resend.div_ceil(4096);
     assert_eq!(
         (b.checked_chunks, b.opaque_chunks, b.included),
-        (data_chunks - PACKAGES, PACKAGES, 5)
+        (data_chunks - 2 * PACKAGES, 2 * PACKAGES, 5)
     );
     // The same with the last two packages swapped: each follows a record
     // that names the other.
@@ -1882,11 +2023,9 @@ fn c1_covert_bytes_next_to_a_skipped_slot_are_no_object() {
     let r = send(f150.clone(), l150.clone(), f150.len() as u64 + 1);
     assert_eq!(found(&r, scanner()), [LinkProblem::NotOnLedger]);
     // The record before it shares a chunk with bytes the ledger does not
-    // show: it is not received as far as the public can tell.
-    assert_eq!(
-        box_holds(&r),
-        only(HoldReason::UplinkObjectInvalid).with(HoldReason::UplinkObjectOutside)
-    );
+    // show: it is not received there as far as the public can tell, but
+    // the close resend brings it whole.
+    assert_eq!(box_holds(&r), only(HoldReason::UplinkObjectInvalid));
 
     // The skip itself is bounded: past what slot 151 could carry (its
     // catch-up shape, two frames, of full payloads) it is a finding.
@@ -1941,9 +2080,11 @@ fn add_witnessed(
 #[test]
 fn c1_a_witnessed_resend_skips_only_where_a_frame_was_lost() {
     // The frame of slot 150, which held the whole stream, was lost and
-    // declared; every frame after it arrived. The gateway's session of a
-    // witnessed resend of the stream starts with it, in slot 220. Starting
-    // past the stream's end skips where no position went untaken.
+    // declared, and its close resend too; every other frame arrived. The
+    // gateway's session of a witnessed resend of the stream starts with
+    // it, in slot 220. The stream may skip a payload at the lost close
+    // resend's position; starting further past the stream's end skips
+    // where no position went untaken.
     let run = |skip: u64, from: u64, declared: u32| {
         run_witnessed(
             witnessed_day(skip, (220, 220), MAX_PAYLOAD_LEN),
@@ -1952,6 +2093,8 @@ fn c1_a_witnessed_resend_skips_only_where_a_frame_was_lost() {
             declared,
         )
     };
+    let close = u64::from(day().links[SCANNER].frames.last().unwrap().payload_len);
+    let past = MAX_PAYLOAD_LEN as u64 - close + 1;
     let r = run(0, 220, 0);
     assert!(
         found(&r, scanner()).is_empty(),
@@ -1960,20 +2103,26 @@ fn c1_a_witnessed_resend_skips_only_where_a_frame_was_lost() {
     );
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     assert_eq!(r.connectivity().holds(), HoldSet::empty());
-    let r = run(100, 220, 0);
+    let r = run(past - 1, 220, 0);
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    let r = run(past, 220, 0);
     assert_eq!(found(&r, scanner()), [LinkProblem::Offset]);
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     // A session that starts earlier makes the slots before the resend
     // slots the device must send in: the skip is allowed across them, but
     // each is a missing slot the gateway must declare.
-    let r = run(100, 217, 0);
+    let r = run(past, 217, 0);
     assert!(
         found(&r, scanner()).is_empty(),
         "{:?}",
         found(&r, scanner())
     );
     assert_eq!(sessions_found(&r), [(12, SessionProblem::MissingSlots)]);
-    assert_eq!(link_report(&r, scanner()).missing_slots, 4);
+    assert_eq!(link_report(&r, scanner()).missing_slots, 5);
 }
 
 #[test]
@@ -2139,7 +2288,13 @@ fn c2_a_link_that_lists_nothing_still_tiles_its_data() {
     }
     let old_key = day().links[SCANNER].key;
     let mut links = honest_links();
-    links[SCANNER] = Link::new(new_key, &with_packages(&scanner_objects()), 150, 212, 1);
+    links[SCANNER] = Link::box_link(
+        new_key,
+        &with_packages(&scanner_objects()),
+        150,
+        212,
+        &day_runs(),
+    );
     links.push(Link {
         key: old_key,
         frames: common::uplink::frames(old_key, &[0xA5; 5000], 150, 212, 1),
@@ -2172,9 +2327,11 @@ fn c3_the_operator_cannot_list_what_the_device_did_not_send() {
     other[n / 2] ^= 0xFF;
     let other: &'static [u8] = leak_slice(other);
     let sent = with_packages(&[o[0], o[1], other, o[3], o[4]]);
-    // The honest gateway logs what the device listed: R2* is not on the
-    // ledger, and R2 never crossed the link.
-    let r = verify(Plan::new(ST, with_stream(SCANNER, &sent)).events());
+    // The honest gateway logs what the device listed (R2* in its close
+    // resend too): R2* is not on the ledger, and R2 never crossed the
+    // link.
+    let resent = with_packages(&[o[0], o[1], other, o[3]]);
+    let r = verify(Plan::new(ST, with_stream_resent(&sent, &resent)).events());
     assert!(found(&r, scanner()).contains(&LinkProblem::NotOnLedger));
     let outside: Vec<Hash512> = station(&r).outside.iter().map(|e| e.hash).collect();
     assert!(
@@ -2183,7 +2340,8 @@ fn c3_the_operator_cannot_list_what_the_device_did_not_send() {
     );
 
     // The operator lists R2 where R2* lies: the device did not sign that
-    // list, and the frame is not received.
+    // list, and the frame is not received (the batch arrives in the close
+    // resend, the closing tick not).
     let mut links = with_stream(SCANNER, &sent);
     let at = links[SCANNER].frames[0]
         .objects
@@ -2193,7 +2351,7 @@ fn c3_the_operator_cannot_list_what_the_device_did_not_send() {
     links[SCANNER].frames[0].objects[at].object_hash = ityv_crypto::object_hash(o[2]);
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Signature]);
-    assert_eq!(station(&r).outside.len(), 5);
+    assert_eq!(station(&r).outside.len(), 1);
 
     // Next to a lost frame, without packages: R3* in R3's place, then the
     // tick twice; the lost slot 151 cuts the first tick. The frames list
@@ -2206,7 +2364,7 @@ fn c3_the_operator_cannot_list_what_the_device_did_not_send() {
     let sent = [o[0], o[1], o[2], other, o[4], o[4]];
     let (_, all) = stream(&sent);
     let links = cut(
-        with_stream(SCANNER, &sent),
+        with_stream_resent(&sent, &[o[0], o[1], o[2], other]),
         SCANNER,
         &[
             (150, 0),
@@ -2241,9 +2399,9 @@ fn c3_the_operator_cannot_list_what_the_device_did_not_send() {
 
 #[test]
 fn e1_to_e3_honest_line_loss_holds_nothing() {
-    // The batch with its packages twice (the second copy the close resend
-    // would carry), then the closing tick, spread over frames of 8,192 or
-    // 6,000 bytes so the frame boundaries fall at chunk boundaries or
+    // The batch with its packages twice (its second copy in the next
+    // slot), then the closing tick, spread over frames of 8,192 or 6,000
+    // bytes from slot 150 to 211, and an honest close slot so the frame boundaries fall at chunk boundaries or
     // anywhere. Any one frame of the first copy lost and declared, the
     // second copy whole: the first data frame (E1), the batch attestation's
     // frame (E2), a frame with a record's start whose package arrives (E3).
@@ -2255,7 +2413,14 @@ fn e1_to_e3_honest_line_loss_holds_nothing() {
     let key = day().links[SCANNER].key;
     let mut runs = 0;
     for capacity in [8192usize, 6000] {
-        let (frames, listed) = device_frames_of(key, &twice, 150, 212, 1, capacity);
+        let (mut frames, listed) = device_frames_of(key, &twice, 150, 211, 1, capacity);
+        let mut tail = Link {
+            key,
+            frames: frames.clone(),
+            objects: Vec::new(),
+        };
+        extend_link(&mut tail, &close_slot(212, Vec::new(), once.clone()));
+        frames = tail.frames;
         let second = listed[once.len()].stream_offset;
         for lost in frames
             .iter()
@@ -2519,9 +2684,10 @@ fn an_object_may_span_two_frames() {
         found(&r, scanner())
     );
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    // And the close resend, the batch's run with its packages again.
     let b = link_report(&r, scanner());
-    assert_eq!((b.data_frames, b.objects, b.included), (2, 5, 5));
-    assert_eq!(b.opaque_chunks, 0);
+    assert_eq!((b.data_frames, b.objects, b.included), (3, 12, 5));
+    assert_eq!(b.opaque_chunks, PACKAGES);
     assert!(station(&r).outside.is_empty());
     assert_eq!(r.connectivity().holds(), HoldSet::empty());
     // A capture of both frames puts the object together again; of one, the
@@ -3198,7 +3364,7 @@ fn r2_b_an_object_is_listed_only_as_often_as_its_kind_allows() {
     // resend's bytes and declared slots allow).
     let tick = o[4];
     let t = tick.len() as u64;
-    let tick_at = day().links[SCANNER].objects.last().unwrap().stream_offset;
+    let tick_at = day_tick().stream_offset;
     for (lose, declared, problems) in [
         (&[(220u64, 1u16)][..], 2u32, &[][..]),
         (
@@ -3212,7 +3378,7 @@ fn r2_b_an_object_is_listed_only_as_often_as_its_kind_allows() {
         ),
     ] {
         let mut links = honest_links();
-        let end = stream_len(&links[SCANNER]);
+        let end = link_end(&links[SCANNER]);
         add_witnessed(
             &mut links,
             &with_packages(&o),
@@ -3268,19 +3434,20 @@ fn r2_c_a_swapped_in_scanner_may_lose_its_first_frame() {
     let mut twice = once.clone();
     twice.extend(once.iter().copied());
     // The box's ticks as [`book_swapped`] lays them: the old scanner's of
-    // slot 150, the new one's closing tick of the swap's slot.
+    // slots 150 to 180, the new one's closing tick of the swap's slot.
     twice.push(box_tick_in(181, ityv_encoding::BoxProgressState::Closed));
-    let tick150 = box_tick_in(150, ityv_encoding::BoxProgressState::Casting);
-    let (frames, listed) = device_frames_of(new_key, &twice, 181, 212, 1, 6000);
+    let (frames, listed) = device_frames_of(new_key, &twice, 181, 211, 1, 6000);
     let run = |frames: &Vec<Built>, lose_first: bool, declare: bool| {
         let book = book_swapped(w, amendment, 181);
         let mut links = honest_links();
-        links[SCANNER] = Link {
+        let mut l = Link {
             key: new_key,
             frames: frames.clone(),
             objects: listed.clone(),
         };
-        links.push(Link::new(old_key, &[tick150], 150, 180, 1));
+        extend_link(&mut l, &close_slot(212, Vec::new(), day_runs()));
+        links[SCANNER] = l;
+        links.push(ticked_link(old_key, &[], 180));
         let lose = move |l: usize, f: &Built| {
             if lose_first && l == SCANNER && f.slot == 181 {
                 None
@@ -3376,7 +3543,8 @@ fn r2_d_witnessed_slots_are_slots_the_device_must_send_in() {
     let lost = [(219, 0), (219, 1)];
     let r = run_witnessed(links.clone(), resend_windows(219), &lost, 0);
     assert_eq!(sessions_found(&r), [(12, SessionProblem::MissingSlots)]);
-    assert_eq!(link_report(&r, scanner()).missing_slots, 2);
+    // Slots 150, 212 (the close resend's) and 219.
+    assert_eq!(link_report(&r, scanner()).missing_slots, 3);
     let r = run_witnessed(links.clone(), resend_windows(219), &lost, 1);
     assert!(
         found(&r, scanner()).is_empty(),
@@ -3527,7 +3695,13 @@ fn verify_stream(book: Book, objects: &[&'static [u8]]) -> Report<'static> {
     let (_, mut links) = station_links(book.world.genesis, &events).remove(0);
     let l = &links[0];
     let (first, last) = (l.frames[0].slot, l.frames.last().unwrap().slot);
-    links[0] = Link::new(l.key, objects, first, last, 1);
+    let mine: Vec<&'static [u8]> = events
+        .iter()
+        .copied()
+        .filter(|e| device_of(e) == Some((true, B1.id)))
+        .collect();
+    let runs = with_packages(&batch_runs(&box_stream(&mine)));
+    links[0] = Link::box_link(l.key, objects, first, last, &runs);
     verify_book(book, Plan::new(ST, links).events())
 }
 
@@ -3774,7 +3948,7 @@ fn r2_h_catch_up_and_close_resend_groups_only_where_the_protocol_uses_them() {
             f.kind = FrameKind::CloseResend;
         }
     }
-    for s in 160..=212 {
+    for s in 160..=211 {
         add(&mut links[SCANNER], s, |f| f.index = 1);
     }
     let key = links[SCANNER].key;
@@ -3867,17 +4041,18 @@ fn links_of(book: &Book) -> Vec<Link> {
     station_links(book.world.genesis, &events).remove(0).1
 }
 
-/// `l` with every frame from `from` on turned into kind `kind`, each slot
-/// filled to the catch-up shape (two numbers here) with empty frames.
+/// `l` with every normal frame from `from` on turned into kind `kind`,
+/// each such slot filled to the catch-up shape (two numbers here) with
+/// empty frames; the close slot's group stays.
 fn shape_from(l: &mut Link, from: u64, kind: FrameKind) {
     let slots: Vec<u64> = l
         .frames
         .iter()
-        .filter(|f| f.slot >= from)
+        .filter(|f| f.slot >= from && f.kind == FrameKind::Normal)
         .map(|f| f.slot)
         .collect();
     for f in &mut l.frames {
-        if f.slot >= from {
+        if f.slot >= from && f.kind == FrameKind::Normal {
             f.kind = kind;
         }
     }
@@ -3924,8 +4099,20 @@ fn r3_1a_a_witnessed_resend_is_not_in_the_close_slot() {
     // Two batches whose normal frames were lost (slot 150, declared); a
     // witnessed resend carries them in the close slot 212 itself, in a
     // session that starts there: before the box left the station, so
-    // `KindOrder` for both frames. One slot later, nothing.
-    for (slot, want) in [(212u64, &[LinkProblem::KindOrder; 2][..]), (213, &[][..])] {
+    // `KindOrder` for both frames, and the close slot, taken whole, has no
+    // close resend: `Resend`. One slot later, after a close slot whose
+    // close resend was lost too (declared), nothing.
+    for (slot, want) in [
+        (
+            212u64,
+            &[
+                LinkProblem::KindOrder,
+                LinkProblem::KindOrder,
+                LinkProblem::Resend,
+            ][..],
+        ),
+        (213, &[][..]),
+    ] {
         let (book, s) = two_batches();
         let mut links = links_of(&book);
         let key = links[SCANNER].key;
@@ -3934,11 +4121,14 @@ fn r3_1a_a_witnessed_resend_is_not_in_the_close_slot() {
             FrameKind::Normal,
             [with_packages(&s[..8]), std::vec![s[8]]].concat()
         )];
-        for g in 151..slot {
+        for g in 151..slot.min(212) {
             groups.push((g, FrameKind::Normal, Vec::new()));
         }
         let mut l = link_of(key, &groups, 1);
-        let mut at = l.frames.last().unwrap().stream_offset;
+        if slot > 212 {
+            extend_link(&mut l, &close_slot(212, Vec::new(), with_packages(&s[..8])));
+        }
+        let mut at = link_end(&l);
         let resend = with_packages(&s[..8]);
         let none: Vec<&'static [u8]> = Vec::new();
         for (index, objs) in [(0, &resend), (1, &none)] {
@@ -3953,7 +4143,7 @@ fn r3_1a_a_witnessed_resend_is_not_in_the_close_slot() {
         windows.push((slot, slot + 5));
         plan.windows = windows;
         let lose = move |k: usize, f: &Built| {
-            if k == SCANNER && f.slot == 150 {
+            if k == SCANNER && (f.slot == 150 || close_resend_frame(f)) {
                 None
             } else if f.slot >= slot {
                 Some(11)
@@ -3963,7 +4153,11 @@ fn r3_1a_a_witnessed_resend_is_not_in_the_close_slot() {
                 window(f.slot)
             }
         };
-        let declare = declare_one(1);
+        let declare = move |i: u32, e: &mut SessionLink| {
+            if e.link_id_hash == scanner() && (i == 1 || (i == 11 && slot > 212)) {
+                e.missing_slots = 1;
+            }
+        };
         plan.assign = Some(&lose);
         plan.tweak_link = Some(&declare);
         let r = verify_book(book, plan.events());
@@ -4088,11 +4282,12 @@ fn r3_1c_batches_keep_their_order_in_a_witnessed_resend() {
             FrameKind::Normal,
             [batches[0].clone(), batches[1].clone(), std::vec![s[8]]].concat()
         )];
-        for slot in 151..=212 {
+        for slot in 151..=211 {
             groups.push((slot, FrameKind::Normal, Vec::new()));
         }
         let mut l = link_of(key, &groups, 1);
-        let end = l.frames.last().unwrap().stream_offset;
+        extend_link(&mut l, &close_slot(212, Vec::new(), with_packages(&s[..8])));
+        let end = link_end(&l);
         let resend = [batches[order[0]].clone(), batches[order[1]].clone()].concat();
         l.frames.push(make_frame(
             key,
@@ -4115,7 +4310,7 @@ fn r3_1c_batches_keep_their_order_in_a_witnessed_resend() {
         let mut plan = Plan::new(ST, links);
         plan.windows = resend_windows(220);
         let lose = |l: usize, f: &Built| {
-            if l == SCANNER && f.slot == 150 {
+            if l == SCANNER && (f.slot == 150 || close_resend_frame(f)) {
                 None
             } else if f.slot >= 220 {
                 Some(11)
@@ -4123,7 +4318,7 @@ fn r3_1c_batches_keep_their_order_in_a_witnessed_resend() {
                 window(f.slot)
             }
         };
-        let declare = declare_one(1);
+        let declare = declare_with_close(1);
         plan.assign = Some(&lose);
         plan.tweak_link = Some(&declare);
         let r = verify_book(book, plan.events());
@@ -4232,11 +4427,12 @@ fn r3_1c_each_run_of_witnessed_slots_keeps_its_own_order() {
         FrameKind::Normal,
         [batches[0].clone(), batches[1].clone(), std::vec![s[8]]].concat()
     )];
-    for slot in 151..=212 {
+    for slot in 151..=211 {
         groups.push((slot, FrameKind::Normal, Vec::new()));
     }
     let mut l = link_of(key, &groups, 1);
-    let mut at = l.frames.last().unwrap().stream_offset;
+    extend_link(&mut l, &close_slot(212, Vec::new(), with_packages(&s[..8])));
+    let mut at = link_end(&l);
     let none: Vec<&'static [u8]> = Vec::new();
     for (slot, index, objs) in [
         (220, 0, &batches[0]),
@@ -4252,7 +4448,8 @@ fn r3_1c_each_run_of_witnessed_slots_keeps_its_own_order() {
     let mut plan = Plan::new(ST, links);
     plan.windows = resend_windows(220);
     let lose = |l: usize, f: &Built| {
-        if l == SCANNER && (f.slot == 150 || (f.slot, f.index) == (220, 0)) {
+        if l == SCANNER && (f.slot == 150 || (f.slot, f.index) == (220, 0) || close_resend_frame(f))
+        {
             None
         } else if f.slot >= 220 {
             Some(11)
@@ -4264,7 +4461,7 @@ fn r3_1c_each_run_of_witnessed_slots_keeps_its_own_order() {
     let declare = |i: u32, e: &mut SessionLink| {
         if e.link_id_hash == scanner() {
             e.missing_slots = match i {
-                1 => 1,
+                1 | 11 => 1,
                 12 => 2,
                 _ => 0,
             };
@@ -4495,11 +4692,12 @@ fn r3_1e_a_batch_with_a_lost_record_is_still_missing() {
             .concat(),
         ),
     ];
-    for slot in 153..=212 {
+    for slot in 153..=211 {
         groups.push((slot, FrameKind::Normal, Vec::new()));
     }
     let mut l = link_of(key, &groups, 1);
-    let mut at = l.frames.last().unwrap().stream_offset;
+    extend_link(&mut l, &close_slot(212, Vec::new(), with_packages(&s[..8])));
+    let mut at = link_end(&l);
     let none: Vec<&'static [u8]> = Vec::new();
     for (index, objs) in [(0, &first), (1, &none)] {
         let f = make_frame(key, 220, index, FrameKind::WitnessedResend, at, objs);
@@ -4510,7 +4708,7 @@ fn r3_1e_a_batch_with_a_lost_record_is_still_missing() {
     let mut plan = Plan::new(ST, links);
     plan.windows = resend_windows(220);
     let lose = |k: usize, f: &Built| {
-        if k == SCANNER && f.slot == 151 {
+        if k == SCANNER && (f.slot == 151 || close_resend_frame(f)) {
             None
         } else if f.slot >= 220 {
             Some(11)
@@ -4518,7 +4716,7 @@ fn r3_1e_a_batch_with_a_lost_record_is_still_missing() {
             window(f.slot)
         }
     };
-    let declare = declare_one(1);
+    let declare = declare_with_close(1);
     plan.assign = Some(&lose);
     plan.tweak_link = Some(&declare);
     let r = verify_book(book, plan.events());
@@ -4538,14 +4736,14 @@ fn r3_1e_a_witnessed_resend_carries_only_what_is_still_missing() {
     let o = scanner_objects();
     let run = with_packages(&o[..4]);
     let mut links = honest_links();
-    let end = stream_len(&links[SCANNER]);
+    let end = link_end(&links[SCANNER]);
     add_witnessed(&mut links, &run, end, (220, 220), MAX_PAYLOAD_LEN);
     let r = run_witnessed_kept(links, resend_windows(220));
     assert_eq!(found(&r, scanner()), [LinkProblem::Resend; 7]);
     assert!(box_holds(&r).contains(HoldReason::UplinkObjectInvalid));
     // The batch listed whole in a witnessed slot and again in a later one.
     let mut links = honest_links();
-    let end = stream_len(&links[SCANNER]);
+    let end = link_end(&links[SCANNER]);
     add_witnessed(&mut links, &run, end, (220, 220), MAX_PAYLOAD_LEN);
     let last = links[SCANNER].frames.last().unwrap();
     let second = last.stream_offset + u64::from(last.payload_len);
@@ -4852,18 +5050,14 @@ fn r3_3_each_frame_key_starts_with_the_event_that_brought_it() {
         };
         g1.push((slot, FrameKind::Normal, objs));
     }
-    let mut g2: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = Vec::new();
-    for slot in 181..=212u64 {
-        let objs = if slot == 212 {
-            std::vec![o[4]]
-        } else {
-            Vec::new()
-        };
-        g2.push((slot, FrameKind::Normal, objs));
-    }
+    let g2: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (181..=211u64)
+        .map(|s| (s, FrameKind::Normal, Vec::new()))
+        .collect();
+    let mut l2 = link_of(k2, &g2, 1);
+    extend_link(&mut l2, &close_slot(212, std::vec![o[4]], day_runs()));
     let mut links = honest_links();
     links[SCANNER] = link_of(k1, &g1, 1);
-    links.push(link_of(k2, &g2, 1));
+    links.push(l2);
     let r = verify_book(book, Plan::new(ST, links).events());
     assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     assert!(found(&r, link(k1)).is_empty(), "{:?}", found(&r, link(k1)));
@@ -4886,44 +5080,34 @@ fn r3_3b_a_transmitter_replaced_alone_on_the_day_has_an_honest_path() {
     let old_key = day().links[SCANNER].key;
     let o = scanner_objects();
     let honest = with_packages(&o);
-    // The box's ticks as [`book_swapped`] lays them: casting at 150, closed
-    // at the swap's slot (the day's own closing tick without a swap).
-    let ticks = |swap: bool| {
-        if swap {
-            (
-                box_tick_in(150, ityv_encoding::BoxProgressState::Casting),
-                box_tick_in(181, ityv_encoding::BoxProgressState::Closed),
-            )
+    // The box's ticks as [`book_swapped`] lays them: casting for every
+    // slot to the swap, closed at the swap's slot (the day's own closing
+    // tick without a swap). The new transmitter sends the closing tick in
+    // the close slot, before the close resend.
+    let run_of = honest[..honest.len() - 1].to_vec();
+    let links_for = |swap: bool| {
+        let old = if swap {
+            ticked_link(old_key, &run_of, 180)
         } else {
-            (o[4], o[4])
-        }
-    };
-    let groups = |swap: bool| {
-        let (first, last) = ticks(swap);
-        let mut g_old = Vec::new();
-        for slot in 150..=180u64 {
-            let mut objs = Vec::new();
-            if slot == 150 {
-                objs = honest[..honest.len() - 1].to_vec();
-                if swap {
-                    objs.push(first);
-                }
-            }
-            g_old.push((slot, FrameKind::Normal, objs));
-        }
-        let mut g_new = Vec::new();
-        for slot in 181..=212u64 {
-            g_new.push((
-                slot,
-                FrameKind::Normal,
-                if slot == 212 {
-                    std::vec![last]
-                } else {
-                    Vec::new()
-                },
-            ));
-        }
-        (g_old, g_new)
+            let g: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=180u64)
+                .map(|s| {
+                    let objs = if s == 150 { run_of.clone() } else { Vec::new() };
+                    (s, FrameKind::Normal, objs)
+                })
+                .collect();
+            link_of(old_key, &g, 1)
+        };
+        let last = if swap {
+            box_tick_in(181, ityv_encoding::BoxProgressState::Closed)
+        } else {
+            o[4]
+        };
+        let g_new: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (181..=211u64)
+            .map(|s| (s, FrameKind::Normal, Vec::new()))
+            .collect();
+        let mut new = link_of(new_key, &g_new, 1);
+        extend_link(&mut new, &close_slot(212, std::vec![last], day_runs()));
+        (old, new)
     };
     // `catchup`: the new transmitter's slot that is a catch-up group (two
     // frames here), if any.
@@ -4935,10 +5119,9 @@ fn r3_3b_a_transmitter_replaced_alone_on_the_day_has_an_honest_path() {
             book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, amendment);
             book
         };
-        let (g_old, g_new) = groups(swap);
+        let (old, mut new) = links_for(swap);
         let mut links = honest_links();
-        links[SCANNER] = link_of(old_key, &g_old, 1);
-        let mut new = link_of(new_key, &g_new, 1);
+        links[SCANNER] = old;
         if let Some(slot) = catchup {
             reseal(&mut new, slot, |f| f.kind = FrameKind::CatchUp);
             add(&mut new, slot, |f| f.index = 1);
@@ -5057,20 +5240,22 @@ fn r3_4_a_spare_transmitter_does_not_send_before_its_swap() {
         ));
     }
     let mut g_new = Vec::new();
-    for slot in 150..=212u64 {
+    for slot in 150..=211u64 {
         g_new.push((
             slot,
             FrameKind::Normal,
-            match slot {
-                150 => with_packages(&o[..4]),
-                212 => std::vec![o[4]],
-                _ => Vec::new(),
+            if slot == 150 {
+                with_packages(&o[..4])
+            } else {
+                Vec::new()
             },
         ));
     }
+    let mut new = link_of(new_key, &g_new, 1);
+    extend_link(&mut new, &close_slot(212, std::vec![o[4]], day_runs()));
     let mut links = honest_links();
     links[SCANNER] = link_of(old_key, &g_old, 1);
-    links.push(link_of(new_key, &g_new, 1));
+    links.push(new);
     let r = verify_book(book, Plan::new(ST, links).events());
     assert_eq!(found(&r, link(new_key)), [LinkProblem::BeforeSwap; 31]);
     assert!(box_holds(&r).contains(HoldReason::UplinkFrameInvalid));
@@ -5682,5 +5867,655 @@ fn held_a_ledger_hash_under_another_schema_is_always_a_finding() {
             "{:?}",
             found(&r, scanner())
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The fourth review of 2i.
+
+/// Windows of six slots from 150 to 209, then `extra` (each after the one
+/// before).
+fn windows_then(extra: &[(u64, u64)]) -> Vec<(u64, u64)> {
+    let mut w: Vec<(u64, u64)> = (150..=204).step_by(6).map(|s| (s, s + 5)).collect();
+    w.extend_from_slice(extra);
+    w
+}
+
+/// A scanner link of `key`: normal frames from 150 to `last_normal`
+/// (`normal` lists slot 150's objects), then each `(slot, kind, objects)`
+/// of `tail` as two frames (the catch-up shape), objects in the first.
+fn scanner_with_tail(
+    key: u16,
+    normal: &[&'static [u8]],
+    last_normal: u64,
+    tail: &[(u64, FrameKind, Vec<&'static [u8]>)],
+) -> Link {
+    let mut groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = Vec::new();
+    for slot in 150..=last_normal {
+        groups.push((
+            slot,
+            FrameKind::Normal,
+            if slot == 150 {
+                normal.to_vec()
+            } else {
+                Vec::new()
+            },
+        ));
+    }
+    let mut l = link_of(key, &groups, 1);
+    let mut at = l
+        .frames
+        .last()
+        .map_or(0, |f| f.stream_offset + u64::from(f.payload_len));
+    for (slot, kind, objects) in tail {
+        for index in 0..2u16 {
+            let objs: &[&'static [u8]] = if index == 0 { objects } else { &[] };
+            let f = make_frame(key, *slot, index, *kind, at, objs);
+            at += u64::from(f.payload_len);
+            l.frames.push(f);
+        }
+    }
+    l
+}
+
+/// `l` with `frames` (slot, number, kind, objects) added after its last,
+/// each from where the one before ended.
+fn extend_link(l: &mut Link, frames: &[(u64, u16, FrameKind, Vec<&'static [u8]>)]) {
+    let key = l.key;
+    let mut at = l
+        .frames
+        .last()
+        .map_or(0, |f| f.stream_offset + u64::from(f.payload_len));
+    for (slot, index, kind, objs) in frames {
+        let f = make_frame(key, *slot, *index, *kind, at, objs);
+        at += u64::from(f.payload_len);
+        l.frames.push(f);
+    }
+}
+
+#[test]
+fn r4_1a_a_witnessed_resend_carries_nothing_where_nothing_was_lost() {
+    // The audit for finding 1 (bug4_1a). Nothing is lost anywhere: every
+    // position is taken and every session declares no missing slot.
+    let o = scanner_objects();
+    let key = day().links[SCANNER].key;
+    let run = with_packages(&o[..4]);
+    // The scanner never sends BOX-1's batch during the day and sends no
+    // close resend; after the close it sends the batch's run as a
+    // witnessed resend. The close slot was taken whole with no close
+    // resend, and a witnessed resend where nothing was lost has nothing
+    // to carry: `Resend`.
+    let mut links = honest_links();
+    links[SCANNER] = scanner_with_tail(
+        key,
+        &[o[4]],
+        212,
+        &[(213, FrameKind::WitnessedResend, run.clone())],
+    );
+    let mut plan = Plan::new(ST, links);
+    plan.windows = windows_then(&[(210, 212), (213, 218)]);
+    let r = verify(plan.events());
+    let f = found(&r, scanner());
+    assert!(f.contains(&LinkProblem::Resend), "{f:?}");
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert!(box_holds(&r).contains(HoldReason::UplinkObjectInvalid));
+    // The batch in the day and again in the close resend; the closing
+    // tick held back from the day to a witnessed resend: the tick alone
+    // is `Resend`.
+    let mut links = honest_links();
+    let mut l = scanner_with_tail(key, &run, 211, &[]);
+    extend_link(
+        &mut l,
+        &[
+            (212, 0, FrameKind::CatchUp, Vec::new()),
+            (212, 1, FrameKind::CloseResend, run.clone()),
+            (213, 0, FrameKind::WitnessedResend, std::vec![o[4]]),
+            (213, 1, FrameKind::WitnessedResend, Vec::new()),
+        ],
+    );
+    links[SCANNER] = l;
+    let mut plan = Plan::new(ST, links);
+    plan.windows = windows_then(&[(210, 212), (213, 218)]);
+    let r = verify(plan.events());
+    assert_eq!(found(&r, scanner()), [LinkProblem::Resend]);
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+}
+
+#[test]
+fn r4_1b_a_challenged_record_rides_neither_resend() {
+    // The audit for finding 2 (bug4_1b). BOX-1 with four records, the
+    // second by hash opened for a challenge (its opening laid); the batch
+    // takes counters 1–4. Normal frames: the tick in 150, the opening and
+    // the challenged record with its package in 151, the batch's run in
+    // 152. The device states its close at slot 160: a catch-up frame and
+    // a close resend carrying the batch's run and then the challenged
+    // record and its package again. After the close a witnessed resend
+    // carries both once more. Nothing was lost. Once the gateway closed,
+    // a batch-schema object of no batch is judged as any other: never in
+    // the close resend, in a witnessed resend only when lost: `Resend`
+    // for each of the four listings.
+    let casts: Vec<Cast> = (1..=4).map(|i| cast(B1, i, 1)).collect();
+    let mut sorted = casts.clone();
+    sorted.sort_by_key(|c| ityv_crypto::object_hash(c.event).0);
+    let challenged = sorted[1];
+    let opening = challenge(B1, &challenged);
+    let rest: Vec<Cast> = sorted
+        .iter()
+        .copied()
+        .filter(|c| c.counter != challenged.counter)
+        .collect();
+    let attestation = batch(B1, 0, 1, 4, &codes(&rest));
+    let tick150 = box_tick_in(150, ityv_encoding::BoxProgressState::Casting);
+    let make_book = || {
+        let mut book = Book::new(election_world());
+        book.w(opened(B1));
+        book.push(SCHEMA_PROGRESS_TICK, tick150);
+        for c in &casts {
+            book.push(ityv_encoding::SCHEMA_CAST_RECORD, c.event);
+        }
+        book.push(ityv_encoding::SCHEMA_CHALLENGE_OPENING, opening);
+        book.push(ityv_encoding::SCHEMA_BATCH_ATTEST, attestation);
+        book
+    };
+    let mut run = std::vec![attestation];
+    run.extend(rest.iter().map(|c| c.event));
+    let run = with_packages(&run);
+    let extra = with_packages(&[challenged.event]);
+    let links = links_of(&make_book());
+    let key = links[SCANNER].key;
+    let unit_key = links[UNIT].key;
+    let make = |resend: Vec<&'static [u8]>, witnessed: Option<Vec<&'static [u8]>>| {
+        let mut groups = std::vec![
+            (150u64, FrameKind::Normal, std::vec![tick150]),
+            (
+                151,
+                FrameKind::Normal,
+                with_packages(&[opening, challenged.event]),
+            ),
+            (152, FrameKind::Normal, run.clone()),
+        ];
+        for slot in 153..=159 {
+            groups.push((slot, FrameKind::Normal, Vec::new()));
+        }
+        let mut l = link_of(key, &groups, 1);
+        extend_link(
+            &mut l,
+            &[
+                (160, 0, FrameKind::CatchUp, Vec::new()),
+                (160, 1, FrameKind::CloseResend, resend),
+            ],
+        );
+        if let Some(objs) = witnessed {
+            extend_link(
+                &mut l,
+                &[
+                    (161, 0, FrameKind::WitnessedResend, objs),
+                    (161, 1, FrameKind::WitnessedResend, Vec::new()),
+                ],
+            );
+        }
+        let unit_groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=160u64)
+            .map(|s| (s, FrameKind::Normal, Vec::new()))
+            .collect();
+        let mut plan = Plan::new(ST, std::vec![l, link_of(unit_key, &unit_groups, 1)]);
+        plan.windows = std::vec![(150, 155), (156, 160), (161, 166)];
+        verify_book(make_book(), plan.events())
+    };
+    let r = make([run.clone(), extra.clone()].concat(), Some(extra.clone()));
+    assert_eq!(found(&r, link(key)), [LinkProblem::Resend; 4]);
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert!(station(&r).final_session.is_some());
+    // The close resend of the batch alone, and no witnessed resend:
+    // nothing.
+    let r = make(run.clone(), None);
+    assert!(
+        found(&r, link(key)).is_empty(),
+        "{:?}",
+        found(&r, link(key))
+    );
+}
+
+#[test]
+fn r4_2_a_transmitter_taken_out_is_not_put_back() {
+    // The audit for finding 3 (bug4_2). BOX-1's transmitter 600 is
+    // replaced by 650 at slot 181 and put back at slot 195: two
+    // amendments and two witnessed swaps while the box is open, and a
+    // tick for every slot. A transmitter taken out is not put back: the
+    // box stage refuses the second swap (`BoxEventRefused`), and key
+    // 600's frames after slot 181 are `AfterSwap` (its span ends at the
+    // swap, so its slots after it are none of its own). Nothing else.
+    use ityv_encoding::BoxProgressState;
+    let old = day().links[SCANNER].key;
+    let spare = common::uplink::BOX_FRAME_BASE + 50;
+    let (w, a1, a2) = twice_amended(spare, old);
+    let tick = |s: u64| box_tick_in(s, BoxProgressState::Casting);
+    let closing = box_tick_in(195, BoxProgressState::Closed);
+    let mut book = Book::new(w);
+    let events = &day().events;
+    let close = events
+        .iter()
+        .position(|(s, _)| *s == ityv_encoding::SCHEMA_BOX_CLOSE)
+        .unwrap();
+    for (schema, event) in &events[..close] {
+        book.push(*schema, event);
+    }
+    for s in 150..=180 {
+        book.push(SCHEMA_PROGRESS_TICK, tick(s));
+    }
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a1);
+    let (schema, event) = box_swap(181);
+    book.push(schema, event);
+    for s in 181..=194 {
+        book.push(SCHEMA_PROGRESS_TICK, tick(s));
+    }
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a2);
+    let (schema, event) = box_swap(195);
+    book.push(schema, event);
+    book.push(SCHEMA_PROGRESS_TICK, closing);
+    let ours = scanner_objects();
+    for (schema, event) in &events[close..] {
+        if *schema == SCHEMA_PROGRESS_TICK && ours.contains(event) {
+            continue;
+        }
+        book.push(*schema, event);
+    }
+    let run = with_packages(&ours[..4]);
+    let g_old: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=181u64)
+        .chain(195..=212)
+        .map(|s| {
+            let objs = match s {
+                150 => [run.clone(), std::vec![tick(150)]].concat(),
+                151..=180 => std::vec![tick(s)],
+                195 => std::vec![closing],
+                _ => Vec::new(),
+            };
+            (s, FrameKind::Normal, objs)
+        })
+        .collect();
+    let g_new: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (181..=195u64)
+        .map(|s| {
+            let objs = if s < 195 {
+                std::vec![tick(s)]
+            } else {
+                Vec::new()
+            };
+            (s, FrameKind::Normal, objs)
+        })
+        .collect();
+    let mut links = honest_links();
+    links[SCANNER] = link_of(old, &g_old, 1);
+    links.push(link_of(spare, &g_new, 1));
+    let r = verify_book(book, Plan::new(ST, links).events());
+    let refusals = &r.boxes().report(B1.id).unwrap().refusals;
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert_eq!(refusals[0].refusal, ityv_verify::Refusal::OutOfOrder);
+    let f = found(&r, link(old));
+    assert_eq!(f, [LinkProblem::AfterSwap; 18]);
+    assert!(
+        found(&r, link(spare)).is_empty(),
+        "{:?}",
+        found(&r, link(spare))
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert_eq!(
+        r.status().holds(),
+        HoldSet::empty()
+            .with(HoldReason::BoxEventRefused)
+            .with(HoldReason::UplinkFrameInvalid)
+    );
+}
+
+/// Frames of link `key` from `first_slot`, one a slot, that carry
+/// `object` (from stream offset `at`) in pieces cut at `cuts` (offsets
+/// into the object), each listing it.
+fn split_frames(
+    key: u16,
+    object: &'static [u8],
+    at: u64,
+    first_slot: u64,
+    cuts: &[usize],
+) -> Vec<Built> {
+    let entry = entry_at(object, at);
+    let mut out = Vec::new();
+    let mut bounds = std::vec![0usize];
+    bounds.extend_from_slice(cuts);
+    bounds.push(object.len());
+    for (i, w) in bounds.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let mut f = make_frame(
+            key,
+            first_slot + i as u64,
+            0,
+            FrameKind::Normal,
+            at + a as u64,
+            &[],
+        );
+        f.data = object[a..b].to_vec();
+        f.payload_len = (b - a) as u32;
+        f.objects = if b > a { std::vec![entry] } else { Vec::new() };
+        f.seal(key, link(key));
+        out.push(f);
+    }
+    out
+}
+
+#[test]
+fn r4_3_a_unit_sends_little_after_the_stations_close() {
+    // The audit for finding 5 (bug4_3). U-1A sends its tick in slot 150
+    // and nothing more to the station's close (212).
+    let l = &day().links[UNIT];
+    let key = l.key;
+    let objects: Vec<&'static [u8]> = device_events((false, ST));
+    let (tick, ps) = (objects[0], objects[1]);
+    assert_eq!(schema_of(ps), SCHEMA_PARTICIPATION_SET);
+    let groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=212u64)
+        .map(|s| {
+            (
+                s,
+                FrameKind::Normal,
+                if s == 150 {
+                    std::vec![tick]
+                } else {
+                    Vec::new()
+                },
+            )
+        })
+        .collect();
+    let day_link = link_of(key, &groups, 1);
+    let at = tick.len() as u64;
+    let run = |unit: Link, lose: &[u64]| {
+        let mut links = honest_links();
+        links[UNIT] = unit;
+        let lost = lose.to_vec();
+        let assign = move |l: usize, f: &Built| {
+            if l == UNIT && lost.contains(&f.slot) {
+                None
+            } else {
+                Some(((f.slot - 150) / 6) as usize)
+            }
+        };
+        let n = u32::try_from(lose.len()).unwrap();
+        let declare = move |i: u32, e: &mut SessionLink| {
+            if e.link_id_hash == link(key) && i == 11 {
+                e.missing_slots = n;
+            }
+        };
+        let mut plan = Plan::new(ST, links);
+        plan.assign = Some(&assign);
+        plan.tweak_link = Some(&declare);
+        verify(plan.events())
+    };
+    // Its participation set cut across 28 frames from 213 to 240: the slot
+    // after the close is its own; every one after it follows a frame not
+    // full: `AfterClose` (27 frames).
+    let n = ps.len();
+    let cuts: Vec<usize> = (1..28).map(|i| (i * i * n) / (28 * 28)).collect();
+    let mut unit = day_link.clone();
+    unit.frames.extend(split_frames(key, ps, at, 213, &cuts));
+    let r = run(unit, &[]);
+    let u = link_report(&r, link(key));
+    let after: Vec<u64> = u
+        .findings
+        .iter()
+        .filter(|f| f.problem == LinkProblem::AfterClose)
+        .map(|f| f.slot.unwrap())
+        .collect();
+    assert_eq!(after, (214..=240).collect::<Vec<u64>>());
+    assert!(
+        u.findings
+            .iter()
+            .all(|f| f.problem == LinkProblem::AfterClose),
+        "{:?}",
+        u.findings
+    );
+    assert!(
+        r.connectivity()
+            .holds()
+            .contains(HoldReason::UplinkFrameInvalid)
+    );
+    // In the slot after the close: nothing.
+    let mut unit = day_link.clone();
+    unit.frames.extend(split_frames(key, ps, at, 213, &[]));
+    let r = run(unit, &[]);
+    assert!(
+        found(&r, link(key)).is_empty(),
+        "{:?}",
+        found(&r, link(key))
+    );
+    assert_eq!(r.connectivity().holds(), HoldSet::empty());
+    // In two slots after it, the first frame not full: `AfterClose`.
+    let mut unit = day_link.clone();
+    unit.frames.extend(split_frames(key, ps, at, 213, &[n / 2]));
+    let r = run(unit, &[]);
+    assert_eq!(found(&r, link(key)), [LinkProblem::AfterClose]);
+    // The same with slot 213 lost (declared): its frame may have been
+    // full, so 214 may go on.
+    let mut unit = day_link;
+    unit.frames.extend(split_frames(key, ps, at, 213, &[n / 2]));
+    let r = run(unit, &[213]);
+    assert!(
+        found(&r, link(key)).is_empty(),
+        "{:?}",
+        found(&r, link(key))
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+}
+
+#[test]
+fn r4_3_a_unit_goes_on_after_the_close_only_from_full_frames() {
+    // Mid-day (the box's close laid, the gateway not closed): U-1A sends
+    // an object longer than a payload from slot 213. Its first frame full,
+    // the rest in 214: nothing; a frame more in 215, after one not full:
+    // `AfterClose`.
+    let l = &day().links[UNIT];
+    let key = l.key;
+    let tick = device_events((false, ST))[0];
+    let groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = (150..=212u64)
+        .map(|s| {
+            (
+                s,
+                FrameKind::Normal,
+                if s == 150 {
+                    std::vec![tick]
+                } else {
+                    Vec::new()
+                },
+            )
+        })
+        .collect();
+    let at = tick.len() as u64;
+    let big = fake_object(
+        SCHEMA_PARTICIPATION_SET,
+        &std::vec![0x51; MAX_PAYLOAD_LEN + 100],
+    );
+    for (more, want) in [(false, &[][..]), (true, &[LinkProblem::AfterClose][..])] {
+        let mut unit = link_of(key, &groups, 1);
+        unit.frames
+            .extend(split_frames(key, big, at, 213, &[MAX_PAYLOAD_LEN]));
+        if more {
+            let end = at + big.len() as u64;
+            unit.frames
+                .push(make_frame(key, 215, 0, FrameKind::Normal, end, &[]));
+        }
+        let mut links = honest_links();
+        links[UNIT] = unit;
+        let mut plan = Plan::new(ST, links);
+        plan.tweak_body = Some(&not_final);
+        let r = verify(plan.events());
+        assert_eq!(found(&r, link(key)), want, "{more}");
+    }
+}
+
+#[test]
+fn r4_4_a_transmitter_only_swap_leaves_the_device_owing_every_tick() {
+    // The audit for finding 4 (bug4_4). BOX-1's device signs a tick at
+    // slot 150 and its closing tick at slot 181, nothing between. With or
+    // without an amendment that replaces only its transmitter and a
+    // witnessed swap at 181, the same device kept running and owed every
+    // tick: `ProgressStream`.
+    use ityv_encoding::BoxProgressState;
+    let new_key = common::uplink::BOX_FRAME_BASE + 50;
+    let (w, amendment) = election_amended(|d| {
+        d.boxes[0].frame_key = common::uplink::frame_key(new_key);
+    });
+    let w = leak(w);
+    for swap in [false, true] {
+        let mut book = Book::new(w);
+        let events = &day().events;
+        let close = events
+            .iter()
+            .position(|(s, _)| *s == ityv_encoding::SCHEMA_BOX_CLOSE)
+            .unwrap();
+        for (schema, event) in &events[..close] {
+            book.push(*schema, event);
+        }
+        book.push(
+            SCHEMA_PROGRESS_TICK,
+            box_tick_in(150, BoxProgressState::Casting),
+        );
+        if swap {
+            book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, amendment);
+            let (schema, event) = box_swap(181);
+            book.push(schema, event);
+        }
+        book.push(
+            SCHEMA_PROGRESS_TICK,
+            box_tick_in(181, BoxProgressState::Closed),
+        );
+        let ours = scanner_objects();
+        for (schema, event) in &events[close..] {
+            if *schema == SCHEMA_PROGRESS_TICK && ours.contains(event) {
+                continue;
+            }
+            book.push(*schema, event);
+        }
+        let book = leak(book);
+        let r = verify_ledger(
+            book.world.genesis,
+            book.ledger.bytes(),
+            &book.ledger.events,
+            publications(),
+        );
+        assert!(
+            r.progress()
+                .box_holds(B1.id)
+                .contains(HoldReason::ProgressStream),
+            "{swap}: {:?}",
+            r.progress().box_holds(B1.id)
+        );
+    }
+}
+
+/// BOX-1 with nine records in three batches (counters 1–3, 4–6, 7–9),
+/// closed; each batch's run (attestation, records by hash, packages) and
+/// the box's closing tick.
+fn nine_records_in_three_batches() -> (Book, Vec<Vec<&'static [u8]>>, &'static [u8]) {
+    let mut book = Book::new(election_world());
+    let casts: Vec<Cast> = (1..=9).map(|i| cast(B1, i, 1)).collect();
+    book.w(opened(B1));
+    for c in &casts {
+        book.push(ityv_encoding::SCHEMA_CAST_RECORD, c.event);
+    }
+    let all = codes(&casts);
+    let mut runs = Vec::new();
+    for k in 0..3usize {
+        let b = batch(
+            B1,
+            k as u32,
+            3 * k as u64 + 1,
+            3 * k as u64 + 3,
+            &all[3 * k..3 * k + 3],
+        );
+        book.push(ityv_encoding::SCHEMA_BATCH_ATTEST, b);
+        let mut recs: Vec<&'static [u8]> =
+            casts[3 * k..3 * k + 3].iter().map(|c| c.event).collect();
+        recs.sort_by_key(|r| ityv_crypto::object_hash(r).0);
+        let mut run = std::vec![b];
+        run.extend(recs);
+        runs.push(with_packages(&run));
+    }
+    book.push(ityv_encoding::SCHEMA_BOX_CLOSE, close(B1, 9, 9, 0, &all));
+    for (schema, event) in station_record(9) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(9));
+    let events = book.ledger.events.clone();
+    let tick = *events
+        .iter()
+        .find(|e| schema_of(e) == SCHEMA_PROGRESS_TICK && device_of(e) == Some((true, B1.id)))
+        .unwrap();
+    (book, runs, tick)
+}
+
+#[test]
+fn held4_the_order_tolerance_reaches_back_one_slot_on_slots() {
+    // Slot 150 is lost (declared). Batch 2 is first received in 151 after
+    // that loss; batch 0 in 152 is tolerated (its first copy may have been
+    // in the loss, its second copy leads the next slot); batch 1 in 153 is
+    // not: batch 2 was first received two slots before.
+    let (book, runs, tick) = nine_records_in_three_batches();
+    let key = links_of(&book)[SCANNER].key;
+    let mut groups: Vec<(u64, FrameKind, Vec<&'static [u8]>)> = std::vec![
+        (150, FrameKind::Normal, runs[0].clone()),
+        (151, FrameKind::Normal, runs[2].clone()),
+        (152, FrameKind::Normal, runs[0].clone()),
+        (153, FrameKind::Normal, runs[1].clone()),
+    ];
+    for slot in 154..=212u64 {
+        groups.push((
+            slot,
+            FrameKind::Normal,
+            if slot == 154 {
+                std::vec![tick]
+            } else {
+                Vec::new()
+            },
+        ));
+    }
+    let mut links = links_of(&book);
+    links[SCANNER] = link_of(key, &groups, 1);
+    let lose = |l: usize, f: &Built| {
+        if l == SCANNER && f.slot == 150 {
+            None
+        } else {
+            window(f.slot)
+        }
+    };
+    let declare = |i: u32, e: &mut SessionLink| {
+        if i == 1 && e.link_id_hash == link(key) {
+            e.missing_slots = 1;
+        }
+    };
+    let mut plan = Plan::new(ST, links);
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    let r = verify_book(book, plan.events());
+    let f = &link_report(&r, link(key)).findings;
+    let batch: Vec<u64> = f
+        .iter()
+        .filter(|x| x.problem == LinkProblem::Batch)
+        .map(|x| x.stream_offset)
+        .collect();
+    // One `Batch`: batch 1's attestation (first in 153).
+    assert_eq!(batch.len(), 1, "{f:?}");
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+}
+
+#[test]
+fn held4_a_transmitter_swap_cannot_take_another_devices_frame_key() {
+    // An amendment that gives BOX-1 the frame key of the station's unit
+    // U-1A (or of the spare U-1B) is refused by the genesis rules
+    // (`SharedKey`): the transmitter-only swap cannot borrow a link.
+    let d = election_draft();
+    for n in [0u16, 1] {
+        let (body, _) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
+        let built = leak(common::sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
+            p.legal_authorization_hash = ityv_crypto::object_hash(body);
+        }));
+        let mut one = d.clone();
+        one.boxes[0].frame_key = common::uplink::frame_key(common::uplink::UNIT_FRAME_BASE + n);
+        one.appointments = one.referenced_appointments();
+        let a1 = common::amendment(1, built.pin, &one.raw(), &SIGNERS);
+        assert!(ityv_verify::verify_genesis(&built.pin, &built.input(), &[a1]).is_err());
     }
 }

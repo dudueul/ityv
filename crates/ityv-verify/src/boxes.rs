@@ -35,7 +35,9 @@
 //! alone, ADR-0041 decision 2), a device-signed close is refused until a
 //! `BoxUnitSwap` (two clerks, observers of two organisations) records the
 //! swap on site, and a swap is taken only for an open box whose device key
-//! or frame key an amendment changed. A replaced device's own events after the
+//! or frame key an amendment changed. A transmitter taken out is not put
+//! back: a swap into a state that gives the box a frame key an amendment
+//! already took from it is refused (the device's close is still taken). A replaced device's own events after the
 //! amendment's frame do not verify under the new key and are refused.
 //!
 //! Every signature is verified here, under the key the genesis registers
@@ -570,6 +572,9 @@ struct Run<'r, 'g> {
     /// (a transmitter replaced alone) and no `BoxUnitSwap` has recorded the
     /// swap yet.
     swap_due: bool,
+    /// The frame keys amendments took from the open box: a transmitter
+    /// taken out is not put back (ADR-0041 decision 2).
+    retired: Vec<&'g [u8; FRAME_KEY_LEN]>,
 }
 
 impl<'r> Run<'r, '_> {
@@ -588,19 +593,24 @@ impl<'r> Run<'r, '_> {
         }
         let open = matches!(m, Machine::Open(_) | Machine::Fallback(_));
         let frame_key = |k: usize| self.frame_keys.get(k).copied().flatten();
-        let replaced =
-            m.spec().device_key() != spec.device_key() || frame_key(self.state) != frame_key(state);
+        let (before, after) = (frame_key(self.state), frame_key(state));
+        let replaced = m.spec().device_key() != spec.device_key() || before != after;
         let (m, refusal) = m.follow(&spec);
         if refusal.is_none() {
             self.state = state;
             self.swap_due |= open && replaced;
+            if open && before != after {
+                self.retired.extend(before);
+            }
         }
         (m, refusal)
     }
 
     /// An on-site device swap, taken only when an amendment gave the open
     /// box a new device key or a new frame key. The index scoped the event
-    /// to this box and election by its body.
+    /// to this box and election by its body. A swap into a state whose
+    /// frame key the box already gave up (a transmitter put back) is
+    /// refused; the on-site record stands, so the device's close is taken.
     fn swap(&mut self, spec: &BoxSpec<'_>, signed: &Signed<'_>) -> Option<Refusal> {
         if !self.swap_due {
             return Some(Refusal::OutOfOrder);
@@ -608,7 +618,9 @@ impl<'r> Run<'r, '_> {
         match BoxUnitSwap::check(signed, spec.roster()) {
             Ok(_) => {
                 self.swap_due = false;
-                None
+                let key = self.frame_keys.get(self.state).copied().flatten();
+                key.is_some_and(|k| self.retired.contains(&k))
+                    .then_some(Refusal::OutOfOrder)
             }
             Err(e) => Some(Refusal::State(e)),
         }
@@ -1009,6 +1021,7 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
             .collect(),
         state: first.map_or(0, |(k, _)| k),
         swap_due: false,
+        retired: Vec::new(),
     };
     let (phase, machine_holds, counts) = match first {
         Some((_, spec)) => {
