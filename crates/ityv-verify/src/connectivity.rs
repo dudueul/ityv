@@ -1772,13 +1772,15 @@ fn judge_frames(
     // The kinds' slots: a catch-up group only after a slot of the span fell
     // short, or in the close slot; a close resend only from the close slot,
     // for as many slots as what came before it needs at the catch-up shape.
+    // The first slot of the span that is not whole: a walk over the slots
+    // that hold frames, so bounded by them.
     let first_short = shape.span.map(|(a, _)| {
         let mut s = a;
-        while full(slots.get(&s), normal, catchup) {
-            match s.checked_add(1) {
-                Some(next) => s = next,
-                None => break,
+        for (slot, group) in slots.range(a..) {
+            if *slot != s || !full(Some(group), normal, catchup) {
+                break;
             }
+            s = slot.saturating_add(1);
         }
         s
     });

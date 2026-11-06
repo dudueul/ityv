@@ -3014,6 +3014,38 @@ fn r2_b_an_object_is_listed_only_as_often_as_its_kind_allows() {
     );
     assert_eq!(found(&r, scanner()), [LinkProblem::Repeat]);
 
+    // A witnessed resend of the closing tick in each of two runs of
+    // witnessed slots (220, then 222 after a slot sent in vain and
+    // declared): once in each. In two slots of one run: once too often.
+    let tick = o[4];
+    let t = tick.len() as u64;
+    for (second, declared, problems) in [
+        (222u64, 1u32, &[][..]),
+        (221, 0, &[LinkProblem::Repeat][..]),
+    ] {
+        let mut links = honest_links();
+        let end = stream_len(&links[SCANNER]);
+        add_witnessed(&mut links, &[tick], end, (220, 220), MAX_PAYLOAD_LEN);
+        add_witnessed(
+            &mut links,
+            &[tick],
+            end + t,
+            (second, second),
+            MAX_PAYLOAD_LEN,
+        );
+        let declare = move |i: u32, e: &mut SessionLink| {
+            if i == 12 && e.link_id_hash == scanner() {
+                e.missing_slots = declared;
+            }
+        };
+        let mut plan = Plan::new(ST, links);
+        plan.windows = resend_windows(220);
+        plan.tweak_link = Some(&declare);
+        let r = verify(plan.events());
+        assert_eq!(found(&r, scanner()), problems, "{second}");
+        assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    }
+
     // The review's attack: a package listed sixty times, covert bytes in
     // the fill after each (the sealed allowance is per listing).
     let p1 = common::uplink::package_of(o[1]).unwrap();
@@ -3221,6 +3253,40 @@ fn r2_d_witnessed_slots_are_slots_the_device_must_send_in() {
     windows.last_mut().unwrap().1 = 221;
     let r = run(1, windows);
     assert!(sessions_found(&r).contains(&(12, SessionProblem::UndeclaredGap)));
+
+    // Where the witnessed slots meet the box's, a slot no window covers is
+    // one slot of the gap: no session covers slots 204 to 209, and a
+    // witnessed resend in slot 206 is filed in the next session (outside
+    // its window).
+    let mut links = honest_links();
+    for index in 0..2 {
+        add(&mut links[SCANNER], 211, |f| {
+            f.slot = 206;
+            f.index = index;
+            f.kind = FrameKind::WitnessedResend;
+        });
+    }
+    let windows: Vec<(u64, u64)> = (150..=210)
+        .step_by(6)
+        .filter(|s| *s != 204)
+        .map(|s| (s, s + 5))
+        .collect();
+    let file = |_: usize, f: &Built| {
+        if f.kind == FrameKind::WitnessedResend {
+            Some(9)
+        } else {
+            windows
+                .iter()
+                .position(|(a, b)| *a <= f.slot && f.slot <= *b)
+        }
+    };
+    let mut plan = Plan::new(ST, links);
+    plan.windows = windows.clone();
+    plan.assign = Some(&file);
+    let r = verify(plan.events());
+    assert!(found(&r, scanner()).contains(&LinkProblem::Window));
+    assert!(sessions_found(&r).contains(&(10, SessionProblem::UndeclaredGap)));
+    assert_eq!(link_report(&r, scanner()).missing_slots, 6);
 }
 
 #[test]
@@ -3342,6 +3408,30 @@ fn r2_g_a_run_holds_its_batchs_records_in_order() {
     // A run that stops before its batch's last record.
     let r = verify(Plan::new(ST, with_stream(SCANNER, &[o[0], o[1], o[2], o[4]])).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::Batch]);
+    // Or where the stream ends, every position after it taken: the device
+    // sent no more. With the last slot lost (and declared), the rest may
+    // have been in it.
+    let short = with_packages(&[o[0], o[1], o[2]]);
+    let r = verify(Plan::new(ST, with_stream(SCANNER, &short)).events());
+    assert_eq!(found(&r, scanner()), [LinkProblem::Batch]);
+    let lose = |l: usize, f: &Built| {
+        if l == SCANNER && f.slot == 212 {
+            None
+        } else {
+            window(f.slot)
+        }
+    };
+    let declare = declare_one(11);
+    let mut plan = Plan::new(ST, with_stream(SCANNER, &short));
+    plan.assign = Some(&lose);
+    plan.tweak_link = Some(&declare);
+    let r = verify(plan.events());
+    assert!(
+        found(&r, scanner()).is_empty(),
+        "{:?}",
+        found(&r, scanner())
+    );
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
 
     // Two batches: each run holds its own batch's records, and the batches
     // go out in their order.
@@ -3448,6 +3538,16 @@ fn r2_h_catch_up_and_close_resend_groups_only_where_the_protocol_uses_them() {
     let r = verify(Plan::new(ST, links).events());
     assert_eq!(found(&r, scanner()), [LinkProblem::KindOrder; 2]);
     assert_eq!(box_holds(&r), only(HoldReason::UplinkFrameInvalid));
+    // Half a catch-up group there: the slot that falls short is its own,
+    // not one before it.
+    let mut links = honest_links();
+    reseal(&mut links[SCANNER], 160, |f| f.kind = FrameKind::CatchUp);
+    let declare = declare_one(2);
+    let mut plan = Plan::new(ST, links);
+    plan.tweak_link = Some(&declare);
+    let r = verify(plan.events());
+    assert_eq!(found(&r, scanner()), [LinkProblem::KindOrder]);
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
     // After a slot the device did not send in (and the gateway declared),
     // it may catch up.
     let mut links = honest_links();
