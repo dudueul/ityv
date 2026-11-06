@@ -6163,6 +6163,29 @@ fn r4_2_a_transmitter_taken_out_is_not_put_back() {
             .with(HoldReason::BoxEventRefused)
             .with(HoldReason::UplinkFrameInvalid)
     );
+
+    // Taken out before the opening counts too: an amendment before the
+    // opening gives the box key 650, and one on the day brings back 600
+    // with a witnessed swap at 181. The box stage refuses the swap, and
+    // 600 was in service from the opening for no slot (650 was): every
+    // frame of it after the opening's slot is `AfterSwap`.
+    let (w, a1, a2) = twice_amended(spare, old);
+    let mut book = Book::new(w);
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a1);
+    for (schema, event) in &events[..close] {
+        book.push(*schema, event);
+    }
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, a2);
+    let (schema, event) = box_swap(181);
+    book.push(schema, event);
+    for (schema, event) in &events[close..] {
+        book.push(*schema, event);
+    }
+    let r = verify_book(book, Plan::new(ST, honest_links()).events());
+    let refusals = &r.boxes().report(B1.id).unwrap().refusals;
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert_eq!(refusals[0].refusal, ityv_verify::Refusal::OutOfOrder);
+    assert!(found(&r, link(old)).contains(&LinkProblem::AfterSwap));
 }
 
 /// Frames of link `key` from `first_slot`, one a slot, that carry

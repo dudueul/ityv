@@ -572,8 +572,9 @@ struct Run<'r, 'g> {
     /// (a transmitter replaced alone) and no `BoxUnitSwap` has recorded the
     /// swap yet.
     swap_due: bool,
-    /// The frame keys amendments took from the open box: a transmitter
-    /// taken out is not put back (ADR-0041 decision 2).
+    /// The frame keys amendments took from the box: a transmitter taken
+    /// out is not put back, a replacement is always a fresh spare
+    /// (ADR-0041 decision 2).
     retired: Vec<&'g [u8; FRAME_KEY_LEN]>,
 }
 
@@ -599,7 +600,7 @@ impl<'r> Run<'r, '_> {
         if refusal.is_none() {
             self.state = state;
             self.swap_due |= open && replaced;
-            if open && before != after {
+            if before != after {
                 self.retired.extend(before);
             }
         }
@@ -609,8 +610,9 @@ impl<'r> Run<'r, '_> {
     /// An on-site device swap, taken only when an amendment gave the open
     /// box a new device key or a new frame key. The index scoped the event
     /// to this box and election by its body. A swap into a state whose
-    /// frame key the box already gave up (a transmitter put back) is
-    /// refused; the on-site record stands, so the device's close is taken.
+    /// frame key an amendment already took from the box (a transmitter
+    /// put back) is refused; the on-site record stands, so the device's
+    /// close is taken.
     fn swap(&mut self, spec: &BoxSpec<'_>, signed: &Signed<'_>) -> Option<Refusal> {
         if !self.swap_due {
             return Some(Refusal::OutOfOrder);
