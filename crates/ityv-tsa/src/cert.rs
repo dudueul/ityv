@@ -12,6 +12,7 @@
 //! extension is refused, a processed extension may not repeat, and
 //! everything else must still be in the DER subset.
 
+use crate::alg::SignatureAlgorithm;
 use crate::der::{
     self, BIT_STRING, BOOLEAN, CONTEXT_0, CONTEXT_3, GENERALIZED_TIME, INTEGER, NULL, OCTET_STRING,
     OID, Reader, SEQUENCE, UTC_TIME,
@@ -27,6 +28,56 @@ use crate::time::{self, GenTime};
 pub(crate) enum PublicKey<'a> {
     Rsa(RsaPublicKey<'a>),
     Ec(EcPublicKey<'a>),
+}
+
+impl<'a> PublicKey<'a> {
+    /// The key as one signer holds it: the RSA modulus or the EC point.
+    pub(crate) const fn identity(&self) -> &'a [u8] {
+        match self {
+            Self::Rsa(key) => key.modulus(),
+            Self::Ec(key) => key.point(),
+        }
+    }
+
+    /// Whether the key can verify at all: an EC point is on its curve
+    /// (an RSA key's form was checked when it was read).
+    pub(crate) fn usable(&self) -> bool {
+        match self {
+            Self::Rsa(_) => true,
+            Self::Ec(key) => key.on_curve(),
+        }
+    }
+
+    /// Whether this key makes signatures of `algorithm`: an RSA key the
+    /// three RSA algorithms, a P-256 key ECDSA P-256/SHA-256, a P-384 key
+    /// the two P-384 ones (the pairs `verify_token` accepts).
+    pub(crate) fn makes(&self, algorithm: SignatureAlgorithm) -> bool {
+        match (self, algorithm) {
+            (
+                Self::Rsa(_),
+                SignatureAlgorithm::RsaPkcs1Sha256
+                | SignatureAlgorithm::RsaPkcs1Sha384
+                | SignatureAlgorithm::RsaPkcs1Sha512,
+            ) => true,
+            (Self::Ec(key), SignatureAlgorithm::EcdsaP256Sha256) => key.curve() == Curve::P256,
+            (
+                Self::Ec(key),
+                SignatureAlgorithm::EcdsaP384Sha384 | SignatureAlgorithm::EcdsaP384Sha512,
+            ) => key.curve() == Curve::P384,
+            (
+                Self::Rsa(_),
+                SignatureAlgorithm::EcdsaP256Sha256
+                | SignatureAlgorithm::EcdsaP384Sha384
+                | SignatureAlgorithm::EcdsaP384Sha512,
+            )
+            | (
+                Self::Ec(_),
+                SignatureAlgorithm::RsaPkcs1Sha256
+                | SignatureAlgorithm::RsaPkcs1Sha384
+                | SignatureAlgorithm::RsaPkcs1Sha512,
+            ) => false,
+        }
+    }
 }
 
 /// The parts of a certificate that verification uses.
@@ -132,7 +183,8 @@ fn read_time(validity: &mut Reader<'_>) -> Result<GenTime, DerError> {
 }
 
 /// `SubjectPublicKeyInfo`: RSA (`rsaEncryption` with `NULL` parameters,
-/// RFC 3279 §2.3.1) or EC (`id-ecPublicKey` with a named curve, RFC 5480 §2.1.1).
+/// RFC 3279 §2.3.1) or EC (`id-ecPublicKey` with a named curve, RFC 5480
+/// §2.1.1).
 fn read_public_key<'a>(tbs: &mut Reader<'a>) -> Result<PublicKey<'a>, TsaError> {
     let mut info = tbs.sequence()?;
     let mut algorithm = info.sequence()?;

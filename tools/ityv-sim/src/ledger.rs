@@ -3,14 +3,16 @@
 //!
 //! A scenario is a list of [`Step`]s. Most are events; checkpoints are
 //! steps too, signed when the plan is laid down because their roots
-//! depend on every frame before them. An attack is a change to the list
+//! depend on every frame before them, and followed by the timestamp
+//! records of the simulated authorities (ADR-0039, [`crate::tsa`]). An attack is a change to the list
 //! (an event removed, repeated, moved, replaced) or a step kind that
 //! produces a deliberately wrong frame.
 
 use ityv_crypto::object_hash;
 use ityv_encoding::{
     CheckpointBody, CheckpointParts, Hash512, KeysetId, LedgerFrame, LedgerId, SCHEMA_BOX_CLOSE,
-    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SchemaId, Seq, TimeBucket, TreeSize,
+    SCHEMA_CHECKPOINT_BODY, SCHEMA_LEDGER_FRAME, SCHEMA_TIMESTAMP_RECORD, SchemaId, Seq,
+    TimeBucket, TreeSize,
 };
 use ityv_ledger::{
     SCHEMA_SIGNED_CHECKPOINT, SignedCheckpointParts, WitnessSignatureEntry, root_of_leaves,
@@ -37,9 +39,26 @@ pub enum Step {
         filed: Option<Hash512>,
     },
     /// A witness checkpoint over every frame so far, in time bucket
-    /// `bucket`.
+    /// `bucket`, followed by the tokens of the first `stamps` simulated
+    /// timestamp authorities (the government's, then the other), a minute
+    /// into the bucket. Two anchor it (VC-115).
     Checkpoint {
         /// The witnesses' time bucket.
+        bucket: u64,
+        /// How many authorities stamp it (0 to 2).
+        stamps: usize,
+    },
+    /// A timestamp record over the last checkpoint so far: the token of
+    /// `by`, issued a minute into `bucket`, in a record that names
+    /// `named`. An honest record has `named == by` and the checkpoint's
+    /// own bucket; scenarios use other buckets (an early token) or another
+    /// signer (a forged record).
+    Stamp {
+        /// The authority the record names.
+        named: crate::tsa::Authority,
+        /// The authority whose token it carries.
+        by: crate::tsa::Authority,
+        /// The bucket a minute into which the token was issued.
         bucket: u64,
     },
     /// A second checkpoint under the previous checkpoint's sequence
@@ -70,7 +89,7 @@ impl Step {
     pub const fn event_bytes(&self) -> Option<&'static [u8]> {
         match self {
             Self::Event { event, .. } => Some(event),
-            Self::Checkpoint { .. } | Self::ForkCheckpoint { .. } => None,
+            Self::Checkpoint { .. } | Self::Stamp { .. } | Self::ForkCheckpoint { .. } => None,
         }
     }
 }
@@ -102,6 +121,9 @@ struct Book<'e> {
     last: Option<(u64, Hash512, u64)>,
     previous: Option<(u64, Hash512)>,
     bucket: Option<u64>,
+    serial: u64,
+    /// The last checkpoint event.
+    checkpoint_event: Option<&'static [u8]>,
 }
 
 impl Book<'_> {
@@ -162,7 +184,43 @@ impl Book<'_> {
         self.previous = self.last.map(|(s, h, _)| (s, h));
         self.last = Some((seq, object_hash(body), size));
         self.bucket = Some(bucket);
+        self.checkpoint_event = Some(event);
         self.push(SCHEMA_SIGNED_CHECKPOINT, event, event);
+    }
+
+    /// A record naming `named` with `by`'s token over the last checkpoint,
+    /// issued a minute into `bucket`.
+    fn stamp_with(&mut self, named: crate::tsa::Authority, by: crate::tsa::Authority, bucket: u64) {
+        let target = object_hash(self.checkpoint_event.unwrap());
+        self.serial += 1;
+        let record = crate::tsa::record_named(
+            self.election.election_id(),
+            named,
+            by,
+            SCHEMA_SIGNED_CHECKPOINT,
+            &target,
+            bucket,
+            self.serial,
+        );
+        self.push(SCHEMA_TIMESTAMP_RECORD, record, record);
+    }
+
+    /// The tokens of the first `stamps` authorities over the last event (a
+    /// checkpoint in bucket `bucket`).
+    fn stamp(&mut self, stamps: usize, bucket: u64) {
+        let target = object_hash(self.events.last().unwrap());
+        for a in crate::tsa::AUTHORITIES.iter().take(stamps) {
+            self.serial += 1;
+            let record = crate::tsa::record(
+                self.election.election_id(),
+                *a,
+                SCHEMA_SIGNED_CHECKPOINT,
+                &target,
+                bucket,
+                self.serial,
+            );
+            self.push(SCHEMA_TIMESTAMP_RECORD, record, record);
+        }
     }
 }
 
@@ -181,6 +239,8 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
         last: None,
         previous: None,
         bucket: None,
+        serial: 0,
+        checkpoint_event: None,
     };
     for step in steps {
         match step {
@@ -195,13 +255,15 @@ pub fn lay_down(election: &Election, steps: &[Step]) -> Ledger {
                     book.disputes.push(*f);
                 }
             }
-            Step::Checkpoint { bucket } => {
+            Step::Checkpoint { bucket, stamps } => {
                 let (seq, previous) = book
                     .last
                     .map_or((1, Hash512::ZERO), |(seq, hash, _)| (seq + 1, hash));
                 let size = book.frames.len() as u64;
                 book.checkpoint(seq, previous, size, *bucket, 0);
+                book.stamp(*stamps, *bucket);
             }
+            Step::Stamp { named, by, bucket } => book.stamp_with(*named, *by, *bucket),
             Step::ForkCheckpoint { bucket, dropped } => {
                 let (seq, _, size) = book.last.unwrap();
                 let previous = book.previous.map_or(Hash512::ZERO, |(_, h)| h);

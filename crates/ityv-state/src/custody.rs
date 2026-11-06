@@ -19,7 +19,7 @@ use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     BoxId, CustodyHandoffBody, CustodyHandoffParts, CustodyRoute, ElectionId, EventRole, Hash512,
     OrgId, RosterRole, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_SEAL_CHANGE_BODY, SealChangeBody,
-    SealChangeParts, SealChangeReason, SignerId,
+    SealChangeParts, SealChangeReason, SignerId, same_org,
 };
 
 use crate::close::{RosterEntry, check_witnesses};
@@ -174,7 +174,9 @@ impl<'a> CustodyChain<'a> {
                 | EventRole::Authority
                 | EventRole::Device
                 | EventRole::Chair
-                | EventRole::Auditor => return Err(Error::NotRegistered),
+                | EventRole::Auditor
+                | EventRole::RollSource
+                | EventRole::RollCustodian => return Err(Error::NotRegistered),
             };
             if s.signer_id.as_bytes() != id.as_bytes() || s.org_id.as_bytes() != org.as_bytes() {
                 return Err(Error::NotRegistered);
@@ -206,7 +208,9 @@ impl<'a> CustodyChain<'a> {
         {
             return Err(Error::CustodyPrevious);
         }
-        if h.from_org.as_bytes() == h.to_org.as_bytes() {
+        // Organisations compare as names (`same_org`): a hand-off to the
+        // same body under another spelling is no hand-off.
+        if same_org(h.from_org, h.to_org) {
             return Err(Error::CustodySameOrganisation);
         }
         let stop = usize::try_from(self.handoffs).map_err(|_| Error::Overflow)?;
@@ -406,6 +410,16 @@ mod tests {
             ..first()
         };
         assert_eq!(c.link(&same_org, H1), Err(Error::CustodySameOrganisation));
+        // The same organisation spelled another way (`same_org`).
+        let same_spelled = CustodyHandoffParts {
+            to_signer: id(b"clerk2"),
+            to_org: org(b"station"),
+            ..first()
+        };
+        assert_eq!(
+            c.link(&same_spelled, H1),
+            Err(Error::CustodySameOrganisation)
+        );
         let off_route = CustodyHandoffParts {
             to_org: org(b"CENTRE"),
             ..first()

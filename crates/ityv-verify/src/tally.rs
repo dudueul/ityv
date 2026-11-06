@@ -29,11 +29,20 @@
 //!   an earlier frame, every out-of-district box of the style with cast
 //!   records resolved in an earlier frame, every record of the style that
 //!   awaits the law decided in an earlier frame, and the witnesses' time
-//!   (the latest time bucket of a valid checkpoint recorded before the
-//!   scope) more than 96 buckets after the last close of the style. The
+//!   (the time bucket of the last valid checkpoint recorded before the
+//!   scope whose timestamp tokens, also recorded before the scope, anchor
+//!   it) more than 96 buckets after the last close of the style. The
 //!   verifier has no clock, and the trustees' own bucket is only their
 //!   claim: a forward-dated scope inside the late-close window would fix
 //!   as `UNATTESTED` what a late batch close may still attest (VC-057).
+//!   The witnesses' bucket alone would let a colluding witness quorum
+//!   date an intermediate checkpoint as it likes, since only the last
+//!   checkpoint's anchoring decides the ledger's anchor deadline; tokens
+//!   of a government-run and a non-government authority of two operators,
+//!   within the checkpoint's anchor window and none earlier than the
+//!   backdating tolerance (the chain ends there otherwise), recorded before
+//!   the scope, show that the scope was recorded after an honest
+//!   authority's time reached the checkpoint's bucket (ADR-0039 개정).
 //!   A late batch close or late box close recorded after a scope of its
 //!   box's style is refused and holds. The scope taken is compared with
 //!   the recomputation: the included records'
@@ -148,6 +157,7 @@ use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
 use crate::records::RecordStage;
 use crate::sigs::Material;
+use crate::timestamp::{TimestampStage, anchoring};
 
 /// Options per chunk (PROTOCOL.md §7.4).
 const DIGITS: usize = 9;
@@ -681,23 +691,38 @@ struct Ctx<'g, 'a> {
     index: &'g LedgerIndex<'a>,
     authority: &'g AuthorityStage<'a>,
     trustees: Trustees<'a>,
-    /// The valid checkpoints: frame, tree size, time bucket.
-    checkpoints: Vec<(u64, u64, TimeBucket)>,
+    /// The valid checkpoints: frame, tree size, time bucket, event hash.
+    checkpoints: Vec<(u64, u64, TimeBucket, Hash512)>,
+    /// The timestamp tokens of the ledger.
+    timestamps: &'g TimestampStage<'a>,
 }
 
 impl<'a> Ctx<'_, 'a> {
     /// The witnesses' time at frame `at`: the time bucket of the last valid
-    /// checkpoint recorded before it (0 if none), as PROTOCOL.md §11.1
-    /// says. Trustees and clerks declare their own buckets; the late-close
+    /// checkpoint recorded before it that is anchored by timestamp tokens
+    /// also recorded before it (0 if none), as PROTOCOL.md §11.1 says.
+    /// Trustees and clerks declare their own buckets; the late-close
     /// window is measured in this one (VC-057). The witnesses attest it
     /// within their clock tolerance and the chain's buckets never decrease
-    /// (VC-012), so the last checkpoint's bucket is also the latest.
+    /// (VC-012), so the last such checkpoint's bucket is also the latest.
+    /// The tokens make the bucket the authorities' too (module docs); an
+    /// unanchored checkpoint gives an earlier time, so a rule that waits
+    /// for the time to pass refuses rather than accepts.
     fn witness_time(&self, at: Seq) -> TimeBucket {
+        let epoch = self.timestamps.epoch();
         self.checkpoints
             .iter()
-            .filter(|(frame, _, _)| *frame < at.get())
-            .max_by_key(|(frame, _, _)| *frame)
-            .map_or(TimeBucket::new(0), |(_, _, bucket)| *bucket)
+            .filter(|(frame, _, _, _)| *frame < at.get())
+            .filter(|(_, _, bucket, hash)| {
+                anchoring(
+                    self.timestamps
+                        .tokens_for(hash)
+                        .filter(|t| t.frame.get() < at.get() && t.within_window(epoch, *bucket)),
+                )
+                .satisfied()
+            })
+            .max_by_key(|(frame, _, _, _)| *frame)
+            .map_or(TimeBucket::new(0), |(_, _, bucket, _)| *bucket)
     }
 
     /// The `CRYPTO_TALLY_AID` capability for the day of `bucket`.
@@ -1273,7 +1298,7 @@ fn take_opening(
     let covered = ctx
         .checkpoints
         .iter()
-        .map(|(frame, size, _)| (*frame, *size));
+        .map(|(frame, size, _, _)| (*frame, *size));
     let in_checkpoint = checkpointed_before(covered, scope.get(), seq.get());
     admit_aggregate_opening(&cap, p.election_id, in_checkpoint)
         .map_err(|_| TallyRefusal::Premature)?;
@@ -1441,7 +1466,7 @@ pub fn verify_tally<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
     authority: &AuthorityStage<'a>,
-    checkpoints: &CheckpointChain,
+    checkpoints: &CheckpointChain<'a>,
     boxes: &BoxStage<'a>,
     records: &RecordStage<'a>,
     disputes: &DisputeStage<'a>,
@@ -1454,8 +1479,9 @@ pub fn verify_tally<'a>(
         checkpoints: checkpoints
             .checkpoints()
             .iter()
-            .map(|c| (c.frame.get(), c.tree_size, c.time_bucket))
+            .map(|c| (c.frame.get(), c.tree_size, c.time_bucket, c.event_hash))
             .collect(),
+        timestamps: checkpoints.timestamps(),
     };
     let mut work = Work {
         boxes: genesis

@@ -120,9 +120,11 @@ fn seal_needs_the_quorum() {
 #[test]
 fn seal_needs_diverse_witnesses() {
     let b = fixture();
-    // Witness i is of organisation i mod 7, provider i mod 4, region i mod 3.
+    // Witness i is of organisation i mod 7, provider i mod 4, region i mod 3;
+    // from the eighth on the organisation is spelled another way, which is
+    // the same organisation (`same_org`, the final review's F7).
     for who in [
-        // Six organisations.
+        // Six organisations (nine names).
         [0, 1, 2, 3, 4, 5, 7, 8, 9],
         // Three providers.
         [0, 1, 2, 4, 5, 6, 8, 9, 10],

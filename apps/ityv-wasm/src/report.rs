@@ -28,17 +28,17 @@ use alloc::vec::Vec;
 
 use ityv_crypto::Sha3Hasher;
 use ityv_encoding::{
-    Hash512, ProgressBody, ProgressTick, SCHEMA_PROGRESS_TICK, SCHEMA_VERSION_1, ScopeSet,
-    TimeBucket, decode_object,
+    Day, Hash512, ProgressBody, ProgressTick, SCHEMA_PROGRESS_TICK, SCHEMA_VERSION_1, ScopeSet,
+    TimeBucket, TimestampAuthorityKind, decode_object,
 };
-use ityv_ledger::{FrameStream, check_anchor, check_board};
+use ityv_ledger::{FrameStream, check_board};
 use ityv_state::{
     Evidence, HoldReason, HoldSet, Outcome, Publication, StatusReport, Step, evaluate, out_of,
 };
 use ityv_verify::{
-    AuditInput, BeaconObservation, BoxProgressReport, BoxRecords, BoxReport, IndexedEvent,
-    Publications, Report, StationProgressReport, UnitTally, VerifiedGenesis, verify_genesis,
-    verify_ledger_with,
+    AuditInput, BeaconObservation, BoxProgressReport, BoxRecords, BoxReport, Custody, IndexedEvent,
+    Publications, Report, StampedToken, StationProgressReport, UnitTally, VerifiedGenesis,
+    verify_genesis, verify_ledger_with,
 };
 
 use crate::audit::{refusal_rows, refused_holds, style_concluded, style_holds, write_audit};
@@ -171,15 +171,13 @@ pub struct Verification {
     pub json: String,
 }
 
+/// What the bundle says the caller brings: its current time and the board
+/// deadline. The anchor deadline is the verifier's, from the ledger's
+/// timestamp tokens (ADR-0039).
 fn publications(b: &Bundle<'_>) -> Publications {
     let p = &b.publications;
-    let receipts: Vec<TimeBucket> = p.receipts.iter().map(|r| TimeBucket::new(*r)).collect();
     Publications {
-        anchors: Publication::from_ledger(&check_anchor(
-            TimeBucket::new(p.checkpoint),
-            &receipts,
-            TimeBucket::new(p.now),
-        )),
+        now: TimeBucket::new(p.now),
         board: Publication::from_ledger(&check_board(
             TimeBucket::new(p.close),
             p.published.map(TimeBucket::new),
@@ -471,7 +469,7 @@ pub fn unit_statuses(
                     Outcome::NotRun
                 },
             )
-            .with_anchors(publications.anchors)
+            .with_anchors(report.checkpoints().anchor_deadline(publications.now))
             .with_board(publications.board)
             .with_holds(holds);
             UnitStatus {
@@ -527,7 +525,10 @@ fn write_report(
     }
     j.end_array();
     j.object("publications");
-    j.str("anchors", &publication_name(pubs.anchors));
+    j.str(
+        "anchors",
+        &publication_name(report.checkpoints().anchor_deadline(pubs.now)),
+    );
     j.str("board", &publication_name(pubs.board));
     j.end_object();
     j.object("ledger");
@@ -548,8 +549,117 @@ fn write_report(
     write_progress(j, genesis, &look);
     write_participation(j, report);
     write_disputes(j, report);
+    write_roll(j, genesis, report);
     write_audit(j, report, observation, bundle.beacon.is_some());
     write_records(j, report);
+}
+
+/// The name of a timestamp authority's kind.
+pub(crate) const fn kind_name(kind: TimestampAuthorityKind) -> &'static str {
+    match kind {
+        TimestampAuthorityKind::Government => "Government",
+        TimestampAuthorityKind::NonGovernment => "NonGovernment",
+    }
+}
+
+/// One taken timestamp token, public fields only (the verifier's values),
+/// with the time bucket of its latest instant counted from the election
+/// epoch day `epoch` (negative before it).
+pub(crate) fn token_fields(j: &mut Json, t: &StampedToken<'_>, epoch: Day) {
+    j.num("frame", t.frame.get());
+    j.str("authority", &text(t.authority.as_bytes()));
+    j.str("operator", &text(t.operator.as_bytes()));
+    j.str("kind", kind_name(t.kind));
+    j.num("genTime", t.gen_time);
+    j.num("latest", t.latest);
+    let start = i128::from(epoch.get()).saturating_mul(86_400);
+    j.int(
+        "latestBucket",
+        i128::from(t.latest).saturating_sub(start).div_euclid(900),
+    );
+}
+
+/// One roll state and the custodians that agree with it.
+fn custody_fields(j: &mut Json, c: &Custody<'_>) {
+    j.num("seq", c.seq.get());
+    j.str("fingerprint", &grouped(&fingerprint(c.hash.as_bytes())));
+    j.num("entryCount", c.state.entry_count);
+    j.array("custodians");
+    for k in &c.custodians {
+        j.item_str(&text(k.as_bytes()));
+    }
+    j.end_array();
+    j.bool("pseudonymConfirmed", c.pseudonym_confirmed);
+    j.bool("effective", c.effective);
+}
+
+/// The voter roll's custody (ADR-0040), public information only: the
+/// freeze and each amendment with the custodians whose receipts agree,
+/// against the genesis quorum; refused roll events and dissenting
+/// receipts. Contested check-ins are restricted: only their number.
+fn write_roll(j: &mut Json, genesis: &VerifiedGenesis<'_>, report: &Report<'_>) {
+    let roll = report.roll();
+    j.object("roll");
+    j.bool("complete", roll.complete());
+    j.num(
+        "quorum",
+        u64::from(genesis.genesis().body().custody_quorum()),
+    );
+    j.num(
+        "extracts",
+        u64::try_from(roll.extracts().len()).unwrap_or(u64::MAX),
+    );
+    if let Some(f) = roll.freeze() {
+        j.object("freeze");
+        custody_fields(j, f);
+        j.end_object();
+    } else {
+        j.null("freeze");
+    }
+    j.array("amendments");
+    for a in roll.amendments() {
+        j.begin_object();
+        j.num("number", a.number);
+        j.str("reason", &format!("{:?}", a.reason));
+        j.str("authority", &text(a.authority.as_bytes()));
+        custody_fields(j, &a.custody);
+        j.end_object();
+    }
+    j.end_array();
+    j.array("refused");
+    for r in roll.refused() {
+        j.begin_object();
+        j.num("seq", r.seq.get());
+        j.str("event", &format!("{:?}", r.event));
+        j.str("refusal", &format!("{:?}", r.refusal));
+        j.end_object();
+    }
+    j.end_array();
+    j.array("mismatches");
+    for m in roll.mismatches() {
+        j.begin_object();
+        j.num("seq", m.seq.get());
+        j.str("custodian", &text(m.custodian.as_bytes()));
+        j.end_object();
+    }
+    j.end_array();
+    j.num(
+        "contestedFrames",
+        u64::try_from(roll.contested_frames()).unwrap_or(u64::MAX),
+    );
+    j.opt_num("pollClose", roll.poll_close().map(ityv_encoding::Seq::get));
+    j.array("lateAmendments");
+    for seq in roll.late_amendments() {
+        j.item_num(seq.get());
+    }
+    j.end_array();
+    j.array("missingExtracts");
+    for station in roll.missing_extracts() {
+        j.item_str(&text(station.as_bytes()));
+    }
+    j.end_array();
+    holds_json(j, "holds", roll.holds());
+    j.end_object();
 }
 
 fn write_checkpoints(j: &mut Json, report: &Report<'_>) {
@@ -560,6 +670,8 @@ fn write_checkpoints(j: &mut Json, report: &Report<'_>) {
         "unchecked",
         u64::try_from(chain.unchecked()).unwrap_or(u64::MAX),
     );
+    let stamps = chain.timestamps();
+    let epoch = stamps.epoch();
     j.array("valid");
     for c in chain.checkpoints() {
         j.begin_object();
@@ -572,9 +684,47 @@ fn write_checkpoints(j: &mut Json, report: &Report<'_>) {
             &grouped(&fingerprint(c.body_hash.as_bytes())),
         );
         j.str("root", &grouped(&fingerprint(c.root.as_bytes())));
+        // The verifier's anchoring of this checkpoint (VC-115) and the
+        // tokens over it, each with whether it lies in the anchor window.
+        j.object("anchoring");
+        j.bool("government", c.anchoring.government);
+        j.bool("nonGovernment", c.anchoring.non_government);
+        j.num(
+            "operators",
+            u64::try_from(c.anchoring.operators).unwrap_or(u64::MAX),
+        );
+        j.bool("satisfied", c.anchoring.satisfied());
+        j.end_object();
+        j.array("tokens");
+        for t in stamps.tokens_for(&c.event_hash) {
+            j.begin_object();
+            token_fields(j, t, epoch);
+            j.bool("inWindow", t.within_window(epoch, c.time_bucket));
+            j.end_object();
+        }
+        j.end_array();
         j.end_object();
     }
     j.end_array();
+    j.object("timestamps");
+    j.num(
+        "tokens",
+        u64::try_from(stamps.tokens().len()).unwrap_or(u64::MAX),
+    );
+    j.num(
+        "unanswered",
+        u64::try_from(stamps.unanswered().len()).unwrap_or(u64::MAX),
+    );
+    j.array("refusals");
+    for r in stamps.refusals() {
+        j.begin_object();
+        j.num("frame", r.frame.get());
+        j.str("authority", &text(r.authority.as_bytes()));
+        j.str("problem", &format!("{:?}", r.problem));
+        j.end_object();
+    }
+    j.end_array();
+    j.end_object();
     j.array("findings");
     for f in chain.findings() {
         j.begin_object();
@@ -781,6 +931,19 @@ fn write_refused(j: &mut Json, bundle: &Bundle<'_>, report: &Report<'_>) {
     }
     for s in report.disputes().refused() {
         list.push((s.get(), "disputes", "Refused".to_owned()));
+    }
+    for r in report.checkpoints().timestamps().refusals() {
+        list.push((r.frame.get(), "timestamps", format!("{:?}", r.problem)));
+    }
+    for r in report.roll().refused() {
+        list.push((
+            r.seq.get(),
+            "roll",
+            format!("{:?}: {:?}", r.event, r.refusal),
+        ));
+    }
+    for m in report.roll().mismatches() {
+        list.push((m.seq.get(), "roll", "CustodyMismatch".to_owned()));
     }
     for (seq, reason) in refusal_rows(report) {
         list.push((seq, "audit", reason));

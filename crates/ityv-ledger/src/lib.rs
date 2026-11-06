@@ -67,7 +67,6 @@ pub use policy::{
     profile_matches_roster,
 };
 pub use publication::{
-    ANCHOR_WINDOW, BOARD_WINDOW, Breach, REQUIRED_ANCHORS, Status, anchor_deadline, board_deadline,
-    check_anchor, check_board,
+    ANCHOR_WINDOW, BOARD_WINDOW, Breach, Status, anchor_deadline, board_deadline, check_board,
 };
 pub use verified::Verified;

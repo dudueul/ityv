@@ -15,12 +15,16 @@ doctest = true
 
 # Only the sibling TCB crates. Signatures are verified by `ityv-crypto`, the
 # trees and frame chain by `ityv-ledger`, the genesis seal and entry proofs
-# by `ityv-state`; this crate drives them over whole sets and ledgers.
+# by `ityv-state`, timestamp tokens by `ityv-tsa`; this crate drives them
+# over whole sets and ledgers.
 [dependencies]
 ityv-encoding = { path = "../ityv-encoding", version = "=0.1.0" }
 ityv-crypto = { path = "../ityv-crypto", version = "=0.1.0" }
 ityv-ledger = { path = "../ityv-ledger", version = "=0.1.0" }
 ityv-state = { path = "../ityv-state", version = "=0.1.0" }
+# RFC 3161 timestamp tokens (ADR-0034 §6, ADR-0037): the verifier takes only
+# `verify_token`'s result, never parses DER itself.
+ityv-tsa = { path = "../ityv-tsa", version = "=0.1.0" }
 
 [dev-dependencies]
 rand_chacha = { version = "=0.10.0", default-features = false }

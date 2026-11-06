@@ -4,7 +4,7 @@
 
 ## 무엇인가
 
-ADR-0034의 시점확인 토큰을 검증하는 TCB 크레이트다. DER·CMS 파서와 RSA·ECDSA 검증이 핵심 검증기(`ityv-verify`)의 TCB를 키우지 않도록 따로 두었고(ADR-0034 §6), 다른 워크스페이스 크레이트에 의존하지 않는다. 결정과 이유는 `docs/adr/ADR-0037-tsa-crate.md`에 있다. 장부와의 연결(`TimestampRecord`, genesis의 기관 목록, 체크포인트 단계)은 다음 단계다.
+ADR-0034의 시점확인 토큰을 검증하는 TCB 크레이트다. DER·CMS 파서와 RSA·ECDSA 검증이 핵심 검증기(`ityv-verify`)의 TCB를 키우지 않도록 따로 두었고(ADR-0034 §6), 다른 워크스페이스 크레이트에 의존하지 않는다. 결정과 이유는 `docs/adr/ADR-0037-tsa-crate.md`에 있다. 장부와의 연결(`TimestampRecord`, genesis의 기관 목록, 체크포인트 단계)은 `ityv-verify`의 `timestamp` 모듈이 이 크레이트의 공개 API로 한다(ADR-0039).
 
 | 모듈 | 내용 | 근거 |
 |---|---|---|
@@ -25,12 +25,14 @@ ADR-0034의 시점확인 토큰을 검증하는 TCB 크레이트다. DER·CMS �
 genesis의 기관 항목 ──▶ PinnedTsa::from_bytes(pin) ─┐
 체크포인트 객체 해시 ─▶ Imprint::of(Sha512, &hash) ─┤
 장부의 DER 토큰 ────────────────────────────────────┴─▶ verify_token
-                                                         │ Err(TsaError::…) → TimestampInvalid (연결 단계)
+                                                         │ Err(TsaError::…) → TimestampInvalid (ityv-verify, ADR-0039)
                                                          ▼
                                   VerifiedTimestamp: gen_time(), earliest(), latest(), policy(),
                                   serial(), nonce(), accuracy(), imprint(), certificate_sha256(),
                                   certificate_source()
 ```
+
+`PinnedTsa::signer_key()`는 핀의 인증서 사본을 `verify_token`이 서명자 인증서를 읽듯 읽고, EC 점이 곡선 위에 있고, 핀이 허용한 서명 알고리즘 가운데 그 키가 만들고 그 다이제스트도 허용된 것이 있을 때만 서명자(`SignerKey`: 서명 키(RSA 모듈러스나 EC 점), 인증서의 `notBefore`·`notAfter`)를 돌려준다. 사본이 없으면 `CertificateNotPinned`, 사본이 서명자 인증서로 받아들여지지 않으면 그 오류, 곡선 밖의 점이면 `InvalidEcPoint`, 맞는 알고리즘이 없으면 `SignatureNotAllowed`다. 연결 단계가 genesis에서 어떤 토큰도 검증될 수 없는 핀과, 한 키를 두 인증서로 핀한 기관을 거부하는 데 쓴다(ADR-0039 2항).
 
 핀의 바이트 형식(`src/pin.rs`): 형식 버전 1, 서명 인증서 DER의 SHA-256(32), 다이제스트 마스크, 서명 알고리즘 마스크, 플래그(ESS v1 허용), 정책 목록(DER OID 1–8개, 오름차순, `u16` 길이 접두), 인증서(선택, `u16` 길이 접두). 모르는 비트, 정렬되지 않거나 겹친 정책, 길이가 맞지 않는 핀은 거부하므로 핀마다 인코딩이 하나다. `PinnedTsa::new`와 `encode`가 같은 형식을 만든다.
 
@@ -40,10 +42,10 @@ genesis의 기관 항목 ──▶ PinnedTsa::from_bytes(pin) ─┐
 - 반환값은 서명됐거나(`TSTInfo` 필드) 핀이나 호출자가 준 것(인증서 해시, 각인)이다. 예외는 `certificate_source()`로, 서명되지 않은 `certificates` 필드에 핀의 인증서가 있었는지를 알려 줄 뿐이다(누구나 인증서를 넣고 뺄 수 있다). 서명된 바이트를 바꾸는 변형은 받아들여지지 않고, 받아들여진 변형은 결과를 바꾸지 않는다(`tests/proptests.rs`).
 - `earliest()`, `latest()`는 `genTime ∓ 정확도`를 넘침 없이 계산한다(정확도의 초는 3600 이하). 체크포인트 단계는 `genTime` 하나가 아니라 이 구간으로 판정해야 한다(ADR-0037 9).
 - 핀이 허용한 다이제스트(각인, `SignerInfo`, ESS v2)와 서명 알고리즘만 쓴다. 지원하지 않는 조합(P-256과 SHA-384, 1024비트 RSA, SHA-1 각인)은 핀과 상관없이 거부한다.
-- 거부마다 `TsaError`의 고유 변형이 있고, 토큰이 낼 수 있는 변형 가운데 `Der(_)`를 뺀 59개마다 그 규칙만 어긴 토큰이 정확히 그 오류로 거부된다(`tests/rules.rs`, 전수 `match`; `Der(_)`는 `der` 단위 테스트와 `tests/strict.rs`). 검사 순서(구조 → 인증서 → 허용 알고리즘 → 서명 속성 → 서명 → 내용)가 고정이므로 같은 토큰은 언제나 같은 오류를 낸다.
+- 거부마다 `TsaError`의 고유 변형이 있고, 토큰이 낼 수 있는 변형 가운데 `Der(_)`를 뺀 59개마다 그 규칙만 어긴 토큰이 정확히 그 오류로 거부된다(`tests/rules.rs`, 전수 `match`; `Der(_)`는 `der` 단위 테스트와 `tests/strict.rs`). 검사 순서(구조 → 인증서 → 허용 알고리즘 → 각인 → 서명 속성 → 서명 → 나머지 내용)가 고정이므로 같은 토큰은 언제나 같은 오류를 낸다. 각인은 다이제스트와 서명을 계산하기 전에 비교하므로 다른 대상의 토큰은 서명 검증 비용 없이 거부된다(ADR-0037 8, 개정).
 
 보장하지 않는 것:
-- 기관이 적은 시각이 참이라는 것. 기관 하나는 아무 시각에나 서명할 수 있다. ADR-0034는 서로 다른 운영 주체의 기관 둘 이상을 요구하고, 그 판정은 연결 단계의 체크포인트 단계가 한다.
+- 기관이 적은 시각이 참이라는 것. 기관 하나는 아무 시각에나 서명할 수 있다. ADR-0034는 서로 다른 운영 주체의 기관 둘 이상을 요구하고, 그 판정은 `ityv-verify`의 체크포인트 단계가 한다(ADR-0039).
 - 인증서의 폐지 여부, 루트까지의 경로. 인증서는 해시로 고정되며 그 고정의 출처는 genesis다.
 - 양자 내성. 토큰의 RSA·ECDSA 서명은 보강 증거이고 신뢰의 뿌리는 증인 정족수의 하이브리드 서명이다(ADR-0034 §5).
 - 실제 지정 기관의 토큰이 이 엄격성을 통과한다는 것. freetsa.org 토큰은 통과했고(ESS v1 허용 핀), 지정 기관, 특히 정부 운영 기관의 실제 토큰은 채택 전에 확인한다. 남은 미확인 항목(`SignedData` 버전, `directoryName`이 아닌 `tsa` 이름, RSA-PSS 등)은 ADR-0037의 위험 목록에 있다.
@@ -71,6 +73,6 @@ genesis의 기관 항목 ──▶ PinnedTsa::from_bytes(pin) ─┐
 
 ## 검증
 
-- V1: `tests/rules.rs`(토큰이 낼 수 있는 `TsaError` 변형 가운데 `Der(_)`를 뺀 59개마다 그 규칙만 어긴 토큰 하나, 전수 `match`로 목록 누락을 컴파일 오류로), `tests/tokens.rs`(유효 토큰 9개의 시각·각인·정책·일련번호·nonce·정확도·알고리즘·인증서, 핀의 다이제스트·서명·ESS v1 허용, 다른 기관, 각인·정책 불일치, 지원하지 않는 조합, 서명 바이트 뒤집기, `TSTInfo` 바이트 변경, freetsa.org 토큰), `tests/strict.rs`(DER 규칙과 규칙마다 추가 조작 토큰, 받는 경계값과 받는 형식(정렬되지 않은 서명 밖 집합, ESS v2 `{id-sha256, NULL}`, 필수 인증서 정책, ESS v1과 v2를 함께, ECDSA 높은 `s`), `genTime ± 정확도` 구간, 인증서 프로필 규칙마다, 키 식별자로 지목한 서명자, 비정규 DER: 비최소 길이·부정 길이·긴 길이·뒤따르는 바이트, 모든 오프셋의 절단, 크기 상한), `tests/proptests.rs`(임의 바이트, 유효 토큰의 무작위 변형, 임의 핀), 모듈 단위 테스트(DER 규칙, 시각과 독립 참조 구현, RSA 경계 `s ≥ n`·짧은 `s`·크기·지수, ECDSA 범위, 핀 왕복), cargo-mutants.
+- V1: `tests/rules.rs`(토큰이 낼 수 있는 `TsaError` 변형 가운데 `Der(_)`를 뺀 59개마다 그 규칙만 어긴 토큰 하나, 전수 `match`로 목록 누락을 컴파일 오류로), `tests/tokens.rs`(유효 토큰 9개의 시각·각인·정책·일련번호·nonce·정확도·알고리즘·인증서, 핀의 다이제스트·서명·ESS v1 허용, 다른 기관, 각인·정책 불일치, 지원하지 않는 조합, 서명 바이트 뒤집기, `TSTInfo` 바이트 변경, 핀의 서명자 키(`signer_key`: 키마다 만드는 알고리즘, 허용되지 않은 다이제스트, 만들지 않는 알고리즘, 사본 없음, 받아들여지지 않는 사본), freetsa.org 토큰), `tests/strict.rs`(DER 규칙과 규칙마다 추가 조작 토큰, 받는 경계값과 받는 형식(정렬되지 않은 서명 밖 집합, ESS v2 `{id-sha256, NULL}`, 필수 인증서 정책, ESS v1과 v2를 함께, ECDSA 높은 `s`), `genTime ± 정확도` 구간, 인증서 프로필 규칙마다, 키 식별자로 지목한 서명자, 비정규 DER: 비최소 길이·부정 길이·긴 길이·뒤따르는 바이트, 모든 오프셋의 절단, 크기 상한), `tests/proptests.rs`(임의 바이트, 유효 토큰의 무작위 변형, 임의 핀), 모듈 단위 테스트(DER 규칙, 시각과 독립 참조 구현, RSA 경계 `s ≥ n`·짧은 `s`·크기·지수, ECDSA 범위, 핀 왕복), cargo-mutants.
 - V2: `kani/proofs.rs`(길이 헤더의 정규성과 경계(260바이트 입력까지, 짧은·`0x81`·`0x82` 형식 전부), 정규 헤더 수락, 트리 검사의 전역성(4바이트: CBMC 메모리 한계, 더 깊은 트리는 단위·속성 테스트), `SEQUENCE` 정확 소비, `BOOLEAN`·`INTEGER`·OID 규칙, `SET` 순서, `GeneralizedTime`·`UTCTime` 전역성, 참조 구현과의 시각 일치(윤년 규칙마다 하네스 하나, 연도는 구체값이고 월·일·시각은 기호값; 임의 연도는 속성 테스트), `genTime ± 정확도`의 정확성과 넘침 없음(9999년까지 모든 시각과 정확도 상한까지)). 하네스 16개, 가장 긴 것이 4분 안쪽. `cargo kani -p ityv-tsa`.
 - 퍼징: `fuzz/`(워크스페이스 밖, nightly와 cargo-fuzz). CI에서는 돌리지 않고 속성 테스트가 대신한다.

@@ -15,9 +15,12 @@ doctest = false
 name = "ityv-sim"
 path = "src/main.rs"
 
-# Only workspace crates (no external dependency). Randomness for hedged
-# signing and for commitments comes from `ityv-cunit`'s SHA3 counter-mode
-# generator seeded from the scenario seed, so every run is byte-identical.
+# Workspace crates, and for the simulated timestamp authorities (`tsa`)
+# the P-256 signer and SHA-2 that `ityv-tsa` already depends on, at the
+# same pinned versions (no new crate in the lock file). Randomness for
+# hedged signing and for commitments comes from `ityv-cunit`'s SHA3
+# counter-mode generator seeded from the scenario seed, and ECDSA signing
+# is deterministic (RFC 6979), so every run is byte-identical.
 [dependencies]
 ityv-encoding = { path = "../../crates/ityv-encoding", version = "=0.1.0" }
 ityv-crypto = { path = "../../crates/ityv-crypto", version = "=0.1.0" }
@@ -25,6 +28,9 @@ ityv-ledger = { path = "../../crates/ityv-ledger", version = "=0.1.0" }
 ityv-cunit = { path = "../../crates/ityv-cunit", version = "=0.1.0" }
 ityv-state = { path = "../../crates/ityv-state", version = "=0.1.0" }
 ityv-verify = { path = "../../crates/ityv-verify", version = "=0.1.0" }
+ityv-tsa = { path = "../../crates/ityv-tsa", version = "=0.1.0" }
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa"] }
+sha2 = { version = "=0.11.1", default-features = false }
 
 [dev-dependencies]
 ityv-wasm = { path = "../../apps/ityv-wasm", version = "=0.1.0" }

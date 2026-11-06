@@ -313,6 +313,79 @@ fn a_challenged_record_cites_its_challenge_opening() {
     assert!(u.passed(), "{u:?}");
 }
 
+/// The scope of unit 1 over `casts`, at its frame.
+fn scope1(book: &mut Book, casts: &[Cast]) -> u64 {
+    book.q(scope(scope_body(&spec(STYLE1, RU1, &codes(casts)))))
+}
+
+/// The two records that anchor the last event pushed (a checkpoint at
+/// `bucket`): the government's and the other authority's.
+fn anchor_last(bucket: u64, book: &Book) -> [&'static [u8]; 2] {
+    let event = *book.ledger.events.last().unwrap();
+    common::tsa::anchor(ityv_ledger::SCHEMA_SIGNED_CHECKPOINT, event, bucket)
+}
+
+#[test]
+fn the_witnesses_time_needs_an_anchored_checkpoint() {
+    // ADR-0039 개정: the late-close window is measured by the last valid
+    // checkpoint before the scope that timestamp tokens, also recorded
+    // before the scope, anchor. Each book below has a checkpoint past the
+    // window (bucket READY).
+    use ityv_encoding::SCHEMA_TIMESTAMP_RECORD as RECORD;
+    let premature = |book: &Book, at: u64| {
+        let stage = book.run();
+        assert_eq!(
+            refused(&stage),
+            [(at, TallyEvent::Scope, TallyRefusal::Premature)]
+        );
+        assert_eq!(unit1(&stage).scope, None);
+    };
+    // No token at all: the witnesses' bucket alone is not the time.
+    let mut book = Book::new(world());
+    let casts = box1_closed(&mut book);
+    book.checkpoint_bare_at(READY);
+    let at = scope1(&mut book, &casts);
+    premature(&book, at);
+    // The tokens recorded only after the scope.
+    let mut book = Book::new(world());
+    let casts = box1_closed(&mut book);
+    book.checkpoint_bare_at(READY);
+    let records = anchor_last(READY, &book);
+    let at = scope1(&mut book, &casts);
+    for r in records {
+        book.push(RECORD, r);
+    }
+    premature(&book, at);
+    // One kind only before the scope, the other after.
+    let mut book = Book::new(world());
+    let casts = box1_closed(&mut book);
+    book.checkpoint_bare_at(READY);
+    let [gov, free] = anchor_last(READY, &book);
+    book.push(RECORD, gov);
+    let at = scope1(&mut book, &casts);
+    book.push(RECORD, free);
+    premature(&book, at);
+    // An anchored checkpoint inside the window and a later one past it
+    // without tokens: the anchored one's bucket is the time.
+    let mut book = Book::new(world());
+    let casts = box1_closed(&mut book);
+    book.checkpoint_at(CLOSE_BUCKET + 96);
+    book.checkpoint_bare_at(READY);
+    let at = scope1(&mut book, &casts);
+    premature(&book, at);
+    // Both kinds before the scope: taken.
+    let mut book = Book::new(world());
+    let casts = box1_closed(&mut book);
+    book.checkpoint_bare_at(READY);
+    for r in anchor_last(READY, &book) {
+        book.push(RECORD, r);
+    }
+    let at = scope1(&mut book, &casts);
+    let stage = book.run();
+    assert!(refused(&stage).is_empty(), "{:?}", refused(&stage));
+    assert_eq!(unit1(&stage).scope.map(Seq::get), Some(at));
+}
+
 #[test]
 fn a_scope_before_its_time_is_refused() {
     // BOX-1 still open.
@@ -1319,6 +1392,9 @@ fn a_clean_election_reaches_crypto_tally_verified() {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     tally1(
         &mut book,
         &casts,
@@ -1328,7 +1404,7 @@ fn a_clean_election_reaches_crypto_tally_verified() {
     );
     book.checkpoint();
     let anchored = Publications {
-        anchors: Publication::Satisfied,
+        now: TimeBucket::new(0),
         board: Publication::Pending,
     };
     let report = verify_ledger(
@@ -1384,6 +1460,9 @@ fn a_clean_election_reaches_crypto_tally_verified() {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     let body = scope_body(&spec(STYLE1, RU1, &codes(&casts)));
     book.q(scope(body));
     book.checkpoint();
@@ -1439,6 +1518,9 @@ fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
         book.push(schema, event);
     }
     book.push(SCHEMA_PARTICIPATION_SET, participation(5));
+    for (schema, event) in roll() {
+        book.push(schema, event);
+    }
     book.checkpoint();
     tally1(
         &mut book,
@@ -1468,10 +1550,145 @@ fn two_unit_ledger(opening2: bool, paper2: bool) -> Report<'static> {
         book.ledger.bytes(),
         &book.ledger.events,
         Publications {
-            anchors: Publication::Satisfied,
+            now: TimeBucket::new(0),
             board: Publication::Pending,
         },
     )
+}
+
+/// The clean one-box election with the roll events `roll_events` in place
+/// of the standard roll, and contested check-ins `contested` supplied.
+fn election_with_roll(
+    roll_events: &[(SchemaId, &'static [u8])],
+    contested: &[&'static [u8]],
+) -> Report<'static> {
+    let world = election_world();
+    let mut book = Book::new(world);
+    for chamber in [ChamberCode::P1, ChamberCode::P2] {
+        book.push(SCHEMA_PARTY_KEY_CEREMONY, ceremony(chamber));
+    }
+    for m in ELECTION_MODULES {
+        book.push(SCHEMA_MODULE_PROVISIONED, provisioning(m));
+    }
+    let casts = box1(&mut book);
+    for (schema, event) in station_record(3) {
+        book.push(schema, event);
+    }
+    book.push(SCHEMA_PARTICIPATION_SET, participation(3));
+    for (schema, event) in roll_events {
+        book.push(*schema, event);
+    }
+    tally1(
+        &mut book,
+        &casts,
+        &spec(STYLE1, RU1, &codes(&casts)),
+        &[1, 1, 1, 0, 0],
+        0,
+    );
+    book.checkpoint();
+    let anchored = Publications {
+        now: TimeBucket::new(0),
+        board: Publication::Pending,
+    };
+    let book = common::leak(book);
+    ityv_verify::verify_ledger_full(
+        world.genesis,
+        book.ledger.bytes(),
+        &book.ledger.events,
+        anchored,
+        &ityv_verify::AuditInput::default(),
+        &ityv_verify::RollInput {
+            contested: common::leak_slice(contested.to_vec()),
+        },
+    )
+}
+
+#[test]
+fn the_participation_step_waits_for_the_roll_and_its_holds_reach_the_status() {
+    use common::roll;
+    // The standard roll: verified.
+    let report = election_with_roll(&roll(), &[]);
+    assert!(report.roll().complete());
+    assert_eq!(report.status().status(), Status::CryptoTallyVerified);
+    // No roll on the ledger: the participation step is not run
+    // (`LEGAL_ANNEX.md` amendment 14, §44-3 ④), and nothing holds.
+    let report = election_with_roll(&[], &[]);
+    assert!(report.participation().complete());
+    assert!(!report.roll().complete());
+    assert_eq!(report.status().holds(), HoldSet::empty());
+    assert_eq!(report.status().status(), Status::SourceCompletenessChecked);
+    // The freeze and two receipts: not confirmed either.
+    let mut short = roll();
+    short.pop();
+    let report = election_with_roll(&short, &[]);
+    assert!(report.roll().freeze().is_some());
+    assert_eq!(report.status().status(), Status::SourceCompletenessChecked);
+    // A receipt that disagrees holds the ledger.
+    let mut events = roll();
+    let st1 = [roll::residents(b"ST-1", 0x10), roll::snapshot()];
+    let freeze_body = roll::freeze(roll::merged(0x40, &st1), roll::sources(&st1));
+    let mut other = roll::merged(0x40, &st1);
+    other.entry_count += 1;
+    events.push((
+        SCHEMA_WITNESSED_EVENT,
+        roll::witnessed(
+            roll::receipt(
+                roll::C_PA,
+                freeze_body,
+                other,
+                Some(roll::sources(&[roll::residents(b"ST-1", 0x10), roll::snapshot()]).0),
+                false,
+            ),
+            &[roll::by(roll::C_PA)],
+            None,
+        ),
+    ));
+    let report = election_with_roll(&events, &[]);
+    assert!(report.roll().complete());
+    assert_eq!(report.status().status(), Status::HoldReview);
+    assert_eq!(
+        report.status().holds(),
+        HoldSet::empty().with(HoldReason::RollCustodyMismatch)
+    );
+    // A roll event that cannot be taken holds the ledger.
+    let mut events = roll();
+    events.push((
+        SCHEMA_WITNESSED_EVENT,
+        roll::witnessed(roll::snapshot(), &[roll::by(roll::SNAPSHOT)], Some(3)),
+    ));
+    let report = election_with_roll(&events, &[]);
+    assert_eq!(
+        report.status().holds(),
+        HoldSet::empty().with(HoldReason::RollEventRefused)
+    );
+    // A supplied contested check-in that does not verify holds the
+    // ledger; the public verifier, without it, does not.
+    let bad = object(
+        ityv_encoding::SCHEMA_CONTESTED_CHECKIN,
+        SCHEMA_VERSION_1,
+        &ityv_encoding::ContestedCheckin::new(
+            group(&ityv_encoding::ContestedMessage {
+                election_id: common::election(),
+                station_id: ityv_encoding::StationId::new(b"ST-1").unwrap(),
+                unit_id: ityv_encoding::UnitId::new(b"U-1A").unwrap(),
+                pseudonym: common::leak([9u8; 64]),
+                envelope_label: ityv_encoding::Token192([1; 24]),
+            }),
+            common::leak([0u8; ityv_encoding::HYBRID_SIG_LEN]),
+            &[],
+        )
+        .unwrap(),
+    );
+    let mut events = roll();
+    events.push((ityv_encoding::SCHEMA_CONTESTED_CHECKIN, bad));
+    let public = election_with_roll(&events, &[]);
+    assert_eq!(public.roll().contested_frames(), 1);
+    assert_eq!(public.status().status(), Status::CryptoTallyVerified);
+    let with_access = election_with_roll(&events, &[bad]);
+    assert_eq!(
+        with_access.status().holds(),
+        HoldSet::empty().with(HoldReason::ContestedCheckinInvalid)
+    );
 }
 
 #[test]

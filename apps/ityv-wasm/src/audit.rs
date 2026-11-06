@@ -26,7 +26,7 @@ use ityv_verify::{AuditedRecord, Report, StyleAudit};
 
 use crate::bundle::BeaconInput;
 use crate::json::Json;
-use crate::report::{fingerprint, grouped, hex, holds_json, text};
+use crate::report::{fingerprint, grouped, hex, holds_json, text, token_fields};
 
 /// How many buckets the binding checkpoint must precede the beacon
 /// publication by (ADR-0036 4: `binding ≤ published − 3`).
@@ -251,8 +251,12 @@ fn write_observation(j: &mut Json, observation: Option<BeaconInput<'_>>, source:
     j.end_object();
 }
 
-/// Writes the commit the stage took and its binding checkpoint.
-fn write_commit(j: &mut Json, report: &Report<'_>) {
+/// Writes the commit the stage took and its binding checkpoint, with the
+/// timestamp tokens over it: each with whether it was recorded before the
+/// seed and whether its latest instant is before the observed beacon
+/// publication bucket (the two conditions of ADR-0039 8; shown, the
+/// decision is the verifier's seed refusal `Unstamped`).
+fn write_commit(j: &mut Json, report: &Report<'_>, published: Option<u64>) {
     let Some(c) = report.audit().commit() else {
         j.null("commit");
         return;
@@ -276,6 +280,24 @@ fn write_commit(j: &mut Json, report: &Report<'_>) {
         j.num("seq", k.checkpoint_seq.get());
         j.num("bucket", k.time_bucket.get());
         j.str("fingerprint", &fp(&k.body_hash));
+        let stamps = report.checkpoints().timestamps();
+        let epoch = stamps.epoch();
+        let seed = report.audit().seed().map(|s| s.seq.get());
+        j.array("tokens");
+        for t in stamps.tokens_for(&k.event_hash) {
+            j.begin_object();
+            token_fields(j, t, epoch);
+            j.bool("beforeSeed", seed.is_some_and(|s| t.frame.get() < s));
+            match published {
+                Some(p) => j.bool(
+                    "beforePublication",
+                    t.before(epoch, ityv_encoding::TimeBucket::new(p)),
+                ),
+                None => j.null("beforePublication"),
+            }
+            j.end_object();
+        }
+        j.end_array();
         j.end_object();
     } else {
         j.null("binding");
@@ -315,7 +337,7 @@ pub(crate) fn write_audit(
     });
     write_observation(j, observation, source);
     j.num("margin", MARGIN);
-    write_commit(j, report);
+    write_commit(j, report, observation.map(|o| o.published));
     if let Some(s) = audit.seed() {
         j.object("seed");
         j.num("seq", s.seq.get());

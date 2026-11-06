@@ -80,7 +80,7 @@ offset  size  field
 | `schema_id` | 이름 | 깊이 | 비고 |
 |---|---|---|---|
 | 0x0001 | `LedgerFrame` | 1 | 장부 프레임 헤더: seq, prev_hash, event_hash |
-| 0x0002 | `GenesisBody` | 6 | genesis 본문: 핀·키·정족수·정당 명부·챔버, 항목 집합 11개의 (수, root)(§8.54, ADR-0028). 버전 1–5는 내용만 나열한 명세 초안(3에서 연결 목록 해시, 4에서 릴리스 목록 해시와 증명 키·참관인 확인 키, 5에서 `progress_policies[]`)이었고 인코딩된 적이 없다. 버전 6이 처음 인코딩된 형식이다 |
+| 0x0002 | `GenesisBody` | 8 | genesis 본문: 핀·키·정족수·명부 보관 정족수·정당 명부·챔버, 항목 집합 13개의 (수, root)(§8.54, ADR-0028). 버전 1–5는 내용만 나열한 명세 초안(3에서 연결 목록 해시, 4에서 릴리스 목록 해시와 증명 키·참관인 확인 키, 5에서 `progress_policies[]`)이었고 인코딩된 적이 없다. 버전 6이 처음 인코딩된 형식이다(집합 11개). 버전 7(ADR-0039): 집합 12(시점확인 기관)를 더한다. 버전 8(ADR-0040): 명부 보관 정족수와 집합 13(명부 기관)을 더한다. 앞 버전 본문은 받지 않는다 |
 | 0x0003 | `LegalAuthorization` | 1 | scope 집합, 조문 참조 해시, 시행 구간 |
 | 0x0004 | `CheckpointBody` | 1 | tree_size, root, prev, box_close_root, dispute_root |
 | 0x0005 | `CastRecordBody` | 1 | 투함 기록 본문: 커밋먼트 벡터, 증명, 모듈 카운터, share 패키지 해시(§8.6) |
@@ -118,7 +118,7 @@ offset  size  field
 | 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
 | 0x0026 | `ModuleProvisioned` | 1 | 모듈 발급 기록: 본체·패드 카드 ID, KEM 공개키, 챔버 엔트로피 약속, 보안 칩 여부, 정당 PRF 키 확인값(§8.31, ADR-0024) |
 | 0x0027 | `PartyKeyCeremony` | 1 | 정당 열쇠 생성 절차 기록. 키 자료 없음(§8.32, ADR-0024) |
-| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다. 버전 3(ADR-0036): 역할 10(감사인)과 감사 본문 0x000D·0x0048·0x004B·0x004C·0x004D·0x004E를 받는다 |
+| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다. 버전 3(ADR-0036): 역할 10(감사인)과 감사 본문 0x000D·0x0048·0x004B·0x004C·0x004D·0x004E를 받는다. 버전 4(ADR-0040): 역할 11(명부 출처 기관)·12(명부 보관 기관)와 명부 본문 0x0052–0x0055를 받는다 |
 | 0x0029 | `BoxOpenedBody` | 1 | 투표함 개시 본문(§8.36) |
 | 0x002A | `FallbackBody` | 1 | `FallbackDeclared`·`FallbackEnded` 본문(§8.37) |
 | 0x002B | `IssuanceCountBody` | 1 | 투표소 교부 회계 본문(§8.38) |
@@ -157,6 +157,14 @@ offset  size  field
 | 0x004C | `AuditFindingBody` | 1 | 감사 발견: 투표양식, 장치, 발견 문서 해시(§8.71). 서명은 `WitnessedEvent` |
 | 0x004D | `HandCountReportBody` | 1 | 보고 단위별 수검표 결과(`PaperCountReportBody`와 같은 필드, §8.72). 서명은 `WitnessedEvent` |
 | 0x004E | `AuditCommitBody` | 1 | 감사 약정(`AuditCommit`): 모든 동결 뒤, 비콘 공표 전에 주사위 기록 해시, 비콘 지정 문서 해시와 회차, 동결 본문들의 정렬 집합 root를 고정(§8.73, ADR-0036). 서명은 `WitnessedEvent` |
+| 0x004F | `TimestampRecord` | 1 | 장부 이벤트: 기관 하나의 RFC 3161 토큰과 그 대상인 앞 이벤트(스키마, 객체 해시), 또는 응답 없음(§8.75, ADR-0034, ADR-0039). 자기 서명 없음 |
+| 0x0050 | `TimestampAuthorityEntry` | 1 | genesis 항목(집합 12): 시점확인 기관, 운영 주체, 정부 운영 여부, 정책 정확도, `ityv-tsa` 핀 1–4개(§8.74, ADR-0039) |
+| 0x0051 | `RollAuthorityEntry` | 1 | genesis 항목(집합 13): 명부의 출처 기관이나 보관 기관 하나, 그 조직, 기능 하나, 하이브리드 공개키(§8.76, ADR-0040) |
+| 0x0052 | `RollSourceExtractBody` | 1 | 출처 추출(`RollSourceExtract`)의 공개부: 출처 기관, 종류, 투표구(주민등록 추출만), 기준일, 항목 수, 항목 commitment root(§8.77, ADR-0033, ADR-0040). 서명은 `WitnessedEvent` |
+| 0x0053 | `RollFreezeBody` | 1 | 명부 동결(`RollFreeze`): 항목 root와 수, 인원수 표 해시, 명부 가명 root, 병합한 추출들의 정렬 집합 root와 수(§8.78). 서명은 `WitnessedEvent` |
+| 0x0054 | `RollCustodyReceiptBody` | 1 | 보관 영수증(`RollCustodyReceipt`): 보관 기관이 다시 계산한 값과 답하는 동결·변경 본문 해시(§8.79). 서명은 `WitnessedEvent` |
+| 0x0055 | `RollAmendmentBody` | 1 | 동결 뒤 변경(`RollAmendment`): 번호, 앞 본문 해시, 사유와 그 출처 기관, 근거 해시, 변경 뒤 값(§8.80). 서명은 `WitnessedEvent` |
+| 0x0056 | `ContestedCheckin` | 1 | 이의 투표의 확인 기록(restricted): 투표소, 유닛, 가명, 봉투 라벨과 유닛·정당 모듈 서명(§8.81, PROTOCOL §6.2). 공개 장부는 프레임만 싣는다 |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -166,7 +174,7 @@ offset  size  field
 
 ## 7. 시험 벡터
 
-`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 6), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다.
+`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다. 시점확인(ADR-0039) 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`다. 명부(ADR-0040) 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`다.
 
 ## 8. 예시 스키마 필드 정의
 
@@ -612,6 +620,10 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 0x004B | `SampleComparisonBody` | `sample-comparison` | 서로 다른 조직 감사인 2 이상, 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음(버전 3부터) |
 | 0x004C | `AuditFindingBody` | `audit-finding` | 같음 |
 | 0x004D | `HandCountReportBody` | `hand-count` | 위원장 1(그 보고 단위의 `commission_org`), 서로 다른 조직 참관인 2 이상, 그 밖의 역할 없음(버전 3부터) |
+| 0x0052 | `RollSourceExtractBody` | `roll-source` | 명부 출처 기관 1, 그 밖의 역할 없음(버전 4부터) |
+| 0x0053 | `RollFreezeBody` | `roll-freeze` | 선관위 1, 위원회 1(버전 4부터) |
+| 0x0054 | `RollCustodyReceiptBody` | `roll-receipt` | 명부 보관 기관 1, 그 밖의 역할 없음(버전 4부터) |
+| 0x0055 | `RollAmendmentBody` | `roll-amendment` | 선관위 1, 위원회 1, 명부 출처 기관 1(버전 4부터) |
 
 #### 8.33 `CustodyHandoffBody` (0x0008)
 
@@ -735,9 +747,9 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
 | 1 | `body` | `Bytes<2048>` | 위 표의 본문 객체 전체. 다른 스키마는 `SchemaMismatch` |
-| 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치, 9 구·시·군 선관위 위원장(버전 2부터), 10 감사인(버전 3부터). 그 밖의 코드는 `ValueOutOfRange`. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
+| 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치, 9 구·시·군 선관위 위원장(버전 2부터), 10 감사인(버전 3부터), 11 명부 출처 기관, 12 명부 보관 기관(버전 4부터). 그 밖의 코드는 `ValueOutOfRange`. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
 
-`WitnessedEvent`는 버전 3이다(ADR-0036). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028, ADR-0035). 버전 3은 역할 10(감사인)과 감사 본문 여섯(0x000D, 0x0048, 0x004B, 0x004C, 0x004D, 0x004E)을 받는다. 0x004E는 같은 단계(ADR-0036)의 독립 리뷰에서 더했고, 버전 3이 아직 공개 장부에 쓰인 적이 없어 같은 버전에 넣었다. 버전 2의 거부 벡터 `role 10`은 버전 3에서 역할 조합 위반(`InvariantViolation`)이 되므로 다시 버전을 올렸다. 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
+`WitnessedEvent`는 버전 4다(ADR-0040). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028, ADR-0035). 버전 3은 역할 10(감사인)과 감사 본문 여섯(0x000D, 0x0048, 0x004B, 0x004C, 0x004D, 0x004E)을 받는다. 0x004E는 같은 단계(ADR-0036)의 독립 리뷰에서 더했고, 버전 3이 아직 공개 장부에 쓰인 적이 없어 같은 버전에 넣었다. 버전 2의 거부 벡터 `role 10`은 버전 3에서 역할 조합 위반(`InvariantViolation`)이 되므로 다시 버전을 올렸다. 버전 4는 역할 11(명부 출처 기관)·12(명부 보관 기관)와 명부 본문 넷(0x0052–0x0055)을 받는다. 버전 3의 거부 벡터 `role 11`이 같은 이유로 바뀌었다(지금의 거부 벡터는 `role 13`). 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
 
 #### 8.43 genesis 항목 `GenesisBox`(0x0035), `CustodyRoute`(0x0039), `RosterSigner`(0x003A)
 
@@ -812,7 +824,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 ### 8.49–8.59 genesis와 투표소 사건 (ADR-0028)
 
-> English summary: the genesis is a bounded body (`GenesisBody`, 0x0002 version 6) with the scalar fields, pins, the two authority keys, the witness quorum, the party roster and chamber thresholds, and the count and Merkle root of eleven entry sets. Each entry is its own object (0x0035–0x003E); a set is strictly ascending by the entry key, its leaves are the entries' object hashes, and its root is the RFC 9162-shaped SHA3-512 root. `SignedGenesis` (0x0033) carries the body with the commission's, the committee's and at least `q` witness signatures; `GenesisAmendmentBody` (0x0034) replaces the eight amendable set commitments. Three witnessed station events: `ObserverCountAttestBody` (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041).
+> English summary: the genesis is a bounded body (`GenesisBody`, 0x0002 version 8) with the scalar fields, pins, the two authority keys, the witness quorum, the roll's custody quorum, the party roster and chamber thresholds, and the count and Merkle root of thirteen entry sets (version 6 had eleven; the twelfth, the timestamp authorities, is §8.74; the thirteenth, the roll's authorities, and the custody quorum came with version 8, §8.76). Each entry is its own object (0x0035–0x003E, 0x0050, 0x0051); a set is strictly ascending by the entry key, its leaves are the entries' object hashes, and its root is the RFC 9162-shaped SHA3-512 root. `SignedGenesis` (0x0033) carries the body with the commission's, the committee's and at least `q` witness signatures; `GenesisAmendmentBody` (0x0034) replaces the eight amendable set commitments. Three witnessed station events: `ObserverCountAttestBody` (0x003F), `CheckinUnitSwapBody` (0x0040), `BoxUnitSwapBody` (0x0041).
 
 #### 8.49 `StationEntry` (0x0036, genesis `stations[]`, 열쇠 `station_id`)
 
@@ -846,7 +858,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 `WitnessRosterEntry`(열쇠 `witness_id`): `witness_id: Ident<64>` ‖ `org_id: Ident<64>` ‖ `provider: Ident<64>` ‖ `region: Ident<64>` ‖ `key: [u8; 2624]`(purpose `checkpoint`, `genesis`, `genesis-amendment`) ‖ `appointment_hash: Hash512`(0이 아님).
 
-#### 8.54 `GenesisBody` (0x0002, 버전 6)
+#### 8.54 `GenesisBody` (0x0002, 버전 8)
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
@@ -860,11 +872,12 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 | 8 | `commission_key` | `[u8; 2624]` | 선관위 하이브리드 공개키 |
 | 9 | `committee_key` | `[u8; 2624]` | 위원회 하이브리드 공개키. 선관위 키와 반쪽 하나라도 같으면 `InvariantViolation` |
 | 10 | `quorum` | `u8` × 6 | `n`, `q`, `f`, 조직·공급자·지역 하한. `13 ≤ n ≤ 64`, `9 ≤ q ≤ n`, `2q − n > f`, 하한은 7·4·3 이상 `q` 이하(아니면 `ValueOutOfRange`) |
+| 10a | `custody_quorum` | `u8` | 명부 상태 하나에 같은 값을 확인해야 하는 서로 다른 보관 기관의 수, 3 이상(아니면 `ValueOutOfRange`, ADR-0033 2항, 개정안 14 제44조의3 ④의 하한). 수는 하위 규정이 정한다. 버전 8부터 |
 | 11 | `parties` | `Array<{chamber: u8, name: Bytes<128>, seats: u16, evidence_hash: Hash512}, 4>` | 2–4개(1개 이하 `InvariantViolation`), i번째의 `chamber`는 `P(i+1)`, 이름은 비지 않은 UTF-8(아니면 `ValueOutOfRange`), 의석 내림차순(어기면 `InvariantViolation`, VC-067), `evidence_hash` 0이 아님 |
 | 12 | `chambers` | `Array<{chamber: u8, threshold: u8, members: u8}, 8>` | 정확히 `P1`…`Pn`, `J`, `A`, `C`, `N` 순서, `1 ≤ threshold ≤ members`(어기면 `InvariantViolation`). `members`가 8을 넘는 genesis는 검증기가 받지 않는다(임계 분산의 용량, `Rule::ChamberSize`, ADR-0035) |
-| 13 | `sets` | `{count: u64, root: Hash512}` × 11 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
+| 13 | `sets` | `{count: u64, root: Hash512}` × 13 | 아래 집합 순서. 증인 집합의 `count`가 `n`과 다르면 `InvariantViolation` |
 
-집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`). 1–8은 변경할 수 있고 9–11은 선거 동안 고정이다.
+집합 순서: 1 투표함(`GenesisBox`), 2 투표소(`StationEntry`), 3 진행 경보 기준(`StationProgressPolicy`), 4 보고 단위(`ReportingUnitEntry`), 5 보관 경로(`CustodyRoute`), 6 서명자 명부(`RosterSigner`), 7 챔버 모듈(`ModuleEntry`), 8 임명 해시, 9 투표양식(`BallotStyleEntry`), 10 신뢰기관(`TrusteeEntry`), 11 증인(`WitnessRosterEntry`), 12 시점확인 기관(`TimestampAuthorityEntry`, §8.74), 13 명부 기관(`RollAuthorityEntry`, §8.76). 1–8은 변경할 수 있고 9–13은 선거 동안 고정이다. 버전 6에는 집합 12가, 버전 7에는 집합 13과 `custody_quorum`이 없었다(ADR-0039, ADR-0040).
 
 집합의 리프 입력은 항목 객체의 §4 객체 해시이고, 항목은 열쇠 바이트 엄격 오름차순이다. 임명 집합은 해시 자체를 바이트 오름차순으로 둔다. root는 PROTOCOL §5.3의 트리 root(리프 접두 0x00, 노드 접두 0x01, 빈 집합은 빈 트리의 root)다. genesis 핀은 이 본문 객체의 객체 해시다.
 
@@ -885,7 +898,7 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `body` | `Bytes<16384>` | `GenesisBody`(버전 6) 또는 `GenesisAmendmentBody` 객체 전체. 다른 스키마는 `SchemaMismatch` |
+| 1 | `body` | `Bytes<16384>` | `GenesisBody`(버전 8) 또는 `GenesisAmendmentBody` 객체 전체. 다른 스키마는 `SchemaMismatch` |
 | 2 | `commission_sig` | `[u8; 4691]` | |
 | 3 | `committee_sig` | `[u8; 4691]` | |
 | 4 | `witness_sigs` | `Array<{witness_id: Ident<64>, sig: [u8; 4691]}, 64>` | `witness_id` 엄격 오름차순. genesis면 본문의 `q` 이상, 변경이면 9 이상(모자라면 `InvariantViolation`, 위치는 개수 필드) |
@@ -1096,3 +1109,118 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 0이 아니어야 하는 해시가 0이면 `InvalidPreviousHash`다. 비콘과 동결이 받아들인 것과 같은지, 약정이 선거마다 하나인지, 고정 체크포인트와 약정이 비콘 공표 전인지는 검증기가 확인한다(VC-045, VC-119).
 
 시험 벡터는 `audit_manifest_freeze_body.txt`, `audit_commit_body.txt`, `audit_seed_body.txt`, `sample_opening_body.txt`, `sample_opening_ref_body.txt`, `sample_comparison_body.txt`, `audit_finding_body.txt`, `hand_count_report_body.txt`이고, 버전을 올린 `witnessed_event.txt`(버전 3), `roster_signer.txt`(버전 3), `quorum_signed.txt`(버전 2)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_audit.rs`에 있다.
+
+### 8.74–8.75 시점확인 (ADR-0034, ADR-0039)
+
+> English summary: the genesis's timestamp authorities (set 12, fixed for the election) and the ledger event that carries one authority's RFC 3161 token over one earlier ledger event. The pins are `ityv-tsa`'s byte form (ADR-0037 §1), opaque to this crate; the verifier reads them, verifies the token over SHA-512 of the target's object hash, and judges it by the latest instant the authority allows (PROTOCOL §5.5).
+
+#### 8.74 `TimestampAuthorityEntry` (0x0050, genesis 집합 12, 열쇠 `tsa_id`)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `tsa_id` | `Ident<64>` | 기관 ID. `TimestampRecord`가 이 값으로 기관을 가리킨다 |
+| 2 | `operator` | `Ident<64>` | 운영 주체. 같은 운영 주체의 기관들은 앵커에서 하나로 센다 |
+| 3 | `kind` | `u8` | 1 정부 운영, 2 정부 밖. 그 밖은 `ValueOutOfRange` |
+| 4 | `policy_accuracy_ms` | `u32` | 기관의 정확도(밀리초): 핀이 허용하는 모든 정책이 보장하는 정확도를 덮는 값. 3,600,000 이하(넘으면 `ValueOutOfRange`). 검증기는 1,000–60,000만 받는다(ADR-0039 1·5항) |
+| 5 | `pins` | `Array<Bytes<16952>, 4>` | `ityv-tsa` 핀 바이트(서명 인증서마다 하나), 1–4개(0이면 `InvariantViolation`), 각 1바이트 이상(빈 핀은 `InvariantViolation`), 바이트 엄격 오름차순(`NotSorted`, `Duplicate`) |
+
+핀의 상한 16,952는 `ityv-tsa` 핀의 고정부(36)와 길이 두 개(4), 정책 8개(각 66 이하), 인증서(16,384 이하)의 합이다. 핀이 `ityv-tsa`로 읽히고 SHA-512를 허용하며 인증서 사본과 그 키가 만드는 허용 알고리즘을 갖는지, 한 인증서와 한 공개키가 두 번 고정되지 않는지, 정확도가 1초–1분인지, 같은 운영 주체(대소문자 무시)의 기관이 한 구분인지, 정부 운영과 정부 밖이 각각 있는지(VC-114), 운영 주체가 증인이나 선관위의 조직이 아닌지는 검증기의 genesis 규칙이다(ADR-0039 2항).
+
+#### 8.75 `TimestampRecord` (0x004F, 장부 이벤트)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `target_schema` | `u32` | 대상 이벤트의 스키마(그 프레임이 적은 것): 0x0010 `SignedCheckpoint`, 0x0028 `WitnessedEvent`, 0x0033 `SignedGenesis`만. 그 밖은 `ValueOutOfRange`(VC-117) |
+| 3 | `target_hash` | `Hash512` | 대상 이벤트의 객체 해시(그 프레임의 `event_hash`), 0이 아님(`InvalidPreviousHash`). 토큰의 `messageImprint`는 이 64바이트의 SHA-512다 |
+| 4 | `authority_id` | `Ident<64>` | genesis 집합 12의 기관 ID |
+| 5 | `token` | `Option<Bytes<16384>>` | DER `TimeStampToken`. 없음은 기관이 응답하지 않았다는 운영자의 기록(ADR-0034 3항). 있으면 1바이트 이상(빈 토큰은 `InvariantViolation`) |
+
+기록에는 자기 서명이 없다. 토큰이 기관의 서명이고 프레임은 체크포인트가 덮는다. 대상이 앞 프레임에 받아들여진 이벤트인지, `WitnessedEvent`의 본문이 시점확인을 받는 종류(법적 결정, 명부 동결, 보관 영수증, ADR-0040)인지, 토큰이 그 기관의 어느 핀으로 그 각인에 대해 검증되는지는 검증기가 확인한다(PROTOCOL §5.5, ADR-0039 3·4항).
+
+시험 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`이고, 집합이 하나 늘어 `genesis_body.txt`(버전 7)와 `signed_genesis.txt`를 다시 만들었다. 왕복 속성 테스트는 `tests/m5_timestamp.rs`에 있다.
+
+### 8.76–8.81 선거인명부 (ADR-0033, ADR-0040)
+
+> English summary: the roll's authorities (genesis set 13, fixed for the election) and its events. A source signs the public part of its extract, the commission and the committee freeze the roll as the merge of the extracts, each custodian signs what it recomputed from its copy, and an amendment carries the signature of the source its reason needs. The counts per precinct and age band are carried as the hash of the published counts table: a witnessed body is at most 2,048 bytes, and the table's form and its small-cell rule are the sub-regulation's (LEGAL_ANNEX amendment 14). A contested check-in is restricted; the public ledger carries its frame only. Every rule between events (who signed, the merge, the quorum, the chain) is the verifier's (PROTOCOL §6.1, §14 6).
+
+#### 8.76 `RollAuthorityEntry` (0x0051, genesis 집합 13, 열쇠 `authority_id`)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `authority_id` | `Ident<64>` | 기관 ID. 명부 본문과 서명의 `signer_id`가 이 값으로 기관을 가리킨다 |
+| 2 | `org_id` | `Ident<64>` | 조직 |
+| 3 | `kind` | `u8` | 기능 하나. 출처: 1 주민등록 추출(구·시·군의 장), 2 전국 주민등록 스냅숏(행정안전부), 3 사망(법원행정처), 4 선거권 제한(검찰·법원), 5 재외선거인·국적 상실(외교부·법무부), 6 불복 결정 법원. 보관: 11 법원행정처, 12 행정안전부, 13 독립검증위원회, 14 보관을 신청한 정당. 그 밖은 `ValueOutOfRange` |
+| 4 | `key` | `[u8; 2624]` | 하이브리드 공개키 |
+
+항목 하나는 기능 하나와 키 하나다. 두 기능을 가진 조직(행정안전부는 스냅숏 출처이자 보관 기관이다)은 항목 둘을 가진다. 보관 기관들의 조직이 서로 다른지, 보관 기관 수가 `custody_quorum` 이상이고 법원행정처와 행정안전부가 있는지, 구·시·군의 장이 있고 스냅숏 출처가 정확히 하나인지, 키가 유효하고 genesis의 다른 키와 반쪽을 함께 쓰지 않는지는 검증기의 genesis 규칙이다(ADR-0040 2항).
+
+#### 8.77 `RollSourceExtractBody` (0x0052)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `authority_id` | `Ident<64>` | 서명하는 출처 기관 |
+| 3 | `kind` | `u8` | 1 투표구의 주민등록 추출(구·시·군의 장이 공직선거법 제37조①에 따라 그 투표구에 대해 작성하는 선거권자 전부, 지방선거에서는 외국인등록대장의 외국인 선거권자 포함), 2 전국 주민등록 스냅숏, 3 사망, 4 선거권 제한, 5 재외선거인·국적 상실. 그 밖은 `ValueOutOfRange` |
+| 4 | `precinct` | `Option<Ident<64>>` | 투표구(genesis의 선거일 투표소). 종류 1에만 있고 그 밖에는 없다(어기면 `InvariantViolation`, 위치는 이 필드) |
+| 5 | `reference_day` | `u64` | 기준일(유닉스 기원 이후의 날 수) |
+| 6 | `entry_count` | `u64` | 항목 수 |
+| 7 | `entries_root` | `Hash512` | 항목 commitment `C_i`(PROTOCOL §6.1)의 정렬 집합 root. 스냅숏이면 그 해시. 0이 아님(`InvalidPreviousHash`) |
+
+#### 8.78 `RollFreezeBody` (0x0053)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `entries_root` | `Hash512` | 명부 항목 commitment의 정렬 집합 root, 0이 아님 |
+| 3 | `entry_count` | `u64` | 항목 수 |
+| 4 | `counts_hash` | `Hash512` | 공표하는 인원수 표(투표구별·연령대별, ADR-0033 4항)의 해시, 0이 아님. 표의 형식과 작은 칸 규칙은 하위 규정 |
+| 5 | `pseudonym_root` | `Hash512` | 명부 가명 다중집합의 Merkle root(§6.5), 0이 아님 |
+| 6 | `sources_root` | `Hash512` | 병합한 출처 추출 본문 객체 해시들의 정렬 집합 root, 0이 아님 |
+| 7 | `source_count` | `u32` | 병합한 추출 수, 1 이상(0이면 `ValueOutOfRange`) |
+| 8 | `time_bucket` | `u64` | 동결 시점 |
+
+필드 2–5는 명부 상태이고 `RollAmendmentBody`가 같은 순서로 다시 적는다. 0인 해시는 `InvalidPreviousHash`다.
+
+#### 8.79 `RollCustodyReceiptBody` (0x0054)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `custodian` | `Ident<64>` | 서명하는 보관 기관 |
+| 3 | `subject_hash` | `Hash512` | 답하는 `RollFreezeBody` 또는 `RollAmendmentBody`의 객체 해시, 0이 아님 |
+| 4 | `entries_root` | `Hash512` | 다시 계산한 항목 root, 0이 아님 |
+| 5 | `entry_count` | `u64` | 다시 계산한 항목 수 |
+| 6 | `counts_hash` | `Hash512` | 다시 계산한 인원수 표 해시, 0이 아님 |
+| 7 | `sources_root` | `Option<Hash512>` | 동결에 답하면 다시 계산한 병합의 출처 root, 변경에 답하면 없음. 있으면 0이 아님 |
+| 8 | `pseudonym_root` | `Option<Hash512>` | 이 보관 기관이 인증된 유닛과 모든 정당 모듈로 계산했거나 다시 계산한 명부 가명 root(VC-109). 없으면 계산하지 않았다. 있으면 0이 아님 |
+| 9 | `time_bucket` | `u64` | 서명 시점 |
+
+#### 8.80 `RollAmendmentBody` (0x0055)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `seq` | `u64` | 1부터, 0이면 `ValueOutOfRange` |
+| 3 | `previous_hash` | `Hash512` | 1번이면 동결 본문, 그 뒤는 직전 변경 본문의 객체 해시. 0이 아님 |
+| 4 | `reason` | `u8` | 1 이의신청 결정(구·시·군의 장), 2 불복 결정(법원), 3 사망(법원행정처), 4 선거권 제한(검찰·법원), 5 재외선거인·국적 상실(외교부·법무부). 그 밖은 `ValueOutOfRange` |
+| 5 | `authority_id` | `Ident<64>` | 사유의 출처 기관(서명한다) |
+| 6 | `basis_hash` | `Hash512` | 그 기관의 결정이나 통지 문서 해시, 0이 아님 |
+| 7–10 | 명부 상태 | §8.78 필드 2–5 | 변경 뒤 값 |
+| 11 | `time_bucket` | `u64` | 수록 시점 |
+
+#### 8.81 `ContestedCheckin` (0x0056, restricted)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `unit_id` | `Ident<64>` | 가명을 계산한 카운터·가명 유닛 |
+| 4 | `pseudonym` | `[u8; 64]` | 선거권자의 가명(§6.4). 그 투표소의 `ParticipationSet`에 넣지 않는다 |
+| 5 | `envelope_label` | `[u8; 24]` | 투표지를 넣은 봉투의 라벨 |
+| 6 | `unit_sig` | `[u8; 4691]` | 유닛 서명 |
+| 7 | `module_sigs` | `Array<{module_id: Ident<64>, sig: [u8; 4691]}, 4>` | 정당 모듈 서명, 서로 다른 모듈(같으면 `Duplicate`) |
+
+서명은 모두 필드 1–5의 헤더 없는 인코딩에 대해 purpose `contested-checkin`이다(`ParticipationSet`과 같은 방식, §8.25). 순번과 시각은 담지 않는다. 가명 옆의 시각은 확인 순서를 드러낸다(VC-084). 모듈의 순서와 수(정당마다 하나, 챔버 순서), 유닛과 모듈의 키는 검증기가 확인한다. 공개 장부는 이 객체의 프레임(객체 해시)만 싣고, 본문은 열람 권한이 있는 검증기가 받는다(ADR-0040 7항). 이의 투표 한 건은 필드 1–5(서명된 메시지)로 정해진다: 서명은 매번 다르므로 같은 메시지를 다시 서명한 객체는 사본이고, 필드 하나라도 다르면 다른 이의 투표다(PROTOCOL §6.2).
+
+시험 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`이고, 버전을 올린 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `witnessed_event.txt`(버전 4)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_roll.rs`에 있다.

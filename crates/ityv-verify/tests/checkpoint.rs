@@ -217,7 +217,7 @@ impl Ledger {
     /// The chain of the ledger with the legal authorization appended after
     /// every frame the test pushed, so that the frame numbers a test names
     /// are those of its own frames.
-    fn chain(&self) -> CheckpointChain {
+    fn chain(&self) -> CheckpointChain<'static> {
         let mut ledger = Ledger {
             stream: self.stream.clone(),
             frames: self.frames.clone(),
@@ -346,13 +346,13 @@ fn scene() -> Scene {
 
 /// The finding of a chain whose only checkpoint is `claim` signed by
 /// `signed` (on top of the scene).
-fn first_finding(signed: &'static [u8]) -> (CheckpointChain, u64) {
+fn first_finding(signed: &'static [u8]) -> (CheckpointChain<'static>, u64) {
     let mut s = scene();
     let frame = s.ledger.push(SCHEMA_SIGNED_CHECKPOINT, signed);
     (s.ledger.chain(), frame)
 }
 
-fn kind_of(chain: &CheckpointChain) -> CheckpointFindingKind {
+fn kind_of(chain: &CheckpointChain<'_>) -> CheckpointFindingKind {
     assert_eq!(chain.findings().len(), 1, "{chain:?}");
     assert!(chain.holds().contains(HoldReason::CheckpointInvalid));
     chain.findings()[0].kind
@@ -448,7 +448,7 @@ fn refuses_too_few_or_too_narrow_or_unknown_signers() {
 }
 
 /// The finding of a second checkpoint `second` after a valid first.
-fn second_finding(second: impl FnOnce(&Scene, &Claim) -> Claim) -> CheckpointChain {
+fn second_finding(second: impl FnOnce(&Scene, &Claim) -> Claim) -> CheckpointChain<'static> {
     let mut s = scene();
     let first = s.first;
     s.ledger.push(SCHEMA_SIGNED_CHECKPOINT, checkpoint(&first));

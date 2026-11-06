@@ -78,6 +78,23 @@ export const STAGES: Record<string, string> = {
   tally: "집계",
   disputes: "분쟁",
   audit: "감사",
+  timestamps: "시점확인",
+  roll: "선거인명부",
+};
+
+/** The two kinds of timestamp authority (ADR-0039). */
+export const TSA_KINDS: Record<string, string> = {
+  Government: "정부 운영",
+  NonGovernment: "정부 밖",
+};
+
+/** Roll amendment reasons (ityv-encoding `RollAmendmentReason`). */
+export const ROLL_REASONS: Record<string, string> = {
+  ObjectionDecision: "이의신청 결정",
+  AppealDecision: "불복 결정",
+  Death: "사망",
+  Disqualification: "선거권 제한",
+  Overseas: "재외선거인·국적 상실",
 };
 
 /** The audit events (ityv-verify `AuditEvent`). */
@@ -101,6 +118,7 @@ export const AUDIT_REFUSALS: Record<string, string> = {
   Beacon: "비콘 지정·회차가 다르거나, 관찰한 비콘 값과 다르다",
   Late: "늦다: 비콘 값을 알 수 있게 된 뒤에 입력이 고정되었다",
   Backdated: "고정 체크포인트가 그것이 덮는 약정보다 이르다",
+  Unstamped: "고정 체크포인트에 시드 앞 프레임의, 공표 구간보다 앞선 시점확인 토큰이 정부 운영과 정부 밖 두 운영 주체에서 없다(ADR-0039 8항)",
   Rule: "상한이 표본 크기 이상인 라운드(모든 표본이 통과한다)",
   Election: "다른 선거",
   Commit: "약정과 다른 주사위 기록",
@@ -196,7 +214,7 @@ export const HOLDS: Record<number, { name: string; ko: string }> = {
   60: { name: "LateCloseAfterScope", ko: "집계 범위가 그 투표양식을 고정한 뒤에 늦은 마감이 실렸다." },
   61: { name: "AuditFreezeRefused", ko: "감사 동결을 받을 수 없다: 서명, RLA 권한, 모르는 투표양식, 그 투표양식의 집계 범위보다 이름, 두 번째 동결, 표본을 모두 통과시키는 상한." },
   62: { name: "AuditFrameMismatch", ko: "동결의 표본 프레임(기록 수나 정렬 집합 root)이 집계 단계가 다시 계산한 포함 기록과 다르다. 그 투표양식은 표본을 뽑지 않는다." },
-  63: { name: "AuditSeedRefused", ko: "감사 시드를 받을 수 없다: 서명, 권한, 약정보다 이름, 고정 체크포인트가 아님, 고정 체크포인트가 약정보다 이르거나 비콘 공표보다 3구간 넘게 앞서지 않음, 약정과 다른 주사위 기록·회차, 다시 계산한 시드나 관찰한 비콘 값과 다름, 두 번째 시드." },
+  63: { name: "AuditSeedRefused", ko: "감사 시드를 받을 수 없다: 서명, 권한, 약정보다 이름, 고정 체크포인트가 아님, 고정 체크포인트가 약정보다 이르거나 비콘 공표보다 3구간 넘게 앞서지 않음, 고정 체크포인트에 시드보다 앞 프레임의 공표 전 시점확인 토큰(정부 운영과 정부 밖, 두 운영 주체)이 없음, 약정과 다른 주사위 기록·회차, 다시 계산한 시드나 관찰한 비콘 값과 다름, 두 번째 시드." },
   64: { name: "SampleOpeningRefused", ko: "표본 열기 흔적을 받을 수 없다: 신뢰기관 정족수, 시드 날의 OBSERVER_ACCESS, 시드보다 이름, 감사가 부르지 않은 기록(지금 라운드의 표본도 전수 대조 장치의 기록도 아님), 같은 기록의 두 번째 열기." },
   65: { name: "SampleOpeningMismatch", ko: "열람 권한이 있는 검증기에 넘긴 제한 열기가 그 기록의 커밋먼트를 열지 못한다." },
   66: { name: "SampleComparisonRefused", ko: "표본 대조를 받을 수 없다: 감사인·참관인 서명, 앞 프레임에 그 기록의 열기 흔적이 없음, 다른 열기를 적음, 기록의 투표함이 아닌 장치, 같은 기록의 두 번째 대조." },
@@ -205,6 +223,13 @@ export const HOLDS: Record<number, { name: string; ko: string }> = {
   69: { name: "HandCountRefused", ko: "수검표 보고를 받을 수 없다: 그 단위 위원장·참관인의 서명, 모르는 단위나 다른 후보 수, 감사가 수검표를 부르기 전, 두 번째 수검표." },
   70: { name: "AuditCommitRefused", ko: "감사 약정을 받을 수 없다: 서명, 모든 동결보다 이름, 동결과 다른 비콘 지정·회차, 받아들인 동결과 다른 동결 root, 관찰한 비콘 공표 이후의 시각, 두 번째 약정." },
   71: { name: "AuditSampleFailed", ko: "시드에서 그 투표양식의 표본을 뽑지 못했다. 일어나지 않을 일이지만 조용히 미완으로 두지 않는다." },
+  72: { name: "TimestampInvalid", ko: "시점확인 기록을 받을 수 없다: genesis가 고정하지 않은 기관, 앞 프레임의 시점확인 대상(체크포인트·genesis·법적 결정·명부 동결과 영수증)이 아닌 대상, 그 기관의 어느 핀으로도 검증되지 않는 토큰, 1분보다 큰 정확도. 토큰 없는 \"응답 없음\" 기록도 기관과 대상을 확인한다." },
+  73: { name: "TimestampMismatch", ko: "유효한 시점확인 토큰이 체크포인트가 증인의 시각보다 허용(1구간)을 넘게 일찍 있었다고 말한다. 증인이나 그 기관 가운데 하나가 시각을 속였다. 사슬이 그 체크포인트에서 끝난다." },
+  74: { name: "RollEventRefused", ko: "선거인명부 사건을 받을 수 없다: 출처 추출(그 출처 기관, 동결 뒤), 동결(병합한 추출과 다른 출처 root, 빠진 투표구), 보관 영수증(보관 기관이 아님, 앞 프레임의 상태가 아님, 두 번째), 변경(출처 서명, 사슬)." },
+  75: { name: "RollCustodyMismatch", ko: "보관 기관이 다시 계산해 서명한 값(항목 root와 수, 인원수 표, 출처 root, 명부 가명 root)이 명부 상태와 다르다. 그 영수증은 정족수에 세지 않고, 분쟁에서 보관 사본을 대조한다." },
+  76: { name: "ContestedCheckinInvalid", ko: "열람 권한이 있는 검증기에 넘긴, 장부에 프레임이 있는 이의 투표 기록이 검증되지 않는다: 다른 선거의 것이거나, genesis에 없는 투표소나 유닛의 것이거나, 그 유닛과 정당마다 그 유닛의 모듈 하나가 한 서명이 아니다. 공개 검증기에는 이의 투표 기록의 프레임 수만 보인다." },
+  77: { name: "ContestedLabelReused", ko: "열람 권한이 있는 검증기에 넘긴 이의 투표 기록에서 한 봉투 라벨이 서로 다른 기록 둘 이상에 쓰였다. 어느 봉투가 어느 기록인지 알 수 없으므로 그 라벨의 봉투는 모두 개표에서 빠진다. 라벨은 무작위 값이라 장치나 내부자의 잘못이다. 공개 검증기에는 이의 투표 기록의 프레임 수만 보인다." },
+  78: { name: "RollIncomplete", ko: "선거인명부가 치러진 선거와 맞지 않는다. 기원의 마지막 상태에 있는 선거일 투표소에 주민 명부 발췌가 없거나(동결 뒤에 더한 투표소), 투표가 끝난 뒤(선거일 투표소에 참여 집합, 참관인 최종 확인 수, 투표함 마감 가운데 하나가 처음 나타난 뒤)에 명부 수정이 기록되었다. 선거인을 확인한 명부는 투표 마감 때의 명부이고 그 뒤의 수정은 그것을 바꾸지 못한다." },
 };
 
 /** Korean name of the alarm kinds. */

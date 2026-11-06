@@ -92,7 +92,9 @@ fn material(event: &WitnessedEvent<'_>, genesis: &VerifiedGenesis<'_>) -> Option
             | EventRole::Authority
             | EventRole::Device
             | EventRole::Chair
-            | EventRole::Auditor => None,
+            | EventRole::Auditor
+            | EventRole::RollSource
+            | EventRole::RollCustodian => None,
         })
         .collect();
     Material::new(pairs?.into_iter())

@@ -1,5 +1,6 @@
 //! The ledger plan of a whole election, in the order events reach the
 //! board: genesis and authorization, key ceremonies and module records,
+//! the voter roll (extracts, freeze, custody receipts),
 //! the voting days slot by slot (openings, records, batches, progress
 //! ticks, emergency insertion, on-site checks, hourly checkpoints),
 //! closes and station counts, participation sets, receipt resolutions,
@@ -85,7 +86,7 @@ impl Plan {
     }
 
     fn checkpoint(&mut self, bucket: u64) -> usize {
-        let at = self.push(Step::Checkpoint { bucket });
+        let at = self.push(Step::Checkpoint { bucket, stamps: 2 });
         self.marks.last_checkpoint = Some(at);
         at
     }
@@ -152,6 +153,9 @@ pub fn plan(election: &Election, until: Until) -> Plan {
     }
     for m in &e.modules {
         p.event(SCHEMA_MODULE_PROVISIONED, e.provisioning(m));
+    }
+    for event in e.roll() {
+        p.event(SCHEMA_WITNESSED_EVENT, event);
     }
 
     let mut days: Vec<u64> = e.spec.stations.iter().map(|s| s.day).collect();

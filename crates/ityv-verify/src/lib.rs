@@ -11,12 +11,14 @@
 //! | Module | Stage | Specification |
 //! |---|---|---|
 //! | [`genesis`] | 1. Pin, signatures, every entry set whole, cross-set agreement, amendments | §4, §14 1, ADR-0028, VC-005, VC-009, VC-014, VC-067, VC-104, VC-105 |
-//! | [`checkpoint`] | 2. Checkpoint chain: witness quorum and diversity, successor rules, roots recomputed from the ledger | §5.3, §5.4, §14 2, VC-011..014 |
+//! | [`checkpoint`] | 2. Checkpoint chain: witness quorum and diversity, successor rules, roots recomputed from the ledger, no backdated time, the anchoring of each checkpoint | §5.3, §5.4, §5.5, §14 2, VC-011..014, VC-115, VC-116 |
+//! | [`timestamp`] | External timestamps: the genesis's authorities, every timestamp record's token verified under its authority's pins over the stamped event | §5.5, ADR-0034, ADR-0037, ADR-0039, VC-114..118 |
 //! | [`index`] | 3. Frame chain, event hashes, canonical events, replayed events, records after close | §5.1, §14 3, VC-010, VC-039, VC-101 |
 //! | [`authority`] | The signed legal authorization that grants every capability | §4.4, VC-006..008 |
 //! | [`boxes`] | 4. Every expected box through its state machine, following genesis amendments: opening, records, fallback, device swap, close invariants, late closes, custody, completeness | §4.3, §7, §14 4, VC-037..040, VC-100, VC-105, VC-106 |
 //! | [`records`] | 5. Cast records: OR proofs, record signatures, batch attestations, counter continuity, record set roots, `UNATTESTED` | §7.2.1, §7.5, §7.6, §14 5, VC-025..027, VC-053, VC-057 |
 //! | [`progress`] | Voting progress record: device streams in slot order, device swaps, station alarms and on-site checks, close comparisons | §7.10, ADR-0027, VC-102, VC-103, VC-106 |
+//! | [`roll`] | 6. The voter roll: source extracts, the freeze as their merge, custody receipts and the custody quorum, amendments with their sources, contested check-ins | §6.1, §6.2, §14 6, ADR-0033, ADR-0040, VC-107..111 |
 //! | [`participation`] | 6. Participation ledger: party key ceremonies, module provisioning records, participation sets, the station identities, repeated pseudonyms | §6.4, §6.5, §9.4.2, §14 6, VC-018, VC-084, VC-092, VC-093, VC-095 |
 //! | [`tally`] | 7. Tally: receipt resolutions, legal tally effects, tally scopes recomputed, aggregate openings against the commitments, paper counts per reporting unit | §10.6, §11, §14 7, VC-024, VC-042..044, VC-057, VC-063, VC-075, VC-099 |
 //! | [`audit`] | 8. Audit: freezes against the recomputed frames, the commit, the seed recomputed against the binding checkpoint and the observed beacon, the sample redrawn, opening references and comparisons, restricted openings reconstructed, escalation, full comparisons, findings, hand counts | §12, §14 8, VC-045..047, VC-059, VC-074 |
@@ -36,6 +38,9 @@
 //! * Problems in the ledger do not stop the index: an invalid frame is
 //!   left out, reported as a [`index::Finding`], and puts the box it
 //!   belongs to (or the whole ledger) under `HOLD_REVIEW`.
+//!
+//! External timestamps (ADR-0039) are verified with `ityv-tsa` and judged
+//! by the checkpoint stage; the ledger's anchor deadline comes from them.
 //!
 //! What this crate does **not** do yet (ROADMAP M5): the split-view,
 //! connectivity and software stages (10–12). The highest status
@@ -63,9 +68,11 @@ pub mod participation;
 pub mod progress;
 pub mod records;
 pub mod report;
+pub mod roll;
 mod sets;
 mod sigs;
 pub mod tally;
+pub mod timestamp;
 
 // Kani harnesses live outside `src/` because they carry a file-level lint
 // relaxation, which CONSTITUTION.md §1.1 forbids under `src/`.
@@ -104,8 +111,17 @@ pub use records::{
     AcceptedRecord, BatchFinding, BatchProblem, BoxRecords, RecordRefusal, RecordStage,
     RejectedRecord, verify_records,
 };
-pub use report::{Publications, Report, verify_ledger, verify_ledger_with};
+pub use report::{Publications, Report, verify_ledger, verify_ledger_full, verify_ledger_with};
+pub use roll::{
+    ContestedFinding, ContestedReport, Custody, CustodyMismatch, RollEvent, RollInput, RollRefusal,
+    RollRefused, RollStage, TakenAmendment, TakenExtract, roll_entry_commitment,
+    roll_entry_included, verify_roll,
+};
 pub use tally::{
     ChunkOpening, ExpectedExclusion, OpeningOutcome, ScopeProblem, TallyEvent, TallyRefusal,
     TallyRefused, TallyStage, UnitTally, verify_tally,
+};
+pub use timestamp::{
+    Anchoring, MAX_TIMESTAMP_ACCURACY_MS, MIN_POLICY_ACCURACY_MS, StampedToken, TimestampProblem,
+    TimestampRefusal, TimestampStage, Unanswered, verify_timestamps,
 };

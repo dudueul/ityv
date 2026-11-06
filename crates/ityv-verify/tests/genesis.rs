@@ -1067,3 +1067,414 @@ fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
     assert_eq!(verified.unit_station(b"U-2B"), st2);
     assert_eq!(verified.unit_station(b"U-2C"), st2);
 }
+
+/// The timestamp authority set (ADR-0039, VC-114), entries in key order:
+/// 0 `TSA-FREE-1`, 1 `TSA-GOV-1` (two pins), 2 `TSA-GOV-2`.
+#[test]
+fn refuses_a_timestamp_authority_set_that_breaks_a_rule() {
+    use common::tsa;
+    use ityv_encoding::{OrgId, PolicyAccuracy, TimestampAuthorityKind, TimestampPins};
+    use ityv_tsa::{DigestAlgorithm, DigestSet, PinnedTsa, SignatureAlgorithm, SignatureSet};
+    let set = EntrySet::TimestampAuthorities;
+    let base = Draft::standard();
+    assert_eq!(verify(&base), Ok(()));
+    let verified = verify_genesis(&standard().pin, &standard().input(), &[]).unwrap();
+    assert_eq!(verified.timestamp_authorities().count(), 3);
+
+    // No non-government authority.
+    let mut d = base.clone();
+    d.timestamps
+        .retain(|a| a.kind == TimestampAuthorityKind::Government);
+    assert_eq!(
+        verify(&d),
+        Err(Error {
+            state: 0,
+            set: Some(set),
+            index: None,
+            rule: Rule::TimestampAuthorities,
+        })
+    );
+    // No government authority.
+    let mut d = base.clone();
+    d.timestamps
+        .retain(|a| a.kind == TimestampAuthorityKind::NonGovernment);
+    assert_eq!(verify(&d).unwrap_err().rule, Rule::TimestampAuthorities);
+    // None at all.
+    let mut d = base.clone();
+    d.timestamps.clear();
+    assert_eq!(verify(&d).unwrap_err().rule, Rule::TimestampAuthorities);
+
+    // Pin bytes that are not a pin.
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[&[0x01, 0x02]]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampPin)));
+    let gov2 = tsa::signer(tsa::GOV_SAME_OPERATOR).cert;
+    let sha256 = DigestAlgorithm::Sha256.bit();
+    let sha384 = DigestAlgorithm::Sha384.bit();
+    let sha512 = DigestAlgorithm::Sha512.bit();
+    let rsa256 = SignatureAlgorithm::RsaPkcs1Sha256.bit();
+    let with_pin = |pin: &'static [u8]| {
+        let mut d = base.clone();
+        d.timestamps[2].pins = TimestampPins::new(&[pin]).unwrap();
+        verify(&d)
+    };
+    // A pin that does not allow SHA-512, the digest of every imprint.
+    assert_eq!(
+        with_pin(tsa::pin_of(gov2, sha256, rsa256)),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A pin that allows SHA-512 but not the digest of the only signature
+    // algorithm it allows (the review's second proof of concept): no
+    // token could verify under it.
+    assert_eq!(
+        with_pin(tsa::pin_of(
+            gov2,
+            sha512,
+            rsa256 | SignatureAlgorithm::EcdsaP256Sha256.bit()
+        )),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A pin whose only algorithms the certificate's RSA key does not make.
+    assert_eq!(
+        with_pin(tsa::pin_of(
+            gov2,
+            sha256 | sha384 | sha512,
+            SignatureAlgorithm::EcdsaP256Sha256.bit() | SignatureAlgorithm::EcdsaP384Sha384.bit()
+        )),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A pin whose EC point is off its curve (the second review's proof of
+    // concept): `ityv-tsa` read it, and no token could verify under it.
+    let mut p256 = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../ityv-tsa/tests/vectors/p256.crt"),
+    )
+    .unwrap();
+    let point = p256
+        .windows(4)
+        .position(|w| w == [0x03, 0x42, 0x00, 0x04])
+        .unwrap();
+    let ecdsa = SignatureAlgorithm::EcdsaP256Sha256.bit();
+    let good_p256: &'static [u8] = common::leak_slice(p256.clone());
+    assert_eq!(
+        with_pin(tsa::pin_of(good_p256, sha256 | sha512, ecdsa)),
+        Ok(())
+    );
+    p256[point + 4 + 63] ^= 0x01;
+    let off_curve: &'static [u8] = common::leak_slice(p256);
+    assert_eq!(
+        with_pin(tsa::pin_of(off_curve, sha256 | sha512, ecdsa)),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // A certificate that ends before the election's epoch day (day 20 000,
+    // 2024-10-04) begins: refused; one that ends as it begins is taken
+    // (the genesis carries no end of the election to check more).
+    assert_eq!(
+        with_pin(tsa::recertified_until(
+            tsa::GOV_SAME_OPERATOR,
+            "20241003235959Z"
+        )),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    assert_eq!(
+        with_pin(tsa::recertified_until(
+            tsa::GOV_SAME_OPERATOR,
+            "20241004000000Z"
+        )),
+        Ok(())
+    );
+    // A pin without its certificate: its key cannot be compared.
+    let hash: [u8; 32] = tsa::signer(tsa::GOV_SAME_OPERATOR).pin[1..33]
+        .try_into()
+        .unwrap();
+    let pin = PinnedTsa::new(
+        hash,
+        DigestSet::from_bits(sha256 | sha512).unwrap(),
+        SignatureSet::from_bits(rsa256).unwrap(),
+        false,
+        &tsa::POLICY,
+        None,
+    )
+    .unwrap();
+    let mut bytes = std::vec![0u8; pin.encoded_len()];
+    let len = pin.encode(&mut bytes).unwrap();
+    bytes.truncate(len);
+    assert_eq!(
+        with_pin(common::leak_slice(bytes)),
+        Err(at(set, 2, Rule::TimestampPin))
+    );
+    // The same certificate with SHA-512 and the algorithm it signs with is
+    // the standard pin, and verifies.
+    assert_eq!(with_pin(tsa::pin_of(gov2, sha256 | sha512, rsa256)), Ok(()));
+    assert_eq!(
+        tsa::pin_of(gov2, sha256 | sha512, rsa256),
+        tsa::signer(tsa::GOV_SAME_OPERATOR).pin
+    );
+
+    // One certificate pinned for two authorities.
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[tsa::signer(tsa::FREE).pin]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampCertificate)));
+    // One certificate pinned twice for one authority, under two encodings
+    // (another digest set).
+    let other_digests = tsa::pin_of(gov2, sha256 | sha384 | sha512, rsa256);
+    let mut pins = std::vec![tsa::signer(tsa::GOV_SAME_OPERATOR).pin, other_digests];
+    pins.sort();
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&pins).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampCertificate)));
+    // One key under two certificates, for two authorities or for one: one
+    // signer would count twice (the review's key-reuse case).
+    let again = tsa::recertified(tsa::FREE);
+    assert_ne!(again[1..33], tsa::signer(tsa::FREE).pin[1..33]);
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&[again]).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampKey)));
+    let mut pins = std::vec![
+        tsa::signer(tsa::GOV_SAME_OPERATOR).pin,
+        tsa::recertified(tsa::GOV_SAME_OPERATOR)
+    ];
+    pins.sort();
+    let mut d = base.clone();
+    d.timestamps[2].pins = TimestampPins::new(&pins).unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampKey)));
+
+    // One operator, two kinds.
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"FREE-TSA").unwrap();
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampOperator)));
+    // One operator spelled twice is one operator (the review's third
+    // proof of concept): the government's operator in lower case, declared
+    // non-government, is refused.
+    let mut d = base.clone();
+    d.timestamps
+        .retain(|a| a.tsa_id.as_bytes() != b"TSA-FREE-1");
+    d.timestamps[1].operator = OrgId::new(b"mois-gpki").unwrap();
+    d.timestamps[1].kind = TimestampAuthorityKind::NonGovernment;
+    assert_eq!(verify(&d), Err(at(set, 1, Rule::TimestampOperator)));
+    let mut d = base.clone();
+    d.timestamps[0].operator = OrgId::new(b"Mois-Gpki").unwrap();
+    assert_eq!(verify(&d), Err(at(set, 1, Rule::TimestampOperator)));
+    // The same spelling with the same kind is one operator and fine.
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"mois-gpki").unwrap();
+    assert_eq!(verify(&d), Ok(()));
+    // Names compare with the separators dropped too (the second review's
+    // I-b): MOIS_GPKI and mois.gpki are MOIS-GPKI.
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"MOIS_GPKI").unwrap();
+    d.timestamps[2].kind = TimestampAuthorityKind::NonGovernment;
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::TimestampOperator)));
+    let mut d = base.clone();
+    d.timestamps[2].operator = OrgId::new(b"mois.gpki").unwrap();
+    assert_eq!(verify(&d), Ok(()));
+    // Many authorities of one operator and one kind are fine (they count
+    // as one toward an anchor).
+    let mut d = base.clone();
+    d.timestamps[2].policy_accuracy = PolicyAccuracy::from_millis(2000).unwrap();
+    assert_eq!(verify(&d), Ok(()));
+
+    // The declared accuracy: one second to one minute.
+    for (ms, ok) in [
+        (0, false),
+        (999, false),
+        (1000, true),
+        (60_000, true),
+        (60_001, false),
+        (3_600_000, false),
+    ] {
+        let mut d = base.clone();
+        d.timestamps[0].policy_accuracy = PolicyAccuracy::from_millis(ms).unwrap();
+        let expected = if ok {
+            Ok(())
+        } else {
+            Err(at(set, 0, Rule::TimestampAccuracy))
+        };
+        assert_eq!(verify(&d), expected, "{ms} ms");
+    }
+
+    // An operator that is a witness's organisation or an election
+    // commission's, in any case: refused in the genesis.
+    // Every roster organisation too (clerks, observers, custodians of
+    // the paper, the court), in any spelling.
+    for org in [
+        b"ORG-C".as_slice(),
+        b"org-c",
+        b"ORG_C",
+        b"NEC-D",
+        b"nec-d",
+        b"N.E.C-D",
+        b"ORG-ST",
+        b"org_st",
+        b"Police",
+        b"COURT",
+    ] {
+        let mut d = base.clone();
+        d.timestamps[0].operator = OrgId::new(org).unwrap();
+        assert_eq!(
+            verify(&d),
+            Err(at(set, 0, Rule::TimestampOperatorConflict)),
+            "{}",
+            String::from_utf8_lossy(org)
+        );
+    }
+
+    // The set's own rules: order, count, root.
+    let mut raw = base.raw();
+    raw.timestamps.swap(0, 1);
+    let built = sign_genesis(&base, raw);
+    assert_eq!(
+        verify_genesis(&built.pin, &built.input(), &[]).unwrap_err(),
+        at(set, 1, Rule::NotSorted)
+    );
+    let built = sign_genesis_with(&base, base.raw(), &SIGNERS, |p| {
+        p.sets[set.index()].count += 1;
+    });
+    let err = verify_genesis(&built.pin, &built.input(), &[]).unwrap_err();
+    assert_eq!((err.set, err.rule), (Some(set), Rule::Count));
+    let built = sign_genesis_with(&base, base.raw(), &SIGNERS, |p| {
+        p.sets[set.index()].root = Hash512([0x77; 64]);
+    });
+    let err = verify_genesis(&built.pin, &built.input(), &[]).unwrap_err();
+    assert_eq!((err.set, err.rule), (Some(set), Rule::Root));
+}
+
+#[test]
+fn refuses_a_roll_authority_set_that_breaks_a_rule() {
+    use common::roll::{self, ROLL_BASE};
+    use ityv_encoding::{OrgId, RollAuthorityKind as K};
+    let set = EntrySet::RollAuthorities;
+    let base = Draft::standard();
+    assert_eq!(verify(&base), Ok(()));
+    let verified = verify_genesis(&standard().pin, &standard().input(), &[]).unwrap();
+    assert_eq!(verified.roll_authorities().count(), 11);
+    assert_eq!(verified.genesis().body().custody_quorum(), 3);
+    let jud = verified.roll_authority(roll::C_JUD).unwrap();
+    assert_eq!(jud.kind, K::CustodianJudiciary);
+    assert_eq!(
+        verified.roll_authority_entry(roll::C_JUD).unwrap().get(),
+        jud
+    );
+    assert!(verified.roll_authority(b"R-NOBODY").is_none());
+    assert!(verified.roll_authority_entry(b"R-NOBODY").is_none());
+    let whole = |rule| Error {
+        state: 0,
+        set: Some(set),
+        index: None,
+        rule,
+    };
+    let without = |id: &[u8]| {
+        let mut d = base.clone();
+        d.rolls.retain(|a| a.authority_id.as_bytes() != id);
+        d
+    };
+
+    // Two custodians of one organisation (in key order R-C-PA, then
+    // R-C-PB): one would count twice.
+    let mut d = base.clone();
+    d.rolls[5].org_id = OrgId::new(b"PARTY-A").unwrap();
+    assert_eq!(verify(&d), Err(at(set, 5, Rule::RollCustodians)));
+    // Also under another spelling (the second review's proof of concept:
+    // the Ministry as `MOIS` and again as `mois` met a quorum of three
+    // with two organisations).
+    for spelling in [b"mois".as_slice(), b"M.O.I.S", b"Mois", b"party_a"] {
+        let mut d = base.clone();
+        d.rolls[5].org_id = OrgId::new(spelling).unwrap();
+        assert_eq!(
+            verify(&d),
+            Err(at(set, 5, Rule::RollCustodians)),
+            "{}",
+            String::from_utf8_lossy(spelling)
+        );
+    }
+    let mut d = base.clone();
+    d.rolls[5].org_id = OrgId::new(b"MOIS-2").unwrap();
+    assert_eq!(verify(&d), Ok(()));
+    // A custodian of a reporting unit's election commission, however
+    // spelled (the final review's F7): the commission would count toward
+    // the quorum that confirms its own roll. A source may be one.
+    for spelling in [b"NEC-D".as_slice(), b"nec_d", b"NECD"] {
+        let mut d = base.clone();
+        d.rolls[5].org_id = OrgId::new(spelling).unwrap();
+        assert_eq!(
+            verify(&d),
+            Err(at(set, 5, Rule::RollCustodians)),
+            "{}",
+            String::from_utf8_lossy(spelling)
+        );
+    }
+    let mut d = base.clone();
+    d.rolls[6].org_id = OrgId::new(b"nec-d").unwrap();
+    assert_eq!(verify(&d), Ok(()));
+    // A source may share its organisation with a custodian (the court
+    // administration keeps the deaths and a copy).
+    let mut d = base.clone();
+    d.rolls[7].org_id = OrgId::new(b"COURT-ADMIN").unwrap();
+    assert_eq!(verify(&d), Ok(()));
+    // Fewer custodians than the quorum.
+    let mut d = base.clone();
+    d.custody_quorum = 6;
+    assert_eq!(verify(&d), Err(whole(Rule::RollCustodians)));
+    d.custody_quorum = 5;
+    assert_eq!(verify(&d), Ok(()));
+    // Without the court administration or the Ministry of the Interior.
+    for id in [roll::C_JUD, roll::C_INT] {
+        assert_eq!(verify(&without(id)), Err(whole(Rule::RollCustodians)));
+    }
+    // Three custodians make a quorum of three: the court administration,
+    // the Ministry and the committee, no party.
+    let mut d = base.clone();
+    d.rolls.retain(|a| a.kind != K::CustodianParty);
+    assert_eq!(verify(&d), Ok(()));
+    // The committee is one of them (exactly one each of kinds 11, 12, 13).
+    assert_eq!(
+        verify(&without(roll::C_IVC)),
+        Err(whole(Rule::RollCustodians))
+    );
+    // A second custodian of the court administration's, the Ministry's or
+    // the committee's kind, of another organisation: refused, or it could
+    // stand in for the real one (the second review's proof of concept: a
+    // party registered as the court administration met the quorum
+    // without the court administration's receipt).
+    for kind in [
+        K::CustodianJudiciary,
+        K::CustodianInterior,
+        K::CustodianCommittee,
+    ] {
+        let mut d = base.clone();
+        assert_eq!(d.rolls[5].authority_id.as_bytes(), roll::C_PB);
+        d.rolls[5].kind = kind;
+        assert_eq!(verify(&d), Err(whole(Rule::RollCustodians)), "{kind:?}");
+    }
+    // Two parties are fine.
+    assert_eq!(verify(&base), Ok(()));
+
+    // No district head, no snapshot, two snapshots.
+    for d in [without(roll::GU), without(roll::SNAPSHOT)] {
+        assert_eq!(verify(&d), Err(whole(Rule::RollSources)));
+    }
+    let mut d = base.clone();
+    d.rolls.push(roll::entry((
+        b"R-SNAPSHOT-2",
+        b"MOIS-2",
+        K::ResidentSnapshot,
+        11,
+    )));
+    assert_eq!(verify(&d), Err(whole(Rule::RollSources)));
+    // Other sources are optional.
+    for id in [roll::DEATHS, roll::DISQ, roll::OVERSEAS, roll::APPEAL] {
+        assert_eq!(verify(&without(id)), Ok(()));
+    }
+
+    // A key another authority or the commission has, a key nothing could
+    // verify under.
+    let mut d = base.clone();
+    d.rolls[6].key = registered(ROLL_BASE + 3);
+    assert_eq!(verify(&d), Err(at(set, 6, Rule::SharedKey)));
+    let mut d = base.clone();
+    d.rolls[0].key = registered(common::COMMISSION);
+    assert_eq!(verify(&d), Err(at(set, 0, Rule::SharedKey)));
+    let mut d = base.clone();
+    d.rolls[2].key = weak(registered(SPARE_BASE + 5));
+    assert_eq!(verify(&d), Err(at(set, 2, Rule::InvalidKey)));
+}

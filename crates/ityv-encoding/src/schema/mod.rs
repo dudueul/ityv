@@ -22,10 +22,12 @@ pub mod genesis_body;
 pub mod ledger_frame;
 pub mod participation;
 pub mod progress;
+pub mod roll;
 pub mod scan_count;
 pub mod share_package;
 pub mod slip;
 pub mod tally;
+pub mod timestamp;
 pub mod util;
 pub mod witnessed;
 
@@ -35,12 +37,14 @@ use crate::primitives::SchemaId;
 /// not name.
 pub const SCHEMA_VERSION_1: u16 = 1;
 
-/// The current version of `WitnessedEvent` (`0x0028`): version 3 admits
-/// the event role 10, the auditor, and the audit bodies `0x000D`,
-/// `0x0048`, `0x004B`, `0x004C`, `0x004D`, `0x004E` (ADR-0036). Version 2 admitted
-/// the event role 9, the district commission chair (ADR-0035); version 1
-/// neither.
-pub const SCHEMA_VERSION_WITNESSED: u16 = 3;
+/// The current version of `WitnessedEvent` (`0x0028`): version 4 admits
+/// the event roles 11, a roll source, and 12, a roll custodian, and the
+/// roll bodies `0x0052`–`0x0055` (ADR-0040). Version 3 admitted the event
+/// role 10, the auditor, and the audit bodies `0x000D`, `0x0048`,
+/// `0x004B`, `0x004C`, `0x004D`, `0x004E` (ADR-0036); version 2 the event
+/// role 9, the district commission chair (ADR-0035); version 1 none of
+/// them.
+pub const SCHEMA_VERSION_WITNESSED: u16 = 4;
 
 /// The current version of `RosterSigner` (`0x003A`): version 3 admits the
 /// roster role 6, the auditor (ADR-0036). Version 2 admitted the roster
@@ -73,7 +77,7 @@ pub const fn schema_version(schema: SchemaId) -> u16 {
 /// `LedgerFrame` (ENCODING.md §6, `0x0001`).
 pub const SCHEMA_LEDGER_FRAME: SchemaId = SchemaId::new(0x0001);
 
-/// `GenesisBody` (ENCODING.md §8.54, `0x0002`, version 6).
+/// `GenesisBody` (ENCODING.md §8.54, `0x0002`, version 8).
 pub const SCHEMA_GENESIS_BODY: SchemaId = SchemaId::new(0x0002);
 
 /// `LegalAuthorization` (ENCODING.md §6, `0x0003`).
@@ -271,3 +275,28 @@ pub const SCHEMA_HAND_COUNT_REPORT_BODY: SchemaId = SchemaId::new(0x004D);
 
 /// `AuditCommitBody` (ENCODING.md §8.73, `0x004E`).
 pub const SCHEMA_AUDIT_COMMIT_BODY: SchemaId = SchemaId::new(0x004E);
+
+/// `TimestampRecord` (ENCODING.md §8.75, `0x004F`).
+pub const SCHEMA_TIMESTAMP_RECORD: SchemaId = SchemaId::new(0x004F);
+
+/// `TimestampAuthorityEntry` (ENCODING.md §8.74, `0x0050`, genesis set 12).
+pub const SCHEMA_TIMESTAMP_AUTHORITY_ENTRY: SchemaId = SchemaId::new(0x0050);
+
+/// `RollAuthorityEntry` (ENCODING.md §8.76, `0x0051`, genesis set 13).
+pub const SCHEMA_ROLL_AUTHORITY_ENTRY: SchemaId = SchemaId::new(0x0051);
+
+/// `RollSourceExtractBody` (ENCODING.md §8.77, `0x0052`).
+pub const SCHEMA_ROLL_SOURCE_EXTRACT_BODY: SchemaId = SchemaId::new(0x0052);
+
+/// `RollFreezeBody` (ENCODING.md §8.78, `0x0053`).
+pub const SCHEMA_ROLL_FREEZE_BODY: SchemaId = SchemaId::new(0x0053);
+
+/// `RollCustodyReceiptBody` (ENCODING.md §8.79, `0x0054`).
+pub const SCHEMA_ROLL_CUSTODY_RECEIPT_BODY: SchemaId = SchemaId::new(0x0054);
+
+/// `RollAmendmentBody` (ENCODING.md §8.80, `0x0055`).
+pub const SCHEMA_ROLL_AMENDMENT_BODY: SchemaId = SchemaId::new(0x0055);
+
+/// `ContestedCheckin` (ENCODING.md §8.81, `0x0056`): restricted; its
+/// ledger frame is public, its body is not.
+pub const SCHEMA_CONTESTED_CHECKIN: SchemaId = SchemaId::new(0x0056);

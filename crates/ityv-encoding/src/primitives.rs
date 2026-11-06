@@ -283,6 +283,12 @@ pub struct UnitId<'a>(Ident<'a>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReportingUnitId<'a>(Ident<'a>);
 
+/// Identifier of an external authority the genesis pins: a timestamp
+/// authority (PROTOCOL.md §5.5) or a voter-roll source or custodian
+/// (§6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuthorityId<'a>(Ident<'a>);
+
 macro_rules! ident_newtype {
     ($name:ident) => {
         impl<'a> $name<'a> {
@@ -339,3 +345,47 @@ ident_newtype!(SignerId);
 ident_newtype!(RouteId);
 ident_newtype!(UnitId);
 ident_newtype!(ReportingUnitId);
+ident_newtype!(AuthorityId);
+
+/// Whether `byte` is a separator an organisation name may be written with
+/// or without.
+const fn org_separator(byte: u8) -> bool {
+    matches!(byte, b'.' | b'_' | b':' | b'-')
+}
+
+/// Whether `a` and `b` name one organisation, as every rule that counts
+/// organisations or keeps them apart compares them (witness and observer
+/// diversity, custody hand-offs, the roll custodians, the timestamp
+/// operators; ADR-0039 2, ADR-0040).
+///
+/// An organisation identifier is ASCII letters, digits and `.`, `_`, `:`,
+/// `-`, and two spellings of one name are one organisation: `MOIS-GPKI`,
+/// `mois-gpki`, `MOIS_GPKI` and `MOISGPKI` compare equal (letters lowered,
+/// separators dropped). This guards against a typo or a second spelling
+/// counting one body twice; it is not an identity check. Names that only
+/// look alike (`M0IS` and `MOIS`) are different names, and which body a
+/// name stands for is the genesis reviewers' to check.
+#[must_use]
+pub fn same_org(a: OrgId<'_>, b: OrgId<'_>) -> bool {
+    let (left, right) = (a.as_bytes(), b.as_bytes());
+    let (mut at_left, mut at_right) = (0usize, 0usize);
+    // One loop, one step per byte of either name (at most the two lengths
+    // and one more): skip a separator on either side, else compare one
+    // letter of each. A single loop keeps the model checker's unwinding
+    // of the rules that call this small.
+    loop {
+        match (left.get(at_left), right.get(at_right)) {
+            (Some(l), _) if org_separator(*l) => at_left = at_left.saturating_add(1),
+            (_, Some(r)) if org_separator(*r) => at_right = at_right.saturating_add(1),
+            (Some(l), Some(r)) => {
+                if !l.eq_ignore_ascii_case(r) {
+                    return false;
+                }
+                at_left = at_left.saturating_add(1);
+                at_right = at_right.saturating_add(1);
+            }
+            (None, None) => return true,
+            (Some(_), None) | (None, Some(_)) => return false,
+        }
+    }
+}

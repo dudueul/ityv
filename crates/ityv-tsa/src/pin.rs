@@ -18,10 +18,47 @@
 //! and the pin's copy is used only when the token does not.
 
 use crate::MAX_TOKEN_LEN;
-use crate::alg::{self, DigestSet, SignatureSet};
+use crate::alg::{self, DigestSet, SignatureAlgorithm, SignatureSet};
+use crate::cert;
 use crate::der::{self, OID, SEQUENCE};
 use crate::error::TsaError;
 use crate::oid::ObjectId;
+use crate::time::GenTime;
+
+/// The signer a pin fixes ([`PinnedTsa::signer_key`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignerKey<'a> {
+    public_key: &'a [u8],
+    not_before: GenTime,
+    not_after: GenTime,
+}
+
+impl<'a> SignerKey<'a> {
+    /// The signing key as one signer holds it: the RSA modulus (its
+    /// big-endian magnitude, no leading zero octet) or the EC point (SEC1
+    /// uncompressed, on its curve). Two pins whose keys give the same bytes
+    /// are one signer: an RSA key with another public exponent over the
+    /// same modulus is held by whoever knows its factorisation, and the
+    /// two forms cannot collide (a point is 65 or 97 octets and starts with
+    /// `04`; a modulus has 256 to 512).
+    #[must_use]
+    pub const fn public_key(&self) -> &'a [u8] {
+        self.public_key
+    }
+
+    /// The certificate's `notBefore`.
+    #[must_use]
+    pub const fn not_before(&self) -> GenTime {
+        self.not_before
+    }
+
+    /// The certificate's `notAfter`: no token verifies with a `genTime`
+    /// after it.
+    #[must_use]
+    pub const fn not_after(&self) -> GenTime {
+        self.not_after
+    }
+}
 
 /// The pin format version this crate reads and writes.
 pub const PIN_FORMAT_VERSION: u8 = 1;
@@ -195,6 +232,49 @@ impl<'a> PinnedTsa<'a> {
     #[must_use]
     pub const fn certificate(&self) -> Option<&'a [u8]> {
         self.certificate
+    }
+
+    /// The signer the pin fixes ([`SignerKey`]: its key and the
+    /// certificate's validity), once the pin's certificate copy reads as
+    /// [`verify_token`](crate::verify_token) reads a signer's certificate,
+    /// its key can verify at all (an EC point on its curve), and some token
+    /// could verify under the pin: some signature algorithm the pin allows
+    /// is one the key makes, over a digest the pin allows. An ESS v2
+    /// binding may use any digest the pin allows, so it never stands in the
+    /// way; the imprint's digest and the period of use are the caller's to
+    /// require.
+    ///
+    /// The key, not the certificate, is what one authority is: the same
+    /// key under two certificates signs for one authority.
+    ///
+    /// # Errors
+    ///
+    /// - [`TsaError::CertificateNotPinned`] if the pin carries no copy.
+    /// - The error of the copy, if `verify_token` would refuse it as a
+    ///   signer's certificate (its profile, its key).
+    /// - [`TsaError::InvalidEcPoint`] if its EC point is not on the curve.
+    /// - [`TsaError::SignatureNotAllowed`] if no signature algorithm the pin
+    ///   allows is one the key makes with a digest the pin allows.
+    pub fn signer_key(&self) -> Result<SignerKey<'a>, TsaError> {
+        let raw = self.certificate.ok_or(TsaError::CertificateNotPinned)?;
+        let certificate = cert::parse(raw)?;
+        if !certificate.key.usable() {
+            return Err(TsaError::InvalidEcPoint);
+        }
+        let usable = SignatureAlgorithm::ALL.into_iter().any(|algorithm| {
+            self.signatures.contains(algorithm)
+                && self.digests.contains(algorithm.digest())
+                && certificate.key.makes(algorithm)
+        });
+        if usable {
+            Ok(SignerKey {
+                public_key: certificate.key.identity(),
+                not_before: certificate.not_before,
+                not_after: certificate.not_after,
+            })
+        } else {
+            Err(TsaError::SignatureNotAllowed)
+        }
     }
 
     /// Whether the policy with content octets `policy` is allowed.

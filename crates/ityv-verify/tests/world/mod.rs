@@ -59,10 +59,10 @@ use ityv_encoding::{
     SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PAPER_COUNT_REPORT_BODY,
     SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_PROGRESS_TICK,
     SCHEMA_QUORUM_SIGNED, SCHEMA_RECEIPT_RESOLUTION_BODY, SCHEMA_SIGNED_GENESIS,
-    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, Scalar32, SchemaId, Scope, Seq, ShareHolder, SignerId, SignerRole,
-    StationId, StationKind, TallyEffect, TallyScopeBody, TallyScopeParts, TimeBucket, Token192,
-    TreeSize, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
+    SCHEMA_SIGNED_LEGAL_AUTHORIZATION, SCHEMA_TALLY_SCOPE_BODY, SCHEMA_TIMESTAMP_RECORD,
+    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, Scalar32, SchemaId, Scope, Seq, ShareHolder,
+    SignerId, SignerRole, StationId, StationKind, TallyEffect, TallyScopeBody, TallyScopeParts,
+    TimeBucket, Token192, TreeSize, TrusteeId, UnitId, WitnessedEvent, Writer, purpose_of,
 };
 use ityv_encoding::{
     ChallengeOpening, ChallengeOpeningBody, ChallengeOpeningParts, MAX_QUORUM_MESSAGE_LEN,
@@ -193,36 +193,44 @@ pub(crate) fn world() -> &'static World {
 pub(crate) fn amended_world() -> &'static (World, &'static [u8]) {
     static WORLD: OnceLock<&'static (World, &'static [u8])> = OnceLock::new();
     WORLD.get_or_init(|| {
-        let d = draft();
-        let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
-        let built = leak(sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
-            p.legal_authorization_hash = object_hash(body);
-        }));
-        let mut next = d.clone();
-        for r in &mut next.roster {
-            if r.signer_id.as_bytes() == b"obs-a" {
-                r.key = common::registered(ROSTER_BASE + 40);
+        leak(amend(|next| {
+            for r in &mut next.roster {
+                if r.signer_id.as_bytes() == b"obs-a" {
+                    r.key = common::registered(ROSTER_BASE + 40);
+                }
             }
-        }
-        next.units[0] = ReportingUnitEntry::new(
-            ReportingUnitId::new(RU1).unwrap(),
-            1,
-            OrgId::new(b"NEC-X").unwrap(),
-        )
-        .unwrap();
-        next.appointments = next.referenced_appointments();
-        let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
-        let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
-        leak((
-            World {
-                genesis,
-                pin: built.pin,
-                signed: built.signed,
-                authorization,
-            },
-            amendment.signed,
-        ))
+            next.units[0] = ReportingUnitEntry::new(
+                ReportingUnitId::new(RU1).unwrap(),
+                1,
+                OrgId::new(b"NEC-X").unwrap(),
+            )
+            .unwrap();
+        }))
     })
+}
+
+/// As [`world`], with one amendment that `change` makes to its draft;
+/// with the signed amendment.
+pub(crate) fn amend(change: impl FnOnce(&mut Draft)) -> (World, &'static [u8]) {
+    let d = draft();
+    let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
+    let built = leak(sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
+        p.legal_authorization_hash = object_hash(body);
+    }));
+    let mut next = d.clone();
+    change(&mut next);
+    next.appointments = next.referenced_appointments();
+    let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
+    let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+    (
+        World {
+            genesis,
+            pin: built.pin,
+            signed: built.signed,
+            authorization,
+        },
+        amendment.signed,
+    )
 }
 
 /// As [`world`], without `CRYPTO_TALLY_AID`.
@@ -1060,8 +1068,20 @@ impl Book {
     }
 
     /// A checkpoint over every frame so far, the witnesses' time
-    /// `bucket`.
+    /// `bucket`, anchored: the government's and the non-government
+    /// authority's real tokens a minute into its bucket follow it (the
+    /// returned frame is the checkpoint's).
     pub(crate) fn checkpoint_at(&mut self, bucket: u64) -> u64 {
+        let frame = self.checkpoint_bare_at(bucket);
+        let event = *self.ledger.events.last().unwrap();
+        for record in common::tsa::anchor(SCHEMA_SIGNED_CHECKPOINT, event, bucket) {
+            self.push(SCHEMA_TIMESTAMP_RECORD, record);
+        }
+        frame
+    }
+
+    /// As [`Self::checkpoint_at`], without timestamp tokens.
+    pub(crate) fn checkpoint_bare_at(&mut self, bucket: u64) -> u64 {
         let body = self.checkpoint_body_at(bucket);
         let seq = self.last.map_or(1, |(seq, _)| seq + 1);
         self.last = Some((seq, object_hash(body)));
@@ -1469,6 +1489,14 @@ pub(crate) fn station_record_of(boxes: &[(Bx, u64)]) -> Vec<(SchemaId, &'static 
         (SCHEMA_WITNESSED_EVENT, observers),
     ]);
     ticks
+}
+
+/// The complete roll of the one-station worlds (ADR-0040): ST-1's
+/// resident extract, the national snapshot, the freeze and three
+/// custodians' receipts, the court administration's with the pseudonym
+/// root.
+pub(crate) fn roll() -> Vec<(SchemaId, &'static [u8])> {
+    common::roll::standard(&[b"ST-1"])
 }
 
 /// A one-box election (BOX-1 at ST-1 in RU-1) whose module entries pin

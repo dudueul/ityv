@@ -27,38 +27,56 @@
 //!    evidence, both authorities' signatures, a forward transition), and
 //!    an event it does not take changes nothing.
 //!
-//! The first checkpoint that breaks a rule ends the chain: it becomes a
-//! [`CheckpointFinding`], the ledger is held (`CheckpointInvalid`), and no
-//! later checkpoint is trusted, because each one vouches for the ones
-//! before it. The frames covered by the last valid checkpoint are the
-//! anchored part of the ledger ([`CheckpointChain::covered`]).
+//! The external timestamps of the ledger ([`crate::verify_timestamps`],
+//! ADR-0034, ADR-0039) then judge each checkpoint that passed:
 //!
-//! What this stage does not prove: that the witnesses published the
-//! checkpoints on time or in external anchors (§5.5), that no other
-//! checkpoint with the same sequence was signed elsewhere (split view,
-//! stage 10), that frames after the last checkpoint will ever be covered,
-//! or anything about the events beyond their hashes, closes and dispute
-//! actions.
+//! 7. no valid token over the signed checkpoint (the `SignedCheckpoint`
+//!    event's object hash) says it existed more than `CLOCK_ERROR_BUCKETS`
+//!    buckets before the bucket its witnesses attest (VC-116): otherwise
+//!    the checkpoint's time is false, the chain ends there as at a broken
+//!    rule, and the ledger is held (`TimestampMismatch`);
+//! 8. its anchoring ([`VerifiedCheckpoint::anchoring`], VC-115): the tokens
+//!    whose latest instant is within its bucket plus the anchor window, by
+//!    kind and operator.
+//!
+//! The first checkpoint that breaks a rule ends the chain: it becomes a
+//! [`CheckpointFinding`], the ledger is held (`CheckpointInvalid`, or
+//! `TimestampMismatch` for rule 7), and no later checkpoint is trusted,
+//! because each one vouches for the ones before it. The frames covered by
+//! the last valid checkpoint are the witnessed part of the ledger
+//! ([`CheckpointChain::covered`]); the ledger's anchor deadline follows the
+//! last valid checkpoint ([`CheckpointChain::anchor_deadline`]), which
+//! covers every earlier one. A timestamp record that cannot be taken holds
+//! the ledger (`TimestampInvalid`) without ending the chain: a token is
+//! corroboration, never the root of trust (ADR-0034 §5).
+//!
+//! What this stage does not prove: that no other checkpoint with the same
+//! sequence was signed elsewhere (split view, stage 10), that frames after
+//! the last checkpoint will ever be covered, that a timestamp authority's
+//! time is true, or anything about the events beyond their hashes, closes
+//! and dispute actions.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
+use ityv_crypto::hash::object_hash;
 use ityv_encoding::{
     CheckpointBody, Hash512, KeysetId, LedgerId, SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, Seq,
     TimeBucket, decode_object,
 };
 use ityv_ledger::{
-    Accumulator, DiversityPolicy, Error as LedgerError, QuorumProfile, Roster,
-    SCHEMA_SIGNED_CHECKPOINT, SignedCheckpoint, WitnessEntry, WitnessSet, evaluate,
-    sorted_set_root, validate_successor,
+    Accumulator, Breach, DiversityPolicy, Error as LedgerError, QuorumProfile, Roster,
+    SCHEMA_SIGNED_CHECKPOINT, SignedCheckpoint, WitnessEntry, WitnessSet, anchor_deadline,
+    evaluate, sorted_set_root, validate_successor,
 };
-use ityv_state::{HoldReason, HoldSet};
+use ityv_state::{HoldReason, HoldSet, Publication};
 
 use crate::authority::AuthorityStage;
 use crate::disputes::{DisputeStep, verify_disputes};
 use crate::genesis::VerifiedGenesis;
 use crate::index::{IndexedEvent, LedgerIndex};
 use crate::sigs::verifying_key;
+use crate::timestamp::{Anchoring, TimestampStage, anchoring, verify_timestamps};
 
 /// A checkpoint that passed every rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,6 +95,12 @@ pub struct VerifiedCheckpoint {
     /// that no single operator declares (the tally's late-close window is
     /// measured in it, PROTOCOL.md §11.1).
     pub time_bucket: TimeBucket,
+    /// The object hash of the `SignedCheckpoint` event, the hash its
+    /// timestamp tokens stamp (ADR-0039).
+    pub event_hash: Hash512,
+    /// The valid tokens over it whose latest instant is within its bucket
+    /// plus the anchor window, by kind and operator (VC-115).
+    pub anchoring: Anchoring,
 }
 
 /// The rule a checkpoint broke.
@@ -100,6 +124,9 @@ pub enum CheckpointFindingKind {
     /// The dispute root is not the root of the disputes unresolved in its
     /// frames.
     DisputeRoot,
+    /// A valid timestamp token says the checkpoint existed more than
+    /// `CLOCK_ERROR_BUCKETS` buckets before its time bucket (VC-116).
+    Backdated,
 }
 
 /// A checkpoint that broke a rule.
@@ -112,15 +139,16 @@ pub struct CheckpointFinding {
 }
 
 /// The checkpoint chain of a ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckpointChain {
+#[derive(Debug, Clone)]
+pub struct CheckpointChain<'a> {
     checkpoints: Vec<VerifiedCheckpoint>,
     findings: Vec<CheckpointFinding>,
     unchecked: usize,
     holds: HoldSet,
+    timestamps: TimestampStage<'a>,
 }
 
-impl CheckpointChain {
+impl<'a> CheckpointChain<'a> {
     /// The valid checkpoints, in chain order.
     #[must_use]
     pub fn checkpoints(&self) -> &[VerifiedCheckpoint] {
@@ -155,6 +183,37 @@ impl CheckpointChain {
     #[must_use]
     pub fn covered(&self) -> u64 {
         self.last().map_or(0, |c| c.tree_size)
+    }
+
+    /// Every timestamp record of the ledger ([`crate::verify_timestamps`]).
+    #[must_use]
+    pub const fn timestamps(&self) -> &TimestampStage<'a> {
+        &self.timestamps
+    }
+
+    /// The anchor deadline of the ledger (PROTOCOL.md §5.5, VC-115),
+    /// decided from the timestamp tokens of the last valid checkpoint,
+    /// which covers every earlier one: met when its tokens satisfy the
+    /// anchor rule; otherwise still open while `now` (the caller's clock,
+    /// the only input this needs it for) is within its window, and missed
+    /// after, with the number of the two required authority kinds present
+    /// out of two. Pending when there is no valid checkpoint.
+    #[must_use]
+    pub fn anchor_deadline(&self, now: TimeBucket) -> Publication {
+        let Some(last) = self.last() else {
+            return Publication::Pending;
+        };
+        if last.anchoring.satisfied() {
+            return Publication::Satisfied;
+        }
+        match anchor_deadline(last.time_bucket) {
+            Ok(deadline) if now.get() <= deadline.get() => Publication::Pending,
+            Ok(_) => Publication::Breached(Breach::AnchorsShort {
+                have: last.anchoring.kinds(),
+                need: 2,
+            }),
+            Err(_) => Publication::Failed,
+        }
     }
 }
 
@@ -289,13 +348,16 @@ fn roster_entries<'a>(genesis: &VerifiedGenesis<'a>) -> Option<Vec<WitnessEntry<
 
 /// Checks one checkpoint against the rules of the module docs, given the
 /// previous valid one.
+#[allow(clippy::too_many_arguments)] // The rules of the module docs, one input each.
 fn check<'a>(
     signed: &SignedCheckpoint<'a>,
+    signed_bytes: &[u8],
     frame: Seq,
     prev: Option<(&CheckpointBody<'a>, &Hash512)>,
     genesis: &VerifiedGenesis<'a>,
     policy: &Policy<'_>,
     prefix: &mut Prefix<'_, 'a>,
+    timestamps: &TimestampStage<'a>,
 ) -> Result<VerifiedCheckpoint, CheckpointFindingKind> {
     let roster = policy.roster.map_err(CheckpointFindingKind::Signatures)?;
     let profile = policy.profile.ok_or(CheckpointFindingKind::Signatures(
@@ -327,6 +389,19 @@ fn check<'a>(
     if prefix.dispute_root() != Some(parts.dispute_root) {
         return Err(CheckpointFindingKind::DisputeRoot);
     }
+    let event_hash = object_hash(signed_bytes);
+    let epoch = timestamps.epoch();
+    if timestamps
+        .tokens_for(&event_hash)
+        .any(|t| t.backdates(epoch, parts.time_bucket))
+    {
+        return Err(CheckpointFindingKind::Backdated);
+    }
+    let anchoring = anchoring(
+        timestamps
+            .tokens_for(&event_hash)
+            .filter(|t| t.within_window(epoch, parts.time_bucket)),
+    );
     Ok(VerifiedCheckpoint {
         frame,
         checkpoint_seq: parts.checkpoint_seq,
@@ -334,6 +409,8 @@ fn check<'a>(
         root: parts.root_hash,
         body_hash: signed.body_hash(),
         time_bucket: parts.time_bucket,
+        event_hash,
+        anchoring,
     })
 }
 
@@ -351,12 +428,14 @@ pub fn verify_checkpoints<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
     authority: &AuthorityStage<'a>,
-) -> CheckpointChain {
+) -> CheckpointChain<'a> {
+    let timestamps = verify_timestamps(genesis, index);
     let mut chain = CheckpointChain {
         checkpoints: Vec::new(),
         findings: Vec::new(),
         unchecked: 0,
-        holds: HoldSet::empty(),
+        holds: timestamps.holds(),
+        timestamps,
     };
     let q = genesis.genesis().body().quorum();
     let entries = roster_entries(genesis).unwrap_or_default();
@@ -380,14 +459,25 @@ pub fn verify_checkpoints<'a>(
         let decoded = event.bytes.and_then(|bytes| {
             decode_object::<SignedCheckpoint<'a>>(SCHEMA_SIGNED_CHECKPOINT, SCHEMA_VERSION_1, bytes)
                 .ok()
+                .map(|signed| (signed, bytes))
         });
-        let result = decoded
-            .ok_or(CheckpointFindingKind::Undecodable)
-            .and_then(|signed| {
-                let before = prev.as_ref().map(|(s, h)| (s.body(), h));
-                check(&signed, event.seq, before, genesis, &policy, &mut prefix)
+        let result =
+            decoded
+                .ok_or(CheckpointFindingKind::Undecodable)
+                .and_then(|(signed, bytes)| {
+                    let before = prev.as_ref().map(|(s, h)| (s.body(), h));
+                    check(
+                        &signed,
+                        bytes,
+                        event.seq,
+                        before,
+                        genesis,
+                        &policy,
+                        &mut prefix,
+                        &chain.timestamps,
+                    )
                     .map(|verified| (signed, verified))
-            });
+                });
         match result {
             Ok((signed, verified)) => {
                 prev = Some((signed, verified.body_hash));
@@ -398,7 +488,12 @@ pub fn verify_checkpoints<'a>(
                     frame: event.seq,
                     kind,
                 });
-                chain.holds = chain.holds.with(HoldReason::CheckpointInvalid);
+                let reason = if kind == CheckpointFindingKind::Backdated {
+                    HoldReason::TimestampMismatch
+                } else {
+                    HoldReason::CheckpointInvalid
+                };
+                chain.holds = chain.holds.with(reason);
             }
         }
     }

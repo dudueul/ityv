@@ -128,8 +128,9 @@ pub enum Publication {
 }
 
 impl Publication {
-    /// Maps the result of `ityv_ledger::check_anchor` or
-    /// `ityv_ledger::check_board`.
+    /// Maps the result of `ityv_ledger::check_board`. The anchor
+    /// deadline comes from the verifier's checkpoint stage, which builds
+    /// its `Publication` itself (ADR-0039 7).
     #[must_use]
     pub const fn from_ledger(outcome: &Result<LedgerStatus, LedgerError>) -> Self {
         match outcome {
@@ -667,10 +668,9 @@ mod tests {
             Publication::from_ledger(&outcome),
             Publication::Breached(Breach::BoardUnpublished)
         );
-        let outcome = ityv_ledger::check_anchor(close, &[close, close], TimeBucket::new(105));
-        assert!(matches!(
-            Publication::from_ledger(&outcome),
-            Publication::Breached(Breach::AnchorsShort { .. })
-        ));
+        let outcome = ityv_ledger::check_board(close, None, TimeBucket::new(196));
+        assert_eq!(Publication::from_ledger(&outcome), Publication::Pending);
+        let outcome = ityv_ledger::check_board(close, Some(close), TimeBucket::new(300));
+        assert_eq!(Publication::from_ledger(&outcome), Publication::Satisfied);
     }
 }

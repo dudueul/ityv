@@ -89,6 +89,18 @@ export function intNum(v: Int | null | undefined): number {
   return v === null || v === undefined ? 0 : Number(v);
 }
 
+/** A timestamp token the verifier took (ADR-0039): public fields only. */
+export interface Token {
+  frame: Int;
+  authority: string;
+  operator: string;
+  kind: "Government" | "NonGovernment";
+  genTime: Int;
+  latest: Int;
+  /** The time bucket of the latest instant (from the election epoch). */
+  latestBucket: Int;
+}
+
 export interface Checkpoint {
   frame: Int;
   seq: Int;
@@ -96,6 +108,37 @@ export interface Checkpoint {
   timeBucket: Int;
   fingerprint: string;
   root: string;
+  /** The verifier's anchoring of this checkpoint (VC-115). */
+  anchoring: { government: boolean; nonGovernment: boolean; operators: Int; satisfied: boolean };
+  tokens: (Token & { inWindow: boolean })[];
+}
+
+/** One roll state and the custodians whose receipts agree (ADR-0040). */
+export interface RollCustody {
+  seq: Int;
+  fingerprint: string;
+  entryCount: Int;
+  custodians: string[];
+  pseudonymConfirmed: boolean;
+  effective: boolean;
+}
+
+export interface RollReport {
+  complete: boolean;
+  quorum: Int;
+  extracts: Int;
+  freeze: RollCustody | null;
+  amendments: (RollCustody & { number: Int; reason: string; authority: string })[];
+  refused: { seq: Int; event: string; refusal: string }[];
+  mismatches: { seq: Int; custodian: string }[];
+  contestedFrames: Int;
+  /** The frame of the first close at an election-day station (set, final count or box close). */
+  pollClose: Int | null;
+  /** Amendments recorded after the poll close (hold 78). */
+  lateAmendments: Int[];
+  /** Election-day stations of the last genesis state without an extract (hold 78). */
+  missingExtracts: string[];
+  holds: Hold[];
 }
 
 export interface BoxReport {
@@ -205,7 +248,14 @@ export interface Report {
   stages?: { step: string; outcome: string }[];
   publications?: { anchors: string; board: string };
   ledger?: { treeSize: Int; root: string; events: Int };
-  checkpoints?: { covered: Int; unchecked: Int; valid: Checkpoint[]; findings: { frame: Int; kind: string }[] };
+  checkpoints?: {
+    covered: Int;
+    unchecked: Int;
+    valid: Checkpoint[];
+    findings: { frame: Int; kind: string }[];
+    timestamps: { tokens: Int; unanswered: Int; refusals: { frame: Int; authority: string; problem: string }[] };
+  };
+  roll?: RollReport;
   boxes?: BoxReport[];
   units?: UnitReport[];
   refused?: { seq: Int; schema: string | null; stage: string; reason: string }[];
@@ -280,7 +330,16 @@ export interface AuditReport {
     dice: string;
     beaconSource: string;
     beaconRound: Int;
-    binding: { frame: Int; seq: Int; bucket: Int; fingerprint: string } | null;
+    binding: {
+      frame: Int;
+      seq: Int;
+      bucket: Int;
+      fingerprint: string;
+      /** The tokens over it: recorded before the seed, and latest instant
+       * before the observed publication bucket (null without an
+       * observation). The decision is the verifier's seed refusal. */
+      tokens: (Token & { beforeSeed: boolean; beforePublication: boolean | null })[];
+    } | null;
   } | null;
   seed: { seq: Int; seed: string; beaconRound: Int; beaconConfirmed: boolean } | null;
   passed: boolean;

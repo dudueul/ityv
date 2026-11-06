@@ -304,11 +304,62 @@ pub enum HoldReason {
     /// rejected every word of a draw, or a drawn position is outside the
     /// frame): the audit cannot proceed (§12.2, ADR-0036).
     AuditSampleFailed = 71,
+    /// A timestamp record on the ledger cannot be taken: its authority is
+    /// not one the genesis pins, its token does not verify under any pin of
+    /// that authority over the SHA-512 of the stamped event's object hash,
+    /// or it stamps no earlier event of a kind that is timestamped (a
+    /// checkpoint, the genesis or an amendment, a voter-roll event, a legal
+    /// decision; never a record, check-in counter or progress record) (§5.5,
+    /// ADR-0034 §7, VC-117, ADR-0039).
+    TimestampInvalid = 72,
+    /// A valid token says a checkpoint existed earlier than the time its
+    /// witnesses attest, by more than the honest clock error: the latest
+    /// instant the token allows falls more than `CLOCK_ERROR_BUCKETS`
+    /// buckets before the checkpoint's bucket. The chain ends there (§5.5,
+    /// ADR-0034 §4, VC-116, ADR-0039).
+    TimestampMismatch = 73,
+    /// A voter-roll event of the ledger was not taken: an extract, the
+    /// freeze, a custody receipt or an amendment whose signer is not the
+    /// authority the genesis registers for it, whose signature does not
+    /// verify, that comes out of order or answers nothing, or that repeats
+    /// or contradicts one taken (§6.1, ADR-0033, VC-107, VC-111,
+    /// ADR-0040).
+    RollEventRefused = 74,
+    /// A custodian's receipt gives other values than the roll state it
+    /// answers (entries root and count, counts table, sources root, a
+    /// pseudonym root): the copies disagree and are compared in a dispute
+    /// (§6.1, ADR-0033 decision 2, VC-108, ADR-0040).
+    RollCustodyMismatch = 75,
+    /// A contested check-in of the ledger, supplied by a verifier with
+    /// access to the restricted body, does not verify: another election,
+    /// a station or unit the genesis does not have, or signatures that are
+    /// not the unit's and one party module's per party (§6.2, ADR-0033
+    /// decision 6, ADR-0040). Only a verifier with access holds on it; the
+    /// public verifier sees the frames.
+    ContestedCheckinInvalid = 76,
+    /// Contested check-ins supplied by a verifier with access carry one
+    /// envelope label in two different messages, whatever their
+    /// pseudonyms: no envelope with the label can be matched to one record,
+    /// so every one of them is excluded from the count. Labels are random
+    /// (ADR-0010 decision 2), so this is a device or insider fault, not a
+    /// voter's act (§6.2, ADR-0033 decision 6, ADR-0040). Only a verifier
+    /// with access holds on it; the public verifier sees the frames. A
+    /// pseudonym that contested twice under two labels is excluded and
+    /// reported without a hold, as one found in a participation set.
+    ContestedLabelReused = 77,
+    /// The roll does not match the election as it ran: an election-day
+    /// station of the genesis's last state has no resident extract (a
+    /// station added after the freeze), or an amendment was recorded after
+    /// voting closed (after the first close the ledger shows at an
+    /// election-day station: its participation set, its observers' final
+    /// count or one of its boxes' close), which must not change the roll
+    /// the voters were checked against (§6.1, ADR-0040).
+    RollIncomplete = 78,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 72] = [
+    pub const ALL: [Self; 79] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -381,6 +432,13 @@ impl HoldReason {
         Self::HandCountRefused,
         Self::AuditCommitRefused,
         Self::AuditSampleFailed,
+        Self::TimestampInvalid,
+        Self::TimestampMismatch,
+        Self::RollEventRefused,
+        Self::RollCustodyMismatch,
+        Self::ContestedCheckinInvalid,
+        Self::ContestedLabelReused,
+        Self::RollIncomplete,
     ];
 
     /// The reason's code.

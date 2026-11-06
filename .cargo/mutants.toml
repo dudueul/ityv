@@ -48,6 +48,36 @@ exclude_re = [
     # false; it exists because `len` needs it (clippy `len_without_is_empty`)
     # (crates/ityv-encoding/src/schema/tally.rs).
     "replace PaperVotes::is_empty -> bool with false",
+    # Equivalent: a timestamp authority has one to four pins (the
+    # constructor and the decoder refuse none), so `TimestampPins::is_empty`
+    # is always false; it exists because `len` needs it (clippy
+    # `len_without_is_empty`) (crates/ityv-encoding/src/schema/timestamp.rs).
+    "replace TimestampPins<'a>::is_empty -> bool with false",
+    # Equivalent: a timestamp record and the event it stamps are two ledger
+    # events, which never share a frame (a frame carries one event; a record
+    # cannot carry its own hash), so `<` and `<=` between their frames agree
+    # (crates/ityv-verify/src/timestamp.rs, `verify_timestamps`).
+    "replace < with <= in verify_timestamps",
+    # Equivalent: the events a timestamp record can name are kept in a map
+    # filtered to the three schemas only to save memory. A record's target
+    # schema is one of those three (the decoder refuses any other, VC-117,
+    # Kani `timestamp_rules_are_exact`) and must equal the event's, so an
+    # unfiltered map finds the same targets
+    # (crates/ityv-verify/src/timestamp.rs, `stamped_schema`).
+    "replace stamped_schema -> bool with true",
+    # Equivalent: a custody receipt and the freeze or amendment it answers
+    # are two ledger events, which never share a frame, so `<` and `<=`
+    # between their frames agree (crates/ityv-verify/src/roll.rs,
+    # `Work::subject`).
+    "replace < with <= in Work<'_, 'a>::subject",
+    # Equivalent: an amendment and the event that marks the poll close (a
+    # participation set, a final observer count or a box close) are two
+    # ledger events, which never share a frame, so `<` and `<=` (`>` and
+    # `>=`) between their frames agree; each comparison
+    # carries a comment saying so (crates/ityv-verify/src/roll.rs:
+    # `RollStage::roll`, `settle_close`).
+    "replace < with <= in RollStage<'a>::roll",
+    "replace > with >= in settle_close",
 ]
 # The workspace builds with `-D warnings`; a mutated body usually leaves a
 # parameter unused, which would make most mutants unviable (fail to build)

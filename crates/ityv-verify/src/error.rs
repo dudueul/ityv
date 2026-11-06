@@ -27,7 +27,7 @@ pub enum Reference {
 }
 
 /// The rule a genesis or amendment broke (VC-005, VC-009, VC-014,
-/// VC-067, VC-104, VC-105).
+/// VC-067, VC-104, VC-105, VC-107, VC-108, VC-114).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Rule {
     /// An object is not the canonical encoding of its schema.
@@ -95,6 +95,53 @@ pub enum Rule {
     /// unit and another unit, a box or a module, or a box and a module.
     /// A device attestation names its device by this identifier alone.
     DeviceId,
+    /// A timestamp authority's pin is not a valid `ityv-tsa` pin, does
+    /// not allow SHA-512 (the digest every imprint uses, ADR-0034 §3), does
+    /// not carry its certificate, has an EC point off its curve, allows no
+    /// signature algorithm its certificate's key makes over a digest it
+    /// allows (`PinnedTsa::signer_key`), or its certificate's validity ends
+    /// before the election's epoch day begins: no token of it could ever
+    /// verify for the election, or its key could not be compared with the
+    /// others' (ADR-0039 2).
+    TimestampPin,
+    /// Two pins of the timestamp authority set name one signing
+    /// certificate: one authority would count as two.
+    TimestampCertificate,
+    /// Two pins of the timestamp authority set carry one signing key
+    /// under two certificates (one RSA modulus, whatever the exponent, or
+    /// one EC point; `SignerKey::public_key`): one signer would count as
+    /// two authorities (ADR-0039 2).
+    TimestampKey,
+    /// Two timestamp authorities of one operator differ in kind: an
+    /// operator is either the government or not (VC-114). Operators are
+    /// compared as names: ASCII case and the separators `._:-` aside.
+    TimestampOperator,
+    /// A timestamp authority's operator is a witness's organisation, a
+    /// roster organisation or an election commission's (one a reporting
+    /// unit names), compared as names: its tokens would not be independent
+    /// of the witnesses' time and the commission's events they check
+    /// (ADR-0039 2).
+    TimestampOperatorConflict,
+    /// A timestamp authority's declared accuracy is below one second or
+    /// above a minute (`MIN_POLICY_ACCURACY_MS`,
+    /// `MAX_TIMESTAMP_ACCURACY_MS`; ADR-0039 1, 5).
+    TimestampAccuracy,
+    /// The timestamp authority set lacks a government-run or a
+    /// non-government authority (VC-114).
+    TimestampAuthorities,
+    /// The roll's custodians cannot confirm a roll: two custodians of one
+    /// organisation, compared as names (`ityv_encoding::same_org`: ASCII
+    /// case and the separators `._:-` aside; one would count twice), fewer
+    /// custodians than the custody quorum, not exactly one custodian each
+    /// of the court administration, the Ministry of the Interior and the
+    /// committee, or (in any genesis state) a custodian of a reporting
+    /// unit's election commission, which would confirm its own roll
+    /// (ADR-0033 decision 2, VC-108, ADR-0040).
+    RollCustodians,
+    /// The roll's sources cannot give a roll: no district head for the
+    /// resident extracts, or not exactly one source of the national
+    /// snapshot (ADR-0033 decision 1, VC-107, ADR-0040).
+    RollSources,
 }
 
 /// Where in the genesis a rule was broken.

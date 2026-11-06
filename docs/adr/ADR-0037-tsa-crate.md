@@ -24,6 +24,7 @@ ADR-0034는 RFC 3161 토큰을 엄격한 DER 부분집합으로 읽고 genesis�
    - 모르는 비트, 빈 마스크, 정렬되지 않거나 겹친 정책, 해시가 맞지 않는 인증서, 길이가 맞지 않는 바이트열은 거부한다. 그래서 핀마다 인코딩이 하나다.
    - 핀의 해시는 SHA-256이다. 인증서 지문을 공표하는 관례(`openssl x509 -fingerprint -sha256`)이고 RFC 5035 ESS v2의 기본 해시다.
    - 인증서 자체는 선택이다. ADR-0034 §3의 요청은 `certReq`를 넣으므로 토큰이 인증서를 담는다. 토큰 안에서 핀의 해시를 가진 인증서를 쓰고, 없을 때만 핀의 사본을 쓴다(`CertificateSource`).
+   - 개정(ADR-0039 리뷰, 2026-11-05; 둘째 리뷰 반영): `PinnedTsa::signer_key()`는 사본이 있을 때 그 서명자(`SignerKey`)를 돌려준다: 서명 키(RSA 모듈러스나 EC 점, 한 서명자는 한 값)와 인증서의 `notBefore`·`notAfter`. 사본이 서명자 인증서로 읽히고, EC 점이 곡선 위에 있으며(`p256`·`p384`로 해독, 아니면 `InvalidEcPoint`), 핀이 허용한 서명 알고리즘 가운데 그 키가 만들고 다이제스트도 허용된 것이 있을 때만이다. `verify_token`의 검사와 오류 순서는 그대로다(곡선 밖의 점은 서명 검증에서 `InvalidEcPoint`). 이 크레이트의 형식에서 사본은 여전히 선택이고, 사본을 요구하는 것은 연결 단계의 genesis 규칙이다(ADR-0039 2항: 한 키를 두 인증서로 핀하면 한 기관이 둘로 셀 수 있다).
    - 핀에 기관 ID, 운영 주체, 정부 운영 여부는 두지 않는다. 그것은 genesis 항목의 다른 필드이고 연결 단계가 정한다.
 
 2. **엄격한 부분집합.** 토큰 전체(최대 16 KiB, 깊이 32)에 같은 DER 규칙을 적용한다. 해석하지 않는 부분(이름, 알 수 없는 서명 속성, 서명되지 않은 속성, 체인 인증서, 비필수 확장 값의 바깥)도 같은 DER 규칙으로 끝까지 검사한다. 다만 그 안의 구조는 모르므로, 그 안에 `DEFAULT` 값을 적은 것(체인 인증서 확장의 `critical FALSE` 등)은 알아채지 못한다.
@@ -43,7 +44,8 @@ ADR-0034는 RFC 3161 토큰을 엄격한 DER 부분집합으로 읽고 genesis�
    - ECDSA P-256/SHA-256, P-384/SHA-384, P-384/SHA-512(freetsa.org, 다이제스트를 384비트로 자른다). 곡선에 맞지 않는 다이제스트는 받지 않는다: P-256과 SHA-384·SHA-512(다이제스트가 곡선보다 길다), P-384와 SHA-256(짧다). 공개키는 비압축 점만, 서명은 엄격한 DER `Ecdsa-Sig-Value`이고 `r`, `s`는 `[1, n−1]`.
    - RSA-PSS는 지원하지 않는다. 매개변수 구조와 MGF1, 복호 블록 해석이 필요해 이번 범위를 넘는다. 지정 기관이 PSS를 쓰면 새 ADR로 더한다.
 7. **의존성.** `sha2` =0.11.1, `sha1` =0.11.0, `crypto-bigint` =0.7.10, `p256`·`p384` =0.14.0(`ecdsa` =0.17.0), 모두 `default-features = false`. RSA는 `rsa` 크레이트를 쓰지 않는다. 그 크레이트는 RUSTSEC-2023-0071(Marvin, 개인키 연산의 시간 누출)이 있고 `deny.toml`이 `ignore = []`이다. 검증에는 공개키 연산 `s^e mod n` 하나면 되므로, `elliptic-curve`가 이미 쓰는 `crypto-bigint`의 고정폭 몽고메리 연산으로 직접 계산한다. 비밀이 없으니 상수 시간은 필요 없고 정확성이 중요하다. 그래서 인코딩을 만들어 비교하고 경계(`s ≥ n`, 짧은 `s`)를 시험한다.
-8. **검사 순서.** 구조(DER·CMS·`TSTInfo`) → 인증서 선택과 프로필 → 서명자 식별자 → 핀의 허용 알고리즘 → ESS → 메시지 다이제스트 → 서명 → 각인·정책·`tsa`·유효기간. 서명으로 진정성을 먼저 세우고 내용을 기대값과 비교한다. 순서가 고정이므로 같은 토큰은 같은 오류를 낸다. 연결 단계는 어떤 오류든 `TimestampInvalid`로 다룬다(ADR-0034 §7).
+8. **검사 순서.** 구조(DER·CMS·`TSTInfo`) → 인증서 선택과 프로필 → 서명자 식별자 → 핀의 허용 알고리즘 → 각인 → ESS → 메시지 다이제스트 → 서명 → 정책·`tsa`·유효기간. 순서가 고정이므로 같은 토큰은 같은 오류를 낸다. 연결 단계는 어떤 오류든 `TimestampInvalid`로 다룬다(ADR-0034 §7).
+   - 개정(ADR-0039 리뷰, 2026-11-05): 처음에는 서명으로 진정성을 세운 뒤 각인을 비교했다. 각인은 서명되지 않은 입력과의 비교일 뿐 무엇도 드러내지 않으므로, 이제 다이제스트와 서명을 계산하기 전에 비교한다. 다른 대상의 토큰(장부에 실린 거짓 기록)이 서명 검증 비용 없이 거부된다. 두 규칙을 함께 어긴 토큰의 오류만 바뀐다(`TSTInfo`의 각인 바이트를 바꾼 토큰은 `MessageDigestMismatch` 대신 `ImprintMismatch`).
 9. **연결 단계에 넘기는 것.** 이 크레이트가 판정하지 않고 `TimestampRecord`와 체크포인트 단계(VC-114..118)가 지켜야 하는 것이다.
    - **시각은 구간이다.** `VerifiedTimestamp::earliest()`와 `latest()`는 `genTime ∓ 정확도`를 넘침 없이 계산한다(`Option`; `earliest`는 1970년 이전이면 `None`, `latest`는 검증된 토큰에서 언제나 값이 있다). VC-115(앵커 창)와 VC-116(역산 금지)은 `genTime` 하나가 아니라 이 구간으로 판정한다. "그 시각까지 존재했다"는 결론은 `latest()`로 내린다: 앵커는 `latest()`가 창 안일 때 충족이고, 역산은 `latest()`도 체크포인트 구간보다 앞설 때만 위반이다. 토큰에 정확도가 없으면 구간은 `genTime` 한 점이다. RFC 3161은 정확도를 정책으로 정할 수도 있게 하므로, 그런 기관은 genesis 항목에 정확도를 따로 둬야 한다.
    - **토큰 바이트는 유일하지 않다.** 서명되지 않은 부분(인증서 집합, 서명되지 않은 속성, 서명자 식별자의 형식, `rsaEncryption`과 `sha*WithRSAEncryption` 표기)은 서명을 깨지 않고 바꾸거나 더하거나 뺄 수 있고, ECDSA 서명은 `(r, n − s)`도 검증된다(`tests/strict.rs`). 검증 결과는 같다. 그래서 `TimestampRecord`와 VC-115는 유효 토큰을 기관(핀)과 운영 주체 단위로 센다. 토큰 바이트나 그 해시로 세면 같은 서명 하나가 둘로 셀 수 있다.
@@ -78,4 +80,4 @@ ADR-0034는 RFC 3161 토큰을 엄격한 DER 부분집합으로 읽고 genesis�
 ## 연결되는 검증
 
 - `crates/ityv-tsa/tests/rules.rs`(규칙마다 토큰 하나), `tests/tokens.rs`, `tests/strict.rs`, `tests/proptests.rs`, 모듈 단위 테스트, `kani/proofs.rs`, `fuzz/`; 시험 벡터 `tests/vectors/make.sh`, `tests/vectors/freetsa/fetch.sh`.
-- 남은 일(연결 단계): `TimestampRecord` 스키마와 genesis의 기관 목록(핀 바이트, 운영 주체, 정부 운영 여부), 체크포인트 단계의 역산 금지·앵커 창 판정(VC-114..118, 9의 구간과 기관 단위 계수), `TimestampMismatch`·`TimestampInvalid` 보류.
+- 연결 단계(ADR-0039): `TimestampRecord` 스키마와 genesis의 기관 목록(핀 바이트 1–4개, 운영 주체, 정부 운영 여부, 정책 정확도), 체크포인트 단계의 역산 금지·앵커 창 판정(9의 구간과 기관 단위 계수), `TimestampMismatch`·`TimestampInvalid` 보류. 이 크레이트의 공개 API(`PinnedTsa::from_bytes`, `verify_token`, `Imprint::of`, `VerifiedTimestamp`)만 쓰며 크레이트는 바뀌지 않았다.

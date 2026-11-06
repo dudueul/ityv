@@ -680,7 +680,8 @@ fn witnessed_event_vectors() {
     b[c1_role_at] = EventRole::Observer.code();
     v.push(invalid("one clerk", b, "InvariantViolation", sigs_at));
     // Version 3 (ADR-0036): role 10 is the auditor, who signs no box
-    // opening; role 11 is no role.
+    // opening; version 4 (ADR-0040): roles 11 and 12 are the roll's
+    // sources and custodians, who sign none either; role 13 is no role.
     let mut b = bytes.clone();
     b[c1_role_at] = EventRole::Auditor.code();
     v.push(invalid(
@@ -689,9 +690,23 @@ fn witnessed_event_vectors() {
         "InvariantViolation",
         sigs_at,
     ));
+    for (role, label) in [
+        (
+            EventRole::RollSource,
+            "roll source on a box opening (version 4)",
+        ),
+        (
+            EventRole::RollCustodian,
+            "roll custodian on a box opening (version 4)",
+        ),
+    ] {
+        let mut b = bytes.clone();
+        b[c1_role_at] = role.code();
+        v.push(invalid(label, b, "InvariantViolation", sigs_at));
+    }
     let mut b = bytes.clone();
-    b[c1_role_at] = 11;
-    v.push(invalid("role 11", b, "ValueOutOfRange", c1_role_at));
+    b[c1_role_at] = 13;
+    v.push(invalid("role 13", b, "ValueOutOfRange", c1_role_at));
     let mut b = bytes.clone();
     b[c1_role_at] = EventRole::Commission.code();
     v.push(invalid(

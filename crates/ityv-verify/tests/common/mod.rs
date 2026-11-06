@@ -28,16 +28,20 @@ use ityv_encoding::{
     Encode, EntrySet, GenesisAmendmentBody, GenesisAmendmentParts, GenesisBody, GenesisBox,
     GenesisEntry, GenesisParts, GenesisWitnessSig, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, Ident,
     ModuleEntry, ModuleId, ModuleIds, ObserverToken, OrgId, PartyEntry, ReportingUnitEntry,
-    ReportingUnitId, RosterRole, RosterSigner, RouteId, SCHEMA_GENESIS_AMENDMENT_BODY,
-    SCHEMA_GENESIS_BODY, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SCHEMA_VERSION_GENESIS, SchemaId,
-    SetCommitment, SignedGenesis, SignerId, StationEntry, StationId, StationKind, StationParts,
-    StationProgressPolicy, TimeBucket, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum,
-    WitnessRosterEntry, encode_object,
+    ReportingUnitId, RollAuthorityEntry, RosterRole, RosterSigner, RouteId,
+    SCHEMA_GENESIS_AMENDMENT_BODY, SCHEMA_GENESIS_BODY, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1,
+    SCHEMA_VERSION_GENESIS, SchemaId, SetCommitment, SignedGenesis, SignerId, StationEntry,
+    StationId, StationKind, StationParts, StationProgressPolicy, TimeBucket,
+    TimestampAuthorityEntry, TrusteeEntry, TrusteeId, UnitId, WitnessQuorum, WitnessRosterEntry,
+    encode_object,
 };
 use ityv_ledger::{Accumulator, sorted_set_root};
 use ityv_verify::{AmendableSets, AmendmentInput, FixedSets, GenesisInput};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
+
+pub mod roll;
+pub mod tsa;
 
 pub fn leak<T>(value: T) -> &'static T {
     Box::leak(Box::new(value))
@@ -200,6 +204,9 @@ pub struct Draft {
     pub styles: Vec<BallotStyleEntry<'static>>,
     pub trustees: Vec<TrusteeEntry<'static>>,
     pub witnesses: Vec<WitnessRosterEntry<'static>>,
+    pub timestamps: Vec<TimestampAuthorityEntry<'static>>,
+    pub rolls: Vec<RollAuthorityEntry<'static>>,
+    pub custody_quorum: u8,
     pub parties: Vec<PartyEntry<'static>>,
     pub chambers: Vec<ChamberThreshold>,
     pub quorum: WitnessQuorum,
@@ -466,6 +473,9 @@ impl Draft {
             styles,
             trustees,
             witnesses,
+            timestamps: tsa::authorities(),
+            rolls: roll::authorities(),
+            custody_quorum: 3,
             parties: std::vec![
                 PartyEntry {
                     chamber: ChamberCode::P1,
@@ -522,6 +532,8 @@ impl Draft {
             styles: encode_set(&self.styles),
             trustees: encode_set(&self.trustees),
             witnesses: encode_set(&self.witnesses),
+            timestamps: encode_set(&self.timestamps),
+            rolls: encode_set(&self.rolls),
         }
     }
 }
@@ -550,6 +562,8 @@ pub struct Raw {
     pub styles: Vec<&'static [u8]>,
     pub trustees: Vec<&'static [u8]>,
     pub witnesses: Vec<&'static [u8]>,
+    pub timestamps: Vec<&'static [u8]>,
+    pub rolls: Vec<&'static [u8]>,
 }
 
 fn commit_objects(objects: &[&[u8]]) -> SetCommitment {
@@ -588,6 +602,8 @@ impl Raw {
             commit_objects(&self.styles),
             commit_objects(&self.trustees),
             commit_objects(&self.witnesses),
+            commit_objects(&self.timestamps),
+            commit_objects(&self.rolls),
         ]
     }
 
@@ -609,6 +625,8 @@ impl Raw {
             ballot_styles: leak_slice(self.styles.clone()),
             trustees: leak_slice(self.trustees.clone()),
             witnesses: leak_slice(self.witnesses.clone()),
+            timestamp_authorities: leak_slice(self.timestamps.clone()),
+            roll_authorities: leak_slice(self.rolls.clone()),
         }
     }
 }
@@ -660,6 +678,7 @@ pub fn parts(draft: &Draft, raw: &Raw) -> GenesisParts<'static> {
         commission_key: registered(COMMISSION),
         committee_key: registered(COMMITTEE),
         quorum: draft.quorum,
+        custody_quorum: draft.custody_quorum,
         parties: leak_slice(draft.parties.clone()),
         chambers: leak_slice(draft.chambers.clone()),
         sets: raw.commitments(),

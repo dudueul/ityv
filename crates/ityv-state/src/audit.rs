@@ -272,7 +272,9 @@ pub fn check_audit_signers(
             | EventRole::Receiver
             | EventRole::Authority
             | EventRole::Device
-            | EventRole::Chair => return Err(Error::NotRegistered),
+            | EventRole::Chair
+            | EventRole::RollSource
+            | EventRole::RollCustodian => return Err(Error::NotRegistered),
         };
         roster_key(roster, s.signer_id, role, s.org_id)?;
         signing_key(keys, s, role)

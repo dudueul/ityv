@@ -17,8 +17,8 @@
 mod common;
 
 use ityv_encoding::{
-    Bytes, Decode, ElectionId, Encode, ErrorKind, Hash512, Ident, Point32, Reader, Scalar32,
-    SchemaId, Seq, Token192, Writer, encode_slice, encoded_len_of_slice,
+    Bytes, Decode, ElectionId, Encode, ErrorKind, Hash512, Ident, OrgId, Point32, Reader, Scalar32,
+    SchemaId, Seq, Token192, Writer, encode_slice, encoded_len_of_slice, same_org,
 };
 
 fn kind_at(result: Result<impl core::fmt::Debug, ityv_encoding::Error>) -> (ErrorKind, usize) {
@@ -331,4 +331,44 @@ fn seq_rejects_zero_and_schema_id_is_transparent() {
 fn error_display_names_kind_and_offset() {
     let e = ityv_encoding::Error::new(ErrorKind::BadMagic, 3);
     assert_eq!(std::format!("{e}"), "BadMagic at byte offset 3");
+}
+
+fn org(b: &'static [u8]) -> OrgId<'static> {
+    OrgId::new(b).unwrap()
+}
+
+#[test]
+fn spellings_of_one_name_are_one_organisation() {
+    for other in [
+        b"MOIS-GPKI".as_slice(),
+        b"mois-gpki",
+        b"Mois-Gpki",
+        b"MOIS_GPKI",
+        b"MOIS.GPKI",
+        b"MOIS:GPKI",
+        b"MOISGPKI",
+        b"-M-O-I-S-G-P-K-I-",
+    ] {
+        assert!(same_org(org(b"MOIS-GPKI"), org(other)), "{other:?}");
+        assert!(same_org(org(other), org(b"MOIS-GPKI")), "{other:?}");
+    }
+}
+
+#[test]
+fn other_letters_or_digits_are_another_organisation() {
+    // `M0IS` (a zero) is another name: the comparison is a guard against
+    // spellings, not an identity check.
+    for other in [
+        b"MOIS-GPKI2".as_slice(),
+        b"MOIS-GPK",
+        b"OIS-GPKI",
+        b"MOIS-GPKJ",
+        b"NOIS-GPKI",
+        b"M0IS-GPKI",
+    ] {
+        assert!(!same_org(org(b"MOIS-GPKI"), org(other)), "{other:?}");
+        assert!(!same_org(org(other), org(b"MOIS-GPKI")), "{other:?}");
+    }
+    assert!(same_org(org(b"A1"), org(b"a1")));
+    assert!(!same_org(org(b"A1"), org(b"A2")));
 }

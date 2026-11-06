@@ -78,11 +78,12 @@ use ityv_crypto::hash::object_hash;
 use ityv_encoding::schema_version;
 use ityv_encoding::{
     ActorSigs, COMMITTEE_ACTOR, ChamberCode, CheckinUnit, Decode, HYBRID_SIG_LEN, HYBRID_VK_LEN,
-    Hash512, ModuleId, ModuleProvisioned, ObserverCountKind, OrgId, PURPOSE_MODULE_PROVISIONED,
-    PURPOSE_PARTICIPATION_SET, PURPOSE_PARTY_KEY, ParticipationSet, PartyKeyCeremony, RosterRole,
-    SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY, SCHEMA_WITNESSED_EVENT, SchemaId, Seq,
-    StationId, WitnessedEvent, decode_object, is_party_chamber, keys_share_half,
+    Hash512, ModuleId, ModuleProvisioned, ObserverCountKind, OrgId, PSEUDONYM_LEN,
+    PURPOSE_MODULE_PROVISIONED, PURPOSE_PARTICIPATION_SET, PURPOSE_PARTY_KEY, ParticipationSet,
+    PartyKeyCeremony, RosterRole, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_MODULE_PROVISIONED,
+    SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PARTICIPATION_SET, SCHEMA_PARTY_KEY_CEREMONY,
+    SCHEMA_WITNESSED_EVENT, SchemaId, Seq, StationId, WitnessedEvent, decode_object,
+    is_party_chamber, keys_share_half,
 };
 use ityv_state::{
     HoldReason, HoldSet, IssuanceCount, IssuanceTotals, ObserverCount, Primary, RosterEntry,
@@ -190,6 +191,9 @@ pub struct StationParticipation<'a> {
     pub count: Option<u32>,
     /// The observers' final check-in count (the last final count taken).
     pub observers: Option<u64>,
+    /// The frame of its first final observer count taken: the station's
+    /// check-in had closed by then.
+    pub first_final: Option<Seq>,
     /// The frame of its last issuance count taken.
     pub issuance: Option<Seq>,
     /// Whether every box of the station has a close.
@@ -220,7 +224,16 @@ pub struct ParticipationStage<'a> {
     ceremonies: Vec<(ChamberCode, Seq)>,
     missing_ceremonies: Vec<ChamberCode>,
     missing_provisioning: Vec<(ModuleId<'a>, Hash512)>,
+    /// The accepted sets, in station key order.
+    sets: Vec<ParticipationSet<'a>>,
     holds: HoldSet,
+}
+
+/// Whether the sorted pseudonyms of `set` hold `pseudonym` (a binary
+/// search over the set's bytes viewed as 64-byte values: no copy).
+fn holds_pseudonym(set: &ParticipationSet<'_>, pseudonym: &[u8; PSEUDONYM_LEN]) -> bool {
+    let (values, _) = set.pseudonyms().as_bytes().as_chunks::<PSEUDONYM_LEN>();
+    values.binary_search(pseudonym).is_ok()
 }
 
 impl<'a> ParticipationStage<'a> {
@@ -288,6 +301,17 @@ impl<'a> ParticipationStage<'a> {
     #[must_use]
     pub const fn holds(&self) -> HoldSet {
         self.holds
+    }
+
+    /// The station of the first accepted participation set (in station
+    /// key order) that holds `pseudonym`, if any: where a contested
+    /// check-in's voter was counted (ADR-0033 decision 6, ADR-0040).
+    #[must_use]
+    pub fn pseudonym_station(&self, pseudonym: &[u8; PSEUDONYM_LEN]) -> Option<StationId<'a>> {
+        self.sets
+            .iter()
+            .find(|s| holds_pseudonym(s, pseudonym))
+            .map(ParticipationSet::station_id)
     }
 
     /// Whether every station's identities, every party's ceremony and
@@ -697,6 +721,8 @@ fn set_signatures(
 struct Counts {
     /// The last final observer count: frame and total.
     observers: Option<(Seq, u64)>,
+    /// The frame of the first final observer count.
+    first_final: Option<Seq>,
     /// The frame of the last issuance count.
     issuance: Option<Seq>,
     /// Whether one of the station's counts was not taken.
@@ -750,7 +776,10 @@ fn station_counts<'a>(ctx: &Ctx<'_, 'a>) -> (BTreeMap<&'a [u8], Counts>, Vec<Cou
         let station = counts.entry(station_id.as_bytes()).or_default();
         match taken {
             Some(Taken::Issuance) => station.issuance = Some(e.seq),
-            Some(Taken::Final(total)) => station.observers = Some((e.seq, total)),
+            Some(Taken::Final(total)) => {
+                station.observers = Some((e.seq, total));
+                station.first_final = station.first_final.or(Some(e.seq));
+            }
             Some(Taken::Periodic) => {}
             None => {
                 station.refused = true;
@@ -852,6 +881,7 @@ fn station_report<'a>(
         set: set.map(|(seq, _)| seq),
         count: set.map(|(_, count)| count),
         observers: counts.observers.map(|(_, total)| total),
+        first_final: counts.first_final,
         issuance: counts.issuance,
         closed: totals.is_some(),
         holds,
@@ -1100,6 +1130,7 @@ pub fn verify_participation<'a>(
         ceremonies: ceremonies.iter().map(|(c, x)| (*c, x.seq)).collect(),
         missing_ceremonies,
         missing_provisioning,
+        sets,
         holds,
     }
 }

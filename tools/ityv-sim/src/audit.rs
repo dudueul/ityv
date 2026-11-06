@@ -258,9 +258,27 @@ impl Audit {
         self.commit_with(self.dice, self.t.commit);
     }
 
-    /// A checkpoint in bucket `bucket`.
+    /// A checkpoint in bucket `bucket` without tokens, then the records
+    /// of `stamps`: each authority's token issued a minute into the bucket
+    /// given with it (an honest authority's real time, or a dishonest
+    /// one's).
+    pub fn checkpoint_stamped(&mut self, bucket: u64, stamps: &[(crate::tsa::Authority, u64)]) {
+        self.push(Step::Checkpoint { bucket, stamps: 0 });
+        for &(a, at) in stamps {
+            self.push(Step::Stamp {
+                named: a,
+                by: a,
+                bucket: at,
+            });
+        }
+    }
+
+    /// A checkpoint in bucket `bucket`, stamped by both simulated
+    /// timestamp authorities a minute into the bucket: the binding
+    /// checkpoint needs those tokens, recorded before the seed and before
+    /// the beacon's publication bucket (ADR-0039 8).
     pub fn checkpoint(&mut self, bucket: u64) {
-        self.push(Step::Checkpoint { bucket });
+        self.push(Step::Checkpoint { bucket, stamps: 2 });
     }
 
     /// The binding checkpoint's hash: the first checkpoint after the

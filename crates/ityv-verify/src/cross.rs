@@ -27,6 +27,8 @@
 //!   that a trustee quorum can be checked at all) (VC-067, VC-017);
 //! * no two devices share an identifier (boxes, check-in units and
 //!   modules), so a device attestation names exactly one device;
+//! * no timestamp authority's operator is a witness's organisation or an
+//!   election commission's that a reporting unit names (ADR-0039 2);
 //! * every registered key is a valid key, and no two keys of the state
 //!   share a half: the two authorities, every
 //!   box's device and attestation keys, every check-in unit's keys, every
@@ -48,6 +50,8 @@ use ityv_encoding::{
 
 use crate::error::{Error, Reference, Rule};
 use crate::genesis::{Amendable, Fixed};
+use crate::roll;
+use crate::timestamp;
 
 /// The highest chamber code (`N`).
 pub(crate) const CHAMBER_CODES: usize = 8;
@@ -349,6 +353,8 @@ pub(crate) fn check<'a>(
 
     check_appointments(state, a, f)?;
     check_devices(state, a)?;
+    timestamp::check_operators_apart(state, &f.timestamps, &f.witnesses, &a.roster, &a.units)?;
+    roll::check_custodians_apart(state, &f.rolls, &a.units)?;
     check_keys(state, a, f, body)
 }
 
@@ -438,6 +444,9 @@ fn check_keys(
     }
     for (i, item) in f.witnesses.items().iter().enumerate() {
         keys.add(item.value.key, Some(EntrySet::Witnesses), i)?;
+    }
+    for (i, item) in f.rolls.items().iter().enumerate() {
+        keys.add(item.value.key, Some(EntrySet::RollAuthorities), i)?;
     }
     Ok(())
 }
