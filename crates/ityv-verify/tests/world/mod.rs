@@ -1559,9 +1559,14 @@ pub(crate) fn election_world() -> &'static World {
 /// As [`election_world`], with one amendment that `change` makes to its
 /// draft; with the signed amendment.
 pub(crate) fn election_amended(change: impl FnOnce(&mut Draft)) -> (World, &'static [u8]) {
-    let d = election_draft();
+    draft_amended(&election_draft(), change)
+}
+
+/// `d` signed, with one amendment that `change` makes to it; with the
+/// signed amendment.
+pub(crate) fn draft_amended(d: &Draft, change: impl FnOnce(&mut Draft)) -> (World, &'static [u8]) {
     let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
-    let built = leak(sign_genesis_with(&d, d.raw(), &SIGNERS, |p| {
+    let built = leak(sign_genesis_with(d, d.raw(), &SIGNERS, |p| {
         p.legal_authorization_hash = object_hash(body);
     }));
     let mut next = d.clone();
@@ -1609,7 +1614,12 @@ pub(crate) const TWO_UNIT_MODULES: [(&[u8], ChamberCode, &[u8], u16, bool); 9] =
 /// ST-1 with BOX-1 in RU-1 and BOX-2 in RU-2, both STYLE-1: two units.
 pub(crate) fn two_unit_world() -> &'static World {
     static WORLD: OnceLock<&'static World> = OnceLock::new();
-    WORLD.get_or_init(|| {
+    WORLD.get_or_init(|| leak(build(&two_unit_draft(), &TALLY_SCOPES)))
+}
+
+/// The draft of [`two_unit_world`].
+pub(crate) fn two_unit_draft() -> Draft {
+    {
         let mut d = Draft::standard();
         d.boxes = std::vec![
             common::genesis_box(0, b"BOX-1", b"ST-1", RU1, &[b"M-B1-P1", b"M-B1-P2"]),
@@ -1657,6 +1667,6 @@ pub(crate) fn two_unit_world() -> &'static World {
             None,
         ));
         d.appointments = d.referenced_appointments();
-        leak(build(&d, &TALLY_SCOPES))
-    })
+        d
+    }
 }

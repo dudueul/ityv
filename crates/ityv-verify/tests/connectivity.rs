@@ -4933,6 +4933,69 @@ fn r3_3b_a_transmitter_replaced_alone_on_the_day_has_an_honest_path() {
 }
 
 #[test]
+fn r3_3c_a_box_an_amendment_removed_owes_no_slot_after_its_last_frame() {
+    // ST-1 with two boxes; BOX-2 opened and sent to slot 170, then an
+    // amendment removed it (with its modules). Its link is in no later
+    // state: once the gateway closed it owes no slot after its last frame,
+    // while BOX-1 and the unit owe every slot to the last window.
+    let (w, amendment) = draft_amended(&two_unit_draft(), |d| {
+        d.boxes.retain(|b| b.box_id.as_bytes() != B2.id);
+        d.modules
+            .retain(|m| !m.module_id.as_bytes().starts_with(b"M-B2"));
+        d.units.truncate(1);
+        let s = d.stations[0];
+        d.stations[0] = ityv_encoding::StationEntry::new(&ityv_encoding::StationParts {
+            station_id: s.station_id(),
+            kind: s.kind(),
+            primary: *s.primary(),
+            spare: *s.spare(),
+            gateway: *s.gateway(),
+            boxes: leak_slice(std::vec![BoxId::new(B1.id).unwrap()]),
+            id_terminals_hash: *s.id_terminals_hash(),
+            tokens: leak_slice(s.tokens().collect()),
+        })
+        .unwrap();
+    });
+    let w = leak(w);
+    let removed =
+        common::uplink::key_number(w.genesis.expected_box_at(0, B2.id).unwrap().frame_key);
+    let mut book = Book::new(w);
+    book.w(opened(B1));
+    book.w(opened(B2));
+    book.push(ityv_encoding::SCHEMA_SIGNED_GENESIS, amendment);
+    let links = station_links(w.genesis, &book.ledger.events).remove(0).1;
+    let first = links[UNIT].frames[0].slot;
+    let per_slot = u16::try_from(
+        links[UNIT]
+            .frames
+            .iter()
+            .filter(|f| f.slot == first)
+            .count(),
+    )
+    .unwrap();
+    let empty = |to: u64| -> Vec<(u64, FrameKind, Vec<&'static [u8]>)> {
+        (150..=to)
+            .map(|s| (s, FrameKind::Normal, Vec::new()))
+            .collect()
+    };
+    let plan = Plan::new(
+        ST,
+        std::vec![
+            link_of(links[SCANNER].key, &empty(179), 1),
+            link_of(links[UNIT].key, &empty(179), per_slot),
+            link_of(removed, &empty(170), 1),
+        ],
+    );
+    let r = verify_book(book, plan.events());
+    assert!(sessions_found(&r).is_empty(), "{:?}", sessions_found(&r));
+    assert!(
+        found(&r, link(removed)).is_empty(),
+        "{:?}",
+        found(&r, link(removed))
+    );
+}
+
+#[test]
 fn r3_4_a_spare_transmitter_does_not_send_before_its_swap() {
     // An amendment and a swap at slot 181 replace BOX-1's transmitter; the
     // spare transmits from the opening, in parallel with the old one.
