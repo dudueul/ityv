@@ -2591,6 +2591,32 @@ fn a_capture_shows_bytes_that_are_not_the_published_objects() {
     assert_eq!(capture_problems(&c), [(None, CaptureProblem::NotObject)]);
     assert_eq!(c.findings[0].stream_offset, Some(after as u64));
 
+    // A second frame that carries the whole stream again one byte on and
+    // lists every object there (review 2 of 2i, J): each starts inside one
+    // listed before it, so it is no object of its own and is not
+    // assembled, though its bytes would hash to it.
+    let l = &day().links[SCANNER];
+    let mut shifted = l.frames[0].clone();
+    shifted.slot = 151;
+    shifted.stream_offset = 1;
+    for o in &mut shifted.objects {
+        o.stream_offset += 1;
+    }
+    shifted.seal(l.key, link(l.key));
+    let file = capture_file(&[wire_frame(&l.frames[0], l.key), wire_frame(&shifted, l.key)]);
+    let c = compare_capture(election_world().genesis, r.index(), &file);
+    for o in &shifted.objects {
+        assert!(
+            c.findings
+                .iter()
+                .any(|f| f.problem == CaptureProblem::ObjectDiffers
+                    && f.stream_offset == Some(o.stream_offset)),
+            "{:?}",
+            c.findings
+        );
+    }
+    assert_eq!(c.objects_matched, 1);
+
     // A record that is not a canonical frame, then a length past the end.
     let mut bad = wire_frame(&day().links[SCANNER].frames[1], day().links[SCANNER].key);
     let n = bad.len();

@@ -72,7 +72,8 @@ pub enum CaptureProblem {
     /// link, slot and number.
     Differs,
     /// Captured bytes at a listed object do not hash to it, or are not
-    /// a canonical header of its schema.
+    /// a canonical header of its schema, or an object listed before it
+    /// covers them.
     ObjectDiffers,
     /// Captured bytes no listed object covers, or fill around a share
     /// package that is not zero.
@@ -339,7 +340,21 @@ pub fn compare_capture(
                 objects.entry(o.stream_offset).or_insert(o);
             }
         }
+        // In stream order, past the end of the last object assembled: an
+        // object over bytes an earlier one covers is no object of its own,
+        // and no captured byte is assembled twice.
+        let mut cursor = 0u64;
         for o in objects.values() {
+            if o.stream_offset < cursor {
+                out.findings.push(finding(
+                    Some(Hash512(link)),
+                    None,
+                    Some(o.stream_offset),
+                    CaptureProblem::ObjectDiffers,
+                ));
+                continue;
+            }
+            cursor = o.end().unwrap_or(u64::MAX);
             let Some(bytes) = assemble(&pieces, o.stream_offset, u64::from(o.len)) else {
                 continue;
             };
