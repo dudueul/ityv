@@ -19,7 +19,9 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 use std::vec::Vec;
 
-use ityv_crypto::uplink::{chain_next, chain_start, chunk_leaf, link_id, payload_root, zero_leaf};
+use ityv_crypto::uplink::{
+    chain_next, chain_start, chunk_leaf, link_id, objects_hash, payload_root, zero_leaf,
+};
 use ityv_crypto::{HybridSigningKey, RecordPurpose, RecordSigningKey, object_hash, sign_record};
 use ityv_encoding::{
     BatchAttest, CARRY_PUBLIC, CARRY_SEALED, CHUNK_LEN, CaptureMessage, CaptureSig,
@@ -286,12 +288,25 @@ pub struct Built {
     pub payload_len: u32,
     /// The data (`payload_len` bytes).
     pub data: Vec<u8>,
+    /// Its object list: every object that overlaps the data.
+    pub objects: Vec<StreamObject>,
     /// Nonzero fill bytes a test puts after the data: (payload offset,
     /// byte).
     pub fill: Vec<(usize, u8)>,
     pub payload_root: Hash512,
     pub leaves: Vec<Hash512>,
     pub sig: [u8; 64],
+}
+
+/// The encoded entries of `objects`.
+pub fn list_bytes(objects: &[StreamObject]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for o in objects {
+        let mut buf = std::vec![0u8; o.encoded_len()];
+        o.encode(&mut ityv_encoding::Writer::new(&mut buf)).unwrap();
+        out.extend_from_slice(&buf);
+    }
+    out
 }
 
 impl Built {
@@ -302,9 +317,20 @@ impl Built {
             kind: self.kind,
             stream_offset: self.stream_offset,
             payload_len: self.payload_len,
+            object_count: self.objects.len() as u16,
             payload_root: self.payload_root,
             frame_sig: leak(self.sig),
         }
+    }
+
+    /// The encoded object list.
+    pub fn list(&self) -> &'static [u8] {
+        leak_slice(list_bytes(&self.objects))
+    }
+
+    /// The frame's header on link `link`.
+    pub fn header(&self, link: Hash512) -> UplinkFrameHeaderParts {
+        self.entry().header(link, objects_hash(self.list()))
     }
 
     /// The bytes of chunk `j` of the payload (zero-extended).
@@ -324,7 +350,7 @@ impl Built {
         c
     }
 
-    /// The whole payload (1,048,425 bytes), fill included.
+    /// The whole payload (966,503 bytes), fill included.
     pub fn payload(&self) -> Vec<u8> {
         let mut p = self.data.clone();
         p.resize(MAX_PAYLOAD_LEN, 0);
@@ -363,7 +389,7 @@ impl Built {
 
     /// Signs the header under frame key `key`.
     pub fn sign(&mut self, key: u16, link: Hash512) {
-        let header = header_object(&self.entry().header(link));
+        let header = header_object(&self.header(link));
         self.sig = *sign_record(&frame_signing(key), RecordPurpose::UplinkFrame, header)
             .unwrap()
             .as_bytes();
@@ -379,9 +405,23 @@ pub fn header_object(parts: &UplinkFrameHeaderParts) -> &'static [u8] {
     )
 }
 
-/// The frames of a device that sends `stream` (its objects' bytes in
-/// order) from slot `first` to slot `last`, `per_slot` normal frames a
-/// slot, the stream as early as it fits.
+/// The entries of `objects` (a stream's) that overlap `[start, start +
+/// len)`; none for an empty range.
+pub fn overlapping(objects: &[StreamObject], start: u64, len: u32) -> Vec<StreamObject> {
+    if len == 0 {
+        return Vec::new();
+    }
+    let end = start + u64::from(len);
+    objects
+        .iter()
+        .filter(|o| o.stream_offset < end && o.end().unwrap() > start)
+        .copied()
+        .collect()
+}
+
+/// Frames that carry the raw bytes `stream` from slot `first` to slot
+/// `last`, `per_slot` normal frames a slot, as early as they fit, listing
+/// no object (bytes a device sends that are no object).
 pub fn frames(key: u16, stream: &[u8], first: u64, last: u64, per_slot: u16) -> Vec<Built> {
     let link = link(key);
     let mut out = Vec::new();
@@ -396,6 +436,7 @@ pub fn frames(key: u16, stream: &[u8], first: u64, last: u64, per_slot: u16) -> 
                 stream_offset: offset as u64,
                 payload_len: len as u32,
                 data: stream[offset..offset + len].to_vec(),
+                objects: Vec::new(),
                 fill: Vec::new(),
                 payload_root: Hash512::ZERO,
                 leaves: Vec::new(),
@@ -409,23 +450,128 @@ pub fn frames(key: u16, stream: &[u8], first: u64, last: u64, per_slot: u16) -> 
     out
 }
 
-/// The stream of `objects`: their bytes concatenated, and each one's
-/// entry.
+/// The stream of `objects` laid end to end, with no fill: their bytes
+/// concatenated, and each one's entry.
 pub fn stream(objects: &[&'static [u8]]) -> (Vec<u8>, Vec<StreamObject>) {
     let mut bytes = Vec::new();
     let mut list = Vec::new();
     for o in objects {
-        let mut r = Reader::new(o);
-        let header = ObjectHeader::read(&mut r).unwrap();
-        list.push(StreamObject {
-            schema: header.schema_id(),
-            object_hash: object_hash(o),
-            stream_offset: bytes.len() as u64,
-            len: o.len() as u32,
-        });
+        list.push(entry_at(o, bytes.len() as u64));
         bytes.extend_from_slice(o);
     }
     (bytes, list)
+}
+
+/// The entry of `object` at stream offset `at`.
+pub fn entry_at(object: &'static [u8], at: u64) -> StreamObject {
+    let mut r = Reader::new(object);
+    let header = ObjectHeader::read(&mut r).unwrap();
+    StreamObject {
+        schema: header.schema_id(),
+        object_hash: object_hash(object),
+        stream_offset: at,
+        len: object.len() as u32,
+    }
+}
+
+/// Whether `object` is a share package.
+fn is_package(object: &[u8]) -> bool {
+    schema_of(object) == ityv_encoding::SCHEMA_SHARE_PACKAGE
+}
+
+/// How an honest device lays `objects` into frames of at most `capacity`
+/// data bytes (ADR-0041 decision 3): each frame takes as much of the
+/// stream as fits; a share package starts at a 4,096-byte boundary of the
+/// frame it starts in, and so does the object after it, with zero fill
+/// between; a package or the object after it whose boundary is past the
+/// frame's end starts the next frame. Returns the stream (fill included),
+/// its objects, and each frame's `(offset, len)` for `frames` frames.
+pub fn layout(
+    objects: &[&'static [u8]],
+    capacity: usize,
+    frames: usize,
+) -> (Vec<u8>, Vec<StreamObject>, Vec<(u64, u32)>) {
+    let mut stream: Vec<u8> = Vec::new();
+    let mut listed: Vec<StreamObject> = Vec::new();
+    let mut spans = Vec::new();
+    let mut next = 0usize;
+    let mut carry: &[u8] = &[];
+    let mut previous_package = false;
+    for _ in 0..frames {
+        let start = stream.len();
+        let mut used = 0usize;
+        if !carry.is_empty() {
+            let take = carry.len().min(capacity);
+            stream.extend_from_slice(&carry[..take]);
+            carry = &carry[take..];
+            used = take;
+        }
+        while carry.is_empty() && next < objects.len() {
+            let o = objects[next];
+            let aligned = previous_package || is_package(o);
+            let at = if aligned {
+                used.div_ceil(CHUNK_LEN) * CHUNK_LEN
+            } else {
+                used
+            };
+            if at >= capacity {
+                break;
+            }
+            stream.resize(start + at, 0);
+            listed.push(entry_at(o, (start + at) as u64));
+            let take = o.len().min(capacity - at);
+            stream.extend_from_slice(&o[..take]);
+            carry = &o[take..];
+            used = at + take;
+            previous_package = is_package(o);
+            next += 1;
+        }
+        spans.push((start as u64, used as u32));
+    }
+    assert!(
+        next == objects.len() && carry.is_empty(),
+        "the frames hold the stream"
+    );
+    (stream, listed, spans)
+}
+
+/// The frames of a device on link `key` that sends `objects` from slot
+/// `first` to slot `last`, `per_slot` normal frames a slot, laid out as
+/// [`layout`] does, and the stream's objects.
+pub fn device_frames(
+    key: u16,
+    objects: &[&'static [u8]],
+    first: u64,
+    last: u64,
+    per_slot: u16,
+) -> (Vec<Built>, Vec<StreamObject>) {
+    let link = link(key);
+    let count = (last - first + 1) as usize * usize::from(per_slot);
+    let (stream, listed, spans) = layout(objects, MAX_PAYLOAD_LEN, count);
+    let mut out = Vec::new();
+    let mut spans = spans.into_iter();
+    for slot in first..=last {
+        for index in 0..per_slot {
+            let (offset, len) = spans.next().unwrap();
+            let at = offset as usize;
+            let mut f = Built {
+                slot,
+                index,
+                kind: FrameKind::Normal,
+                stream_offset: offset,
+                payload_len: len,
+                data: stream[at..at + len as usize].to_vec(),
+                objects: overlapping(&listed, offset, len),
+                fill: Vec::new(),
+                payload_root: Hash512::ZERO,
+                leaves: Vec::new(),
+                sig: [0; 64],
+            };
+            f.seal(key, link);
+            out.push(f);
+        }
+    }
+    (out, listed)
 }
 
 /// A device's link as the gateway records it.
@@ -433,6 +579,7 @@ pub fn stream(objects: &[&'static [u8]]) -> (Vec<u8>, Vec<StreamObject>) {
 pub struct Link {
     pub key: u16,
     pub frames: Vec<Built>,
+    /// The stream's objects (each frame lists those that overlap it).
     pub objects: Vec<StreamObject>,
 }
 
@@ -440,11 +587,21 @@ impl Link {
     /// The link of frame key `key` sending `objects` from `first` to
     /// `last` at `per_slot` frames a slot.
     pub fn new(key: u16, objects: &[&'static [u8]], first: u64, last: u64, per_slot: u16) -> Self {
-        let (bytes, listed) = stream(objects);
+        let (frames, objects) = device_frames(key, objects, first, last, per_slot);
         Self {
             key,
-            frames: frames(key, &bytes, first, last, per_slot),
-            objects: listed,
+            frames,
+            objects,
+        }
+    }
+
+    /// Lists in each frame the stream's objects that overlap it, and seals
+    /// every frame again: after a test moved data between frames.
+    pub fn relist(&mut self) {
+        let link = link(self.key);
+        for f in &mut self.frames {
+            f.objects = overlapping(&self.objects, f.stream_offset, f.payload_len);
+            f.seal(self.key, link);
         }
     }
 }
@@ -456,10 +613,6 @@ pub type LinkTweak<'t> = &'t dyn Fn(u32, &mut SessionLink);
 /// drops it), as a test may decide.
 pub type Assign<'t> = &'t dyn Fn(usize, &Built) -> Option<usize>;
 
-/// The objects a session's log lists for link `l`, given the ones an
-/// honest gateway would list.
-pub type ObjectsIn<'t> = &'t dyn Fn(usize, usize, Vec<StreamObject>) -> Vec<StreamObject>;
-
 /// How a gateway records `links` at `station`: its windows and what a
 /// test changes on the way.
 pub struct Plan<'t> {
@@ -469,7 +622,6 @@ pub struct Plan<'t> {
     pub assign: Option<Assign<'t>>,
     pub tweak_link: Option<LinkTweak<'t>>,
     pub tweak_body: Option<&'t dyn Fn(&mut UplinkSessionParts<'static>)>,
-    pub objects_in: Option<ObjectsIn<'t>>,
     /// Observers who sign a capture statement on a session: (window,
     /// observer, organisation, roster key number).
     pub observers: Vec<(usize, &'static [u8], &'static [u8], u16)>,
@@ -504,7 +656,6 @@ impl Plan<'_> {
             assign: None,
             tweak_link: None,
             tweak_body: None,
-            objects_in: None,
             observers: Vec::new(),
             gateway_key: None,
         }
@@ -550,27 +701,13 @@ impl Plan<'_> {
                     continue;
                 }
                 for f in &frames {
-                    let h = object_hash(header_object(&f.entry().header(link)));
+                    let h = object_hash(header_object(&f.header(link)));
                     head = chain_next(&head, &h);
                     stream_end = f.stream_offset + u64::from(f.payload_len);
                 }
-                let honest: Vec<StreamObject> = l
-                    .objects
-                    .iter()
-                    .filter(|o| {
-                        frames.iter().any(|f| {
-                            f.stream_offset <= o.stream_offset
-                                && o.stream_offset < f.stream_offset + u64::from(f.payload_len)
-                        })
-                    })
-                    .copied()
-                    .collect();
-                let objects = match self.objects_in {
-                    Some(o) => o(k, li, honest),
-                    None => honest,
-                };
                 let mut frame_bytes = Vec::new();
                 let mut leaf_bytes = Vec::new();
+                let mut object_bytes = Vec::new();
                 for f in &frames {
                     let e = f.entry();
                     let mut buf = std::vec![0u8; e.encoded_len()];
@@ -579,12 +716,7 @@ impl Plan<'_> {
                     for leaf in &f.leaves {
                         leaf_bytes.extend_from_slice(leaf.as_bytes());
                     }
-                }
-                let mut object_bytes = Vec::new();
-                for o in &objects {
-                    let mut buf = std::vec![0u8; o.encoded_len()];
-                    o.encode(&mut ityv_encoding::Writer::new(&mut buf)).unwrap();
-                    object_bytes.extend_from_slice(&buf);
+                    object_bytes.extend_from_slice(&list_bytes(&f.objects));
                 }
                 let log = UplinkFrameLog::new(&UplinkFrameLogParts {
                     election_id: election(),
@@ -720,6 +852,34 @@ pub fn schema_of(object: &[u8]) -> SchemaId {
     ObjectHeader::read(&mut r).unwrap().schema_id()
 }
 
+/// The share package the test world's record `record` names: the stand-in
+/// of its box and first module counter (`world::share_package`), if that
+/// is the one it names.
+pub fn package_of(record: &'static [u8]) -> Option<&'static [u8]> {
+    use ityv_encoding::{CastRecord, SCHEMA_SHARE_PACKAGE};
+    let r = decode_object::<CastRecord<'_>>(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, record).ok()?;
+    let counter = r.body().module_counters().iter().next()?.counter;
+    let mut body = r.body().box_id().as_bytes().to_vec();
+    body.extend_from_slice(&counter.to_be_bytes());
+    let p = fake_object(SCHEMA_SHARE_PACKAGE, &body);
+    (object_hash(p) == *r.body().share_package_hash()).then_some(p)
+}
+
+/// `stream` with each record's share package right after it, where the
+/// world can make it.
+pub fn with_packages(stream: &[&'static [u8]]) -> Vec<&'static [u8]> {
+    let mut out = Vec::new();
+    for o in stream {
+        out.push(*o);
+        if schema_of(o) == SCHEMA_CAST_RECORD
+            && let Some(p) = package_of(o)
+        {
+            out.push(p);
+        }
+    }
+    out
+}
+
 /// A box's stream from its ledger events in order: each batch attestation
 /// followed by its records (the last `record_count` seen before it) in
 /// record-hash order; progress ticks and challenge openings where they
@@ -805,7 +965,8 @@ pub fn fake_object(schema: SchemaId, body: &[u8]) -> &'static [u8] {
 pub fn wire_frame(frame: &Built, key: u16) -> Vec<u8> {
     let payload: Box<[u8; MAX_PAYLOAD_LEN]> =
         frame.payload().into_boxed_slice().try_into().unwrap();
-    let wire = UplinkFrame::new(&frame.entry().header(link(key)), &payload, &frame.sig).unwrap();
+    let objects = ityv_encoding::FrameObjects::new(frame.list()).unwrap();
+    let wire = UplinkFrame::new(&frame.header(link(key)), objects, &payload, &frame.sig).unwrap();
     let mut out = std::vec![0u8; ityv_encoding::HEADER_LEN + wire.encoded_len()];
     let n = ityv_encoding::encode_object(
         ityv_encoding::SCHEMA_UPLINK_FRAME,
@@ -919,8 +1080,11 @@ fn box_buckets(events: &[&'static [u8]], box_id: &[u8]) -> (Option<u64>, Option<
 /// The links that carry every device event of `events` (the ledger's
 /// event objects so far) for every station of `genesis`'s last state, by
 /// station: each opened box's scanner from the first slot of its opening
-/// to the last slot of its close, the station's in-service unit from the
-/// station's first opening to the slot after its last close.
+/// to the slot after its close bucket (its closing tick's), its records'
+/// share packages after them; the station's in-service unit from the
+/// station's first opening to its last box's close slot. While a box is
+/// open, its scanner (and the unit) send to the end of the six-slot window
+/// that holds the station's last close slot (or its first opening).
 pub fn station_links(
     genesis: &ityv_verify::VerifiedGenesis<'static>,
     events: &[&'static [u8]],
@@ -930,19 +1094,24 @@ pub fn station_links(
     let slots = |bucket: u64| bucket_slots(TimeBucket::new(bucket)).unwrap();
     let mut out = Vec::new();
     for station in genesis.stations() {
-        let mut links = Vec::new();
-        let mut first_open: Option<u64> = None;
-        let mut last_close: Option<u64> = None;
+        let mut opened = Vec::new();
         for b in station.boxes() {
-            let entry = genesis.expected_box(b.as_bytes()).unwrap();
             let (open, close) = box_buckets(events, b.as_bytes());
             let Some(open) = open else {
                 continue;
             };
-            let first = slots(open).0;
-            let last = close.map_or(first, |c| slots(c).1);
-            first_open = Some(first_open.map_or(first, |f| f.min(first)));
-            last_close = Some(last_close.map_or(last, |l| l.max(last)));
+            opened.push((b, slots(open).0, close.map(|c| slots(c).1 + 1)));
+        }
+        let Some(first) = opened.iter().map(|(_, f, _)| *f).min() else {
+            continue;
+        };
+        let closed_end = opened.iter().filter_map(|(_, _, c)| *c).max();
+        let any_open = opened.iter().any(|(_, _, c)| c.is_none());
+        let end = closed_end.unwrap_or(first);
+        let window_end = first + (end - first) / 6 * 6 + 5;
+        let mut links = Vec::new();
+        for (b, open, close) in &opened {
+            let entry = genesis.expected_box(b.as_bytes()).unwrap();
             let mine: Vec<&'static [u8]> = events
                 .iter()
                 .copied()
@@ -950,15 +1119,12 @@ pub fn station_links(
                 .collect();
             links.push(Link::new(
                 key_number(entry.frame_key),
-                &box_stream(&mine),
-                first,
-                last,
+                &with_packages(&box_stream(&mine)),
+                *open,
+                close.unwrap_or(window_end),
                 SCANNER_FRAMES.0,
             ));
         }
-        let (Some(first), Some(last)) = (first_open, last_close) else {
-            continue;
-        };
         let station_id = station.station_id().as_bytes();
         let mine: Vec<&'static [u8]> = events
             .iter()
@@ -969,7 +1135,7 @@ pub fn station_links(
             key_number(station.primary().frame_key),
             &mine,
             first,
-            last + 1,
+            if any_open { window_end } else { end },
             UNIT_FRAMES.0,
         ));
         let id: &'static [u8] = leak_slice(station_id.to_vec());

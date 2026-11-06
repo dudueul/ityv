@@ -1042,7 +1042,7 @@ fn an_amended_state_meets_every_cross_set_rule() {
 fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
     let built = standard();
     // The amendment replaces BOX-3 by BOX-4 and ST-2's spare unit U-2B by
-    // U-2C.
+    // U-2C, each with a frame key of its own.
     let mut draft = Draft::standard();
     draft.boxes[2] = genesis_box(
         2,
@@ -1051,11 +1051,14 @@ fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
         b"RU-2",
         &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
     );
+    draft.boxes[2].frame_key = common::uplink::frame_key(common::uplink::BOX_FRAME_BASE + 9);
+    let mut u2c = checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]);
+    u2c.frame_key = common::uplink::frame_key(common::uplink::UNIT_FRAME_BASE + 9);
     draft.stations[1] = station(
         b"ST-2",
         StationKind::EarlyVoting,
         checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
-        checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        u2c,
         &[b"BOX-4"],
         &[],
     );
@@ -1539,6 +1542,89 @@ fn refuses_a_frame_key_shared_or_nothing_could_verify_under() {
         verify(&draft).unwrap_err(),
         at(EntrySet::Stations, 1, Rule::InvalidKey)
     );
+}
+
+/// The Ed25519 half of hybrid key `key`, as a frame key.
+fn ed25519_half(key: &[u8; ityv_encoding::HYBRID_VK_LEN]) -> &'static [u8; 32] {
+    common::leak(key[ityv_encoding::MLDSA87_VK_HALF..].try_into().unwrap())
+}
+
+#[test]
+fn refuses_a_frame_key_that_is_a_hybrid_keys_half() {
+    // ST-2's gateway key's Ed25519 half as its in-service unit's frame
+    // key: the gateway could sign the unit's frames (the review of 2i).
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| p.primary.frame_key = ed25519_half(p.gateway.key));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedKey)
+    );
+    // BOX-1's own device key's half as its frame key.
+    let mut draft = Draft::standard();
+    draft.boxes[0].frame_key = ed25519_half(draft.boxes[0].device_key);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 0, Rule::SharedKey)
+    );
+    // The committee's half, held by no device.
+    let mut draft = Draft::standard();
+    draft.boxes[1].frame_key = ed25519_half(registered(common::COMMITTEE));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 1, Rule::SharedKey)
+    );
+}
+
+#[test]
+fn a_frame_key_stays_apart_from_every_states_keys_and_with_its_device() {
+    let built = standard();
+    // The amendment swaps BOX-3's device and gives it, as frame key, the
+    // half of the device key it had before: no key of the new state has
+    // that half, the genesis state did.
+    let mut draft = Draft::standard();
+    let old = draft.boxes[2].device_key;
+    draft.boxes[2].device_key = registered(SPARE_BASE + 2);
+    draft.boxes[2].frame_key = ed25519_half(old);
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let err = verify_genesis(&built.pin, &built.input(), &[a]).unwrap_err();
+    assert_eq!(
+        (err.state, err.set, err.rule),
+        (1, Some(EntrySet::Boxes), Rule::SharedKey)
+    );
+    // BOX-4 replaces BOX-3 and takes over its frame key: the link would
+    // name two devices.
+    let mut draft = Draft::standard();
+    draft.boxes[2] = genesis_box(
+        2,
+        b"BOX-4",
+        b"ST-2",
+        b"RU-2",
+        &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
+    );
+    draft.stations[1] = st2_with(|p| {
+        p.boxes = common::leak_slice(std::vec![ityv_encoding::BoxId::new(b"BOX-4").unwrap()]);
+    });
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let err = verify_genesis(&built.pin, &built.input(), &[a]).unwrap_err();
+    assert_eq!(
+        (err.state, err.set, err.rule),
+        (1, Some(EntrySet::Boxes), Rule::SharedKey)
+    );
+    // A unit's frame key moves to another unit of the station.
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| {
+        p.spare = checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]);
+    });
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let err = verify_genesis(&built.pin, &built.input(), &[a]).unwrap_err();
+    assert_eq!(
+        (err.state, err.set, err.rule),
+        (1, Some(EntrySet::Stations), Rule::SharedKey)
+    );
+    // The same device keeping its frame key is fine.
+    let (_, raw) = amended_raw();
+    let a = amendment(1, built.pin, &raw, &SIGNERS);
+    assert!(verify_genesis(&built.pin, &built.input(), &[a]).is_ok());
 }
 
 #[test]
