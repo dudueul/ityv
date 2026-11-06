@@ -2410,8 +2410,8 @@ fn unit_swaps(
     unit: &[u8],
     original: bool,
 ) -> (Option<u64>, Option<u64>) {
-    let mut brought = None;
-    let mut taken = None;
+    // Each swap of the station: the failed unit, the spare, the slot.
+    let mut swaps: Vec<(&[u8], &[u8], u64)> = Vec::new();
     for e in index.station_events(station_id) {
         let Some(w) = e
             .bytes
@@ -2427,18 +2427,23 @@ fn unit_swaps(
         else {
             continue;
         };
-        let Ok(swap) = w.body::<CheckinUnitSwapBody<'_>>(SCHEMA_CHECKIN_UNIT_SWAP_BODY) else {
-            continue;
-        };
-        let p = swap.parts();
-        if !original && brought.is_none() && p.spare_unit.as_bytes() == unit {
-            brought = Some(p.at_slot);
-        }
-        let in_service = original || brought.is_some_and(|b| p.at_slot >= b);
-        if taken.is_none() && in_service && p.failed_unit.as_bytes() == unit {
-            taken = Some(p.at_slot);
+        if let Ok(swap) = w.body::<CheckinUnitSwapBody<'_>>(SCHEMA_CHECKIN_UNIT_SWAP_BODY) {
+            let p = swap.parts();
+            swaps.push((p.failed_unit.as_bytes(), p.spare_unit.as_bytes(), p.at_slot));
         }
     }
+    let brought = if original {
+        None
+    } else {
+        swaps
+            .iter()
+            .find(|(_, spare, _)| *spare == unit)
+            .map(|(_, _, at)| *at)
+    };
+    let taken = swaps
+        .iter()
+        .find(|(failed, _, at)| *failed == unit && brought.is_none_or(|b| *at >= b))
+        .map(|(_, _, at)| *at);
     (brought, taken)
 }
 

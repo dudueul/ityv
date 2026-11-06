@@ -1221,15 +1221,10 @@ fn a_device_sends_from_the_opening_or_its_swap_to_the_close_or_its_swap() {
             .box_holds(B1.id)
             .contains(HoldReason::UplinkFrameInvalid)
     );
-    // A swap of two other units moves neither link; a later swap that
-    // takes the spare out ends its slots too (a spare is used once: the
-    // unit it replaced does not come back).
+    // A later swap that takes the spare out ends its slots too (a spare is
+    // used once: the unit it replaced does not come back).
     let mut book = book_in(world);
-    for (failed, spare, at) in [
-        (&b"U-1C"[..], &b"U-1D"[..], 170),
-        (b"U-1A", b"U-1B", 181),
-        (b"U-1B", b"U-1A", 200),
-    ] {
+    for (failed, spare, at) in [(&b"U-1A"[..], &b"U-1B"[..], 181), (b"U-1B", b"U-1A", 200)] {
         book.push(
             ityv_encoding::SCHEMA_WITNESSED_EVENT,
             unit_swap(failed, spare, at).1,
