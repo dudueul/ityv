@@ -126,25 +126,28 @@ use ityv_crypto::{
     Purpose, RecordPurpose, RecordSignature, RecordVerifyingKey, object_hash, verify_record,
 };
 use ityv_encoding::{
-    BoxClose, BoxId, BoxOpenedBody, CARRY_CHECKIN, CARRY_PUBLIC, CARRY_ROLL, CARRY_SEALED,
-    CHUNK_LEN, CaptureMessage, CastRecord, ConnectivityIncidentBody, ConnectivityIncidentParts,
-    ConnectivityManifest, DeviceClass, Direction, Encode, EventRole, FRAME_HEADER_LEN, FrameEntry,
-    FrameKind, FrameObjects, GatewayId, HEADER_LEN, Hash512, LogLeaves, LoggedFrame,
-    MAX_PAYLOAD_LEN, ManifestEntry, Medium, PURPOSE_UPLINK_CAPTURE, PURPOSE_UPLINK_SESSION,
-    RosterRole, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_CAST_RECORD,
-    SCHEMA_CHALLENGE_OPENING, SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_PROGRESS_TICK, SCHEMA_SHARE_PACKAGE,
-    SCHEMA_UPLINK_FRAME_HEADER, SCHEMA_UPLINK_FRAME_LOG, SCHEMA_UPLINK_SESSION, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, Schedule, SchemaId, Seq, StationEntry, StationId, StreamObject, UnitId,
-    UplinkFrameHeader, UplinkFrameLog, UplinkSession, WitnessedEvent, decode_object, encode_object,
-    max_package_len, schema_version,
+    BatchAttest, BoxClose, BoxId, BoxOpenedBody, BoxUnitSwapBody, CARRY_CHECKIN, CARRY_PUBLIC,
+    CARRY_ROLL, CARRY_SEALED, CHUNK_LEN, CaptureMessage, CastRecord, CheckinUnitSwapBody,
+    ConnectivityIncidentBody, ConnectivityIncidentParts, ConnectivityManifest, DeviceClass,
+    Direction, Encode, EventRole, FRAME_HEADER_LEN, FrameEntry, FrameKind, FrameObjects, GatewayId,
+    HEADER_LEN, Hash512, LogLeaves, LoggedFrame, MAX_PAYLOAD_LEN, ManifestEntry, Medium,
+    PURPOSE_UPLINK_CAPTURE, PURPOSE_UPLINK_SESSION, ProgressBody, ProgressTick, RosterRole,
+    SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE, SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY,
+    SCHEMA_CAST_RECORD, SCHEMA_CHALLENGE_OPENING, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
+    SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PARTICIPATION_SET,
+    SCHEMA_PROGRESS_TICK, SCHEMA_SHARE_PACKAGE, SCHEMA_UPLINK_FRAME_HEADER,
+    SCHEMA_UPLINK_FRAME_LOG, SCHEMA_UPLINK_SESSION, SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT,
+    Schedule, SchemaId, Seq, StationEntry, StationId, StreamObject, UnitId, UplinkFrameHeader,
+    UplinkFrameLog, UplinkSession, WitnessedEvent, decode_object, encode_object, max_package_len,
+    schema_version,
 };
-use ityv_state::{HoldReason, HoldSet, RosterEntry, Signed, check_incident_signers};
+use ityv_state::{HoldReason, HoldSet, RecordStatus, RosterEntry, Signed, check_incident_signers};
 
 use crate::audit::AuditStage;
 use crate::genesis::VerifiedGenesis;
 use crate::index::{LedgerIndex, Scope};
 use crate::progress::bucket_slots;
+use crate::records::RecordStage;
 use crate::sigs::Material;
 
 // ---------------------------------------------------------------------------
@@ -301,8 +304,15 @@ pub enum LinkProblem {
     BeforeOpening,
     /// A normal or catch-up frame after the box's close.
     AfterClose,
-    /// A normal or catch-up frame after a close resend, or another kind
-    /// after a witnessed resend.
+    /// A frame of a device a swap took out of service, after the swap's
+    /// slot.
+    AfterSwap,
+    /// A frame of a kind its slot may not hold: a catch-up frame where no
+    /// slot of the link's span before it fell short and it is not the
+    /// close slot, a close resend before the close slot or past the slots
+    /// the box's stream needs at the catch-up shape, a normal or catch-up
+    /// frame after a close resend, or another kind after a witnessed
+    /// resend.
     KindOrder,
     /// The stream offset goes back, or skips ahead where no position
     /// between the frame and the one before it went untaken, or by more
@@ -329,10 +339,30 @@ pub enum LinkProblem {
     Alignment,
     /// A ledger event of another box or station than the link's device.
     Foreign,
+    /// An entry whose hash the ledger names under another schema (a share
+    /// package's hash under any schema but a package's, or a package
+    /// listed under the hash of a ledger event).
+    Schema,
+    /// An object listed more often than its kind allows: a batch's
+    /// attestation, record or package more than twice in normal and
+    /// catch-up frames, any other object more than once; anything more
+    /// than once in close resends, or in one run of witnessed resend
+    /// slots.
+    Repeat,
+    /// An object sent before its time or out of its order: a batch's
+    /// attestation or record in a slot before the first its time bucket
+    /// overlaps, a progress tick before its own slot or, in normal and
+    /// catch-up frames, after a tick of a later slot.
+    Time,
     /// A public object whose length is not the ledger's.
     Length,
-    /// A cast record outside a run right after a batch attestation, or not
-    /// above the previous record of its run.
+    /// A cast record that is not where its batch puts it: a run after a
+    /// batch attestation holds that batch's records (as the record stage
+    /// takes them) one after another in hash order from the first, and
+    /// ends, where nothing was lost, at the last; after bytes not
+    /// received, a run is one stretch of one batch's records; a record no
+    /// batch has (other than a challenged one) or outside every run; a
+    /// batch first sent before one of a lower batch index.
     Batch,
     /// A share package not right after the record that names it, or
     /// longer than the election allows.
@@ -354,6 +384,7 @@ impl LinkProblem {
             | Self::Window
             | Self::BeforeOpening
             | Self::AfterClose
+            | Self::AfterSwap
             | Self::KindOrder
             | Self::Offset
             | Self::Fill
@@ -363,6 +394,9 @@ impl LinkProblem {
             | Self::NotObject
             | Self::Alignment
             | Self::Foreign
+            | Self::Schema
+            | Self::Repeat
+            | Self::Time
             | Self::Length
             | Self::Batch
             | Self::Package
@@ -1120,6 +1154,43 @@ impl<'a> Work<'_, 'a> {
 // ---------------------------------------------------------------------------
 // One link's frames and objects.
 
+/// Where a link's span ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpanEnd {
+    /// At this slot, or at its last frame if later: the box's close slot
+    /// (the station's last, for a check-in unit), or while it is open the
+    /// last slot of the station's last session.
+    To(Option<u64>),
+    /// A swap took the device out of service at this slot: it sends to
+    /// the slot before, and no frame of it may follow the swap's slot.
+    Swap(u64),
+    /// At its last frame.
+    LastFrame,
+}
+
+/// A batch as the record stage took it (ADR-0041 decision 6).
+#[derive(Debug, Clone, Default)]
+struct BatchRun {
+    /// Its member records' object hashes, ascending.
+    records: Vec<[u8; 64]>,
+    /// Its batch index.
+    index: u32,
+    /// The first slot its time bucket overlaps: none of its objects goes
+    /// out before.
+    first_slot: Option<u64>,
+}
+
+/// A box's batches as the record stage took them.
+#[derive(Debug, Clone, Default)]
+struct Batches {
+    /// Each batch, by the object hash of its attestation.
+    by_hash: BTreeMap<[u8; 64], BatchRun>,
+    /// The batch of each member record, by the record's object hash.
+    of_record: BTreeMap<[u8; 64], [u8; 64]>,
+    /// The records the device opened for a challenge: no batch has them.
+    challenged: BTreeSet<[u8; 64]>,
+}
+
 /// What a link's judgement needs from the rest of the ledger.
 struct LinkContext<'c, 'a> {
     entry: Option<ManifestEntry<'a>>,
@@ -1129,21 +1200,41 @@ struct LinkContext<'c, 'a> {
     /// The box's close slot: no normal or catch-up frame after it (none
     /// for a check-in unit).
     close: Option<u64>,
-    /// The last slot the device must send in, as far as the ledger shows:
-    /// the box's close slot (the station's last, for a check-in unit), or
-    /// while it is open the last slot of the station's last session.
-    span_end: Option<u64>,
+    /// The slot the device closes in, where it uses its catch-up shape:
+    /// the box's close slot, the station's last for a check-in unit.
+    closing: Option<u64>,
+    /// The first slot the device must send in: the box's opening (the
+    /// station's first) for a link that is its device's from the start,
+    /// the slot of the swap that took it into service for one swapped in.
+    start: Option<u64>,
+    /// Where the slots it must send in end.
+    end: SpanEnd,
     /// Public ledger objects by hash: schema and bytes.
     public: &'c BTreeMap<[u8; 64], (SchemaId, &'a [u8])>,
-    /// Every event hash a ledger frame names.
-    on_ledger: &'c BTreeSet<[u8; 64]>,
-    /// Whom each accepted event concerns, by hash.
+    /// Every event a ledger frame names: hash and schema.
+    on_ledger: &'c BTreeSet<([u8; 64], u32)>,
+    /// Whom each accepted public event concerns, by hash.
     scopes: &'c BTreeMap<[u8; 64], Scope<'a>>,
     /// The share packages the box's accepted cast records name.
     packages: &'c BTreeSet<[u8; 64]>,
+    /// The box's batches.
+    batches: &'c Batches,
     /// The longest share package the election allows.
     package_len: u64,
     closed: bool,
+}
+
+impl LinkContext<'_, '_> {
+    /// Whether a ledger frame names `hash` under a schema other than
+    /// `schema` (a share package the box's records name counts as one).
+    fn other_schema(&self, hash: &[u8; 64], schema: SchemaId) -> bool {
+        let package = self.packages.contains(hash) && schema != SCHEMA_SHARE_PACKAGE;
+        package
+            || self
+                .on_ledger
+                .range((*hash, 0)..=(*hash, u32::MAX))
+                .any(|(_, s)| *s != schema.get())
+    }
 }
 
 /// The received ranges of a link: merged `[start, end)` of every frame
@@ -1480,6 +1571,44 @@ impl Shape {
     }
 }
 
+/// What the frame rules of one link give the object rules and the
+/// session checks.
+struct FrameJudgement {
+    /// Whether each frame's signature verified.
+    valid: Vec<bool>,
+    /// The slots it must send in that a window covers and that fell short.
+    short: BTreeSet<u64>,
+    /// The slots it must send in that no window covers.
+    gap: u64,
+    /// The runs of consecutive slots that hold its witnessed resends.
+    witnessed_runs: u32,
+    /// Whether every position after its last frame was taken: its stream
+    /// ends where the device's did.
+    whole_end: bool,
+}
+
+/// Whether a slot's frames hold every number of their group's shape.
+fn full(group: Option<&(bool, bool, BTreeSet<u16>)>, normal: u16, catchup: u16) -> bool {
+    group.is_some_and(|(cu, _, indices)| {
+        let want = if *cu { catchup } else { normal };
+        indices.range(..want).count() == usize::from(want)
+    })
+}
+
+/// Merges two inclusive slot ranges that overlap or touch into one.
+fn ranges_of(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Vec<(u64, u64)> {
+    let mut v: Vec<(u64, u64)> = [a, b].into_iter().flatten().collect();
+    v.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for (lo, hi) in v {
+        match out.last_mut() {
+            Some(last) if lo <= last.1.saturating_add(1) => last.1 = last.1.max(hi),
+            _ => out.push((lo, hi)),
+        }
+    }
+    out
+}
+
 /// The frame rules of one link (VC-078): the per-frame findings, whether
 /// each frame's signature verified, the slots that fell short, and the
 /// slots of the span no window covers.
@@ -1489,7 +1618,7 @@ fn judge_frames(
     ctx: &LinkContext<'_, '_>,
     windows: &[(u64, u64)],
     report: &mut LinkReport<'_>,
-) -> (Vec<bool>, BTreeSet<u64>, u64) {
+) -> FrameJudgement {
     let key = RecordVerifyingKey::from_bytes(*work.info.frame_key).ok();
     let link = link_id(work.info.frame_key);
     let (normal, catchup) = ctx
@@ -1504,9 +1633,13 @@ fn judge_frames(
         object: None,
         problem,
     };
-    // Signatures, numbers, windows, opening and close, padding proofs.
+    // Signatures, numbers, windows, opening, close and swap, padding
+    // proofs.
     let mut slots: SlotGroups = BTreeMap::new();
     let mut reached = 0u8;
+    // Whether each frame kept the order of kinds (the kinds' slots are
+    // judged below, once the span is known).
+    let mut in_order = Vec::with_capacity(work.frames.len());
     for f in &work.frames {
         let e = &f.entry;
         let header = frame_header(link, e, &f.objects);
@@ -1551,6 +1684,11 @@ fn judge_frames(
         if continuing && ctx.close.is_some_and(|close| e.slot > close) {
             report.findings.push(finding(f, LinkProblem::AfterClose));
         }
+        if let SpanEnd::Swap(at) = ctx.end
+            && e.slot > at
+        {
+            report.findings.push(finding(f, LinkProblem::AfterSwap));
+        }
         // Nothing but resends after a close resend, nothing but witnessed
         // resends after a witnessed resend.
         let rank = match e.kind {
@@ -1558,6 +1696,7 @@ fn judge_frames(
             FrameKind::CloseResend => 1,
             FrameKind::WitnessedResend => 2,
         };
+        in_order.push(rank >= reached);
         if rank < reached {
             report.findings.push(finding(f, LinkProblem::KindOrder));
         }
@@ -1578,10 +1717,11 @@ fn judge_frames(
         }
         group.2.insert(e.index);
     }
-    // The slots the device must send in: from the box's opening (the
-    // first frame's slot when no opening is known) to its close (or the
-    // last frame that is not a witnessed resend, if later); the witnessed
-    // resends' own slots.
+    // The slots the device must send in: from its start (the first frame's
+    // slot when none is known) to its end, or to the last frame that is
+    // not a witnessed resend if later; and from the first slot of the
+    // session that took its first witnessed resend to its last witnessed
+    // resend. A link with no frame (a spare never used) has no span.
     let sent: Vec<u64> = work
         .frames
         .iter()
@@ -1591,50 +1731,77 @@ fn judge_frames(
     let first = sent.iter().min().copied();
     let last = sent.iter().max().copied();
     report.slots = first.zip(last);
-    // A link that is its device's from the start sends from the opening, a
-    // device swapped in from its first frame; one that is its device's in
-    // the last state sends to the close, a device swapped out to its last
-    // frame. A link with no frame (a spare never used) has no span.
-    let span_start = if work.info.original {
-        ctx.opening.or(first)
-    } else {
-        first
-    };
-    let span_end = match (work.info.current, ctx.span_end, last) {
-        (true, Some(a), Some(b)) => Some(a.max(b)),
-        (true | false, _, b) => b,
-    };
-    let witnessed: Vec<u64> = work
+    let span_start = ctx.start.or(first);
+    let span_end = last.map(|b| match ctx.end {
+        SpanEnd::To(Some(a)) => a.max(b),
+        SpanEnd::To(None) | SpanEnd::LastFrame => b,
+        SpanEnd::Swap(at) => at.saturating_sub(1).max(b),
+    });
+    let witnessed_first = work
+        .frames
+        .iter()
+        .find(|f| f.entry.kind == FrameKind::WitnessedResend)
+        .map(|f| f.window.0.min(f.entry.slot));
+    let witnessed_last = work
         .frames
         .iter()
         .filter(|f| f.entry.kind == FrameKind::WitnessedResend)
         .map(|f| f.entry.slot)
-        .collect();
+        .max();
     let shape = Shape {
         normal,
         catchup,
         span: span_start.zip(span_end).filter(|(a, b)| a <= b),
-        witnessed: witnessed
-            .iter()
-            .min()
-            .copied()
-            .zip(witnessed.iter().max().copied()),
+        witnessed: witnessed_first.zip(witnessed_last),
     };
+    // The kinds' slots: a catch-up group only after a slot of the span fell
+    // short, or in the close slot; a close resend only from the close slot,
+    // for as many slots as what came before it needs at the catch-up shape.
+    let first_short = shape.span.map(|(a, _)| {
+        let mut s = a;
+        while full(slots.get(&s), normal, catchup) {
+            match s.checked_add(1) {
+                Some(next) => s = next,
+                None => break,
+            }
+        }
+        s
+    });
+    let resend_from = work
+        .frames
+        .iter()
+        .find(|f| f.entry.kind == FrameKind::CloseResend)
+        .map_or(0, |f| f.entry.stream_offset);
+    let per_slot = u64::from(catchup)
+        .saturating_mul(u64::try_from(MAX_PAYLOAD_LEN).unwrap_or(u64::MAX))
+        .max(1);
+    let resend_slots = resend_from.div_ceil(per_slot);
+    for (f, ordered) in work.frames.iter().zip(&in_order) {
+        let s = f.entry.slot;
+        let ok = match f.entry.kind {
+            FrameKind::Normal | FrameKind::WitnessedResend => true,
+            FrameKind::CatchUp => {
+                ctx.closing == Some(s) || first_short.is_some_and(|short| short < s)
+            }
+            FrameKind::CloseResend => ctx
+                .closing
+                .is_some_and(|c| c <= s && s <= c.saturating_add(resend_slots)),
+        };
+        if *ordered && !ok {
+            report.findings.push(finding(f, LinkProblem::KindOrder));
+        }
+    }
     // Each window holds at most six slots, so this walks a bounded number
     // of slots whatever the frames claim.
     let mut short = BTreeSet::new();
     let mut gap = 0u64;
-    if let Some((a, b)) = shape.span {
+    for (a, b) in ranges_of(shape.span, shape.witnessed) {
         for (start, end) in windows {
             for s in a.max(*start)..=b.min(*end) {
                 // A slot is whole when it holds every number of its shape;
                 // a number beyond the shape is an `Index` finding, not a
                 // gap.
-                let full = slots.get(&s).is_some_and(|(cu, _, indices)| {
-                    let want = if *cu { catchup } else { normal };
-                    indices.range(..want).count() == usize::from(want)
-                });
-                if !full {
+                if !full(slots.get(&s), normal, catchup) {
                     short.insert(s);
                 }
             }
@@ -1646,7 +1813,7 @@ fn judge_frames(
         } else {
             windows.last().map(|w| w.1.min(b))
         };
-        gap = reported.map_or(0, |b| uncovered(windows, a, b));
+        gap = gap.saturating_add(reported.map_or(0, |b| uncovered(windows, a, b)));
     }
     report.missing_slots = u64::try_from(short.len())
         .unwrap_or(u64::MAX)
@@ -1677,7 +1844,35 @@ fn judge_frames(
             e.stream_offset.saturating_add(u64::from(e.payload_len)),
         ));
     }
-    (valid, short, gap)
+    // Whether a position after the last frame went untaken.
+    let beyond = [shape.span, shape.witnessed]
+        .iter()
+        .flatten()
+        .map(|(_, b)| *b)
+        .max()
+        .and_then(|b| b.checked_add(1));
+    let whole_end = match (previous, beyond) {
+        (Some((s, i, _)), Some(after)) => shape.absent(&slots, Some((s, i)), (after, 0)) == 0,
+        _ => true,
+    };
+    // The runs of consecutive witnessed slots.
+    let mut witnessed_runs = 0u32;
+    let mut previous_slot: Option<u64> = None;
+    for (s, (_, w, _)) in &slots {
+        if *w {
+            if previous_slot.is_none_or(|p| p.checked_add(1) != Some(*s)) {
+                witnessed_runs = witnessed_runs.saturating_add(1);
+            }
+            previous_slot = Some(*s);
+        }
+    }
+    FrameJudgement {
+        valid,
+        short,
+        gap,
+        witnessed_runs,
+        whole_end,
+    }
 }
 
 /// One object a frame lists, as the stage tracks it.
@@ -1686,9 +1881,70 @@ struct Listed {
     object: StreamObject,
     /// The log of the first frame that lists it.
     log: Seq,
+    /// The slot and kind of the first frame that lists it.
+    slot: u64,
+    kind: FrameKind,
     /// Whether every chunk of every frame that holds bytes of it was
     /// recomputed and matched.
     verified: bool,
+}
+
+/// Where the walk over a link's objects is, for the batch rule.
+#[derive(Debug, Clone, Copy)]
+enum Walk<'r> {
+    /// Outside every run.
+    Outside,
+    /// Right after bytes not received: a run may go on from anywhere.
+    AfterLoss,
+    /// In a run: the batch's records in hash order (when the ledger has
+    /// the batch), the position of the last record taken, and its hash.
+    Run {
+        list: Option<&'r [[u8; 64]]>,
+        at: Option<usize>,
+        last: Option<[u8; 64]>,
+    },
+}
+
+impl Walk<'_> {
+    /// Whether a run that ends here with nothing lost ends at its batch's
+    /// last record (or is no run, or its batch is not known).
+    fn complete(&self) -> bool {
+        match self {
+            Self::Run {
+                list: Some(list),
+                at,
+                ..
+            } => at.map_or(list.is_empty(), |a| a.checked_add(1) == Some(list.len())),
+            Self::Run { list: None, .. } | Self::Outside | Self::AfterLoss => true,
+        }
+    }
+}
+
+/// How often an object may be listed in normal and catch-up frames: a
+/// batch's attestation, records and packages twice (the closed slot and
+/// the next, PROTOCOL.md §5.8 item 4), anything else once.
+fn listings(schema: SchemaId) -> u32 {
+    if [
+        SCHEMA_BATCH_ATTEST,
+        SCHEMA_CAST_RECORD,
+        SCHEMA_SHARE_PACKAGE,
+    ]
+    .contains(&schema)
+    {
+        2
+    } else {
+        1
+    }
+}
+
+/// The slot of a progress tick, from its bytes.
+fn tick_slot(bytes: &[u8]) -> Option<u64> {
+    let t =
+        decode_object::<ProgressTick<'_>>(SCHEMA_PROGRESS_TICK, SCHEMA_VERSION_1, bytes).ok()?;
+    Some(match *t.body() {
+        ProgressBody::Box(b) => b.parts().slot,
+        ProgressBody::Checkin(c) => c.parts().slot,
+    })
 }
 
 /// The object rules of one link (VC-079) over its frames whose signature
@@ -1698,13 +1954,13 @@ struct Listed {
 fn judge_objects(
     work: &LinkWork<'_>,
     ctx: &LinkContext<'_, '_>,
-    valid: &[bool],
+    judged: &FrameJudgement,
     report: &mut LinkReport<'_>,
 ) -> BTreeSet<(u32, [u8; 64])> {
     let frames: Vec<&Frame<'_>> = work
         .frames
         .iter()
-        .zip(valid)
+        .zip(&judged.valid)
         .filter(|(_, ok)| **ok)
         .map(|(f, _)| f)
         .collect();
@@ -1734,6 +1990,8 @@ fn judge_objects(
             let first = listed.entry(o.stream_offset).or_insert(Listed {
                 object: o,
                 log: f.log,
+                slot: e.slot,
+                kind: e.kind,
                 verified: true,
             });
             if first.object != o {
@@ -1779,69 +2037,191 @@ fn judge_objects(
         object: Some(l.object.object_hash),
         problem,
     };
-    let mut group = false;
-    let mut last_record: Option<[u8; 64]> = None;
+    let batches = ctx.batches;
+    let mut walk = Walk::Outside;
     let mut previous: Option<(SchemaId, Option<Hash512>)> = None;
     let mut previous_end: Option<u64> = None;
+    // Listings per object and kind group: normal and catch-up, close
+    // resend, witnessed resend.
+    let mut counts: BTreeMap<(u32, [u8; 64]), [u32; 3]> = BTreeMap::new();
+    // The batches first sent so far, in normal and catch-up frames, and
+    // the highest batch index among them; the latest tick's slot.
+    let mut first_sent: BTreeSet<u32> = BTreeSet::new();
+    let mut highest: Option<u32> = None;
+    let mut latest_tick: Option<u64> = None;
     for l in listed.values() {
         let o = &l.object;
         let hash = o.object_hash;
+        let schema = o.schema;
         let bytes = ctx
             .public
             .get(&hash.0)
-            .filter(|(s, _)| *s == o.schema)
+            .filter(|(s, _)| *s == schema)
             .map(|(_, b)| *b);
-        // Kind, length, whose.
-        let kind_ok = allowed(class, o.schema).is_some_and(|bit| carries & bit != 0)
-            && (o.schema != SCHEMA_WITNESSED_EVENT || witnessed_ok(bytes));
+        // Kind, length, whose, schema.
+        let kind_ok = allowed(class, schema).is_some_and(|bit| carries & bit != 0)
+            && (schema != SCHEMA_WITNESSED_EVENT || witnessed_ok(bytes));
         if !kind_ok {
             report.findings.push(finding(l, LinkProblem::Kind));
         }
         if bytes.is_some_and(|b| u64::try_from(b.len()).ok() != Some(u64::from(o.len))) {
             report.findings.push(finding(l, LinkProblem::Length));
         }
-        if ctx
-            .scopes
-            .get(&hash.0)
-            .is_some_and(|scope| !mine(*scope, &work.info))
+        let package = schema == SCHEMA_SHARE_PACKAGE;
+        // A share package is judged by the records that name it: the
+        // sealed frames the index keeps by hash say nothing of its box.
+        if !package
+            && ctx
+                .scopes
+                .get(&hash.0)
+                .is_some_and(|scope| !mine(*scope, &work.info))
         {
             report.findings.push(finding(l, LinkProblem::Foreign));
         }
-        // Batches and packages. Across bytes not received, the objects
-        // between are not known: what follows may be the tail of a batch
-        // whose start was lost.
+        let mislabeled = ctx.other_schema(&hash.0, schema);
+        if mislabeled {
+            report.findings.push(finding(l, LinkProblem::Schema));
+        }
+        // How often it is listed.
+        let group = match l.kind {
+            FrameKind::Normal | FrameKind::CatchUp => 0usize,
+            FrameKind::CloseResend => 1,
+            FrameKind::WitnessedResend => 2,
+        };
+        let limit = [listings(schema), 1, judged.witnessed_runs];
+        let count = counts.entry((schema.get(), hash.0)).or_insert([0; 3]);
+        if let (Some(n), Some(most)) = (count.get_mut(group), limit.get(group)) {
+            *n = n.saturating_add(1);
+            if *n > *most {
+                report.findings.push(finding(l, LinkProblem::Repeat));
+            }
+        }
+        // Its batch, and when it may go out.
+        let batch = if schema == SCHEMA_BATCH_ATTEST {
+            batches.by_hash.get(&hash.0)
+        } else if schema == SCHEMA_CAST_RECORD {
+            batches
+                .of_record
+                .get(&hash.0)
+                .and_then(|b| batches.by_hash.get(b))
+        } else {
+            None
+        };
+        if let Some(b) = batch {
+            if b.first_slot.is_some_and(|first| l.slot < first) {
+                report.findings.push(finding(l, LinkProblem::Time));
+            }
+            if group == 0 && first_sent.insert(b.index) {
+                if highest.is_some_and(|h| b.index < h) {
+                    report.findings.push(finding(l, LinkProblem::Batch));
+                }
+                highest = highest.max(Some(b.index));
+            }
+        }
+        if schema == SCHEMA_PROGRESS_TICK
+            && let Some(slot) = bytes.and_then(tick_slot)
+        {
+            let behind = group == 0 && latest_tick.is_some_and(|t| slot < t);
+            if l.slot < slot || behind {
+                report.findings.push(finding(l, LinkProblem::Time));
+            }
+            if group == 0 {
+                latest_tick = latest_tick.max(Some(slot));
+            }
+        }
+        // Batches and packages. Across bytes not received the objects
+        // between are not known: what follows may go on a run whose start
+        // was lost.
         let continuous = match previous_end {
             None => o.stream_offset == 0,
             Some(end) => end >= o.stream_offset || covered(&received, end, o.stream_offset),
         };
         if !continuous {
-            group = true;
-            last_record = None;
+            walk = Walk::AfterLoss;
             previous = None;
         }
-        let schema = o.schema;
+        let record = schema == SCHEMA_CAST_RECORD && !batches.challenged.contains(&hash.0);
         if schema == SCHEMA_BATCH_ATTEST {
-            group = true;
-            last_record = None;
-        } else if schema == SCHEMA_CAST_RECORD {
-            if !group || last_record.is_some_and(|r| r >= hash.0) {
+            if !walk.complete() {
                 report.findings.push(finding(l, LinkProblem::Batch));
             }
-            last_record = Some(hash.0);
-        } else if schema == SCHEMA_SHARE_PACKAGE {
+            // A batch the record stage did not take holds no record.
+            let list = batches.by_hash.get(&hash.0).map_or_else(
+                || {
+                    ctx.on_ledger
+                        .contains(&(hash.0, SCHEMA_BATCH_ATTEST.get()))
+                        .then_some(&[][..])
+                },
+                |b| Some(b.records.as_slice()),
+            );
+            walk = Walk::Run {
+                list,
+                at: None,
+                last: None,
+            };
+        } else if record {
+            let known = ctx.on_ledger.contains(&(hash.0, SCHEMA_CAST_RECORD.get()));
+            let its_list = batches
+                .of_record
+                .get(&hash.0)
+                .and_then(|b| batches.by_hash.get(b))
+                .map(|b| b.records.as_slice());
+            walk = match walk {
+                Walk::Run { list, at, last } => {
+                    let (ok, at) = match list {
+                        Some(list) => {
+                            let next = at.map_or(0, |a| a.saturating_add(1));
+                            let here = list.iter().position(|r| *r == hash.0);
+                            (here == Some(next), here.or(at))
+                        }
+                        None => (last.is_none_or(|r| r < hash.0), None),
+                    };
+                    if !ok {
+                        report.findings.push(finding(l, LinkProblem::Batch));
+                    }
+                    Walk::Run {
+                        list,
+                        at,
+                        last: Some(hash.0),
+                    }
+                }
+                // After a loss, one stretch of one batch's records.
+                Walk::AfterLoss => match its_list {
+                    Some(list) => Walk::Run {
+                        list: Some(list),
+                        at: list.iter().position(|r| *r == hash.0),
+                        last: Some(hash.0),
+                    },
+                    None if known => {
+                        report.findings.push(finding(l, LinkProblem::Batch));
+                        Walk::Outside
+                    }
+                    None => Walk::Run {
+                        list: None,
+                        at: None,
+                        last: Some(hash.0),
+                    },
+                },
+                Walk::Outside => {
+                    report.findings.push(finding(l, LinkProblem::Batch));
+                    Walk::Outside
+                }
+            };
+        } else if package {
             // Right after the record that names it (when that record is
             // known), and no longer than the election allows.
-            let follows = previous.is_none_or(|(s, package)| {
-                s == SCHEMA_CAST_RECORD && package.is_none_or(|p| p == hash)
-            });
+            let follows = previous
+                .is_none_or(|(s, p)| s == SCHEMA_CAST_RECORD && p.is_none_or(|p| p == hash));
             if !follows || u64::from(o.len) > ctx.package_len {
                 report.findings.push(finding(l, LinkProblem::Package));
             }
         } else {
-            group = false;
-            last_record = None;
+            if !walk.complete() {
+                report.findings.push(finding(l, LinkProblem::Batch));
+            }
+            walk = Walk::Outside;
         }
-        let package = if schema == SCHEMA_CAST_RECORD {
+        let its_package = if schema == SCHEMA_CAST_RECORD {
             bytes.and_then(|b| {
                 decode_object::<CastRecord<'_>>(SCHEMA_CAST_RECORD, SCHEMA_VERSION_1, b)
                     .ok()
@@ -1850,15 +2230,38 @@ fn judge_objects(
         } else {
             None
         };
-        previous = Some((schema, package));
+        previous = Some((schema, its_package));
         previous_end = o.end();
         // On the ledger, once the gateway closed: a frame of the ledger
-        // names it (a share package, an accepted record of the box).
-        let named = ctx.on_ledger.contains(&hash.0)
-            || (schema == SCHEMA_SHARE_PACKAGE && ctx.packages.contains(&hash.0));
-        if ctx.closed && !named {
+        // names it under its schema (a share package: an accepted record of
+        // the box names it).
+        let named = if package {
+            ctx.packages.contains(&hash.0)
+        } else {
+            ctx.on_ledger.contains(&(hash.0, schema.get()))
+        };
+        if ctx.closed && !named && !mislabeled {
             report.findings.push(finding(l, LinkProblem::NotOnLedger));
         }
+    }
+    // A run the stream ends in, where the device's stream ends and its
+    // last object was received whole, ends at its batch's last record.
+    let stream_end = frames
+        .iter()
+        .map(|f| {
+            f.entry
+                .stream_offset
+                .saturating_add(u64::from(f.entry.payload_len))
+        })
+        .max();
+    if ctx.closed
+        && judged.whole_end
+        && !walk.complete()
+        && let Some(l) = listed.values().next_back()
+        && l.object.end() == stream_end
+        && stream_end.is_some_and(|end| covered(&received, l.object.stream_offset, end))
+    {
+        report.findings.push(finding(l, LinkProblem::Batch));
     }
     // Chunks: every data chunk whose bytes are all public objects (and the
     // zero fill around packages) is recomputed, in a frame whose list tiles
@@ -1957,6 +2360,136 @@ pub(crate) fn close_slot(index: &LedgerIndex<'_>, box_id: &[u8]) -> Option<u64> 
         let c = decode_object::<BoxClose<'_>>(SCHEMA_BOX_CLOSE, SCHEMA_VERSION_1, e.bytes?).ok()?;
         bucket_slots(c.body().time_bucket()).and_then(|(_, last)| last.checked_add(1))
     })
+}
+
+/// The slot of each `BoxUnitSwap` of `box_id`, in ledger order.
+fn box_swaps(index: &LedgerIndex<'_>, box_id: &[u8]) -> Vec<u64> {
+    index
+        .box_events(box_id)
+        .filter_map(|e| {
+            if e.schema != SCHEMA_WITNESSED_EVENT {
+                return None;
+            }
+            let w = decode_object::<WitnessedEvent<'_>>(
+                SCHEMA_WITNESSED_EVENT,
+                schema_version(SCHEMA_WITNESSED_EVENT),
+                e.bytes?,
+            )
+            .ok()?;
+            w.body::<BoxUnitSwapBody<'_>>(SCHEMA_BOX_UNIT_SWAP_BODY)
+                .ok()
+                .map(|b| b.parts().at_slot)
+        })
+        .collect()
+}
+
+/// The slots of the station's first `CheckinUnitSwap` that brought `unit`
+/// into service and of the first that took it out after that.
+fn unit_swaps(
+    index: &LedgerIndex<'_>,
+    station_id: &[u8],
+    unit: &[u8],
+) -> (Option<u64>, Option<u64>) {
+    let mut brought = None;
+    let mut taken = None;
+    for e in index.station_events(station_id) {
+        let Some(w) = e
+            .bytes
+            .filter(|_| e.schema == SCHEMA_WITNESSED_EVENT)
+            .and_then(|b| {
+                decode_object::<WitnessedEvent<'_>>(
+                    SCHEMA_WITNESSED_EVENT,
+                    schema_version(SCHEMA_WITNESSED_EVENT),
+                    b,
+                )
+                .ok()
+            })
+        else {
+            continue;
+        };
+        let Ok(swap) = w.body::<CheckinUnitSwapBody<'_>>(SCHEMA_CHECKIN_UNIT_SWAP_BODY) else {
+            continue;
+        };
+        let p = swap.parts();
+        if brought.is_none() && p.spare_unit.as_bytes() == unit {
+            brought = Some(p.at_slot);
+        }
+        if taken.is_none()
+            && p.failed_unit.as_bytes() == unit
+            && brought.is_none_or(|b| p.at_slot >= b)
+        {
+            taken = Some(p.at_slot);
+        }
+    }
+    (brought, taken)
+}
+
+/// The links of `box_id`'s frame keys, in the order the genesis states
+/// bring them.
+fn box_links(genesis: &VerifiedGenesis<'_>, box_id: &[u8]) -> Vec<[u8; 64]> {
+    let mut out: Vec<[u8; 64]> = Vec::new();
+    for state in 0..genesis.state_count() {
+        if let Some(b) = genesis.expected_box_at(state, box_id) {
+            let l = link_id(b.frame_key).0;
+            if !out.contains(&l) {
+                out.push(l);
+            }
+        }
+    }
+    out
+}
+
+/// A box's batches as the record stage took them, with the first slot of
+/// each one's time bucket, and its challenged records.
+fn batches_of(index: &LedgerIndex<'_>, records: &RecordStage<'_>, box_id: &[u8]) -> Batches {
+    let mut out = Batches::default();
+    let Some(report) = records.report(box_id) else {
+        return out;
+    };
+    let events = index.events();
+    let at = |seq: Seq| {
+        events
+            .binary_search_by_key(&seq.get(), |e| e.seq.get())
+            .ok()
+            .and_then(|i| events.get(i))
+    };
+    for m in &report.members {
+        let Some(e) = at(m.seq) else {
+            continue;
+        };
+        let body = e.bytes.and_then(|b| {
+            decode_object::<BatchAttest<'_>>(SCHEMA_BATCH_ATTEST, SCHEMA_VERSION_1, b).ok()
+        });
+        let mut list: Vec<[u8; 64]> = m
+            .records
+            .iter()
+            .filter_map(|s| at(*s))
+            .map(|r| r.hash.0)
+            .collect();
+        list.sort_unstable();
+        for r in &list {
+            out.of_record.insert(*r, e.hash.0);
+        }
+        out.by_hash.insert(
+            e.hash.0,
+            BatchRun {
+                records: list,
+                index: body.as_ref().map_or(0, |b| b.body().batch_index()),
+                first_slot: body
+                    .as_ref()
+                    .and_then(|b| bucket_slots(b.body().time_bucket()))
+                    .map(|(first, _)| first),
+            },
+        );
+    }
+    for r in &report.records {
+        if r.state.status() == RecordStatus::ChallengedSpoiled
+            && let Some(e) = at(r.seq)
+        {
+            out.challenged.insert(e.hash.0);
+        }
+    }
+    out
 }
 
 /// The device events whose inclusion the stage checks (VC-080).
@@ -2140,12 +2673,14 @@ fn people_signed<'a>(
 }
 
 /// Runs the connectivity stage over `index` against `genesis`, with the
-/// audit stage for the full comparisons an incident calls for.
+/// record stage for each box's batches and the audit stage for the full
+/// comparisons an incident calls for.
 #[must_use]
 #[allow(clippy::too_many_lines)] // The stage's steps in order, as the module docs list them.
 pub fn verify_connectivity<'a>(
     genesis: &VerifiedGenesis<'a>,
     index: &LedgerIndex<'a>,
+    records: &RecordStage<'a>,
     audit: &AuditStage<'a>,
 ) -> ConnectivityStage<'a> {
     let manifest = genesis.manifest();
@@ -2240,21 +2775,22 @@ pub fn verify_connectivity<'a>(
             .find(seq, k.1, None, SessionProblem::LogDangling);
     }
 
-    // The ledger's public objects, whom each concerns, and every hash a
-    // frame names.
+    // The ledger's public objects and whom each concerns (a sealed frame's
+    // scope says nothing of its box), and every hash and schema a frame
+    // names.
     let mut public: BTreeMap<[u8; 64], (SchemaId, &'a [u8])> = BTreeMap::new();
     let mut scopes: BTreeMap<[u8; 64], Scope<'a>> = BTreeMap::new();
-    let mut on_ledger: BTreeSet<[u8; 64]> = BTreeSet::new();
+    let mut on_ledger: BTreeSet<([u8; 64], u32)> = BTreeSet::new();
     for e in index.events() {
-        on_ledger.insert(e.hash.0);
-        scopes.entry(e.hash.0).or_insert(e.scope);
+        on_ledger.insert((e.hash.0, e.schema.get()));
         if let Some(b) = e.bytes {
+            scopes.entry(e.hash.0).or_insert(e.scope);
             public.insert(e.hash.0, (e.schema, b));
         }
     }
     for f in index.findings() {
-        if let Some(h) = f.event_hash {
-            on_ledger.insert(h.0);
+        if let (Some(h), Some(s)) = (f.event_hash, f.event_schema) {
+            on_ledger.insert((h.0, s.get()));
         }
     }
     let members = genesis.trustees().count();
@@ -2308,9 +2844,17 @@ pub fn verify_connectivity<'a>(
             .filter(|b| opening_slot(index, b).is_some())
             .map(|b| close_slot(index, b))
             .collect();
+        // The station's last close once every opened box closed.
+        let last_close = if !box_closes.is_empty() && box_closes.iter().all(Option::is_some) {
+            box_closes.iter().flatten().max().copied()
+        } else {
+            None
+        };
+        let no_batches = Batches::default();
         for (key, lw) in &station_links {
             let mut packages = BTreeSet::new();
-            let (opening, close, span_end) = match lw.info.device {
+            let mut batches = None;
+            let (opening, close, closing, start, end) = match lw.info.device {
                 LinkDevice::Box(b) => {
                     for e in index.box_events(b.as_bytes()) {
                         if e.schema == SCHEMA_CAST_RECORD
@@ -2326,31 +2870,59 @@ pub fn verify_connectivity<'a>(
                             packages.insert(r.body().share_package_hash().0);
                         }
                     }
+                    batches = Some(batches_of(index, records, b.as_bytes()));
                     let close = close_slot(index, b.as_bytes());
-                    (
-                        opening_slot(index, b.as_bytes()),
-                        close,
-                        close.or(last_window),
-                    )
-                }
-                LinkDevice::Unit(_) => {
-                    // The station's last close once every opened box closed,
-                    // its last session's last slot while one is open.
-                    let all_closed =
-                        !box_closes.is_empty() && box_closes.iter().all(Option::is_some);
-                    let span_end = if all_closed {
-                        box_closes.iter().flatten().max().copied()
-                    } else {
-                        last_window
+                    let opening = opening_slot(index, b.as_bytes());
+                    // The box's frame keys follow one another at its swaps:
+                    // the k-th key from the k-th swap's slot to the next's.
+                    let keys = box_links(genesis, b.as_bytes());
+                    let swaps = box_swaps(index, b.as_bytes());
+                    let k = keys.iter().position(|l| l == key).unwrap_or(0);
+                    let start = match k.checked_sub(1) {
+                        None => opening,
+                        Some(j) => swaps.get(j).copied().or(opening),
                     };
-                    (openings.iter().min().copied(), None, span_end)
+                    let end = if k.saturating_add(1) < keys.len() {
+                        swaps
+                            .get(k)
+                            .map_or(SpanEnd::LastFrame, |s| SpanEnd::Swap(*s))
+                    } else if lw.info.current {
+                        SpanEnd::To(close.or(last_window))
+                    } else {
+                        SpanEnd::LastFrame
+                    };
+                    (opening, close, close, start, end)
+                }
+                LinkDevice::Unit(u) => {
+                    // The station's last close once every opened box closed,
+                    // its last session's last slot while one is open; from
+                    // and to the swaps that bring the unit in and take it
+                    // out.
+                    let opening = openings.iter().min().copied();
+                    let (brought, taken) = unit_swaps(index, station_id.as_bytes(), u.as_bytes());
+                    let start = if lw.info.original {
+                        opening
+                    } else {
+                        brought.or(opening)
+                    };
+                    let end = match taken {
+                        Some(at) => SpanEnd::Swap(at),
+                        None if lw.info.current || brought.is_some() => {
+                            SpanEnd::To(last_close.or(last_window))
+                        }
+                        None => SpanEnd::LastFrame,
+                    };
+                    (opening, None, last_close, start, end)
                 }
             };
+            let batches = batches.unwrap_or_default();
             let ctx = LinkContext {
                 entry: manifest.frame_link(lw.info.class()),
                 opening,
                 close,
-                span_end,
+                closing,
+                start,
+                end,
                 public: &public,
                 on_ledger: &on_ledger,
                 scopes: &scopes,
@@ -2358,6 +2930,11 @@ pub fn verify_connectivity<'a>(
                     &no_packages
                 } else {
                     &packages
+                },
+                batches: if batches.by_hash.is_empty() && batches.challenged.is_empty() {
+                    &no_batches
+                } else {
+                    &batches
                 },
                 package_len,
                 closed,
@@ -2377,8 +2954,9 @@ pub fn verify_connectivity<'a>(
                 included: 0,
                 findings: Vec::new(),
             };
-            let (valid, short, gap) = judge_frames(lw, &ctx, &windows, &mut report);
-            included.insert(*key, judge_objects(lw, &ctx, &valid, &mut report));
+            let judged = judge_frames(lw, &ctx, &windows, &mut report);
+            included.insert(*key, judge_objects(lw, &ctx, &judged, &mut report));
+            let (short, gap) = (judged.short, judged.gap);
             // Missing slots against every session's declaration (none when
             // the session does not list the link).
             for session in &st.sessions {

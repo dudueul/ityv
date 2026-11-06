@@ -345,7 +345,7 @@ pub fn verify_ledger_full<'a>(
         &tally,
         audit_input,
     );
-    let connectivity = verify_connectivity(genesis, &index, &audit);
+    let connectivity = verify_connectivity(genesis, &index, &records, &audit);
 
     let box_holds = boxes.reports().iter().fold(HoldSet::empty(), |acc, r| {
         acc.union(without_close_missing(r.holds))

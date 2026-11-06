@@ -563,7 +563,9 @@ pub(crate) fn sorted(codes: &[Hash512]) -> Vec<Hash512> {
 }
 
 /// The batch `index` of `bx` over counters `first..=last` of every module,
-/// attesting `members`.
+/// attesting `members`, closed in the opening's time bucket (the uplink
+/// tests send the whole day in the opening's slot, and a batch goes out no
+/// earlier than its bucket, ADR-0041 decision 6).
 pub(crate) fn batch(
     bx: Bx,
     index: u32,
@@ -571,7 +573,7 @@ pub(crate) fn batch(
     last: u64,
     members: &[Hash512],
 ) -> &'static [u8] {
-    batch_at(bx, index, first, last, members, 120)
+    batch_at(bx, index, first, last, members, OPEN_BUCKET)
 }
 
 /// As [`batch`], in time bucket `bucket`.
