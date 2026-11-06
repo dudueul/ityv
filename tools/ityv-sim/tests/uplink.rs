@@ -169,14 +169,40 @@ fn each_connectivity_scenario_shows_what_it_injected() {
     assert!(!found.is_empty());
     assert!(found.iter().all(|p| *p == LinkProblem::Batch), "{found:?}");
 
-    for name in ["fault-uplink-lost-frame", "attack-hidden-path-record"] {
-        let r = report(&all[name]);
-        let s = station(&r, "ST-HB-1");
-        assert!(s.findings.is_empty(), "{name}: {:?}", s.findings);
-        assert!(link_problems(&r, "ST-HB-1").is_empty(), "{name}");
-        assert!(!s.outside.is_empty(), "{name}");
-    }
+    // Each record in a run of its own: the runs end early and the
+    // attestation goes out too often (review 2 of 2i, G).
+    let r = report(&all["attack-uplink-singled-records"]);
+    let found = link_problems(&r, "ST-HB-1");
+    assert!(found.contains(&LinkProblem::Batch), "{found:?}");
+    assert!(found.contains(&LinkProblem::Repeat), "{found:?}");
+    assert!(
+        found
+            .iter()
+            .all(|p| matches!(p, LinkProblem::Batch | LinkProblem::Repeat)),
+        "{found:?}"
+    );
+    assert!(station(&r, "ST-HB-1").outside.is_empty());
+    // Covert bytes under the hash of a ledger event of another schema
+    // (review 2 of 2i, A).
+    let r = report(&all["attack-uplink-mislabeled-object"]);
+    assert_eq!(link_problems(&r, "ST-HB-1"), [LinkProblem::Schema]);
+    assert!(station(&r, "ST-HB-1").outside.is_empty());
+
+    let r = report(&all["fault-uplink-lost-frame"]);
+    let s = station(&r, "ST-HB-1");
+    assert!(s.findings.is_empty(), "{:?}", s.findings);
+    assert!(link_problems(&r, "ST-HB-1").is_empty());
+    assert!(!s.outside.is_empty());
+    // A record that never travelled the link: outside, and its batch's
+    // runs (the closing batch and its close resend) skip it with no byte
+    // lost.
     let r = report(&all["attack-hidden-path-record"]);
+    let s = station(&r, "ST-HB-1");
+    assert!(s.findings.is_empty(), "{:?}", s.findings);
+    assert_eq!(
+        link_problems(&r, "ST-HB-1"),
+        [LinkProblem::Batch, LinkProblem::Batch]
+    );
     let outside = &station(&r, "ST-HB-1").outside;
     assert_eq!(outside.len(), 1);
     assert_eq!(outside[0].schema, ityv_encoding::SCHEMA_CAST_RECORD);
