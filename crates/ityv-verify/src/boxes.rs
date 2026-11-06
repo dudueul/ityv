@@ -31,10 +31,11 @@
 //! machine follows that state (`BallotBox::follow`) when it is a later
 //! one. An event of a state without the box is refused. A device swap
 //! must be witnessed: when the state in force gives an open box (or one in
-//! fallback) a new device key, a device-signed close is refused until a
+//! fallback) a new device key or a new frame key (its transmitter replaced
+//! alone, ADR-0041 decision 2), a device-signed close is refused until a
 //! `BoxUnitSwap` (two clerks, observers of two organisations) records the
 //! swap on site, and a swap is taken only for an open box whose device key
-//! an amendment changed. A replaced device's own events after the
+//! or frame key an amendment changed. A replaced device's own events after the
 //! amendment's frame do not verify under the new key and are refused.
 //!
 //! Every signature is verified here, under the key the genesis registers
@@ -67,8 +68,8 @@ use ityv_crypto::{HybridSigned, Purpose, Verified};
 use ityv_encoding::schema_version;
 use ityv_encoding::{
     BatchAttest, BoxClose, BoxId, BoxOpenedBody, CaptureProfile, CastRecord, ChallengeOpening,
-    CloseCounts, Decode, EventRole, FallbackBody, FallbackKind, GenesisBox, HYBRID_SIG_LEN,
-    HYBRID_VK_LEN, LateBatchCloseBody, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE,
+    CloseCounts, Decode, EventRole, FRAME_KEY_LEN, FallbackBody, FallbackKind, GenesisBox,
+    HYBRID_SIG_LEN, HYBRID_VK_LEN, LateBatchCloseBody, SCHEMA_BATCH_ATTEST, SCHEMA_BOX_CLOSE,
     SCHEMA_BOX_OPENED_BODY, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CAST_RECORD,
     SCHEMA_CHALLENGE_OPENING, SCHEMA_CUSTODY_HANDOFF_BODY, SCHEMA_FALLBACK_BODY,
     SCHEMA_IMPRINT_AUDIT_BODY, SCHEMA_ISSUANCE_COUNT_BODY, SCHEMA_LATE_BATCH_CLOSE_BODY,
@@ -560,10 +561,14 @@ struct Run<'r, 'g> {
     /// The box's spec in each genesis state (`None` where a state does not
     /// have the box).
     specs: Vec<Option<BoxSpec<'r>>>,
+    /// The box's frame key (its transmitter's, ADR-0041 decision 2) in each
+    /// genesis state.
+    frame_keys: Vec<Option<&'g [u8; FRAME_KEY_LEN]>>,
     /// The genesis state the machine follows.
     state: usize,
-    /// An amendment gave the open box a new device key and no
-    /// `BoxUnitSwap` has recorded the swap yet.
+    /// An amendment gave the open box a new device key or a new frame key
+    /// (a transmitter replaced alone) and no `BoxUnitSwap` has recorded the
+    /// swap yet.
     swap_due: bool,
 }
 
@@ -582,7 +587,9 @@ impl<'r> Run<'r, '_> {
             return (m, None);
         }
         let open = matches!(m, Machine::Open(_) | Machine::Fallback(_));
-        let replaced = m.spec().device_key() != spec.device_key();
+        let frame_key = |k: usize| self.frame_keys.get(k).copied().flatten();
+        let replaced =
+            m.spec().device_key() != spec.device_key() || frame_key(self.state) != frame_key(state);
         let (m, refusal) = m.follow(&spec);
         if refusal.is_none() {
             self.state = state;
@@ -592,8 +599,8 @@ impl<'r> Run<'r, '_> {
     }
 
     /// An on-site device swap, taken only when an amendment gave the open
-    /// box a new device key. The index scoped the event to this box and
-    /// election by its body.
+    /// box a new device key or a new frame key. The index scoped the event
+    /// to this box and election by its body.
     fn swap(&mut self, spec: &BoxSpec<'_>, signed: &Signed<'_>) -> Option<Refusal> {
         if !self.swap_due {
             return Some(Refusal::OutOfOrder);
@@ -993,6 +1000,13 @@ fn run_box<'a>(shared: &Shared<'_, 'a>, entry: &GenesisBox<'a>) -> BoxReport<'a>
             .collect(),
         refusals: Vec::new(),
         specs,
+        frame_keys: (0..genesis.state_count())
+            .map(|k| {
+                genesis
+                    .expected_box_at(k, id.as_bytes())
+                    .map(|b| b.frame_key)
+            })
+            .collect(),
         state: first.map_or(0, |(k, _)| k),
         swap_due: false,
     };
