@@ -190,6 +190,19 @@ pub struct BatchFinding {
     pub problem: BatchProblem,
 }
 
+/// A batch whose signatures and modules held and whose batch index no
+/// other body carries, with its members: the accepted records (not
+/// challenged) whose counters all fall in its ranges and in no other
+/// batch's (step 2). The connectivity stage holds a box's uplink to these
+/// runs (ADR-0041 decision 6).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BatchMembers {
+    /// The frame that carries the batch.
+    pub seq: Seq,
+    /// The frames that carry its member records, in frame order.
+    pub records: Vec<Seq>,
+}
+
 /// What the record stage concluded about one box.
 #[derive(Debug, Clone)]
 pub struct BoxRecords<'a> {
@@ -204,6 +217,8 @@ pub struct BoxRecords<'a> {
     pub unattested: Vec<Hash512>,
     /// The batch findings, in frame order.
     pub batches: Vec<BatchFinding>,
+    /// Every batch taken as a candidate and its members, in frame order.
+    pub members: Vec<BatchMembers>,
     /// The frames of the challenge openings refused: a signature that does
     /// not verify, or no accepted record of the box with the hash it
     /// names.
@@ -847,12 +862,13 @@ fn screen<'a>(
 
 /// Which records the batches attest: a record is a member of the one batch
 /// whose ranges hold all its counters, and is attested if that batch's
-/// count and root hold. Returns, per record, whether it is attested.
+/// count and root hold. Returns, per record, whether it is attested, and
+/// per batch its members.
 fn attest(
     records: &[Counted<'_>],
     batches: &[Candidate<'_>],
     findings: &mut Vec<BatchFinding>,
-) -> Vec<bool> {
+) -> (Vec<bool>, Vec<BatchMembers>) {
     let mut member_of: Vec<Option<usize>> = Vec::with_capacity(records.len());
     for r in records {
         let covering: Vec<usize> = batches
@@ -874,13 +890,19 @@ fn attest(
         }
     }
     let mut holds_up: Vec<bool> = Vec::with_capacity(batches.len());
+    let mut out: Vec<BatchMembers> = Vec::with_capacity(batches.len());
     for (i, b) in batches.iter().enumerate() {
-        let members: Vec<Hash512> = records
+        let of_batch: Vec<&Counted<'_>> = records
             .iter()
             .zip(&member_of)
             .filter(|(_, m)| **m == Some(i))
-            .map(|(r, _)| r.tracking_code)
+            .map(|(r, _)| r)
             .collect();
+        out.push(BatchMembers {
+            seq: b.seq,
+            records: of_batch.iter().map(|r| r.seq).collect(),
+        });
+        let members: Vec<Hash512> = of_batch.iter().map(|r| r.tracking_code).collect();
         let body = b.batch.body();
         let problem = if u16::try_from(members.len()).ok() != Some(body.record_count()) {
             Some(BatchProblem::RecordCount)
@@ -897,10 +919,11 @@ fn attest(
         }
         holds_up.push(problem.is_none());
     }
-    member_of
+    let attested = member_of
         .iter()
         .map(|m| m.is_some_and(|i| holds_up.get(i).copied().unwrap_or(false)))
-        .collect()
+        .collect();
+    (attested, out)
 }
 
 /// Runs one box.
@@ -951,7 +974,8 @@ fn run_box<'a>(
     let mut findings: Vec<BatchFinding> = Vec::new();
     let candidates = screen(&ctx, batches, &mut findings);
     ranges(&candidates, close.as_ref(), &mut findings);
-    let attested = attest(&accepted, &candidates, &mut findings);
+    let (attested, mut members) = attest(&accepted, &candidates, &mut findings);
+    members.sort_by_key(|m| m.seq.get());
 
     let mut records: Vec<AcceptedRecord> = accepted
         .iter()
@@ -1003,6 +1027,7 @@ fn run_box<'a>(
         rejected,
         unattested,
         batches: findings,
+        members,
         refused_challenges,
         failed_openings,
         record_set_root,

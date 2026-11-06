@@ -122,8 +122,8 @@ pub use progress::{
     ProgressStage, RaisedAlarm, StationProgressReport, bucket_slots, verify_progress,
 };
 pub use records::{
-    AcceptedRecord, BatchFinding, BatchProblem, BoxRecords, RecordRefusal, RecordStage,
-    RejectedRecord, verify_records,
+    AcceptedRecord, BatchFinding, BatchMembers, BatchProblem, BoxRecords, RecordRefusal,
+    RecordStage, RejectedRecord, verify_records,
 };
 pub use report::{Publications, Report, verify_ledger, verify_ledger_full, verify_ledger_with};
 pub use roll::{
