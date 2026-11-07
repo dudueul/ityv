@@ -594,6 +594,8 @@ fn vector(name: &str) -> &'static [u8] {
 /// `st-11-0042`).
 fn vector_genesis() -> &'static VerifiedGenesis<'static> {
     let mut draft = Draft::standard();
+    draft.manifest =
+        common::uplink::manifest_of(vector_election(), &common::uplink::standard_entries());
     let st = StationId::new(b"st-11-0042").unwrap();
     draft.boxes[0].box_id = BoxId::new(b"box-11-0042").unwrap();
     draft.boxes[0].station_id = st;
@@ -936,11 +938,16 @@ fn events_of_a_box_an_amendment_replaced_are_still_known() {
         b"RU-2",
         &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
     );
+    // New devices bring frame keys of their own (a frame key names one
+    // device across the states, ADR-0041 decision 2).
+    draft.boxes[2].frame_key = common::uplink::frame_key(common::uplink::BOX_FRAME_BASE + 9);
+    let mut u2c = checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]);
+    u2c.frame_key = common::uplink::frame_key(common::uplink::UNIT_FRAME_BASE + 9);
     draft.stations[1] = station(
         b"ST-2",
         StationKind::EarlyVoting,
         checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
-        checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        u2c,
         &[b"BOX-4"],
         &[],
     );

@@ -459,6 +459,40 @@ fn box_stream_close_and_swap() {
 }
 
 #[test]
+fn a_transmitter_replaced_alone_leaves_the_device_owing_every_tick() {
+    // The amendment gives BOX-001 a new frame key and keeps its device:
+    // the stream takes the swap, the device's ticks go on under its own
+    // key, and the slots of the swap are not excused (fourth review of
+    // 2i, finding 4).
+    let close = leak(signed_close(&close_parts(
+        counts(10, 10, 2),
+        &[module(b"MOD-P1"), module(b"MOD-P2")],
+    )));
+    let (transmitter, entry) = fixture().transmitter();
+    let entry: &'static Entry<GenesisBox<'static>> = leak(entry);
+    let feed = |s: &mut BoxStream<'static>, slot, n, state| {
+        let (t, k) = box_tick(slot, n, state);
+        s.accept(t, k).unwrap()
+    };
+    // A tick for every slot: clean.
+    let mut s = open_box(10);
+    feed(&mut s, 10, 4, BoxProgressState::Casting);
+    feed(&mut s, 11, 5, BoxProgressState::Casting);
+    s.swap(transmitter, entry, box_swap(12, 5)).unwrap();
+    assert!(feed(&mut s, 12, 6, BoxProgressState::Casting).is_some());
+    assert!(feed(&mut s, 13, 12, BoxProgressState::Closed).is_some());
+    assert!(s.finish(&close.close).is_empty());
+    // Slots 11 to 13 missing across the swap at 14: the stream holds.
+    let mut s = open_box(10);
+    feed(&mut s, 10, 4, BoxProgressState::Casting);
+    s.swap(transmitter, entry, box_swap(14, 5)).unwrap();
+    assert!(s.holds().is_empty());
+    assert!(feed(&mut s, 14, 12, BoxProgressState::Closed).is_some());
+    assert_eq!(s.holds(), stream_hold());
+    assert_eq!(s.finish(&close.close), stream_hold());
+}
+
+#[test]
 fn box_swap_refusals() {
     let fresh = || {
         let mut s = open_box(10);

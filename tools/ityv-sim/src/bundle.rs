@@ -10,10 +10,11 @@ use crate::scenarios::Scenario;
 
 /// The magic bytes.
 pub const MAGIC: &[u8; 8] = b"ITYVSIMB";
-/// The format version: 3 has the beacon observation section and the
-/// timestamp and roll authority sets in the genesis section (genesis sets
-/// 12 and 13, ADR-0039, ADR-0040); version 2 had either, on two branches.
-pub const VERSION: u16 = 3;
+/// The format version: 4 carries the connectivity manifest the genesis
+/// pins in the genesis section, after the signed genesis (ADR-0041); 3 had
+/// the beacon observation section and the timestamp and roll authority
+/// sets (genesis sets 12 and 13, ADR-0039, ADR-0040).
+pub const VERSION: u16 = 4;
 
 /// Section tags, in the order they appear.
 pub mod tag {
@@ -76,6 +77,7 @@ pub fn encode(scenario: &Scenario, ledger: &Ledger) -> Vec<u8> {
     sections.push((tag::PIN, e.pin.as_bytes().to_vec()));
     let mut g = Vec::new();
     blob(&mut g, e.signed);
+    blob(&mut g, e.manifest);
     amendable(&mut g, &e.sets);
     list(&mut g, e.fixed.ballot_styles);
     list(&mut g, e.fixed.trustees);

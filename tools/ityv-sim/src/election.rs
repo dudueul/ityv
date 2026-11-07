@@ -240,6 +240,8 @@ pub struct Election {
     genesis: Option<&'static VerifiedGenesis<'static>>,
     /// The `SignedLegalAuthorization` object.
     pub authorization: &'static [u8],
+    /// The connectivity manifest the genesis pins (ADR-0041 decision 1).
+    pub manifest: &'static [u8],
     /// Boxes, in station order.
     pub boxes: Vec<BoxInfo>,
     /// Stations.
@@ -599,6 +601,7 @@ impl Election {
             },
             genesis: None,
             authorization: &[],
+            manifest: &[],
             boxes,
             stations,
             modules,
@@ -850,6 +853,7 @@ impl Election {
                 reporting_unit_id: ReportingUnitId::new(text(b.unit)).unwrap(),
                 device_key: registered(&b.device),
                 attest_key: registered(&format!("{}/attest", b.device)),
+                frame_key: ed25519_half(&self.key(&format!("frame/{}", b.id))),
                 modules: modules_of(&b.mods.iter().map(|m| m.id).collect::<Vec<_>>()),
             })
             .collect();
@@ -864,6 +868,7 @@ impl Election {
                 unit_id: UnitId::new(text(u)).unwrap(),
                 key: registered(&self.key(&format!("unit/{u}"))),
                 attest_key: registered(&self.key(&format!("unit/{u}/attest"))),
+                frame_key: ed25519_half(&self.key(&format!("frame/{u}"))),
                 modules: modules_of(&mods),
             }
         };
@@ -893,6 +898,11 @@ impl Election {
                     kind: spec.kind,
                     primary: unit_entry(st.units[0]),
                     spare: unit_entry(st.units[1]),
+                    gateway: ityv_encoding::GatewayEntry {
+                        gateway_id: crate::uplink::gateway_id(st.id),
+                        key: registered(&self.key(&format!("gateway/{}", st.id))),
+                        attest_key: registered(&self.key(&format!("gateway/{}/attest", st.id))),
+                    },
                     boxes: leak_slice(box_ids),
                     id_terminals_hash: hash_of("id-terminals", &[st.id.as_bytes()]),
                     tokens: leak_slice(tokens),
@@ -1040,6 +1050,7 @@ impl Election {
     fn seal_genesis(&mut self) {
         let raw = self.draft_sets();
         let (auth_body, authorization) = self.legal_authorization();
+        let manifest = crate::uplink::manifest(self.election_id(), self.spec.two_way_uplink);
         let parties: Vec<PartyEntry<'static>> = self
             .spec
             .parties
@@ -1089,7 +1100,7 @@ impl Election {
             policy_hash: hash_of("policy", &[self.eid.as_bytes()]),
             proof_system_id: ident("ityv-orproof-v1"),
             legal_authorization_hash: object_hash(auth_body),
-            connectivity_manifest_hash: hash_of("connectivity", &[self.eid.as_bytes()]),
+            connectivity_manifest_hash: object_hash(manifest),
             release_manifest_hash: hash_of("release", &[self.eid.as_bytes()]),
             commission_key: registered(&self.commission()),
             committee_key: registered(&self.committee()),
@@ -1116,6 +1127,7 @@ impl Election {
             &pin,
             &GenesisInput {
                 signed,
+                connectivity: manifest,
                 sets,
                 fixed,
             },
@@ -1128,6 +1140,7 @@ impl Election {
         self.fixed = fixed;
         self.genesis = Some(leak(genesis));
         self.authorization = authorization;
+        self.manifest = manifest;
         self.raw = raw;
     }
 
@@ -1142,9 +1155,101 @@ impl Election {
     pub fn input(&self) -> GenesisInput<'static> {
         GenesisInput {
             signed: self.signed,
+            connectivity: self.manifest,
             sets: self.sets,
             fixed: self.fixed,
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Connectivity (ADR-0022, ADR-0041).
+
+    /// The label of the frame key of `device` (a box's scanner, or the
+    /// station's check-in unit in service).
+    #[must_use]
+    pub fn frame_label(&self, device: crate::uplink::Device) -> String {
+        match device {
+            crate::uplink::Device::Box(b) => self.key(&format!("frame/{}", self.boxes[b].id)),
+            crate::uplink::Device::Unit(s) => {
+                self.key(&format!("frame/{}", self.stations[s].units[0]))
+            }
+        }
+    }
+
+    /// The frame key of `device`, as the genesis registers it.
+    #[must_use]
+    pub fn frame_key(&self, device: crate::uplink::Device) -> &'static [u8; 32] {
+        ed25519_half(&self.frame_label(device))
+    }
+
+    /// The label of station `s`'s gateway key.
+    #[must_use]
+    pub fn gateway_label(&self, s: usize) -> String {
+        self.key(&format!("gateway/{}", self.stations[s].id))
+    }
+
+    /// Station `s`'s gateway identifier.
+    #[must_use]
+    pub fn gateway_id(&self, s: usize) -> ityv_encoding::GatewayId<'static> {
+        crate::uplink::gateway_id(self.stations[s].id)
+    }
+
+    /// The first and last slot `device` sends normal frames in: from its
+    /// station's opening to the slot after its box's close bucket (the
+    /// check-in unit to the station's last box's).
+    #[must_use]
+    pub fn link_slots(&self, device: crate::uplink::Device) -> (u64, u64) {
+        let close = |s: usize| crate::day::bucket_slots(self.days[s].close_bucket).1 + 1;
+        match device {
+            crate::uplink::Device::Box(b) => {
+                let s = self.boxes[b].station;
+                (self.days[s].open_slot, close(s))
+            }
+            crate::uplink::Device::Unit(s) => (self.days[s].open_slot, close(s)),
+        }
+    }
+
+    /// A connectivity incident (ADR-0041 decision 11, VC-083) at station
+    /// `station` (`None`: the whole election) about box `b` (`None`: the
+    /// whole station), signed by `who`.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn connectivity_incident(
+        &self,
+        station: Option<usize>,
+        b: Option<usize>,
+        kind: ityv_encoding::IncidentKind,
+        slots: (u64, u64),
+        commitment_unit: bool,
+        who: &[Person],
+    ) -> &'static [u8] {
+        let body = ityv_encoding::ConnectivityIncidentBody::new(
+            &ityv_encoding::ConnectivityIncidentParts {
+                election_id: self.election_id(),
+                station_id: station.map(|s| StationId::new(text(self.stations[s].id)).unwrap()),
+                box_id: b.map(|b| BoxId::new(text(self.boxes[b].id)).unwrap()),
+                kind,
+                from_slot: slots.0,
+                to_slot: slots.1,
+                commitment_unit,
+                evidence_hash: hash_of(
+                    "incident-evidence",
+                    &[&[kind.code()], &slots.0.to_be_bytes()],
+                ),
+            },
+        )
+        .unwrap();
+        self.witnessed(
+            object(ityv_encoding::SCHEMA_CONNECTIVITY_INCIDENT_BODY, &body),
+            who,
+            0,
+        )
+    }
+
+    /// The committee, as a signer of witnessed events.
+    #[must_use]
+    pub fn committee_person(&self) -> Person {
+        self.roll_authorities()[1].clone()
     }
 
     /// An amendment numbered 1 that changes nothing but records a device
@@ -1522,7 +1627,10 @@ impl Election {
             commitments: Commitments::new(&points).unwrap(),
             proof: leak_slice(buf),
             module_counters: ModuleCounters::new(&counters).unwrap(),
-            share_package_hash: hash_of("share-package", &tag),
+            share_package_hash: object_hash(crate::util::share_package(
+                bx.id.as_bytes(),
+                &points.iter().flat_map(|p| p.0).collect::<Vec<u8>>(),
+            )),
             transport_flags: 0,
         })
         .unwrap();

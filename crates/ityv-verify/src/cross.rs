@@ -25,14 +25,21 @@
 //!   chamber the genesis does not have; and each chamber has exactly
 //!   `n_c` trustees, at most eight (the threshold sharing's capacity, so
 //!   that a trustee quorum can be checked at all) (VC-067, VC-017);
-//! * no two devices share an identifier (boxes, check-in units and
-//!   modules), so a device attestation names exactly one device;
+//! * no two devices share an identifier (boxes, check-in units, modules
+//!   and gateways), so a device attestation names exactly one device;
+//! * every frame key (a box's scanner, a check-in unit) is a valid Ed25519
+//!   key, and no two devices of the state share one: a frame key names
+//!   one link (ADR-0041 decision 2); across the states ([`FrameKeys`]), a
+//!   frame key is the Ed25519 half of no registered hybrid key (else the
+//!   holder of that key, a gateway say, could sign the device's frames)
+//!   and names the same device in every state it appears in;
 //! * no timestamp authority's operator is a witness's organisation or an
 //!   election commission's that a reporting unit names (ADR-0039 2);
 //! * every registered key is a valid key, and no two keys of the state
 //!   share a half: the two authorities, every
 //!   box's device and attestation keys, every check-in unit's keys, every
-//!   roster signer, module, trustee and witness.
+//!   station gateway's keys, every roster signer, module, trustee and
+//!   witness.
 //!
 //! What these checks do not prove: that an entry is true of the world (a
 //! box exists physically, a person holds the key registered for them);
@@ -41,8 +48,9 @@
 //! procedures require.
 
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec::Vec;
 
-use ityv_crypto::MAX_MEMBERS;
+use ityv_crypto::{MAX_MEMBERS, RecordVerifyingKey};
 use ityv_encoding::{
     ChamberCode, EntrySet, GenesisBody, HYBRID_VK_LEN, MLDSA87_VK_HALF, ModuleIds, RosterRole,
     RosterSigner,
@@ -353,6 +361,7 @@ pub(crate) fn check<'a>(
 
     check_appointments(state, a, f)?;
     check_devices(state, a)?;
+    check_frame_keys(state, a)?;
     timestamp::check_operators_apart(state, &f.timestamps, &f.witnesses, &a.roster, &a.units)?;
     roll::check_custodians_apart(state, &f.rolls, &a.units)?;
     check_keys(state, a, f, body)
@@ -403,13 +412,83 @@ fn check_devices(state: u64, a: &Amendable<'_>) -> Result<(), Error> {
         }
     }
     for (i, item) in a.stations.items().iter().enumerate() {
-        for unit in [item.value.primary(), item.value.spare()] {
-            if !ids.insert(unit.unit_id.as_bytes()) {
+        let s = &item.value;
+        let units = [s.primary().unit_id.as_bytes(), s.spare().unit_id.as_bytes()];
+        for id in units.into_iter().chain([s.gateway().gateway_id.as_bytes()]) {
+            if !ids.insert(id) {
                 return Err(Error::entry(state, EntrySet::Stations, i, Rule::DeviceId));
             }
         }
     }
     Ok(())
+}
+
+/// Every frame key of one state is a valid Ed25519 key and names one
+/// device (ADR-0041 decision 2).
+fn check_frame_keys(state: u64, a: &Amendable<'_>) -> Result<(), Error> {
+    let boxes = a
+        .boxes
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(i, item)| (item.value.frame_key, EntrySet::Boxes, i));
+    let units = a.stations.items().iter().enumerate().flat_map(|(i, item)| {
+        [item.value.primary(), item.value.spare()]
+            .map(|unit| (unit.frame_key, EntrySet::Stations, i))
+    });
+    let mut seen: BTreeSet<[u8; ityv_encoding::FRAME_KEY_LEN]> = BTreeSet::new();
+    for (key, set, i) in boxes.chain(units) {
+        if RecordVerifyingKey::from_bytes(*key).is_err() {
+            return Err(Error::entry(state, set, i, Rule::InvalidKey));
+        }
+        if !seen.insert(*key) {
+            return Err(Error::entry(state, set, i, Rule::SharedKey));
+        }
+    }
+    Ok(())
+}
+
+/// A registered hybrid key of one state, with the entry that owns it
+/// (`None`: the body).
+type Owned<'k> = (&'k [u8; HYBRID_VK_LEN], Option<EntrySet>, usize);
+
+/// Every registered hybrid key of one state, in the order the checks
+/// report: the two authorities, boxes, stations (units, then the
+/// gateway), roster, modules, trustees, witnesses, roll authorities.
+fn hybrid_keys<'k>(a: &Amendable<'k>, f: &Fixed<'k>, body: &GenesisBody<'k>) -> Vec<Owned<'k>> {
+    let mut out: Vec<Owned<'k>> = Vec::new();
+    out.push((body.commission_key(), None, 0));
+    out.push((body.committee_key(), None, 0));
+    for (i, item) in a.boxes.items().iter().enumerate() {
+        out.push((item.value.device_key, Some(EntrySet::Boxes), i));
+        out.push((item.value.attest_key, Some(EntrySet::Boxes), i));
+    }
+    for (i, item) in a.stations.items().iter().enumerate() {
+        for unit in [item.value.primary(), item.value.spare()] {
+            out.push((unit.key, Some(EntrySet::Stations), i));
+            out.push((unit.attest_key, Some(EntrySet::Stations), i));
+        }
+        let gateway = item.value.gateway();
+        out.push((gateway.key, Some(EntrySet::Stations), i));
+        out.push((gateway.attest_key, Some(EntrySet::Stations), i));
+    }
+    for (i, item) in a.roster.items().iter().enumerate() {
+        out.push((item.value.key, Some(EntrySet::Roster), i));
+    }
+    for (i, item) in a.modules.items().iter().enumerate() {
+        out.push((item.value.key, Some(EntrySet::Modules), i));
+        out.push((item.value.attest_key, Some(EntrySet::Modules), i));
+    }
+    for (i, item) in f.trustees.items().iter().enumerate() {
+        out.push((item.value.key, Some(EntrySet::Trustees), i));
+    }
+    for (i, item) in f.witnesses.items().iter().enumerate() {
+        out.push((item.value.key, Some(EntrySet::Witnesses), i));
+    }
+    for (i, item) in f.rolls.items().iter().enumerate() {
+        out.push((item.value.key, Some(EntrySet::RollAuthorities), i));
+    }
+    out
 }
 
 /// No two keys of one state share a half.
@@ -420,33 +499,78 @@ fn check_keys(
     body: &GenesisBody<'_>,
 ) -> Result<(), Error> {
     let mut keys = Keys::new(state);
-    keys.add(body.commission_key(), None, 0)?;
-    keys.add(body.committee_key(), None, 0)?;
-    for (i, item) in a.boxes.items().iter().enumerate() {
-        keys.add(item.value.device_key, Some(EntrySet::Boxes), i)?;
-        keys.add(item.value.attest_key, Some(EntrySet::Boxes), i)?;
-    }
-    for (i, item) in a.stations.items().iter().enumerate() {
-        for unit in [item.value.primary(), item.value.spare()] {
-            keys.add(unit.key, Some(EntrySet::Stations), i)?;
-            keys.add(unit.attest_key, Some(EntrySet::Stations), i)?;
-        }
-    }
-    for (i, item) in a.roster.items().iter().enumerate() {
-        keys.add(item.value.key, Some(EntrySet::Roster), i)?;
-    }
-    for (i, item) in a.modules.items().iter().enumerate() {
-        keys.add(item.value.key, Some(EntrySet::Modules), i)?;
-        keys.add(item.value.attest_key, Some(EntrySet::Modules), i)?;
-    }
-    for (i, item) in f.trustees.items().iter().enumerate() {
-        keys.add(item.value.key, Some(EntrySet::Trustees), i)?;
-    }
-    for (i, item) in f.witnesses.items().iter().enumerate() {
-        keys.add(item.value.key, Some(EntrySet::Witnesses), i)?;
-    }
-    for (i, item) in f.rolls.items().iter().enumerate() {
-        keys.add(item.value.key, Some(EntrySet::RollAuthorities), i)?;
+    for (key, set, i) in hybrid_keys(a, f, body) {
+        keys.add(key, set, i)?;
     }
     Ok(())
+}
+
+/// The device a frame key names: a box or a check-in unit, by identifier.
+type FrameDevice = (bool, Vec<u8>);
+
+/// The frame keys and hybrid key halves of every genesis state read so far
+/// (ADR-0041 decision 2): a frame key is the Ed25519 half of no hybrid key
+/// of any state, and names one device in every state.
+#[derive(Debug, Default)]
+pub(crate) struct FrameKeys {
+    halves: BTreeSet<[u8; ityv_encoding::FRAME_KEY_LEN]>,
+    frames: BTreeMap<[u8; ityv_encoding::FRAME_KEY_LEN], FrameDevice>,
+}
+
+impl FrameKeys {
+    /// Adds state `state`'s keys: each hybrid key's Ed25519 half must be no
+    /// frame key of an earlier state, and each frame key no half of this
+    /// state or an earlier one, nor another device's frame key in an
+    /// earlier state.
+    ///
+    /// # Errors
+    /// [`Rule::SharedKey`] at the first entry that breaks the rule.
+    pub(crate) fn add(
+        &mut self,
+        state: u64,
+        a: &Amendable<'_>,
+        f: &Fixed<'_>,
+        body: &GenesisBody<'_>,
+    ) -> Result<(), Error> {
+        for (key, set, i) in hybrid_keys(a, f, body) {
+            let Some((_, ed)) = key.split_first_chunk::<MLDSA87_VK_HALF>() else {
+                continue;
+            };
+            let Ok(ed) = <[u8; ityv_encoding::FRAME_KEY_LEN]>::try_from(ed) else {
+                continue;
+            };
+            if self.frames.contains_key(&ed) {
+                return Err(match set {
+                    Some(s) => Error::entry(state, s, i, Rule::SharedKey),
+                    None => Error::body(state, Rule::SharedKey),
+                });
+            }
+            self.halves.insert(ed);
+        }
+        let boxes = a.boxes.items().iter().enumerate().map(|(i, item)| {
+            let b = &item.value;
+            (b.frame_key, EntrySet::Boxes, i, (true, b.box_id.as_bytes()))
+        });
+        let units = a.stations.items().iter().enumerate().flat_map(|(i, item)| {
+            [item.value.primary(), item.value.spare()].map(|u| {
+                (
+                    u.frame_key,
+                    EntrySet::Stations,
+                    i,
+                    (false, u.unit_id.as_bytes()),
+                )
+            })
+        });
+        for (key, set, i, (is_box, id)) in boxes.chain(units) {
+            let other_device = self
+                .frames
+                .get(key)
+                .is_some_and(|(b, d)| *b != is_box || d.as_slice() != id);
+            if self.halves.contains(key) || other_device {
+                return Err(Error::entry(state, set, i, Rule::SharedKey));
+            }
+            self.frames.insert(*key, (is_box, id.to_vec()));
+        }
+        Ok(())
+    }
 }

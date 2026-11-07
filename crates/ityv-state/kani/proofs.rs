@@ -493,7 +493,7 @@ fn status_is_exact() {
         && passed(Step::BoxInvariants)
         && passed(Step::Records)
         && anchored;
-    let complete = log && passed(Step::BoxCompleteness);
+    let complete = log && passed(Step::BoxCompleteness) && passed(Step::Connectivity);
     let tally = complete && passed(Step::Participation) && passed(Step::Tally);
     let audited = tally && passed(Step::Audit);
     let expected = if failed || held {

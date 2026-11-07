@@ -31,7 +31,7 @@ use ityv_encoding::{
     ModuleRecordSig, PROOF_SYSTEM_OR_REP_V1, Point32, ProofHeader, SCHEMA_CAST_RECORD,
     SCHEMA_CAST_RECORD_BODY, SCHEMA_CHALLENGE_OPENING, SCHEMA_CHALLENGE_OPENING_BODY,
     SCHEMA_MEMBER_SHARE, SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, Scalar32, Scalars, ShareEntry,
-    SharePackage, Token192, Transport, TrusteeId, decode_object,
+    SharePackage, Token192, Transport, TrusteeId, decode_object, max_package_len,
 };
 use std::vec::Vec;
 
@@ -651,6 +651,50 @@ fn share_entry<'a>(
         ciphertext,
         tag,
     }
+}
+
+#[test]
+fn the_longest_package_is_the_bound_an_uplink_allows() {
+    // Every field at its longest: what `max_package_len` counts.
+    let id = [b'E'; 64];
+    let ct = std::vec![0x33u8; 4096];
+    let tag = patterned::<16>(0x03);
+    let ids: Vec<Vec<u8>> = (0..64u8)
+        .map(|i| {
+            let mut t = std::vec![b'T'; 64];
+            t[62] = b'0' + i / 10;
+            t[63] = b'0' + i % 10;
+            t
+        })
+        .collect();
+    for members in [1usize, 8, 64] {
+        let entries: Vec<ShareEntry<'_>> = ids[..members]
+            .iter()
+            .map(|t| {
+                share_entry(
+                    std::boxed::Box::leak(t.clone().into_boxed_slice()),
+                    ChamberCode::N,
+                    Transport::Kem,
+                    &ct,
+                    &tag,
+                )
+            })
+            .collect();
+        let package = SharePackage::new(
+            ElectionId::new(&id).unwrap(),
+            BoxId::new(&id).unwrap(),
+            &commitments(8, 0x10),
+            &entries,
+        )
+        .unwrap();
+        let bytes = encode_to_vec(SCHEMA_SHARE_PACKAGE, SCHEMA_VERSION_1, &package);
+        assert_eq!(bytes.len(), max_package_len(members), "{members}");
+    }
+    assert_eq!(max_package_len(0), 416);
+    assert_eq!(max_package_len(1), 416 + 4198);
+    // More members than a package holds count as 64.
+    assert_eq!(max_package_len(65), max_package_len(64));
+    assert_eq!(max_package_len(usize::MAX), max_package_len(64));
 }
 
 #[test]

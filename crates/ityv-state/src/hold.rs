@@ -355,11 +355,63 @@ pub enum HoldReason {
     /// count or one of its boxes' close), which must not change the roll
     /// the voters were checked against (§6.1, ADR-0040).
     RollIncomplete = 78,
+    /// The connectivity manifest breaks a rule of VC-077: a device class
+    /// without an entry, a TCB device with an inbound port or a radio, a
+    /// two-way port of a class that may not have one, a tap that is not
+    /// send-only, a scanner or check-in unit without exactly one frame link
+    /// of the declared shape, or a frame link that may carry check-in
+    /// counters. Every box (§5.8 item 1, ADR-0022 decision 11, ADR-0041).
+    ConnectivityManifest = 79,
+    /// A gateway session cannot be taken, or its record disagrees with its
+    /// frame logs: a gateway the genesis does not register for the
+    /// station, a signature that does not verify, a session out of order or
+    /// not chained to the previous one, a frame log missing, late or
+    /// repeated, a chain head the logs do not give, or counts of frames,
+    /// missing slots or stream end that are not the logs' (§5.8 item 5,
+    /// VC-080, ADR-0041). Every box of the station.
+    UplinkSessionRefused = 80,
+    /// A frame breaks a rule of VC-078: a signature that is not the
+    /// device's frame key over its header, a number or kind outside the
+    /// slot's shape, a frame before the box's opening or a normal frame
+    /// after its close, a stream offset that goes back or skips without a
+    /// missing slot, or a payload root the published chunk leaves and zero
+    /// fill do not give, or a chunk whose public bytes give another leaf
+    /// (§5.8 item 3, ADR-0041). The device's box, or every box of the
+    /// station for a check-in unit.
+    UplinkFrameInvalid = 81,
+    /// A link's stream breaks a rule of VC-079: an object of a kind the
+    /// device may not send or the manifest does not let it carry, bytes
+    /// that are not objects, a published object whose bytes or length are
+    /// not the ledger's, a record outside a closed-batch run in record-hash
+    /// order, a share package not right after its record, or a fully
+    /// received object the ledger does not carry once the gateway closed
+    /// (§5.8 item 4, ADR-0041). The device's box or station.
+    UplinkObjectInvalid = 82,
+    /// A device-signed ledger event of a station whose gateway sent its
+    /// final session lies inside no received frame of its device's link:
+    /// it reached the board by another path, or the gateway dropped the
+    /// frame that carried it (§5.8 item 5, VC-080, ADR-0041). The event's
+    /// box, or every box of its station.
+    UplinkObjectOutside = 83,
+    /// A connectivity incident was recorded: an undeclared connection, an
+    /// inbound path or a radio, an off-schedule frame, a capture or carrier
+    /// record that disagrees, the roll line used outside its window, an
+    /// unexplained transmission, a teardown or radio check finding. The
+    /// electronic layer of the box, the station or the whole election the
+    /// incident names; the paper count is not affected (§5.8 item 10,
+    /// VC-083, ADR-0041).
+    ConnectivityIncident = 84,
+    /// A connectivity incident cannot be taken: its signers are not two
+    /// clerks and observers of two organisations, or the committee and
+    /// observers of two organisations, registered on the genesis roster, or
+    /// it names a station or box the genesis does not have (ADR-0041).
+    /// Every box.
+    ConnectivityIncidentRefused = 85,
 }
 
 impl HoldReason {
     /// Every reason in code order.
-    pub const ALL: [Self; 79] = [
+    pub const ALL: [Self; 86] = [
         Self::PaperRecordMismatch,
         Self::AttestedMismatch,
         Self::SpoilEnvelopeMismatch,
@@ -439,6 +491,13 @@ impl HoldReason {
         Self::ContestedCheckinInvalid,
         Self::ContestedLabelReused,
         Self::RollIncomplete,
+        Self::ConnectivityManifest,
+        Self::UplinkSessionRefused,
+        Self::UplinkFrameInvalid,
+        Self::UplinkObjectInvalid,
+        Self::UplinkObjectOutside,
+        Self::ConnectivityIncident,
+        Self::ConnectivityIncidentRefused,
     ];
 
     /// The reason's code.

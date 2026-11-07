@@ -4,7 +4,10 @@
 //! the voting days slot by slot (openings, records, batches, progress
 //! ticks, emergency insertion, on-site checks, hourly checkpoints),
 //! closes and station counts, participation sets, receipt resolutions,
-//! then the tally of every ballot style and reporting unit.
+//! then the tally of every ballot style and reporting unit. Each station
+//! gateway's sessions come at the end of each six-slot window from the
+//! station's opening; the last ones, final, after the participation sets
+//! (ADR-0041, [`crate::uplink`]).
 
 use std::collections::BTreeSet;
 
@@ -19,6 +22,7 @@ use ityv_encoding::{
 use crate::day::bucket_covering;
 use crate::election::{BATCH_SIZE, CastInfo, Election, QUORUM, options_of};
 use crate::ledger::Step;
+use crate::uplink::{Device, Window, windows};
 
 /// How far the plan goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +58,8 @@ pub struct Marks {
     pub issuance: Vec<Option<usize>>,
     /// Per station: the step of its participation set.
     pub participation: Vec<Option<usize>>,
+    /// Per station: the steps of its gateway's sessions, in order.
+    pub uplink: Vec<Vec<usize>>,
     /// The legal authorization's step.
     pub authorization: usize,
     /// Tally units with the steps of their scope, openings and paper.
@@ -143,9 +149,19 @@ pub fn plan(election: &Election, until: Until) -> Plan {
             closes: vec![None; nb],
             issuance: vec![None; ns],
             participation: vec![None; ns],
+            uplink: vec![Vec::new(); ns],
             ..Marks::default()
         },
     };
+    // Each station's session windows: from its opening to the slot after
+    // its last link's last slot.
+    let station_windows: Vec<Vec<(u64, u64)>> = (0..ns)
+        .map(|s| {
+            let (first, last) = e.link_slots(Device::Unit(s));
+            windows(first, last + 1)
+        })
+        .collect();
+    let mut next_window = vec![0usize; ns];
     p.event(SCHEMA_SIGNED_GENESIS, e.signed);
     p.marks.authorization = p.event(SCHEMA_SIGNED_LEGAL_AUTHORIZATION, e.authorization);
     for party in &e.spec.parties {
@@ -255,6 +271,21 @@ pub fn plan(election: &Election, until: Until) -> Plan {
                         e.progress_check(s, c.alarm_slot, c.alarm, c.finding, c.holding, c.bucket),
                     );
                 }
+                // The gateway's session of a window that ends here (never
+                // the last: that one ends after the close).
+                if let Some(&(start, end)) = station_windows[s].get(next_window[s])
+                    && end == slot
+                {
+                    let at = p.push(Step::Uplink(Window {
+                        station: s,
+                        start,
+                        end,
+                        is_final: false,
+                        faults: Vec::new(),
+                    }));
+                    p.marks.uplink[s].push(at);
+                    next_window[s] += 1;
+                }
             }
             if until == Until::Voting(slot) {
                 p.checkpoint(bucket_covering(slot) + 1);
@@ -303,6 +334,21 @@ pub fn plan(election: &Election, until: Until) -> Plan {
     for s in 0..ns {
         let at = p.event(SCHEMA_PARTICIPATION_SET, e.participation(s, None));
         p.marks.participation[s] = Some(at);
+    }
+    // Each gateway's remaining sessions, the last final.
+    for s in 0..ns {
+        let n = station_windows[s].len();
+        for (k, &(start, end)) in station_windows[s].iter().enumerate().skip(next_window[s]) {
+            let at = p.push(Step::Uplink(Window {
+                station: s,
+                start,
+                end,
+                is_final: k + 1 == n,
+                faults: Vec::new(),
+            }));
+            p.marks.uplink[s].push(at);
+        }
+        next_window[s] = n;
     }
     for (b, bx) in e.boxes.iter().enumerate() {
         if bx.absentee {

@@ -4,7 +4,21 @@
 // shown is the verifier's.
 
 import { expect, test } from "bun:test";
-import { AUDIT_EVENTS, AUDIT_REFUSALS, HOLDS, ROLL_REASONS, STAGES, TSA_KINDS } from "../src/vocab";
+import {
+  AUDIT_EVENTS,
+  AUDIT_REFUSALS,
+  DEVICE_CLASSES,
+  HOLDS,
+  INCIDENT_KINDS,
+  INCIDENT_PROBLEMS,
+  LINK_PROBLEMS,
+  MANIFEST_PROBLEMS,
+  ROLL_REASONS,
+  SESSION_PROBLEMS,
+  STAGES,
+  STEPS,
+  TSA_KINDS,
+} from "../src/vocab";
 
 const repo = `${import.meta.dir}/../../..`;
 const source = async (path: string) => Bun.file(`${repo}/${path}`).text();
@@ -43,6 +57,46 @@ test("every stage the WASM report names a refusal by has Korean text", async () 
   const stages = new Set([...report.matchAll(/list\.push\(\(\s*[^,]+,\s*"([a-z]+)"/g)].map((m) => m[1]!));
   for (const s of ["timestamps", "roll", "audit", "tally"]) expect(stages.has(s)).toBe(true);
   for (const s of stages) expect(korean(STAGES[s])).toBe(true);
+});
+
+/** The variants of `code_enum!` block `name` in Rust source `text`. */
+function codes(text: string, name: string): string[] {
+  const start = text.indexOf(`    ${name} {`);
+  expect(start).toBeGreaterThan(-1);
+  const body = text.slice(start, text.indexOf("\n    }", start));
+  return [...body.matchAll(/^ {8}([A-Z][A-Za-z0-9]*) = /gm)].map((m) => m[1]!);
+}
+
+test("every connectivity finding of ityv-verify and ityv-encoding has Korean text", async () => {
+  const verify = await source("crates/ityv-verify/src/connectivity.rs");
+  for (const [name, table, n] of [
+    ["ManifestProblem", MANIFEST_PROBLEMS, 11],
+    ["SessionProblem", SESSION_PROBLEMS, 17],
+    ["LinkProblem", LINK_PROBLEMS, 25],
+    ["IncidentProblem", INCIDENT_PROBLEMS, 3],
+  ] as const) {
+    const vs = variants(verify, name);
+    expect(vs.length).toBe(n);
+    for (const v of vs) expect(korean(table[v])).toBe(true);
+  }
+  const encoding = await source("crates/ityv-encoding/src/schema/connectivity.rs");
+  const classes = codes(encoding, "DeviceClass");
+  expect(classes.length).toBe(15);
+  for (const v of classes) expect(korean(DEVICE_CLASSES[v])).toBe(true);
+  const kinds = codes(encoding, "IncidentKind");
+  expect(kinds.length).toBe(10);
+  for (const v of kinds) expect(korean(INCIDENT_KINDS[v])).toBe(true);
+  expect(STEPS.Connectivity).not.toContain("아직");
+});
+
+test("the hold table names the connectivity holds", async () => {
+  const hold = await source("crates/ityv-state/src/hold.rs");
+  const names = ["ConnectivityManifest", "UplinkSessionRefused", "UplinkFrameInvalid", "UplinkObjectInvalid", "UplinkObjectOutside", "ConnectivityIncident", "ConnectivityIncidentRefused"];
+  names.forEach((n, i) => {
+    expect(HOLDS[79 + i]?.name).toBe(n);
+    expect(korean(HOLDS[79 + i]?.ko)).toBe(true);
+    expect(hold).toContain(`${n} = ${79 + i},`);
+  });
 });
 
 test("the hold table names the timestamp and roll holds", () => {

@@ -87,3 +87,30 @@
 3. **시뮬레이터.** 체크포인트마다 두 가상 기관(정부 운영과 정부 밖)이 찍는다. 감사의 고정 체크포인트도 시드보다 앞에서 찍으므로 감사 시나리오는 시점확인 규칙(`AuditRefusal::Unstamped`) 아래에서도 같은 결과에 닿는다. `attack-seed-grinding`의 고정 체크포인트는 정직한 기관이 만든 때(공표 뒤)에 찍으므로 토큰 규칙으로도 걸리지만 먼저 걸린 `Late`가 보인다.
 4. **시나리오 7개.** `quick-roll-amended`, `attack-checkpoint-backdated`, `fault-anchor-missed`, `attack-tsa-unpinned`, `attack-roll-extract-after-freeze`, `fault-roll-amendment-short`, `attack-binding-unstamped`(빠른 묶음 43개, 전체 46개). 기존 시나리오의 기대 결과는 바뀌지 않았다.
 5. **콘솔.** 체크포인트 칸에 체크포인트마다 검증기의 앵커(두 구분, 운영 주체 수, 충족)와 토큰, 받지 않은 시점확인 기록을 보인다. 감사 칸의 고정 체크포인트에는 그 토큰과 시드 앞·공표 전 여부, 네 번째 대조(시드 앞 프레임의 공표 전 토큰이 두 구분·두 운영 주체)를 더했다. 후속 작업의 첫 항목("고정 체크포인트가 TSA 토큰을 지니면 감사 칸의 시각 대조를 그 시각으로")은 증인 시각 대조를 그대로 두고 토큰 대조를 나란히 보이는 것으로 했다: 검증기도 둘 다 요구한다(ADR-0039 8항). 선거인명부 보관 칸은 동결과 변경마다 같은 값의 영수증과 정족수, 명부 가명 root, 효력을 보인다. 모두 읽기 전용이고 공개 정보만이며 CSP는 그대로다. `test/vocab.test.ts`는 감사 거부·감사 이벤트·시점확인 기관 구분·명부 변경 사유·보고서의 단계 이름이 Rust 원본의 모든 변형을 한국어로 덮는지 원본을 읽어 확인하고, 보류 표 시험은 0–76 전부를 본다.
+
+## 개정 3 (2026-11-05, 연결 감사, ADR-0041)
+
+1. **번들 형식 4.** GENESIS 섹션의 서명된 genesis 다음에 genesis가 고정한 연결 목록(`ConnectivityManifest` 객체)을 blob으로 싣는다. 검증기가 그것을 genesis 입력(`GenesisInput::connectivity`)으로 받는다. 버전 3은 읽지 않는다.
+2. **시뮬레이터.** 모든 투표소에 게이트웨이(하이브리드 키·증명 키), 모든 스캐너와 카운터·가명 유닛에 프레임 키가 있다. 연결 목록은 기준값(스캐너 16, 유닛 4, 따라잡기 64)을 쓴다. 장치는 개시부터 마감 구간 다음 슬롯까지 슬롯마다 그 수의 프레임을 보내고, 게이트웨이는 투표소 개시부터 여섯 슬롯마다 프레임 기록과 세션을, 참여 집합 뒤에 `final` 세션을 싣는다(투표소의 두 참관인이 캡처 서명). 세션은 계획의 단계(`Step::Uplink`)이고 장부를 깔 때 그때까지 깐 장치 이벤트로 만들어지므로 장부를 바꾸는 공격도 그 장부를 그대로 나른다. 장애는 세션에 붙인다(`uplink::Fault`).
+3. **시나리오 12개.** `attack-manifest-two-way`(79), `attack-uplink-hidden-frame`(80), `attack-uplink-injected-frame`·`fault-uplink-padding`·`fault-uplink-extra-frame`·`fault-uplink-after-close`(81), `attack-uplink-batch-order`(82), `fault-uplink-lost-frame`·`attack-hidden-path-record`(83), `fault-roll-line-incident`·`fault-capture-mismatch`(84), `attack-incident-forged`(85). 빠른 묶음 55개, 전체 58개. 기존 시나리오의 기대 결과는 바뀌지 않았다.
+4. **WASM.** 보고서에 `connectivity`(목록의 어긴 규칙, 투표소마다 세션·창·`final`·캡처 서명 수·바깥 회선 바이트·세션 발견, 링크마다 프레임·객체·포함·확인한 덩어리와 봉인 덩어리·발견, 링크 밖 장치 이벤트, 사건과 전수 대조 대상)를 더했다. 보고 단위의 상태는 그 단위 투표함들의 투표소가 모두 `final` 세션을 가질 때 11단계를 통과로 본다. 연결 단계의 투표함 보류와 장부 보류도 단위 판정에 들어간다.
+5. **콘솔.** 대시보드에 '연결 감사' 칸(투표소·링크 표, 발견, 사건)과 보류 79–85, 연결 판정 어휘를 더했다. 단계 이름의 '아직 구현 안 됨'을 지웠다. 게이트웨이 장치 화면은 여전히 장치의 실시간 계수를 보이는 시연 값이고(장부에 없다), 장부에 실린 세션은 연결 감사 칸이 보인다. `test/vocab.test.ts`는 연결의 판정·장치 종류·사건 종류가 Rust 원본의 모든 변형을 한국어로 덮는지 보고, 보류 표 시험은 0–85 전부를 본다.
+
+## 개정 4 (2026-11-06, 자기 기술 프레임, ADR-0041 2i 검토)
+
+1. **시뮬레이터.** 장치의 프레임이 데이터에 걸친 모든 객체를 목록으로 적어 서명한다. 기록마다 그 기록이 가리키는 봉인 share 패키지(그 투표함과 커밋먼트로 만든 대리 객체)를 기록 바로 뒤에, 프레임의 4 KiB 경계에 싣는다. 창의 데이터 슬롯에서 진행 기록 등을 먼저, 닫힌 배치는 그다음 프레임부터 싣는다. 스캐너의 마감 슬롯은 따라잡기 묶음 64개로, 남은 객체 다음에 모든 배치를 마감 재전송으로 다시 싣는다. 장애 `Lose`는 프레임 번호를 받고, `Covert`(목록에 없는 바이트와 빈 슬롯)·`Relist`(게이트웨이가 바꿔 적은 목록)를 더했다.
+2. **시나리오 3개.** `fault-uplink-recovered-loss`(보류 없음), `attack-uplink-covert-bytes`(82), `attack-uplink-relisted-object`(81, 83). 빠른 묶음 58개, 전체 61개. `attack-mirror-tampered`는 `UplinkObjectInvalid`를 더 건다: 미러가 바꾼 기록은 거부된 프레임이라 그 뒤의 share 패키지를 받아들여진 기록이 가리키지 않는다. `fault-uplink-after-close`는 같은 보류에 `KindOrder` 발견 16개가 더 붙는다(마감 재전송 뒤의 일반 프레임). 나머지 기대 결과는 그대로다.
+3. **콘솔.** 링크 판정 어휘에서 `Early`를 빼고 `Alignment`·`Foreign`을, 사건 판정에 `Scope`를 더했다.
+
+
+## 개정 5 (2026-11-06, 배치를 따르는 묶음, ADR-0041 2i 둘째 검토)
+
+1. **시뮬레이터.** 배치는 앞 배치 뒤의 카운터를 이으므로 링크의 배치는 가장 오래 기다린 기록을 담는다(출력은 그대로). 장애 `Singled`(기록마다 배치 증명을 다시 붙임)와 `Mislabel`(패키지 뒤의 숨은 바이트를 다른 스키마의 장부 해시로 적음)을 더했다.
+2. **시나리오 2개.** `attack-uplink-singled-records`(82), `attack-uplink-mislabeled-object`(82). 빠른 묶음 60개, 전체 63개. 세 시나리오가 `UplinkObjectInvalid`를 더 건다: `attack-hidden-path-record`(업링크로 오지 않은 기록 자리에서 잃은 바이트 없이 배치의 묶음이 끊김), `attack-tampered-record`(묶음에 기록 단계가 거부해 어느 배치에도 들지 않는 기록), `attack-no-authorization`(투표함 이벤트가 거부되어 기록 단계가 받은 배치가 없으므로 링크의 기록이 어느 배치에도 들지 않음). 나머지 기대 결과는 그대로다.
+3. **콘솔.** 링크 판정 어휘에 `AfterSwap`·`Schema`·`Repeat`·`Time`을 더하고 `KindOrder`·`Batch`의 설명을 넓혔다(23개).
+
+## 개정 6 (2026-11-06, 종류의 자리와 재전송, ADR-0041 2i 셋째 검토)
+
+1. **시뮬레이터.** 닫힌 배치를 다음 창의 첫 슬롯에서 무엇보다 먼저 한 번 더 보낸다(둘째 사본, PROTOCOL §5.8 4항). 마감 슬롯에 나간 배치는 마감 재전송이 둘째 사본이다. 기대 결과는 하나도 바뀌지 않았다. 장애 `WitnessedMidday`(투표 중의 입회 재전송 묶음)를 더했다.
+2. **시나리오 1개.** `attack-uplink-witnessed-midday`(81). 빠른 묶음 61개, 전체 64개. 나머지 기대 결과는 그대로다. 무시 시험 `no_cut_of_an_honest_ledger_holds_a_link`는 정직한 장부를 프레임마다 잘라 연결 보류가 없음을 본다.
+3. **콘솔.** 링크 판정 어휘에 `BeforeSwap`·`Resend`를 더하고 `KindOrder`·`Batch`·`Package`의 설명을 고쳤다(25개).

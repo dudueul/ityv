@@ -142,6 +142,15 @@ pub enum Rule {
     /// resident extracts, or not exactly one source of the national
     /// snapshot (ADR-0033 decision 1, VC-107, ADR-0040).
     RollSources,
+    /// The connectivity manifest given is not the one the body pins: its
+    /// object hash is not the body's `connectivity_manifest_hash`
+    /// (ADR-0041 decision 1).
+    ConnectivityPin,
+    /// The connectivity manifest the body pins is not a canonical
+    /// `ConnectivityManifest` (version 2) of the election (ADR-0041
+    /// decision 1). Its one-way rules (VC-077) are the connectivity
+    /// stage's, which holds the ledger.
+    ConnectivityManifest,
 }
 
 /// Where in the genesis a rule was broken.

@@ -44,6 +44,7 @@ pub mod plan;
 pub mod scenarios;
 pub mod spec;
 pub mod tsa;
+pub mod uplink;
 pub mod util;
 
 use ityv_encoding::TimeBucket;

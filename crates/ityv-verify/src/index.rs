@@ -70,6 +70,10 @@ use ityv_encoding::{
     decode_object,
 };
 use ityv_encoding::{
+    ConnectivityIncidentBody, SCHEMA_CONNECTIVITY_INCIDENT_BODY, SCHEMA_UPLINK_FRAME_LOG,
+    SCHEMA_UPLINK_SESSION, UplinkFrameLog, UplinkSession,
+};
+use ityv_encoding::{
     RollAmendmentBody, RollCustodyReceiptBody, RollFreezeBody, RollSourceExtractBody,
     SCHEMA_CONTESTED_CHECKIN, SCHEMA_ROLL_AMENDMENT_BODY, SCHEMA_ROLL_CUSTODY_RECEIPT_BODY,
     SCHEMA_ROLL_FREEZE_BODY, SCHEMA_ROLL_SOURCE_EXTRACT_BODY,
@@ -155,6 +159,8 @@ pub struct Finding<'a> {
     pub offset: usize,
     /// The event hash the frame names, when the record could be read.
     pub event_hash: Option<Hash512>,
+    /// The event schema the frame names, when the record could be read.
+    pub event_schema: Option<SchemaId>,
     /// Whom the finding puts under review.
     pub scope: Scope<'a>,
     /// What is wrong.
@@ -453,6 +459,17 @@ fn witnessed<'a>(event: &WitnessedEvent<'a>) -> Option<(Scope<'a>, ElectionId<'a
     } else if s == SCHEMA_ROLL_AMENDMENT_BODY {
         let b = event.body::<RollAmendmentBody<'a>>(s).ok()?;
         (Scope::Election, b.parts().election_id)
+    } else if s == SCHEMA_CONNECTIVITY_INCIDENT_BODY {
+        // The electronic layer the incident names: a box, a station or the
+        // whole election (ADR-0041 decision 11).
+        let b = event.body::<ConnectivityIncidentBody<'a>>(s).ok()?;
+        let p = b.parts();
+        let scope = match (p.box_id, p.station_id) {
+            (Some(b), _) => Scope::Box(b),
+            (None, Some(st)) => Scope::Station(st),
+            (None, None) => Scope::Election,
+        };
+        (scope, p.election_id)
     } else {
         return None;
     };
@@ -480,6 +497,7 @@ impl<'a> Classified<'a> {
 
 /// Decodes `bytes` as the ledger event of `schema`; `None` if it is not
 /// one.
+#[allow(clippy::too_many_lines)] // One branch per ledger event schema.
 fn classify<'a>(
     genesis: &VerifiedGenesis<'a>,
     schema: SchemaId,
@@ -580,6 +598,16 @@ fn classify<'a>(
             .or_else(|| q.receipt_resolution().map(|r| r.parts().election_id))
             .or_else(|| q.sample_opening_ref().map(|s| s.parts().election_id))?;
         Classified::new(Scope::Election, Role::Other, election)
+    } else if schema == SCHEMA_UPLINK_SESSION {
+        // A gateway's session and the frame logs under it: the
+        // connectivity stage reads every one (ADR-0041).
+        let u = decode::<UplinkSession<'a>>(schema, bytes)?;
+        let p = u.body().parts();
+        Classified::new(Scope::Station(p.station_id), Role::Other, p.election_id)
+    } else if schema == SCHEMA_UPLINK_FRAME_LOG {
+        let l = decode::<UplinkFrameLog<'a>>(schema, bytes)?;
+        let p = l.parts();
+        Classified::new(Scope::Station(p.station_id), Role::Other, p.election_id)
     } else if schema == SCHEMA_TIMESTAMP_RECORD {
         // An authority's token over an earlier event: the checkpoint stage
         // reads every one (ADR-0039).
@@ -645,6 +673,7 @@ impl<'a> Builder<'_, 'a> {
             seq: None,
             offset,
             event_hash: None,
+            event_schema: None,
             scope: Scope::Election,
             kind,
         };
@@ -664,6 +693,7 @@ impl<'a> Builder<'_, 'a> {
             seq: Some(frame.seq()),
             offset: record.offset(),
             event_hash: Some(*frame.event_hash()),
+            event_schema: Some(frame.event_schema_id()),
             scope: Scope::Election,
             kind: FindingKind::ChainBroken,
         };

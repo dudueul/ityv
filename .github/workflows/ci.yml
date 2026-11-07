@@ -131,14 +131,45 @@ jobs:
     # ADR-0040) pushed one ityv-verify shard past the six-hour limit: shards
     # are now dealt round-robin, so slow mutants (the roll and tally tests)
     # spread evenly instead of landing in one consecutive slice, and
-    # ityv-verify has eight shards of about three hours.
+    # ityv-verify has eight shards of about three hours. On a1de409 those
+    # took 2.7 to 4.0 hours (27.6 runner-hours) and ityv-encoding's three
+    # 2.4 to 3.5 (9.4). The connectivity audit (ADR-0041) adds 415
+    # ityv-verify mutants (1,593 to 2,008: the connectivity stage and the
+    # capture and carrier tools) and makes each one dearer (the rebuild of
+    # the crate and its test binaries without incremental compilation 48 to
+    # 58 s, the whole test run 33 to 36 s, on one 4-core machine): about
+    # 1.47 times the work, so ityv-verify has fourteen shards of about 2.9
+    # hours, the slowest about 3.3. It adds 249 ityv-encoding mutants (1,990
+    # to 2,239), each about 1.1 times as dear: about 1.23 times the work,
+    # so ityv-encoding has four shards of about 2.9 hours. The review
+    # fixes of 2i (frames that list their objects) add 41 ityv-verify
+    # mutants (2,049) and 61 ityv-encoding mutants (2,300), each about as
+    # dear as before (measured on one machine against 1651298: ityv-verify
+    # 65.7 to 68.3 s rebuild, 39.1 to 39.2 s tests; ityv-encoding 21.1 to
+    # 21.4 s rebuild): about 1.05 and 1.04 times the work, so the shards
+    # stay, about 3.0 hours each, the slowest about 3.5. The second review
+    # of 2i (runs held to the ledger's batches) adds 102 ityv-verify
+    # mutants (2,151), each about 1.02 times as dear (measured on one
+    # machine against c54717b: 72.0 to 73.2 s rebuild, 38.1 to 39.2 s
+    # tests): about 1.07 times the work, so the shards stay, about 3.2
+    # hours each, the slowest about 3.8. The third review of 2i (the
+    # kinds' slots, resends, mid-day ledgers) brings ityv-verify to 2,270
+    # mutants (2,148 at a872df7), each about 1.09 times as dear (measured
+    # on one machine against a872df7: the rebuild 75.3 s both times, the
+    # tests 41.9 to 52.3 s): about 1.15 times the work, so ityv-verify has sixteen
+    # shards of about 3.2 hours, the slowest about 3.8. ityv-state has 783
+    # (781), so its two shards stay. The fourth review brings ityv-verify
+    # to 2,298 mutants and ityv-state to 784, each about 1.02 times as dear
+    # (against 20758e8: the rebuild 72.5-73.1 to 72.7-75.2 s, the tests
+    # 51.9 to 53.1 s): about 1.03 times the work, so the shards stay.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { crate: ityv-encoding, shard: 0/3 }
-          - { crate: ityv-encoding, shard: 1/3 }
-          - { crate: ityv-encoding, shard: 2/3 }
+          - { crate: ityv-encoding, shard: 0/4 }
+          - { crate: ityv-encoding, shard: 1/4 }
+          - { crate: ityv-encoding, shard: 2/4 }
+          - { crate: ityv-encoding, shard: 3/4 }
           - { crate: ityv-crypto, shard: 0/2 }
           - { crate: ityv-crypto, shard: 1/2 }
           - { crate: ityv-ledger, shard: 0/1 }
@@ -148,14 +179,22 @@ jobs:
           - { crate: ityv-cunit, shard: 3/4 }
           - { crate: ityv-state, shard: 0/2 }
           - { crate: ityv-state, shard: 1/2 }
-          - { crate: ityv-verify, shard: 0/8 }
-          - { crate: ityv-verify, shard: 1/8 }
-          - { crate: ityv-verify, shard: 2/8 }
-          - { crate: ityv-verify, shard: 3/8 }
-          - { crate: ityv-verify, shard: 4/8 }
-          - { crate: ityv-verify, shard: 5/8 }
-          - { crate: ityv-verify, shard: 6/8 }
-          - { crate: ityv-verify, shard: 7/8 }
+          - { crate: ityv-verify, shard: 0/16 }
+          - { crate: ityv-verify, shard: 1/16 }
+          - { crate: ityv-verify, shard: 2/16 }
+          - { crate: ityv-verify, shard: 3/16 }
+          - { crate: ityv-verify, shard: 4/16 }
+          - { crate: ityv-verify, shard: 5/16 }
+          - { crate: ityv-verify, shard: 6/16 }
+          - { crate: ityv-verify, shard: 7/16 }
+          - { crate: ityv-verify, shard: 8/16 }
+          - { crate: ityv-verify, shard: 9/16 }
+          - { crate: ityv-verify, shard: 10/16 }
+          - { crate: ityv-verify, shard: 11/16 }
+          - { crate: ityv-verify, shard: 12/16 }
+          - { crate: ityv-verify, shard: 13/16 }
+          - { crate: ityv-verify, shard: 14/16 }
+          - { crate: ityv-verify, shard: 15/16 }
           - { crate: ityv-tsa, shard: 0/1 }
     steps:
       - uses: actions/checkout@v4.2.2

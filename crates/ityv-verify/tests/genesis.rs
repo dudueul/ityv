@@ -22,8 +22,8 @@ use common::{
     sign_genesis_with, standard, station, token,
 };
 use ityv_encoding::{
-    ChamberCode, EntrySet, GenesisBox, HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, RouteId,
-    SCHEMA_VERSION_1, StationId, StationKind, StationProgressPolicy,
+    ChamberCode, EntrySet, GenesisBox, HYBRID_VK_LEN, Hash512, MLDSA87_VK_HALF, RouteId, StationId,
+    StationKind, StationProgressPolicy,
 };
 use ityv_verify::{Error, Reference, Rule, verify_genesis};
 
@@ -154,7 +154,11 @@ fn refuses_a_key_twice() {
     twin.device_key = registered(SPARE_BASE);
     raw.boxes.insert(
         1,
-        object(ityv_encoding::SCHEMA_GENESIS_BOX, SCHEMA_VERSION_1, &twin),
+        object(
+            ityv_encoding::SCHEMA_GENESIS_BOX,
+            ityv_encoding::SCHEMA_VERSION_DEVICE_ENTRY,
+            &twin,
+        ),
     );
     let built = sign_genesis(&draft, raw);
     let err = verify_genesis(&built.pin, &built.input(), &[]).unwrap_err();
@@ -1038,7 +1042,7 @@ fn an_amended_state_meets_every_cross_set_rule() {
 fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
     let built = standard();
     // The amendment replaces BOX-3 by BOX-4 and ST-2's spare unit U-2B by
-    // U-2C.
+    // U-2C, each with a frame key of its own.
     let mut draft = Draft::standard();
     draft.boxes[2] = genesis_box(
         2,
@@ -1047,11 +1051,14 @@ fn the_genesis_remembers_every_state_s_boxes_stations_and_units() {
         b"RU-2",
         &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
     );
+    draft.boxes[2].frame_key = common::uplink::frame_key(common::uplink::BOX_FRAME_BASE + 9);
+    let mut u2c = checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]);
+    u2c.frame_key = common::uplink::frame_key(common::uplink::UNIT_FRAME_BASE + 9);
     draft.stations[1] = station(
         b"ST-2",
         StationKind::EarlyVoting,
         checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
-        checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        u2c,
         &[b"BOX-4"],
         &[],
     );
@@ -1477,4 +1484,220 @@ fn refuses_a_roll_authority_set_that_breaks_a_rule() {
     let mut d = base.clone();
     d.rolls[2].key = weak(registered(SPARE_BASE + 5));
     assert_eq!(verify(&d), Err(at(set, 2, Rule::InvalidKey)));
+}
+
+/// ST-2 of the standard draft with `change` made to its parts.
+fn st2_with(
+    change: impl FnOnce(&mut ityv_encoding::StationParts<'static>),
+) -> ityv_encoding::StationEntry<'static> {
+    let mut parts = ityv_encoding::StationParts {
+        station_id: StationId::new(b"ST-2").unwrap(),
+        kind: StationKind::EarlyVoting,
+        primary: checkin_unit(2, b"U-2A", &[b"M-U2A-P1", b"M-U2A-P2"]),
+        spare: checkin_unit(3, b"U-2B", &[b"M-U2B-P1", b"M-U2B-P2"]),
+        gateway: common::uplink::gateway(b"ST-2"),
+        boxes: common::leak_slice(std::vec![ityv_encoding::BoxId::new(b"BOX-3").unwrap()]),
+        id_terminals_hash: Hash512([0x33; 64]),
+        tokens: &[],
+    };
+    change(&mut parts);
+    ityv_encoding::StationEntry::new(&parts).unwrap()
+}
+
+#[test]
+fn the_st2_fixture_is_the_standard_station() {
+    let draft = Draft::standard();
+    assert_eq!(st2_with(|_| {}), draft.stations[1]);
+}
+
+#[test]
+fn refuses_a_frame_key_shared_or_nothing_could_verify_under() {
+    // Two boxes with one frame key.
+    let mut draft = Draft::standard();
+    draft.boxes[1].frame_key = draft.boxes[0].frame_key;
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 1, Rule::SharedKey)
+    );
+    // A check-in unit with a box's frame key.
+    let mut draft = Draft::standard();
+    let key = draft.boxes[0].frame_key;
+    draft.stations[1] = st2_with(|p| p.spare.frame_key = key);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedKey)
+    );
+    // The identity point: no signature verifies under it.
+    let mut draft = Draft::standard();
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    draft.boxes[2].frame_key = common::leak(identity);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 2, Rule::InvalidKey)
+    );
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| p.primary.frame_key = common::leak(identity));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::InvalidKey)
+    );
+}
+
+/// The Ed25519 half of hybrid key `key`, as a frame key.
+fn ed25519_half(key: &[u8; ityv_encoding::HYBRID_VK_LEN]) -> &'static [u8; 32] {
+    common::leak(key[ityv_encoding::MLDSA87_VK_HALF..].try_into().unwrap())
+}
+
+#[test]
+fn refuses_a_frame_key_that_is_a_hybrid_keys_half() {
+    // ST-2's gateway key's Ed25519 half as its in-service unit's frame
+    // key: the gateway could sign the unit's frames (the review of 2i).
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| p.primary.frame_key = ed25519_half(p.gateway.key));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedKey)
+    );
+    // BOX-1's own device key's half as its frame key.
+    let mut draft = Draft::standard();
+    draft.boxes[0].frame_key = ed25519_half(draft.boxes[0].device_key);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 0, Rule::SharedKey)
+    );
+    // The committee's half, held by no device.
+    let mut draft = Draft::standard();
+    draft.boxes[1].frame_key = ed25519_half(registered(common::COMMITTEE));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Boxes, 1, Rule::SharedKey)
+    );
+}
+
+#[test]
+fn a_frame_key_stays_apart_from_every_states_keys_and_with_its_device() {
+    let built = standard();
+    // The amendment swaps BOX-3's device and gives it, as frame key, the
+    // half of the device key it had before: no key of the new state has
+    // that half, the genesis state did.
+    let mut draft = Draft::standard();
+    let old = draft.boxes[2].device_key;
+    draft.boxes[2].device_key = registered(SPARE_BASE + 2);
+    draft.boxes[2].frame_key = ed25519_half(old);
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let err = verify_genesis(&built.pin, &built.input(), &[a]).unwrap_err();
+    assert_eq!(
+        (err.state, err.set, err.rule),
+        (1, Some(EntrySet::Boxes), Rule::SharedKey)
+    );
+    // BOX-4 replaces BOX-3 and takes over its frame key: the link would
+    // name two devices.
+    let mut draft = Draft::standard();
+    draft.boxes[2] = genesis_box(
+        2,
+        b"BOX-4",
+        b"ST-2",
+        b"RU-2",
+        &[b"M-B3-P1", b"M-B3-P2", b"M-B3-A"],
+    );
+    draft.stations[1] = st2_with(|p| {
+        p.boxes = common::leak_slice(std::vec![ityv_encoding::BoxId::new(b"BOX-4").unwrap()]);
+    });
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let err = verify_genesis(&built.pin, &built.input(), &[a]).unwrap_err();
+    assert_eq!(
+        (err.state, err.set, err.rule),
+        (1, Some(EntrySet::Boxes), Rule::SharedKey)
+    );
+    // A unit's frame key moves to another unit of the station.
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| {
+        p.spare = checkin_unit(3, b"U-2C", &[b"M-U2B-P1", b"M-U2B-P2"]);
+    });
+    let a = amendment(1, built.pin, &draft.raw(), &SIGNERS);
+    let err = verify_genesis(&built.pin, &built.input(), &[a]).unwrap_err();
+    assert_eq!(
+        (err.state, err.set, err.rule),
+        (1, Some(EntrySet::Stations), Rule::SharedKey)
+    );
+    // The same device keeping its frame key is fine.
+    let (_, raw) = amended_raw();
+    let a = amendment(1, built.pin, &raw, &SIGNERS);
+    assert!(verify_genesis(&built.pin, &built.input(), &[a]).is_ok());
+}
+
+#[test]
+fn refuses_a_gateway_named_like_another_device_or_holding_another_key() {
+    // A gateway with a box's identifier.
+    let mut draft = Draft::standard();
+    draft.stations[1] =
+        st2_with(|p| p.gateway.gateway_id = ityv_encoding::GatewayId::new(b"BOX-1").unwrap());
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::DeviceId)
+    );
+    // Two stations with one gateway.
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| p.gateway = common::uplink::gateway(b"ST-1"));
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::DeviceId)
+    );
+    // A gateway with a box's device key, or with its own key twice.
+    let mut draft = Draft::standard();
+    let key = draft.boxes[0].device_key;
+    draft.stations[1] = st2_with(|p| p.gateway.key = key);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedKey)
+    );
+    let mut draft = Draft::standard();
+    draft.stations[1] = st2_with(|p| p.gateway.attest_key = p.gateway.key);
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        at(EntrySet::Stations, 1, Rule::SharedKey)
+    );
+}
+
+#[test]
+fn refuses_a_connectivity_manifest_the_body_does_not_pin() {
+    use common::uplink::{manifest, manifest_of, standard_entries};
+    // Another manifest beside the body than the one it pins.
+    let draft = Draft::standard();
+    let built = sign_genesis(&draft, draft.raw());
+    let mut input = built.input();
+    let mut entries = standard_entries();
+    entries.pop();
+    input.connectivity = manifest(&entries);
+    assert_eq!(
+        verify_genesis(&built.pin, &input, &[]).unwrap_err(),
+        body_rule(Rule::ConnectivityPin)
+    );
+    // A pinned manifest of another election.
+    let mut draft = Draft::standard();
+    draft.manifest = manifest_of(
+        ityv_encoding::ElectionId::new(b"E-OTHER").unwrap(),
+        &standard_entries(),
+    );
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        body_rule(Rule::ConnectivityManifest)
+    );
+    // Pinned bytes that are not a manifest.
+    let mut draft = Draft::standard();
+    draft.manifest = draft.raw().boxes[0];
+    assert_eq!(
+        verify(&draft).unwrap_err(),
+        body_rule(Rule::ConnectivityManifest)
+    );
+    // A manifest that breaks the one-way rules is still pinned: the
+    // connectivity stage holds the ledger on it (ADR-0022 decision 11).
+    let mut draft = Draft::standard();
+    let mut entries = standard_entries();
+    for e in &mut entries {
+        e.direction = ityv_encoding::Direction::Both;
+    }
+    draft.manifest = manifest(&entries);
+    assert_eq!(verify(&draft), Ok(()));
 }

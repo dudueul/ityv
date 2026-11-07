@@ -879,6 +879,7 @@ fn genesis_entries() {
         reporting_unit_id: ityv_encoding::ReportingUnitId::new(b"ru-11-absentee").unwrap(),
         device_key: &VK,
         attest_key: &VK,
+        frame_key: &[0xF4; 32],
         modules: modules(),
     };
     let mut buf = Vec::new();

@@ -78,14 +78,14 @@ assert_eq!(decoded, frame);
 | 0x002C | `ImprintAuditBody`, `ImprintAuditParts` | §8.39 | |
 | 0x002D | `SealChangeBody`, `SealChangeParts`, `SealChangeReason` | §8.40 | 새 봉인 해시는 앞과 다름 |
 | 0x002E | `LateBatchCloseBody`, `LateBatchCloseParts`, `LateBatchReason` | §8.41 | 배치 본문 해시 0 아님 |
-| 0x0028 | `WitnessedEvent`, `EventSig`, `EventRole` | §8.42 | 위 본문 9종의 봉투. 서명자 오름차순, 본문별 역할 조합(`roles_satisfied`), purpose는 `purpose_of`. 버전 4: 명부 역할 11·12와 명부 본문 0x0052–0x0055 |
-| 0x0035, 0x0039, 0x003A | `GenesisBox`, `CustodyRoute`, `RosterSigner`, `CaptureProfile`, `RosterRole` | §8.43 | genesis 항목 객체. 경로는 2–8곳이고 이웃이 다름, 임명 해시 0 아님, 역할 4는 법정 권한 기관 |
+| 0x0028 | `WitnessedEvent`, `EventSig`, `EventRole` | §8.42 | 위 본문 9종의 봉투. 서명자 오름차순, 본문별 역할 조합(`roles_satisfied`), purpose는 `purpose_of`. 버전 4: 명부 역할 11·12와 명부 본문 0x0052–0x0055. 버전 5: 연결 사건 본문 0x0059 |
+| 0x0035, 0x0039, 0x003A | `GenesisBox`, `CustodyRoute`, `RosterSigner`, `CaptureProfile`, `RosterRole` | §8.43 | genesis 항목 객체. 경로는 2–8곳이고 이웃이 다름, 임명 해시 0 아님, 역할 4는 법정 권한 기관. `GenesisBox` 버전 2: 스캐너의 프레임 키(ADR-0041) |
 | 0x002F | `BoxProgressBody`, `BoxProgressParts`, `BoxProgressState` | §8.44 | 투표함 진행 기록. 누계와 상태만 |
 | 0x0030 | `CheckinProgressBody`, `CheckinProgressParts`, `CheckinProgressState`, `UnitId` | §8.45 | `spoiled ≤ issued`, `spoiled + returned ≤ issued` |
 | 0x0031 | `ProgressTick`, `ProgressBody` | §8.46 | 두 진행 기록 본문 가운데 하나와 장치 서명. purpose는 본문 스키마로 정함 |
 | 0x0032 | `ProgressCheckBody`, `ProgressCheckParts`, `ProgressAlarm`, `ProgressFinding` | §8.47 | `WitnessedEvent`에 실림. 반출 장수는 판정 2에만 |
 | 0x0037 | `StationProgressPolicy` | §8.48 | genesis 항목 객체. 기표소 수와 기준 장수는 1 이상 |
-| 0x0036, 0x0038, 0x003B–0x003E | `StationEntry`, `CheckinUnit`, `ObserverToken`, `StationKind`, `ReportingUnitEntry`, `ModuleEntry`, `BallotStyleEntry`, `TrusteeEntry`, `WitnessRosterEntry`, `EntrySet`, `GenesisEntry` | §8.49–§8.53 | genesis 항목 객체. 예비 유닛은 ID와 키 반쪽이 모두 다름, 투표함 1–8, `k = ⌈(m+2)/9⌉`, 모듈은 `N` 챔버 아님 |
+| 0x0036, 0x0038, 0x003B–0x003E | `StationEntry`, `CheckinUnit`, `GatewayEntry`, `ObserverToken`, `StationKind`, `ReportingUnitEntry`, `ModuleEntry`, `BallotStyleEntry`, `TrusteeEntry`, `WitnessRosterEntry`, `EntrySet`, `GenesisEntry` | §8.49–§8.53 | genesis 항목 객체. 예비 유닛은 ID와 키 반쪽과 프레임 키가 모두 다름, 투표함 1–8, `k = ⌈(m+2)/9⌉`, 모듈은 `N` 챔버 아님. `StationEntry` 버전 2: 유닛의 프레임 키와 투표소 게이트웨이(ADR-0041) |
 | 0x0002 | `GenesisBody`, `GenesisParts`, `PartyEntry`, `ChamberThreshold`, `WitnessQuorum`, `SetCommitment` | §8.54 | 버전 8(집합 13개와 명부 보관 정족수 3 이상, ADR-0040). 두 기관 키 반쪽이 다름, 정족수 프로필, 정당 2–4와 챔버 목록, 증인 수 = `n` |
 | 0x0034 | `GenesisAmendmentBody`, `GenesisAmendmentParts`, `AmendmentReason` | §8.55 | 번호 1부터, 해시 0 아님, 바뀔 수 있는 집합 8개만 |
 | 0x0033 | `SignedGenesis`, `GenesisWitnessSig`, `GenesisKind` | §8.56 | 증인 서명 오름차순, genesis는 `q` 이상, 변경은 9 이상 |
@@ -98,6 +98,11 @@ assert_eq!(decoded, frame);
 | 0x0054 | `RollCustodyReceiptBody`, `RollCustodyReceiptParts` | §8.79 | `WitnessedEvent`에 실림. 출처 root는 동결에, 명부 가명 root는 선택 |
 | 0x0055 | `RollAmendmentBody`, `RollAmendmentParts`, `RollAmendmentReason` | §8.80 | `WitnessedEvent`에 실림. 번호 1부터, 사유마다 출처 기능(`source`) |
 | 0x0056 | `ContestedCheckin`, `ContestedMessage` | §8.81 | restricted. 필드 묶음에 유닛·정당 모듈 서명, 모듈 4개 이하·중복 없음, `Debug`는 가명과 라벨을 숨김 |
+| 0x001C | `ConnectivityManifest`, `ManifestEntries`, `ManifestEntry`, `DeviceClass`, `Direction`, `Medium`, `Schedule` | §8.21 | 버전 2(ADR-0041): 장치 종류·포트별 정책, 1–256개 (종류, 포트) 엄격 오름차순, 프레임 수 없음이거나 `1 ≤ 일반 ≤ 따라잡기 ≤ 64`, 정의된 `carries` 비트만. 한 방향 규칙은 검증기의 일(VC-077) |
+| 0x001D, 0x0057 | `UplinkFrame`, `UplinkFrameHeader`, `UplinkFrameHeaderParts`, `FrameKind`, `data_chunks` | §8.22, §8.82 | 버전 2: 1 MiB 본문, 데이터 뒤의 0이 아닌 첫 바이트를 그 위치에서 거부, 번호 64 미만, 데이터 1,048,425바이트 이하. 장치는 151바이트 머리에 서명한다 |
+| 0x001E, 0x001F | `UplinkSessionBody`, `UplinkSessionParts`, `SessionLinks`, `SessionLink`, `UplinkSession`, `CaptureSig`, `CaptureMessage` | §8.23, §8.24 | 버전 2: 창 `start ≤ end ≤ start + 5`(`u64` 끝 포함), 앞 세션 해시는 첫 세션에만 0, 링크 16개 이하 엄격 오름차순, 본문 4,096바이트 이하(오류는 봉투 위치로), 참관인 4명 이하 오름차순(purpose `uplink-capture`) |
+| 0x0058 | `UplinkFrameLog`, `UplinkFrameLogParts`, `LogFrames`, `FrameEntry`, `LogLeaves`, `LogObjects`, `StreamObject` | §8.83 | 프레임 1–384개 (슬롯, 번호) 엄격 오름차순, 잎은 정확히 `Σ ⌈payload_len / 4096⌉`, 객체는 16바이트 이상이고 앞 객체 끝 이상에서 시작 |
+| 0x0059 | `ConnectivityIncidentBody`, `ConnectivityIncidentParts`, `IncidentKind` | §8.84 | `WitnessedEvent`에 실림. 투표함은 투표소와 함께만, 구간 `from ≤ to`, 증거 해시 0 아님, 사무원 둘과 두 조직 참관인 또는 위원회와 두 조직 참관인 |
 
 0x0010·0x0011은 `ityv-ledger`가, 0x0014·0x0101·0x0103·0x0104·0x0105는 `ityv-cunit`가 구현한다(ENCODING §6).
 
@@ -112,7 +117,7 @@ assert_eq!(decoded, frame);
 ```bash
 cargo test --locked -p ityv-encoding                  # V1: 단위·속성·골든 벡터 테스트
 ITYV_UPDATE_VECTORS=1 cargo test --locked -p ityv-encoding --test vectors --test m3_vectors   # 벡터 재생성
-cargo kani -p ityv-encoding                           # V2: Kani 하네스 20개
+cargo kani -p ityv-encoding                           # V2: Kani 하네스 39개(연결 감사 넷: 코드표, 머리 왕복, 세션 규칙, 사건 규칙)
 cargo mutants -p ityv-encoding                        # V1: 변이 테스트
 ```
 

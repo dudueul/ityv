@@ -2,7 +2,7 @@
 
 > English summary: The system never claims an air gap. Every connection of every device, gateway and central system is declared in a genesis-pinned connectivity manifest, kept to the minimum, made physically one-way wherever possible, and checked by parties who do not trust each other. The scanner and the check-in counter unit have no wireless and no inbound path: their only external port is an optical transmitter with no receiver, feeding a station gateway. Devices send fixed-size frames (1 MiB body) on a fixed 10-minute schedule, padded when idle, carrying only objects at or above their publication granularity (closed batches sorted by record hash). The untrusted gateway hash-chains every frame and signs UplinkSession events that go on the board. Party observers and registered monitors may attach their own recorders to receive-only passive taps on both sides of the gateway and reconcile their captures byte for byte; carrier circuit logs are a third, independent source. Observers may run RF checks; after the election an independent lab tears down a publicly drawn sample of devices. Any undeclared connection, inbound path, off-schedule or off-size frame, or capture mismatch is an incident that puts the affected boxes' electronic layer in HOLD_REVIEW without touching the paper count. Integrity and secrecy do not depend on isolation; the audit closes the residual risk of a hidden link exfiltrating a scanner's reading order.
 
-- 상태: 채택
+- 상태: 채택. 인코딩과 공개 검증기의 연결은 ADR-0041(2026-11-05)
 - 날짜: 2026-11-01
 - 관련: ADR-0003, ADR-0004, ADR-0005, ADR-0009, ADR-0014, ADR-0018, ADR-0020, ADR-0021; `docs/spec/PROTOCOL.md` §1, §4.1, §5.8, §7.1, §7.8, §14, §16, 부록 A·B·C; `docs/spec/ENCODING.md` §6, §8.21–§8.24; `docs/spec/FAILURE_CASES.md` §8; `docs/usecases/USE_CASES.md` G·H·T; `docs/governance/GOVERNANCE.md` §6.1; `docs/legal/LEGAL_ANNEX.md` 개정안 8·11; `docs/hardware/DEVICES.md` §5.6; VC-077..083
 
@@ -62,3 +62,15 @@ ityv의 보안은 원래 분리에 기대지 않는다. 정확성은 종이 원�
 - M5 `ityv-verify`: 연결 목록 형식 검사, 세션 사슬 재계산, 캡처 대조 도구.
 - M6 `tools/ityv-sim`: 숨은 프레임, 일정 이탈, 게이트웨이 누락, 탭 불일치 주입.
 - M8: 광 단방향 링크의 역방향 시험, 탭의 수동성 인증, 게이트웨이 참조 설계, 분해 검사 절차서.
+
+## 개정 (2026-11-05, 연결 감사의 연결, ADR-0041)
+
+M5 2i가 이 결정을 인코딩과 공개 검증기에 연결했다. 결정은 그대로이고 형식이 다음처럼 정해졌다.
+
+1. **연결 목록은 종류별 정책이다.** `ConnectivityManifest`(버전 2)는 장치 종류와 포트마다 선언하고, 실제 장치와 프레임 키·게이트웨이는 genesis의 장치 항목(`GenesisBox`, `StationEntry` 버전 2)이 갖는다. 장치 교체는 투표함·투표소 집합의 변경으로 새 키를 들인다. 목록은 genesis 본문이 해시로 고정하고 함께 공표한다. 한 방향 규칙을 어긴 목록도 고정되며 검증기가 장부 전체의 전자 층을 보류한다(11항의 뜻).
+2. **장치는 프레임 머리와 자기 객체 목록에 서명한다.** 1 MiB 프레임을 공표할 수 없고 봉인 패키지는 다시 만들 수 없으므로, 장치 서명과 게이트웨이 사슬은 215바이트 머리 `UplinkFrameHeader`(0x0057)를 덮는다. 머리의 탑재부 root는 4 KiB 덩어리 256개의 트리라 데이터 덩어리 잎만으로 채움이 0임을 보이고, 머리의 목록 해시는 프레임이 실은 객체(스키마, 해시, 흐름 오프셋, 길이)의 목록을 덮는다. 객체의 경계는 장치가 말하고 게이트웨이는 옮길 뿐이다. 봉인 패키지는 자기 덩어리에 놓여, 나머지 덩어리는 공개 객체로 다시 계산된다. 게이트웨이는 세션·링크마다 `UplinkFrameLog`(0x0058)를 공표한다.
+3. **세션.** 한 시간(여섯 슬롯) 이하의 창, 앞 세션 본문 해시, 링크마다 일반·따라잡기 프레임 수·빠진 슬롯·흐름 끝·사슬 head. 참관인은 본문 해시와 자기 캡처의 해시에 서명한다(purpose `uplink-capture`). 모든 투표소 게이트웨이의 `final` 세션이 있어야 `SOURCE_COMPLETENESS_CHECKED`다.
+4. **사건.** `ConnectivityIncidentBody`(0x0059)는 현장의 사무원 둘과 서로 다른 조직의 참관인 둘, 또는 위원회와 서로 다른 조직의 참관인 둘이 서명한다(`FAILURE_CASES.md` §8과 부록 A를 함께 받는다). 효과는 그 투표함·투표소·선거의 전자 층 보류이고 검증기는 풀지 않는다.
+5. **세 출처 대조와 무선·분해 검사.** 캡처와 통신사 기록의 대조는 `ityv-verify`의 도구(`compare_capture`, `compare_carrier`)이고 상태 판정 밖이다. 어긋남은 사건으로 장부에 온다. `RfCheck`, `TeardownReport`, `CarrierReconciliation`은 아직 부호화하지 않는다(M8 절차와 함께).
+6. **연결되는 검증의 M5·M6 항목**은 ADR-0041이 마쳤다: 목록의 형식과 한 방향 규칙, 세션 사슬 재계산, 장치 출처 객체의 포함, 캡처 대조 도구(`ityv-verify`), 숨은 프레임·일정 이탈·게이트웨이 누락·주입·사건의 시나리오(`tools/ityv-sim`). M8 항목은 그대로 남는다.
+

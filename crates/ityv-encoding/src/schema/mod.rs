@@ -16,6 +16,7 @@ pub mod cast_record;
 pub mod challenge;
 pub mod checkin;
 pub mod checkpoint;
+pub mod connectivity;
 pub mod events;
 pub mod genesis;
 pub mod genesis_body;
@@ -37,14 +38,15 @@ use crate::primitives::SchemaId;
 /// not name.
 pub const SCHEMA_VERSION_1: u16 = 1;
 
-/// The current version of `WitnessedEvent` (`0x0028`): version 4 admits
+/// The current version of `WitnessedEvent` (`0x0028`): version 5 admits
+/// the connectivity incident body `0x0059` (ADR-0041). Version 4 admitted
 /// the event roles 11, a roll source, and 12, a roll custodian, and the
 /// roll bodies `0x0052`–`0x0055` (ADR-0040). Version 3 admitted the event
 /// role 10, the auditor, and the audit bodies `0x000D`, `0x0048`,
 /// `0x004B`, `0x004C`, `0x004D`, `0x004E` (ADR-0036); version 2 the event
 /// role 9, the district commission chair (ADR-0035); version 1 none of
 /// them.
-pub const SCHEMA_VERSION_WITNESSED: u16 = 4;
+pub const SCHEMA_VERSION_WITNESSED: u16 = 5;
 
 /// The current version of `RosterSigner` (`0x003A`): version 3 admits the
 /// roster role 6, the auditor (ADR-0036). Version 2 admitted the roster
@@ -59,6 +61,16 @@ pub const SCHEMA_VERSION_REPORTING_UNIT: u16 = 2;
 /// sample opening reference `0x004A` as a body (ADR-0036).
 pub const SCHEMA_VERSION_QUORUM_SIGNED: u16 = 2;
 
+/// The current version of the connectivity schemas `0x001C`–`0x001F`:
+/// version 2 (ADR-0041). Version 1 was a specification draft that was never
+/// encoded.
+pub const SCHEMA_VERSION_UPLINK: u16 = 2;
+
+/// The current version of `GenesisBox` (`0x0035`) and `StationEntry`
+/// (`0x0036`): version 2 adds each device's frame key and the station's
+/// gateway (ADR-0041).
+pub const SCHEMA_VERSION_DEVICE_ENTRY: u16 = 2;
+
 /// The current version of schema `schema`, the only one this crate
 /// encodes and decodes (ENCODING.md §3: a change of shape takes a new
 /// version, and a version number is never reused for another shape).
@@ -66,6 +78,8 @@ pub const SCHEMA_VERSION_QUORUM_SIGNED: u16 = 2;
 pub const fn schema_version(schema: SchemaId) -> u16 {
     match schema.get() {
         0x0002 => genesis_body::SCHEMA_VERSION_GENESIS,
+        0x001C..=0x001F => SCHEMA_VERSION_UPLINK,
+        0x0035 | 0x0036 => SCHEMA_VERSION_DEVICE_ENTRY,
         0x0028 => SCHEMA_VERSION_WITNESSED,
         0x0038 => SCHEMA_VERSION_REPORTING_UNIT,
         0x003A => SCHEMA_VERSION_ROSTER_SIGNER,
@@ -130,6 +144,19 @@ pub const SCHEMA_BOX_CLOSE: SchemaId = SchemaId::new(0x001A);
 
 /// `ScanCountAttest` (ENCODING.md §8.15, `0x001B`).
 pub const SCHEMA_SCAN_COUNT_ATTEST: SchemaId = SchemaId::new(0x001B);
+
+/// `ConnectivityManifest` (ENCODING.md §8.21, `0x001C`, version 2).
+pub const SCHEMA_CONNECTIVITY_MANIFEST: SchemaId = SchemaId::new(0x001C);
+
+/// `UplinkFrame` (ENCODING.md §8.22, `0x001D`, version 2): a transport
+/// unit, never a ledger event.
+pub const SCHEMA_UPLINK_FRAME: SchemaId = SchemaId::new(0x001D);
+
+/// `UplinkSessionBody` (ENCODING.md §8.23, `0x001E`, version 2).
+pub const SCHEMA_UPLINK_SESSION_BODY: SchemaId = SchemaId::new(0x001E);
+
+/// `UplinkSession` (ENCODING.md §8.24, `0x001F`, version 2).
+pub const SCHEMA_UPLINK_SESSION: SchemaId = SchemaId::new(0x001F);
 
 /// `ParticipationSet` (ENCODING.md §8.25).
 pub const SCHEMA_PARTICIPATION_SET: SchemaId = SchemaId::new(0x0020);
@@ -296,6 +323,16 @@ pub const SCHEMA_ROLL_CUSTODY_RECEIPT_BODY: SchemaId = SchemaId::new(0x0054);
 
 /// `RollAmendmentBody` (ENCODING.md §8.80, `0x0055`).
 pub const SCHEMA_ROLL_AMENDMENT_BODY: SchemaId = SchemaId::new(0x0055);
+
+/// `UplinkFrameHeader` (ENCODING.md §8.82, `0x0057`): what a frame's
+/// signature and the gateway's chain cover; never a ledger event.
+pub const SCHEMA_UPLINK_FRAME_HEADER: SchemaId = SchemaId::new(0x0057);
+
+/// `UplinkFrameLog` (ENCODING.md §8.83, `0x0058`).
+pub const SCHEMA_UPLINK_FRAME_LOG: SchemaId = SchemaId::new(0x0058);
+
+/// `ConnectivityIncidentBody` (ENCODING.md §8.84, `0x0059`).
+pub const SCHEMA_CONNECTIVITY_INCIDENT_BODY: SchemaId = SchemaId::new(0x0059);
 
 /// `ContestedCheckin` (ENCODING.md §8.81, `0x0056`): restricted; its
 /// ledger frame is public, its body is not.

@@ -33,9 +33,9 @@ use ityv_crypto::{HybridSigned, Verified};
 use ityv_encoding::{
     BoxClose, BoxId, BoxProgressBody, BoxProgressState, BoxUnitSwapBody, BoxUnitSwapParts,
     CheckinProgressBody, CheckinProgressState, CheckinUnit, CheckinUnitSwapBody,
-    CheckinUnitSwapParts, ElectionId, GenesisBox, ObserverCountAttestBody, ObserverCountKind,
-    ObserverCountParts, ProgressAlarm, ProgressBody, ProgressCheckBody, ProgressFinding,
-    ProgressTick, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
+    CheckinUnitSwapParts, ElectionId, FRAME_KEY_LEN, GenesisBox, ObserverCountAttestBody,
+    ObserverCountKind, ObserverCountParts, ProgressAlarm, ProgressBody, ProgressCheckBody,
+    ProgressFinding, ProgressTick, SCHEMA_BOX_UNIT_SWAP_BODY, SCHEMA_CHECKIN_UNIT_SWAP_BODY,
     SCHEMA_OBSERVER_COUNT_ATTEST_BODY, SCHEMA_PROGRESS_CHECK_BODY, StationEntry, StationId,
     StationProgressPolicy, UnitId,
 };
@@ -254,9 +254,11 @@ impl<const N: usize> Stream<N> {
         Ok(true)
     }
 
-    /// Continues after a device swap from the counts the swap record
-    /// confirms; the slots of the swap itself are excused.
-    fn swap(&mut self, at_slot: u64, counts: [u64; N]) {
+    /// Continues after a swap from the counts the swap record confirms.
+    /// After a new device (`new_device`) the slots of the swap itself are
+    /// excused; a transmitter replaced alone leaves the same device
+    /// running, which still owes every tick.
+    fn swap(&mut self, at_slot: u64, counts: [u64; N], new_device: bool) {
         if self.closed || at_slot < self.next_slot.saturating_sub(1) {
             self.hold();
         }
@@ -268,7 +270,9 @@ impl<const N: usize> Stream<N> {
             self.hold();
         }
         self.last = counts;
-        self.next_slot = self.next_slot.max(at_slot);
+        if new_device {
+            self.next_slot = self.next_slot.max(at_slot);
+        }
     }
 
     /// The holds at close: the stream's own and a final mismatch.
@@ -287,6 +291,8 @@ pub struct BoxStream<'a> {
     anchor: Anchor,
     box_id: BoxId<'a>,
     key: &'a Key,
+    /// The frame key of the box's transmitter (ADR-0041 decision 2).
+    frame_key: &'a [u8; FRAME_KEY_LEN],
     inner: Stream<1>,
 }
 
@@ -311,6 +317,7 @@ impl<'a> BoxStream<'a> {
             anchor,
             box_id: entry.box_id,
             key: entry.device_key,
+            frame_key: entry.frame_key,
             inner: Stream::new(first_slot, [0]),
         })
     }
@@ -343,18 +350,20 @@ impl<'a> BoxStream<'a> {
         Ok(usable.then_some(body))
     }
 
-    /// Continues with a spare commitment unit: its key from the entry
-    /// `entry` of `amended`, a later state of the genesis the stream was
-    /// opened with (PROTOCOL.md §4.3), and the slot and sheets-in count
-    /// the on-site `swap` record confirms (§7.10 item 8). A count the
-    /// signers could not read holds the stream.
+    /// Continues with a spare commitment unit, or the same unit with a
+    /// spare transmitter: its keys from the entry `entry` of `amended`, a
+    /// later state of the genesis the stream was opened with (PROTOCOL.md
+    /// §4.3), and the slot and sheets-in count the on-site `swap` record
+    /// confirms (§7.10 item 8). A count the signers could not read holds
+    /// the stream. A spare unit continues from the swap's slot; the same
+    /// unit with a spare transmitter still owes a tick for every slot.
     ///
     /// # Errors
     /// [`Error::StaleEntry`] unless `amended` is a later state of the
     /// stream's genesis and `entry` was proved against it,
     /// [`Error::Mismatch`] if the entry or the swap names another box or
-    /// election, or the entry still has the current key. On error nothing
-    /// changes.
+    /// election, or the entry still has the current device key and frame
+    /// key (nothing was swapped). On error nothing changes.
     pub fn swap(
         &mut self,
         amended: &Genesis<'a>,
@@ -368,13 +377,15 @@ impl<'a> BoxStream<'a> {
         if e.box_id.as_bytes() != self.box_id.as_bytes()
             || p.box_id.as_bytes() != self.box_id.as_bytes()
             || p.election_id.as_bytes() != self.election_id.as_bytes()
-            || e.device_key == self.key
+            || (e.device_key == self.key && e.frame_key == self.frame_key)
         {
             return Err(Error::Mismatch);
         }
+        let new_device = e.device_key != self.key;
         self.anchor = anchor;
         self.key = e.device_key;
-        self.inner.swap(p.at_slot, [p.sheets_in]);
+        self.frame_key = e.frame_key;
+        self.inner.swap(p.at_slot, [p.sheets_in], new_device);
         self.inner.holds = self
             .inner
             .holds
@@ -496,7 +507,7 @@ impl<'a> CheckinStream<'a> {
         }
         self.unit_id = self.spare.unit_id;
         self.key = self.spare.key;
-        self.inner.swap(p.at_slot, p.counts());
+        self.inner.swap(p.at_slot, p.counts(), true);
         self.inner.holds = self
             .inner
             .holds

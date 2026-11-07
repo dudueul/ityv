@@ -53,6 +53,13 @@ exclude_re = [
     # is always false; it exists because `len` needs it (clippy
     # `len_without_is_empty`) (crates/ityv-encoding/src/schema/timestamp.rs).
     "replace TimestampPins<'a>::is_empty -> bool with false",
+    # Equivalent: a connectivity manifest has one to 256 entries and a
+    # frame log one to 384 frames (the constructors and the decoders refuse
+    # none), so `ManifestEntries::is_empty` and `LogFrames::is_empty` are
+    # always false; they exist because `len` needs them (clippy
+    # `len_without_is_empty`) (crates/ityv-encoding/src/schema/connectivity.rs).
+    "replace ManifestEntries<'a>::is_empty -> bool with false",
+    "replace LogFrames<'a>::is_empty -> bool with false",
     # Equivalent: a timestamp record and the event it stamps are two ledger
     # events, which never share a frame (a frame carries one event; a record
     # cannot carry its own hash), so `<` and `<=` between their frames agree

@@ -326,6 +326,11 @@ pub(crate) fn witnessed_seeded(
 }
 
 pub(crate) fn opened(bx: Bx) -> &'static [u8] {
+    opened_at(bx, OPEN_BUCKET)
+}
+
+/// As [`opened`], in time bucket `bucket`.
+pub(crate) fn opened_at(bx: Bx, bucket: u64) -> &'static [u8] {
     let names: Vec<&'static [u8]> = bx.mods.iter().map(|m| m.0).collect();
     let body = BoxOpenedBody::new(&BoxOpenedParts {
         election_id: common::election(),
@@ -334,7 +339,7 @@ pub(crate) fn opened(bx: Bx) -> &'static [u8] {
         seal_digest: SEAL,
         seals_match: true,
         initial_count: 0,
-        time_bucket: TimeBucket::new(OPEN_BUCKET),
+        time_bucket: TimeBucket::new(bucket),
     });
     let body = object(SCHEMA_BOX_OPENED_BODY, SCHEMA_VERSION_1, &body);
     let mut who = PEOPLE.to_vec();
@@ -355,6 +360,16 @@ pub(crate) struct Cast {
     pub(crate) counter: u64,
     pub(crate) style: &'static [u8],
     pub(crate) chunks: u8,
+}
+
+/// The stand-in for the sealed share package of box `box_id`'s record
+/// `counter`: an object of the share package's schema the record names by
+/// hash (the tests never open it; the connectivity tests send it after its
+/// record).
+pub(crate) fn share_package(box_id: &[u8], counter: u64) -> &'static [u8] {
+    let mut body = box_id.to_vec();
+    body.extend_from_slice(&counter.to_be_bytes());
+    common::uplink::fake_object(ityv_encoding::SCHEMA_SHARE_PACKAGE, &body)
 }
 
 /// The module record message `body_hash ‖ module_id ‖ counter`.
@@ -456,7 +471,7 @@ pub(crate) fn cast_styled(
         commitments: Commitments::new(&points).unwrap(),
         proof: leak_slice(buf),
         module_counters: ModuleCounters::new(&counters).unwrap(),
-        share_package_hash: Hash512([6; 64]),
+        share_package_hash: object_hash(share_package(bx.id, counter)),
         transport_flags: 0,
     })
     .unwrap();
@@ -553,7 +568,9 @@ pub(crate) fn sorted(codes: &[Hash512]) -> Vec<Hash512> {
 }
 
 /// The batch `index` of `bx` over counters `first..=last` of every module,
-/// attesting `members`.
+/// attesting `members`, closed in the opening's time bucket (the uplink
+/// tests send the whole day in the opening's slot, and a batch goes out no
+/// earlier than its bucket, ADR-0041 decision 6).
 pub(crate) fn batch(
     bx: Bx,
     index: u32,
@@ -561,7 +578,7 @@ pub(crate) fn batch(
     last: u64,
     members: &[Hash512],
 ) -> &'static [u8] {
-    batch_at(bx, index, first, last, members, 120)
+    batch_at(bx, index, first, last, members, OPEN_BUCKET)
 }
 
 /// As [`batch`], in time bucket `bucket`.
@@ -1061,6 +1078,16 @@ impl Book {
         self.push(SCHEMA_QUORUM_SIGNED, event)
     }
 
+    /// The gateways' frame logs and sessions over every device event so
+    /// far, each station's last session final (ADR-0041): the uplink the
+    /// status ladder needs for `SOURCE_COMPLETENESS_CHECKED`.
+    pub(crate) fn uplink(&mut self) {
+        let events = self.ledger.events.clone();
+        for (schema, event) in common::uplink::for_ledger(self.world.genesis, &events) {
+            self.push(schema, event);
+        }
+    }
+
     /// A checkpoint over every frame so far, after the last one, in the
     /// first bucket after the late-close window.
     pub(crate) fn checkpoint(&mut self) -> u64 {
@@ -1499,31 +1526,63 @@ pub(crate) fn roll() -> Vec<(SchemaId, &'static [u8])> {
     common::roll::standard(&[b"ST-1"])
 }
 
+/// The draft of [`election_world`].
+pub(crate) fn election_draft() -> Draft {
+    let mut d = draft();
+    d.boxes.retain(|b| b.box_id.as_bytes() == B1.id);
+    d.stations.truncate(1);
+    d.policies.truncate(1);
+    d.units.truncate(1);
+    d.modules.retain(|m| {
+        ELECTION_MODULES
+            .iter()
+            .any(|e| e.0 == m.module_id.as_bytes())
+    });
+    for entry in &mut d.modules {
+        let m = ELECTION_MODULES
+            .iter()
+            .find(|e| e.0 == entry.module_id.as_bytes())
+            .unwrap();
+        entry.provisioned_hash = object_hash(provisioning(*m));
+    }
+    d.appointments = d.referenced_appointments();
+    d
+}
+
 /// A one-box election (BOX-1 at ST-1 in RU-1) whose module entries pin
 /// their provisioning records.
 pub(crate) fn election_world() -> &'static World {
     static WORLD: OnceLock<&'static World> = OnceLock::new();
-    WORLD.get_or_init(|| {
-        let mut d = draft();
-        d.boxes.retain(|b| b.box_id.as_bytes() == B1.id);
-        d.stations.truncate(1);
-        d.policies.truncate(1);
-        d.units.truncate(1);
-        d.modules.retain(|m| {
-            ELECTION_MODULES
-                .iter()
-                .any(|e| e.0 == m.module_id.as_bytes())
-        });
-        for entry in &mut d.modules {
-            let m = ELECTION_MODULES
-                .iter()
-                .find(|e| e.0 == entry.module_id.as_bytes())
-                .unwrap();
-            entry.provisioned_hash = object_hash(provisioning(*m));
-        }
-        d.appointments = d.referenced_appointments();
-        leak(build(&d, &TALLY_SCOPES))
-    })
+    WORLD.get_or_init(|| leak(build(&election_draft(), &TALLY_SCOPES)))
+}
+
+/// As [`election_world`], with one amendment that `change` makes to its
+/// draft; with the signed amendment.
+pub(crate) fn election_amended(change: impl FnOnce(&mut Draft)) -> (World, &'static [u8]) {
+    draft_amended(&election_draft(), change)
+}
+
+/// `d` signed, with one amendment that `change` makes to it; with the
+/// signed amendment.
+pub(crate) fn draft_amended(d: &Draft, change: impl FnOnce(&mut Draft)) -> (World, &'static [u8]) {
+    let (body, authorization) = common::legal_authorization(&TALLY_SCOPES, 20_000, 20_100);
+    let built = leak(sign_genesis_with(d, d.raw(), &SIGNERS, |p| {
+        p.legal_authorization_hash = object_hash(body);
+    }));
+    let mut next = d.clone();
+    change(&mut next);
+    next.appointments = next.referenced_appointments();
+    let amendment = common::amendment(1, built.pin, &next.raw(), &SIGNERS);
+    let genesis = leak(verify_genesis(&built.pin, &built.input(), &[amendment]).unwrap());
+    (
+        World {
+            genesis,
+            pin: built.pin,
+            signed: built.signed,
+            authorization,
+        },
+        amendment.signed,
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -1555,7 +1614,12 @@ pub(crate) const TWO_UNIT_MODULES: [(&[u8], ChamberCode, &[u8], u16, bool); 9] =
 /// ST-1 with BOX-1 in RU-1 and BOX-2 in RU-2, both STYLE-1: two units.
 pub(crate) fn two_unit_world() -> &'static World {
     static WORLD: OnceLock<&'static World> = OnceLock::new();
-    WORLD.get_or_init(|| {
+    WORLD.get_or_init(|| leak(build(&two_unit_draft(), &TALLY_SCOPES)))
+}
+
+/// The draft of [`two_unit_world`].
+pub(crate) fn two_unit_draft() -> Draft {
+    {
         let mut d = Draft::standard();
         d.boxes = std::vec![
             common::genesis_box(0, b"BOX-1", b"ST-1", RU1, &[b"M-B1-P1", b"M-B1-P2"]),
@@ -1603,6 +1667,6 @@ pub(crate) fn two_unit_world() -> &'static World {
             None,
         ));
         d.appointments = d.referenced_appointments();
-        leak(build(&d, &TALLY_SCOPES))
-    })
+        d
+    }
 }

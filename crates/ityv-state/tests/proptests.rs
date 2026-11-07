@@ -275,14 +275,22 @@ proptest! {
                 prop_assert!(anchored && log.iter().all(|s| passed(*s)));
             }
             Status::SourceCompletenessChecked => {
-                prop_assert!(anchored && passed(Step::BoxCompleteness));
+                prop_assert!(
+                    anchored && passed(Step::BoxCompleteness) && passed(Step::Connectivity)
+                );
             }
             Status::CryptoTallyVerified => {
                 prop_assert!(passed(Step::Participation) && passed(Step::Tally));
             }
             Status::PaperAudited => {
                 prop_assert!(anchored);
-                for s in log.iter().chain(&[Step::BoxCompleteness, Step::Participation, Step::Tally, Step::Audit]) {
+                for s in log.iter().chain(&[
+                    Step::BoxCompleteness,
+                    Step::Connectivity,
+                    Step::Participation,
+                    Step::Tally,
+                    Step::Audit,
+                ]) {
                     prop_assert!(passed(*s));
                 }
             }

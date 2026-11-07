@@ -9,9 +9,9 @@ use std::sync::OnceLock;
 
 use ityv_encoding::ComparisonCode;
 use ityv_encoding::{
-    DisputeType, ProgressAlarm, ProgressBody, ProgressTick, SCHEMA_BOX_CLOSE, SCHEMA_CAST_RECORD,
-    SCHEMA_PARTICIPATION_SET, SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED, SCHEMA_VERSION_1,
-    SCHEMA_WITNESSED_EVENT, SchemaId, decode_object,
+    DisputeType, IncidentKind, ProgressAlarm, ProgressBody, ProgressTick, SCHEMA_BOX_CLOSE,
+    SCHEMA_CAST_RECORD, SCHEMA_PARTICIPATION_SET, SCHEMA_PROGRESS_TICK, SCHEMA_QUORUM_SIGNED,
+    SCHEMA_VERSION_1, SCHEMA_WITNESSED_EVENT, SchemaId, decode_object,
 };
 use ityv_state::{AuditPhase, HoldReason, Status};
 use ityv_verify::AmendmentInput;
@@ -23,6 +23,7 @@ use crate::election::{CastInfo, Election, Person, QUORUM};
 use crate::ledger::Step;
 use crate::plan::{Plan, Until, plan, unit_casts, unit_no_record};
 use crate::spec::DayEvent;
+use crate::uplink::{Device, Fault};
 use crate::util::{leak, leak_slice};
 
 /// Which generated set a scenario belongs to.
@@ -168,7 +169,7 @@ fn last_checkpoint_bucket(steps: &[Step]) -> u64 {
         .rev()
         .find_map(|s| match s {
             Step::Checkpoint { bucket, .. } | Step::ForkCheckpoint { bucket, .. } => Some(*bucket),
-            Step::Event { .. } | Step::Stamp { .. } => None,
+            Step::Event { .. } | Step::Stamp { .. } | Step::Uplink(_) => None,
         })
         .unwrap_or(0)
 }
@@ -707,7 +708,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             (
                 "기록 바꿔치기(표갈이)",
                 "한빛초등학교 체육관 투표함의 두 번째 기록을, 다른 선택으로 새로 만든 본문에 원래 기록의 장치·모듈 서명을 붙여 실었다.",
-                "그 기록은 장치 서명이 맞지 않아 거부(RecordRejected)되고, 배치·마감 기록 집합·집계 범위가 줄줄이 어긋난다. HOLD_REVIEW.",
+                "그 기록은 장치 서명이 맞지 않아 거부(RecordRejected)되고, 배치·마감 기록 집합·집계 범위가 줄줄이 어긋난다. 업링크로 나간 배치의 묶음에도 그 배치가 갖지 않는 기록이 끼어 있다(UplinkObjectInvalid). HOLD_REVIEW.",
             ),
             hold(&[
                 H::RecordRejected,
@@ -716,6 +717,7 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::RecordSetMismatch,
                 H::TallyScopeMismatch,
                 H::AggregateMismatch,
+                H::UplinkObjectInvalid,
             ]),
             Vec::new(),
         ));
@@ -841,7 +843,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             (
                 "미러 사본의 바뀐 바이트",
                 "프레임은 그대로 두고, 함께 공표한 이벤트 가운데 기록 하나의 마지막 바이트를 바꿨다(미러가 사본을 고친 경우).",
-                "프레임이 가리키는 해시의 이벤트가 없어 그 프레임이 거부되고 장부 전체가 HOLD_REVIEW(LedgerUnchecked). 그 기록이 빠지므로 배치·마감 수량·교부 등식·집계 범위도 함께 어긋난다.",
+                "프레임이 가리키는 해시의 이벤트가 없어 그 프레임이 거부되고 장부 전체가 HOLD_REVIEW(LedgerUnchecked). 그 기록이 빠지므로 배치·마감 수량·교부 등식·집계 범위도 함께 어긋난다. 스캐너가 그 기록 뒤에 보낸 봉인 share 패키지는 받아들여진 기록 어느 것도 가리키지 않으므로 UplinkObjectInvalid(NotOnLedger)도 걸린다.",
             ),
             hold(&[
                 H::LedgerUnchecked,
@@ -852,6 +854,7 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::RecordSetMismatch,
                 H::TallyScopeMismatch,
                 H::AggregateMismatch,
+                H::UplinkObjectInvalid,
             ]),
             Vec::new(),
         ));
@@ -1244,7 +1247,7 @@ fn quick_scenarios() -> Vec<Scenario> {
             (
                 "법적 승인이 없는 장부",
                 "genesis가 고정한 법적 승인 객체(SignedLegalAuthorization)를 장부에 싣지 않았다.",
-                "권한이 필요한 어떤 단계도 받을 수 없어 장부 전체가 HOLD_REVIEW(AuthorizationMissing), 그 위의 이벤트도 줄줄이 거부된다.",
+                "권한이 필요한 어떤 단계도 받을 수 없어 장부 전체가 HOLD_REVIEW(AuthorizationMissing), 그 위의 이벤트도 줄줄이 거부된다. 투표함 이벤트가 거부되어 기록 단계가 받은 배치가 없으므로, 업링크의 기록은 장부의 어느 배치에도 속하지 않는다(UplinkObjectInvalid).",
             ),
             hold(&[
                 H::AuthorizationMissing,
@@ -1253,6 +1256,7 @@ fn quick_scenarios() -> Vec<Scenario> {
                 H::ReceiptResolutionRefused,
                 H::TallyScopeRefused,
                 H::AggregateRefused,
+                H::UplinkObjectInvalid,
             ]),
             Vec::new(),
         ));
@@ -1291,6 +1295,7 @@ fn quick_scenarios() -> Vec<Scenario> {
         ));
     }
     timestamp_and_roll_scenarios(e, &mut out);
+    connectivity_scenarios(e, &mut out);
     audit_scenarios(&mut out, &slips);
     out
 }
@@ -1507,4 +1512,501 @@ fn full_scenarios() -> Vec<Scenario> {
         ],
     ));
     out
+}
+
+/// The quick election whose connectivity manifest gives the scanner's frame
+/// link a receiving direction too (VC-077).
+fn quick_two_way_election() -> &'static Election {
+    static E: OnceLock<&'static Election> = OnceLock::new();
+    E.get_or_init(|| {
+        let mut spec = catalog::quick(Vec::new());
+        spec.two_way_uplink = true;
+        leak(Election::build(spec))
+    })
+}
+
+/// Adds `fault` to station `s`'s `k`-th gateway session (`None`: the last).
+fn uplink_fault(bld: &mut Builder, s: usize, k: Option<usize>, fault: Fault) {
+    let marks = &bld.plan.marks.uplink[s];
+    let at = match k {
+        Some(k) => marks[k],
+        None => *marks.last().unwrap(),
+    };
+    if let Step::Uplink(w) = &mut bld.plan.steps[at] {
+        w.faults.push(fault);
+    }
+}
+
+/// Puts `step` just before the last checkpoint.
+fn before_last_checkpoint(steps: &mut Vec<Step>, step: Step) {
+    let at = steps
+        .iter()
+        .rposition(|s| matches!(s, Step::Checkpoint { .. }))
+        .unwrap();
+    steps.insert(at, step);
+}
+
+/// Scenarios of the connectivity audit (ADR-0022, ADR-0041), quick set.
+#[allow(clippy::too_many_lines)] // One scenario after another.
+fn connectivity_scenarios(e: &'static Election, out: &mut Vec<Scenario>) {
+    use HoldReason as H;
+    let q = Set::Quick;
+    let a = Group::Attack;
+    let hb = e.box_index("BOX-HB-1");
+    let st = e.station_index("ST-HB-1");
+    let nr = e.station_index("ST-NR-P");
+    let scanner = Device::Box(hb);
+    let open = e.days[st].open_slot;
+
+    // A two-way scanner port in the manifest (VC-077).
+    out.push(Builder::new(quick_two_way_election(), Until::Tallied).scenario(
+        "attack-manifest-two-way",
+        q,
+        a,
+        (
+            "받기도 하는 스캐너 포트",
+            "genesis가 고정한 연결 목록이 커밋먼트 유닛의 업링크 포트를 양방향으로 적었다. 목록 형식은 맞고 genesis도 서명됐으며, 장부의 프레임과 세션은 깨끗한 선거와 같다.",
+            "TCB 장치에 들어오는 경로를 선언한 것은 그 종류의 모든 장치에 걸리므로 장부 전체가 HOLD_REVIEW(ConnectivityManifest). 연결 단계가 목록의 어긴 규칙(TcbInbound, TwoWay, FrameLinkShape)을 보인다.",
+        ),
+        hold(&[H::ConnectivityManifest]),
+        Vec::new(),
+    ));
+    // A frame the gateway hid without declaring it (VC-080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Hide {
+                device: scanner,
+                slot: open + 1,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-hidden-frame",
+            q,
+            a,
+            (
+                "게이트웨이가 숨긴 프레임",
+                "한빛초등학교 체육관 게이트웨이가 첫 세션에서 스캐너의 둘째 슬롯 첫 프레임을 기록과 사슬에서 빼고, 그 슬롯을 빠진 슬롯으로 적지 않았다.",
+                "세션이 적은 빠진 슬롯 수가 기록에서 다시 센 값과 달라 그 투표소의 모든 투표함이 HOLD_REVIEW(UplinkSessionRefused). 숨긴 프레임 자체는 참관인 캡처 대조(compare_capture)가 찾는다.",
+            ),
+            hold(&[H::UplinkSessionRefused]),
+            Vec::new(),
+        ));
+    }
+    // A frame the gateway signed in place of the device's (VC-078).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Inject {
+                device: scanner,
+                slot: open + 2,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-injected-frame",
+            q,
+            a,
+            (
+                "게이트웨이가 끼워 넣은 프레임",
+                "한빛초등학교 체육관 스캐너의 셋째 슬롯 마지막 프레임 자리에 게이트웨이가 자기 키로 서명한 프레임을 넣었다. 사슬과 세션은 그 프레임을 덮는다.",
+                "프레임 서명이 그 장치의 프레임 키로 맞지 않아 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid).",
+            ),
+            hold(&[H::UplinkFrameInvalid]),
+            Vec::new(),
+        ));
+    }
+    // A nonzero byte after the data (the padding proof, VC-078).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Fill {
+                device: scanner,
+                slot: open + 3,
+            },
+        );
+        out.push(bld.scenario(
+            "fault-uplink-padding",
+            q,
+            a,
+            (
+                "0이 아닌 채움",
+                "한빛초등학교 체육관 스캐너가 넷째 슬롯 마지막 프레임의 데이터 뒤 채움에 0이 아닌 바이트를 넣고 그대로 서명했다. 프레임이 말한 것보다 많이 실은 모양이다.",
+                "공표한 데이터 잎과 0 잎으로 다시 만든 탑재부 루트가 서명된 루트와 달라(채움 증명 실패) 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid).",
+            ),
+            hold(&[H::UplinkFrameInvalid]),
+            Vec::new(),
+        ));
+    }
+    // One frame more in a slot than the manifest allows (VC-078).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Extra {
+                device: scanner,
+                slot: open + 2,
+            },
+        );
+        out.push(bld.scenario(
+            "fault-uplink-extra-frame",
+            q,
+            a,
+            (
+                "슬롯당 수를 넘은 프레임",
+                "한빛초등학교 체육관 스캐너가 셋째 슬롯에 일반 프레임을 연결 목록의 16개보다 하나 더(번호 16) 보냈다.",
+                "번호가 슬롯당 수를 넘어 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid).",
+            ),
+            hold(&[H::UplinkFrameInvalid]),
+            Vec::new(),
+        ));
+    }
+    // Normal frames after the close (VC-078).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(&mut bld, st, None, Fault::AfterClose { device: scanner });
+        out.push(bld.scenario(
+            "fault-uplink-after-close",
+            q,
+            a,
+            (
+                "마감 뒤에도 보낸 스캐너",
+                "한빛초등학교 체육관 스캐너가 마감 구간 다음 슬롯이 지난 뒤에도 한 슬롯 동안 일반 프레임 16개를 더 보냈다.",
+                "마감 뒤의 일반 프레임이라 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid).",
+            ),
+            hold(&[H::UplinkFrameInvalid]),
+            Vec::new(),
+        ));
+    }
+    // Records of a batch out of record-hash order (VC-079).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(&mut bld, st, None, Fault::Unordered { device: scanner });
+        out.push(bld.scenario(
+            "attack-uplink-batch-order",
+            q,
+            a,
+            (
+                "배치 순서를 어긴 기록",
+                "한빛초등학교 체육관 스캐너가 마감 배치의 기록을 기록 해시 내림차순으로 보냈다. 보내는 순서가 투입 순서를 드러낼 수 있는 모양이다.",
+                "배치 안의 기록이 해시 오름차순이 아니라 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid).",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
+    // Each record in a run of its own (review 2 of 2i, G).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(&mut bld, st, None, Fault::Singled { device: scanner });
+        out.push(bld.scenario(
+            "attack-uplink-singled-records",
+            q,
+            a,
+            (
+                "기록마다 다시 보낸 배치 증명",
+                "한빛초등학교 체육관 스캐너가 마감 배치를 보내면서 둘째 기록부터 기록마다 그 배치 증명을 다시 앞에 붙였다. 묶음마다 기록이 하나라 묶음 안 순서 규칙을 피하고, 기록을 아무 순서로나 보낼 수 있는 모양이다.",
+                "묶음은 장부가 정한 그 배치의 기록을 첫 기록부터 마지막 기록까지 차례로 담아야 하므로 기록 하나로 끝난 묶음이 위반이고, 배치 증명이 허용된 횟수보다 많이 나갔다. 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid).",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
+    // A witnessed-resend group during voting (review 3 of 2i, finding 1).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::WitnessedMidday {
+                device: scanner,
+                slot: open + 2,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-witnessed-midday",
+            q,
+            a,
+            (
+                "투표 중의 입회 재전송",
+                "한빛초등학교 체육관 스캐너가 투표 중인 셋째 슬롯에 입회 재전송(종류 3) 묶음을 따라잡기 모양(64개)으로 보냈다. 입회 재전송은 봉인 장치를 개표소로 옮긴 뒤에만 오므로, 그 모양을 아무 때나 쓰면 프레임마다 실을 양을 고르는 길이 네 배가 된다.",
+                "마감 전의 입회 재전송과 그 뒤의 일반 프레임이 종류의 자리를 어겨 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid).",
+            ),
+            hold(&[H::UplinkFrameInvalid]),
+            Vec::new(),
+        ));
+    }
+    // Covert bytes under the hash of a ledger event of another schema
+    // (review 2 of 2i, A).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let (_, close) = e.link_slots(scanner);
+        uplink_fault(
+            &mut bld,
+            st,
+            None,
+            Fault::Mislabel {
+                device: scanner,
+                slot: close,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-mislabeled-object",
+            q,
+            a,
+            (
+                "다른 스키마로 적은 장부 해시",
+                "한빛초등학교 체육관 스캐너가 마감 슬롯에서 share 패키지로 끝나는 프레임 뒤에 3,000바이트의 숨은 바이트를 붙이고, 객체 목록에는 그 바이트를 진행 기록으로, 해시는 같은 프레임의 배치 증명의 것으로 적어 서명했다. 장부에 있는 해시라서 '장부에 없는 객체'를 피하고, 스키마가 달라 공개 바이트와 대조되지 않는 모양이다.",
+                "장부가 그 해시를 다른 스키마로 싣고 있으므로 목록의 항목이 위반이고, 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid).",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
+    // A frame lost on the line, declared (VC-080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Lose {
+                device: scanner,
+                slot: open + 5,
+                index: 0,
+            },
+        );
+        out.push(bld.scenario(
+            "fault-uplink-lost-frame",
+            q,
+            a,
+            (
+                "잃어버린 프레임",
+                "한빛초등학교 체육관 스캐너의 첫 세션 마지막 슬롯 첫 프레임이 회선에서 사라졌다. 게이트웨이는 그 슬롯을 빠진 슬롯으로 정직하게 적었지만, 그 프레임이 나르던 진행 기록은 다시 오지 않았다(진행 기록은 자기 슬롯에 한 번만 보낸다).",
+                "세션은 받는다. 그러나 장부의 그 진행 기록들이 장치의 받은 프레임 어디에도 없어 그 투표함이 HOLD_REVIEW(UplinkObjectOutside).",
+            ),
+            hold(&[H::UplinkObjectOutside]),
+            Vec::new(),
+        ));
+    }
+    // A frame of the closing batch lost, declared, and brought again by the
+    // close resend (honest line loss, VC-078–080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let close = e.link_slots(scanner).1;
+        uplink_fault(
+            &mut bld,
+            st,
+            None,
+            Fault::Lose {
+                device: scanner,
+                slot: close,
+                index: 1,
+            },
+        );
+        out.push(bld.scenario(
+            "fault-uplink-recovered-loss",
+            q,
+            a,
+            (
+                "되찾은 프레임",
+                "한빛초등학교 체육관 스캐너의 마감 슬롯에서 마감 배치(배치 증명, 기록, 봉인 share 패키지)를 실은 프레임이 회선에서 사라졌다. 게이트웨이는 그 슬롯을 빠진 슬롯으로 정직하게 적었고, 같은 슬롯의 마감 재전송이 그 배치를 다시 실어 왔다.",
+                "CRYPTO_TALLY_VERIFIED. 보류 없음. 흐름은 잃은 프레임만큼 건너뛰고(그 자리의 번호는 받지 못했다), 잃은 범위 뒤의 기록은 증명을 잃은 배치의 꼬리로 읽히며, 모든 기록이 재전송의 받은 프레임 안에 있고 그 덩어리가 장부의 객체로 다시 계산된다.",
+            ),
+            expected(Status::CryptoTallyVerified, &[]),
+            Vec::new(),
+        ));
+    }
+    // Bytes that are no object, next to a silent slot (ADR-0041 decision 3).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Covert {
+                device: scanner,
+                slot: open + 3,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-covert-bytes",
+            q,
+            a,
+            (
+                "건너뛴 슬롯 옆의 숨은 바이트",
+                "한빛초등학교 체육관 스캐너가 넷째 슬롯 첫 프레임에 어느 객체도 아닌 3,000바이트를 싣고 객체 목록에는 아무것도 적지 않은 채 서명했다. 다음 슬롯에는 아무것도 보내지 않고, 그다음 슬롯은 그 바이트보다 한 바이트 뒤에서 이어 갔다. 게이트웨이는 빈 슬롯을 빠진 슬롯으로 정직하게 적었다.",
+                "프레임의 서명된 목록이 데이터를 덮지 않아 그 투표함이 HOLD_REVIEW(UplinkObjectInvalid). 건너뛴 한 바이트는 받지 못한 자리를 넘지 않으므로 위반이 아니다.",
+            ),
+            hold(&[H::UplinkObjectInvalid]),
+            Vec::new(),
+        ));
+    }
+    // The gateway's own list for a frame the device signed (VC-078, VC-080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        uplink_fault(
+            &mut bld,
+            st,
+            Some(0),
+            Fault::Relist {
+                device: scanner,
+                slot: open + 5,
+            },
+        );
+        out.push(bld.scenario(
+            "attack-uplink-relisted-object",
+            q,
+            a,
+            (
+                "게이트웨이가 바꿔 적은 객체",
+                "한빛초등학교 체육관 게이트웨이가 첫 세션 마지막 슬롯의 데이터 프레임을 기록하면서 장치가 적은 객체 목록의 첫 객체를 다른 해시로 바꿔 적고, 그 머리로 사슬을 이었다.",
+                "장치의 서명은 장치가 적은 목록의 해시를 덮으므로 그 프레임은 서명이 맞지 않아 받은 프레임이 아니다. 그 투표함이 HOLD_REVIEW(UplinkFrameInvalid), 그 프레임이 나르던 진행 기록이 받은 프레임 어디에도 없어 UplinkObjectOutside.",
+            ),
+            hold(&[H::UplinkFrameInvalid, H::UplinkObjectOutside]),
+            Vec::new(),
+        ));
+    }
+    // A record that reached the ledger without travelling the link (VC-080).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let record = cast_of(e, hb, 3);
+        uplink_fault(
+            &mut bld,
+            st,
+            None,
+            Fault::Withhold {
+                event: ityv_crypto::object_hash(record.event),
+            },
+        );
+        out.push(bld.scenario(
+            "attack-hidden-path-record",
+            q,
+            a,
+            (
+                "링크를 거치지 않은 기록",
+                "한빛초등학교 체육관 투표함의 세 번째 기록은 장부에 있지만 스캐너의 업링크로 오지 않았다(숨은 경로). 배치 증명은 그 기록을 그대로 센다.",
+                "장치 출처 객체가 어느 세션의 받은 프레임에도 없어 그 투표함이 HOLD_REVIEW(UplinkObjectOutside, VC-080). 잃은 바이트 없이 이어진 배치의 묶음에서 그 기록이 빠져 다음 기록이 배치의 차례가 아니다(UplinkObjectInvalid).",
+            ),
+            hold(&[H::UplinkObjectInvalid, H::UplinkObjectOutside]),
+            Vec::new(),
+        ));
+    }
+    // Incidents (VC-083).
+    let committee_and_observers = |s: usize| {
+        let mut who = vec![e.committee_person()];
+        who.extend(
+            e.people(s)
+                .into_iter()
+                .filter(|p| p.role == ityv_encoding::EventRole::Observer),
+        );
+        who
+    };
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let (_, last) = e.link_slots(Device::Unit(nr));
+        let event = e.connectivity_incident(
+            Some(nr),
+            None,
+            IncidentKind::RollLineOutsideWindow,
+            (last + 1, last + 6),
+            false,
+            &committee_and_observers(nr),
+        );
+        before_last_checkpoint(
+            &mut bld.plan.steps,
+            Step::event(SCHEMA_WITNESSED_EVENT, event),
+        );
+        out.push(bld.scenario(
+            "fault-roll-line-incident",
+            q,
+            a,
+            (
+                "투표 시간 밖의 명부 회선",
+                "통신사 기록(compare_carrier)에서 누리구 사전투표소의 명부 전용회선에 마감 뒤의 통신이 나왔다. 위원회와 그 투표소의 두 참관인이 연결 사건(RollLineOutsideWindow)을 서명해 실었다.",
+                "그 투표소 모든 투표함의 전자 층이 HOLD_REVIEW(ConnectivityIncident). 종이 결과는 그대로다.",
+            ),
+            hold(&[H::ConnectivityIncident]),
+            Vec::new(),
+        ));
+    }
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let event = e.connectivity_incident(
+            Some(st),
+            Some(hb),
+            IncidentKind::CaptureMismatch,
+            (open, open + 5),
+            true,
+            &e.people(st),
+        );
+        before_last_checkpoint(
+            &mut bld.plan.steps,
+            Step::event(SCHEMA_WITNESSED_EVENT, event),
+        );
+        out.push(bld.scenario(
+            "fault-capture-mismatch",
+            q,
+            a,
+            (
+                "참관인 캡처와 다른 프레임",
+                "한빛초등학교 체육관 참관인의 탭 캡처가 게이트웨이가 공표한 첫 시간의 프레임과 달랐다(compare_capture). 사무원 둘과 참관인 둘이 커밋먼트 유닛이 걸린 연결 사건(CaptureMismatch)을 서명해 실었다.",
+                "그 투표함의 전자 층이 HOLD_REVIEW(ConnectivityIncident). 보고는 그 투표함을 종이와 전수 대조할 대상으로 적는다(아직 대조하지 않음).",
+            ),
+            hold(&[H::ConnectivityIncident]),
+            Vec::new(),
+        ));
+    }
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let mut who = e.people(st);
+        let other = who
+            .iter()
+            .filter(|p| p.role == ityv_encoding::EventRole::Observer)
+            .nth(1)
+            .unwrap()
+            .key
+            .clone();
+        if let Some(p) = who
+            .iter_mut()
+            .find(|p| p.role == ityv_encoding::EventRole::Observer)
+        {
+            p.key = other;
+        }
+        let event = e.connectivity_incident(
+            Some(st),
+            Some(hb),
+            IncidentKind::CaptureMismatch,
+            (open, open + 5),
+            true,
+            &who,
+        );
+        before_last_checkpoint(
+            &mut bld.plan.steps,
+            Step::event(SCHEMA_WITNESSED_EVENT, event),
+        );
+        out.push(bld.scenario(
+            "attack-incident-forged",
+            q,
+            a,
+            (
+                "서명이 맞지 않는 연결 사건",
+                "한빛초등학교 체육관 투표함에 대한 연결 사건에 한 참관인의 서명을 다른 참관인의 키로 만들어 붙였다.",
+                "사건은 받지 않는다. 누가 무엇을 주장했는지 확인할 수 없으므로 장부 전체가 HOLD_REVIEW(ConnectivityIncidentRefused).",
+            ),
+            hold(&[H::ConnectivityIncidentRefused]),
+            Vec::new(),
+        ));
+    }
 }

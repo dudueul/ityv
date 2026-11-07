@@ -6,7 +6,11 @@
 //! the full amendable sets of the state it creates. In order it:
 //!
 //! 1. decodes the `SignedGenesis` and refuses it unless its body's object
-//!    hash is the pin (`ityv_state::Pinned::new`, VC-005);
+//!    hash is the pin (`ityv_state::Pinned::new`, VC-005), and the
+//!    connectivity manifest published beside it unless its object hash is
+//!    the body's `connectivity_manifest_hash` and it is a canonical
+//!    manifest of the election (ADR-0041 decision 1; its one-way rules,
+//!    VC-077, are the connectivity stage's);
 //! 2. checks the witness set whole, verifies the commission's, the
 //!    committee's and every witness's hybrid signature under the keys the
 //!    body and the witness set register, and seals the genesis with those
@@ -39,11 +43,13 @@
 //!   one module of each party chamber; no module belongs to a party
 //!   chamber the genesis does not have; each chamber has exactly `n_c`
 //!   trustees (VC-067, VC-017);
-//! * no two devices share an identifier (boxes, check-in units and
-//!   modules), so a device attestation names exactly one device;
+//! * no two devices share an identifier (boxes, check-in units, modules
+//!   and gateways), so a device attestation names exactly one device;
+//! * every frame key is a valid Ed25519 key that names one device of the
+//!   state (ADR-0041);
 //! * no two keys of the state share a half: the two authorities, every
 //!   box's device and attestation keys, every check-in unit's keys, every
-//!   roster signer, module, trustee and witness.
+//!   gateway's keys, every roster signer, module, trustee and witness.
 //!
 //! The result, [`VerifiedGenesis`], exists only if every step passed. It
 //! proves entries for the state machines from the sets it checked, so a
@@ -59,13 +65,14 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use ityv_crypto::Purpose;
+use ityv_crypto::{Purpose, object_hash};
 use ityv_encoding::{
-    BallotStyleEntry, CustodyRoute, ENTRY_SET_COUNT, ElectionId, EntrySet, GenesisBody, GenesisBox,
-    GenesisEntry, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, ModuleEntry, ReportingUnitEntry,
-    RollAuthorityEntry, RosterSigner, SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SetCommitment,
-    SignedGenesis, StationEntry, StationId, StationProgressPolicy, TimestampAuthorityEntry,
-    TrusteeEntry, WitnessRosterEntry, decode_object,
+    BallotStyleEntry, ConnectivityManifest, CustodyRoute, ENTRY_SET_COUNT, ElectionId, EntrySet,
+    GenesisBody, GenesisBox, GenesisEntry, HYBRID_SIG_LEN, HYBRID_VK_LEN, Hash512, ModuleEntry,
+    ReportingUnitEntry, RollAuthorityEntry, RosterSigner, SCHEMA_CONNECTIVITY_MANIFEST,
+    SCHEMA_SIGNED_GENESIS, SCHEMA_VERSION_1, SCHEMA_VERSION_UPLINK, SetCommitment, SignedGenesis,
+    StationEntry, StationId, StationProgressPolicy, TimestampAuthorityEntry, TrusteeEntry,
+    WitnessRosterEntry, decode_object,
 };
 use ityv_ledger::InclusionProof;
 use ityv_state::{Anchor, Entry, Genesis, Pinned};
@@ -114,12 +121,17 @@ pub struct FixedSets<'a> {
     pub roll_authorities: &'a [&'a [u8]],
 }
 
-/// A genesis as published: the `SignedGenesis` object and every entry.
+/// A genesis as published: the `SignedGenesis` object, every entry and
+/// the connectivity manifest the body pins.
 #[derive(Debug, Clone, Copy)]
 pub struct GenesisInput<'a> {
     /// The encoded `SignedGenesis` (schema `0x0033`) carrying the
     /// `GenesisBody`.
     pub signed: &'a [u8],
+    /// The encoded `ConnectivityManifest` (schema `0x001C`, version 2)
+    /// whose object hash the body's `connectivity_manifest_hash` pins
+    /// (ADR-0041 decision 1).
+    pub connectivity: &'a [u8],
     /// The amendable sets as the genesis commits to them.
     pub sets: AmendableSets<'a>,
     /// The fixed sets.
@@ -275,6 +287,8 @@ pub struct VerifiedGenesis<'a> {
     /// Every state's devices and places, for scoping ledger events signed
     /// before an amendment changed them.
     seen: Seen<'a>,
+    /// The connectivity manifest the body pins.
+    manifest: ConnectivityManifest<'a>,
 }
 
 /// One earlier genesis state with its checked amendable sets.
@@ -335,6 +349,7 @@ pub fn verify_genesis<'a>(
         )
     })?;
     let body = signed.genesis().ok_or(Error::body(0, Rule::Kind))?;
+    let manifest = manifest(&body, input.connectivity)?;
     let fixed = Fixed::parse(0, &input.fixed, body.sets())?;
     timestamp::check_authorities(0, &fixed.timestamps, body.election_epoch_day())?;
     roll::check_authorities(0, &fixed.rolls, body.custody_quorum())?;
@@ -359,6 +374,8 @@ pub fn verify_genesis<'a>(
 
     let mut sets = Amendable::parse(0, &input.sets, genesis.sets())?;
     cross::check(0, &sets, &fixed, genesis.body())?;
+    let mut frame_keys = cross::FrameKeys::default();
+    frame_keys.add(0, &sets, &fixed, genesis.body())?;
     let mut seen = Seen::default();
     seen.add(&sets);
     let mut anchors = Vec::with_capacity(amendments.len().saturating_add(1));
@@ -376,6 +393,7 @@ pub fn verify_genesis<'a>(
         let next = amend(state, &genesis, &fixed, amendment)?;
         let next_sets = Amendable::parse(state, &amendment.sets, next.sets())?;
         cross::check(state, &next_sets, &fixed, next.body())?;
+        frame_keys.add(state, &next_sets, &fixed, next.body())?;
         seen.add(&next_sets);
         anchors.push(next.anchor());
         history.push(State {
@@ -392,7 +410,27 @@ pub fn verify_genesis<'a>(
         history,
         fixed,
         seen,
+        manifest,
     })
+}
+
+/// The connectivity manifest `bytes`, if it is the one `body` pins: its
+/// object hash is the body's `connectivity_manifest_hash`, it decodes as a
+/// canonical manifest and names the body's election.
+fn manifest<'a>(
+    body: &GenesisBody<'_>,
+    bytes: &'a [u8],
+) -> Result<ConnectivityManifest<'a>, Error> {
+    if object_hash(bytes) != *body.connectivity_manifest_hash() {
+        return Err(Error::body(0, Rule::ConnectivityPin));
+    }
+    let manifest: ConnectivityManifest<'a> =
+        decode_object(SCHEMA_CONNECTIVITY_MANIFEST, SCHEMA_VERSION_UPLINK, bytes)
+            .map_err(|_| Error::body(0, Rule::ConnectivityManifest))?;
+    if manifest.election_id().as_bytes() != body.election_id().as_bytes() {
+        return Err(Error::body(0, Rule::ConnectivityManifest));
+    }
+    Ok(manifest)
 }
 
 /// The entry `key` of `set`, proved against `genesis`.
@@ -447,6 +485,13 @@ impl<'a> VerifiedGenesis<'a> {
     #[must_use]
     pub const fn election_id(&self) -> ElectionId<'a> {
         self.genesis.election_id()
+    }
+
+    /// The connectivity manifest the genesis pins (fixed for the
+    /// election).
+    #[must_use]
+    pub const fn manifest(&self) -> &ConnectivityManifest<'a> {
+        &self.manifest
     }
 
     /// Every state from the genesis (amendment number 0) to the last

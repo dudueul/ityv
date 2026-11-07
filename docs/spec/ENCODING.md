@@ -106,10 +106,10 @@ offset  size  field
 | 0x0019 | `SlipBody` | 1 | 슬립 본문(§8.18) |
 | 0x001A | `BoxClose` | 1 | 마감 본문 바이트 + 장치·사무원·참관인 서명(§8.17) |
 | 0x001B | `ScanCountAttest` | 1 | 스캔 카운터 본문 바이트 + 참관인 서명(§8.15) |
-| 0x001C | `ConnectivityManifest` | 1 | 연결 목록: 포트별 방향·매체·상대·시간대·슬롯당 프레임 수·프레임 키(§8.21, ADR-0022) |
-| 0x001D | `UplinkFrame` | 1 | 고정 크기 송신 프레임. 장부 이벤트가 아닌 전송 단위(§8.22) |
-| 0x001E | `UplinkSessionBody` | 1 | 게이트웨이 세션 본문: 링크별 프레임 수·사슬 head(§8.23) |
-| 0x001F | `UplinkSession` | 1 | 세션 본문 바이트 + 게이트웨이 하이브리드 서명 + 참관인 서명(§8.24) |
+| 0x001C | `ConnectivityManifest` | 2 | 연결 목록: 장치 종류·포트별 방향·매체·상대·시간대·슬롯당 프레임 수·실어 나르는 것(§8.21, ADR-0022, ADR-0041). genesis가 해시로 고정한다. 버전 1은 인코딩된 적 없는 초안 |
+| 0x001D | `UplinkFrame` | 2 | 고정 크기 송신 프레임. 장부 이벤트가 아닌 전송 단위. 장치 서명은 머리 0x0057에(§8.22) |
+| 0x001E | `UplinkSessionBody` | 2 | 게이트웨이 세션 본문: 창, 링크별 프레임 수·빠진 슬롯·흐름 끝·사슬 head, 앞 세션 해시(§8.23) |
+| 0x001F | `UplinkSession` | 2 | 세션 본문 바이트 + 게이트웨이 하이브리드 서명 + 참관인 캡처 서명(§8.24) |
 | 0x0020 | `ParticipationSet` | 1 | 투표 종료 뒤 투표소별 정렬 가명 목록. 순번·시간 없음(§8.25, PROTOCOL §6.5) |
 | 0x0021 | `ReleaseManifestBody` | 1 | 릴리스 목록 본문: 이미지별 버전·빌드·소스·툴체인·이미지 해시·문구 표 해시, 구성별 해시(§8.26, ADR-0023) |
 | 0x0022 | `ReleaseManifest` | 1 | 본문 바이트 + 빌더 서명 3 이상 + 인증기관·위원회 서명(§8.27) |
@@ -118,7 +118,7 @@ offset  size  field
 | 0x0025 | `AttestationSummary` | 1 | 현장 QR용 요약 + Ed25519 서명. 장부 이벤트가 아닌 인쇄 객체(§8.30) |
 | 0x0026 | `ModuleProvisioned` | 1 | 모듈 발급 기록: 본체·패드 카드 ID, KEM 공개키, 챔버 엔트로피 약속, 보안 칩 여부, 정당 PRF 키 확인값(§8.31, ADR-0024) |
 | 0x0027 | `PartyKeyCeremony` | 1 | 정당 열쇠 생성 절차 기록. 키 자료 없음(§8.32, ADR-0024) |
-| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다. 버전 3(ADR-0036): 역할 10(감사인)과 감사 본문 0x000D·0x0048·0x004B·0x004C·0x004D·0x004E를 받는다. 버전 4(ADR-0040): 역할 11(명부 출처 기관)·12(명부 보관 기관)와 명부 본문 0x0052–0x0055를 받는다 |
+| 0x0028 | `WitnessedEvent` | 1 | 사람이 서명하는 장부 이벤트의 공통 봉투: 본문 객체 바이트 + 역할별 하이브리드 서명(§8.42, ADR-0025). 버전 2(ADR-0035): 역할 9(구·시·군 선관위 위원장)와 본문 `PaperCountReportBody`를 받는다. 버전 3(ADR-0036): 역할 10(감사인)과 감사 본문 0x000D·0x0048·0x004B·0x004C·0x004D·0x004E를 받는다. 버전 4(ADR-0040): 역할 11(명부 출처 기관)·12(명부 보관 기관)와 명부 본문 0x0052–0x0055를 받는다. 버전 5(ADR-0041): 본문 0x0059(연결 사건)를 받는다 |
 | 0x0029 | `BoxOpenedBody` | 1 | 투표함 개시 본문(§8.36) |
 | 0x002A | `FallbackBody` | 1 | `FallbackDeclared`·`FallbackEnded` 본문(§8.37) |
 | 0x002B | `IssuanceCountBody` | 1 | 투표소 교부 회계 본문(§8.38) |
@@ -131,8 +131,8 @@ offset  size  field
 | 0x0032 | `ProgressCheckBody` | 1 | 진행 경보의 현장 확인 본문(§8.47). 서명은 `WitnessedEvent` |
 | 0x0033 | `SignedGenesis` | 1 | genesis 또는 변경 본문 바이트 + 선관위·위원회·증인 서명(§8.56, ADR-0028) |
 | 0x0034 | `GenesisAmendmentBody` | 1 | genesis 변경 본문: 번호, 이전 본문 해시, 사유, 바뀔 수 있는 집합 8개의 (수, root)(§8.55) |
-| 0x0035 | `GenesisBox` | 1 | genesis 항목: 예정 투표함(§8.43) |
-| 0x0036 | `StationEntry` | 1 | genesis 항목: 투표소(§8.49) |
+| 0x0035 | `GenesisBox` | 2 | genesis 항목: 예정 투표함(§8.43). 버전 2(ADR-0041): 스캐너의 프레임 키를 더한다 |
+| 0x0036 | `StationEntry` | 2 | genesis 항목: 투표소(§8.49). 버전 2(ADR-0041): 카운터·가명 유닛의 프레임 키와 투표소 게이트웨이를 더한다 |
 | 0x0037 | `StationProgressPolicy` | 1 | genesis 항목: 투표소 진행 경보 기준(§8.48) |
 | 0x0038 | `ReportingUnitEntry` | 1 | genesis 항목: 보고 단위(§8.50). 버전 2(ADR-0035): 종이 개표를 보고하는 구·시·군 선관위 `commission_org`를 더한다 |
 | 0x0039 | `CustodyRoute` | 1 | genesis 항목: 보관 경로(§8.43) |
@@ -165,6 +165,9 @@ offset  size  field
 | 0x0054 | `RollCustodyReceiptBody` | 1 | 보관 영수증(`RollCustodyReceipt`): 보관 기관이 다시 계산한 값과 답하는 동결·변경 본문 해시(§8.79). 서명은 `WitnessedEvent` |
 | 0x0055 | `RollAmendmentBody` | 1 | 동결 뒤 변경(`RollAmendment`): 번호, 앞 본문 해시, 사유와 그 출처 기관, 근거 해시, 변경 뒤 값(§8.80). 서명은 `WitnessedEvent` |
 | 0x0056 | `ContestedCheckin` | 1 | 이의 투표의 확인 기록(restricted): 투표소, 유닛, 가명, 봉투 라벨과 유닛·정당 모듈 서명(§8.81, PROTOCOL §6.2). 공개 장부는 프레임만 싣는다 |
+| 0x0057 | `UplinkFrameHeader` | 1 | 프레임 머리: 링크, 슬롯, 번호, 종류, 흐름 오프셋, 데이터 길이, 탑재부 root, 객체 목록 해시(§8.82, ADR-0041). 장치가 서명하고 게이트웨이가 사슬로 묶는 대상 |
+| 0x0058 | `UplinkFrameLog` | 1 | 게이트웨이의 프레임 기록: 세션·링크마다 프레임 머리 필드·서명, 데이터 덩어리 잎, 프레임마다 장치가 서명한 객체 목록(§8.83). 장부 이벤트 |
+| 0x0059 | `ConnectivityIncidentBody` | 1 | 연결 사건 본문: 투표소·투표함, 종류, 슬롯 구간, 커밋먼트 유닛 연루, 증거 해시(§8.84). 서명은 `WitnessedEvent` |
 | 0x0101 | `Interpretation` | 1 | 해석 유닛 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0103 | `ModuleIssue` | 1 | 챔버 모듈 → 커밋먼트 유닛 링크 객체(§8.19, `ityv-cunit` 구현) |
 | 0x0104 | `VisitEnd` | 1 | 해석 유닛 → 커밋먼트 유닛 방문 끝 알림(§8.19, `ityv-cunit` 구현, ADR-0021) |
@@ -174,7 +177,7 @@ offset  size  field
 
 ## 7. 시험 벡터
 
-`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다. 시점확인(ADR-0039) 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`다. 명부(ADR-0040) 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`다.
+`ityv-encoding` 크레이트는 각 스키마의 정상 벡터와 거부 벡터를 `vectors/` 디렉터리에 16진수로 공개한다. 독립 2차 구현(V5)은 이 벡터로 차분 테스트를 한다. 파일 첫 줄에 스키마 ID와 버전이 있고, 거부 벡터는 오류 종류와 위치를 함께 적는다. genesis(ADR-0028) 벡터는 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `genesis_amendment_body.txt`, `genesis_box.txt`, `station_entry.txt`, `station_progress_policy.txt`, `reporting_unit_entry.txt`, `custody_route.txt`, `roster_signer.txt`, `module_entry.txt`, `ballot_style_entry.txt`, `trustee_entry.txt`, `witness_roster_entry.txt`, `observer_count_attest_body.txt`, `checkin_unit_swap_body.txt`, `box_unit_swap_body.txt`다. 장부의 법적 승인(ADR-0030) 벡터는 `signed_legal_authorization.txt`다. 시점확인(ADR-0039) 벡터는 `timestamp_authority_entry.txt`, `timestamp_record.txt`다. 명부(ADR-0040) 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`다. 연결 감사(ADR-0041) 벡터는 `connectivity_manifest.txt`, `uplink_frame_header.txt`, `uplink_session_body.txt`, `uplink_session.txt`, `uplink_frame_log.txt`, `connectivity_incident_body.txt`다(1 MiB `UplinkFrame`은 파일로 공표하지 않는다, §8.22).
 
 ## 8. 예시 스키마 필드 정의
 
@@ -407,66 +410,74 @@ offset  size  field
 
 디코더는 첫 번째 위반에서 멈추고 `(종류, 오프셋)`을 돌려준다. 오프셋은 객체 시작(헤더의 magic) 기준 절대 오프셋이다. 헤더 위반의 오프셋은 `BadMagic` 0, `SchemaMismatch` 4, `UnsupportedVersion` 8, `NonZeroFlags` 10, `BodyLengthMismatch` 12이고, 본문 뒤 잉여 바이트는 `TrailingBytes`(잉여가 시작되는 오프셋)다.
 
-### 8.21 `ConnectivityManifest` (`schema_id` 0x001C, `schema_version` 1)
+### 8.21 `ConnectivityManifest` (`schema_id` 0x001C, `schema_version` 2)
 
-genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, §5.8, ADR-0022).
+> English summary: the connectivity manifest is a per-class policy (ADR-0041 decision 1): for each device class and port, its direction, medium, peer class, counterpart, schedule, frame counts and what it carries. The genesis body pins its object hash (`connectivity_manifest_hash`, the body stays at version 8) and it is published beside the genesis; the verifier receives it with the genesis sets. Device instances, their frame keys and each station's gateway live in the genesis device entries (§8.43, §8.49). The one-way rules and the coverage of every class are the verifier's (VC-077): a manifest that breaks them is still pinned, and holds the whole ledger's electronic layer.
+
+genesis 본문이 객체 해시로 고정하고(`connectivity_manifest_hash`) genesis와 함께 공표한다(PROTOCOL §4.1, §5.8, ADR-0022, ADR-0041). 장부 이벤트가 아니며 검증기는 genesis 입력으로 받는다(`GenesisInput::connectivity`). 해시가 다르면 `Rule::ConnectivityPin`, 디코딩되지 않거나 선거가 다르면 `Rule::ConnectivityManifest`로 genesis를 받지 않는다.
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `election_id` | `Ident<64>` | |
-| 2 | `frame_body_len` | `u32` | 1,048,576이어야 한다. 그 외 값은 `ValueOutOfRange` |
-| 3 | `slot_minutes` | `u16` | 10이어야 한다 |
-| 4 | `entries` | `Array<{link_id: Ident<64>, device_class: u8, port: Ident<32>, direction: u8, medium: u8, counterpart: Ident<64>, schedule: u8, frames_per_slot: u16, catchup_frames_per_slot: u16, carries: u32, frame_key: [u8; 32]}, 1024>` | 1개 이상, `link_id` 바이트 오름차순, 중복 없음 |
+| 1 | `election_id` | `Ident<64>` | genesis의 선거 |
+| 2 | `entries` | `Array<항목, 256>` | 1개 이상(0이면 개수 접두사 위치에 `InvariantViolation`), (`device_class`, `port` 바이트) 엄격 오름차순(`NotSorted`, `Duplicate`) |
 
-- `device_class`: 1 해석 유닛, 2 커밋먼트 유닛·스캐너 바깥 포트, 3 카운터·가명 유닛, 4 챔버 모듈, 5 선거일 신원 확인 단말, 6 사전투표 신원 확인 단말, 7 투표소 게이트웨이, 8 관찰 탭, 9 장부 수집 서버, 10 공개원장 공표 서버, 11 증인, 12 신뢰기관 수신 시스템, 13 수령 라벨 판독기, 14 각인 판독기, 15 프린터류(각인기·슬립·라벨). 그 외 값은 `ValueOutOfRange`.
+항목 = `device_class: u8` ‖ `port: Ident<32>` ‖ `direction: u8` ‖ `medium: u8` ‖ `peer_class: u8` ‖ `counterpart: Ident<64>` ‖ `schedule: u8` ‖ `frames_per_slot: u16` ‖ `catchup_frames_per_slot: u16` ‖ `carries: u32`.
+
+- `device_class`: 1 해석 유닛, 2 커밋먼트 유닛(스캐너의 바깥 포트), 3 카운터·가명 유닛, 4 챔버 모듈, 5 선거일 신원 확인 단말, 6 사전투표 신원 확인 단말, 7 투표소 게이트웨이, 8 관찰 탭, 9 장부 수집 서버, 10 공개원장 공표 서버, 11 증인, 12 신뢰기관 수신 시스템, 13 수령 라벨 판독기, 14 각인 판독기, 15 프린터류(각인기·슬립·라벨). 1–4가 TCB다. 그 외 값은 `ValueOutOfRange`.
 - `direction`: 0 없음(봉인 또는 미장착), 1 내보내기만(수신 소자 없음), 2 받기만, 3 양방향.
 - `medium`: 0 없음, 1 광 송신 전용, 2 광커플러(장치 내부), 3 유선 이더넷, 4 광 회선, 5 선거 전용회선(통합선거인명부), 6 입회 절차 현장 직결, 7 무선.
+- `peer_class`: 상대 장치 종류(1–15), 0은 시스템 밖 상대(`counterpart`가 이름을 적는다).
 - `schedule`: 0 사용 안 함, 1 투표함 개시–마감 처리, 2 사전투표 기간, 3 상시, 4 입회 절차 때만.
-- `carries` 비트: 0 공개 기록·배치 증명, 1 봉인 share 패키지, 2 확인 카운터, 3 장치 링크 객체, 4 체크포인트·장부, 5 명부 조회(개인정보), 6 세션 기록. 정의되지 않은 비트가 서 있으면 `ValueOutOfRange`.
-- `frame_key`: `UplinkFrame`을 서명하는 Ed25519 공개키. 프레임을 보내지 않는 항목은 0이어야 한다.
-- 집합 불변식(`InvariantViolation`, `entries` 개수 접두사 오프셋): `device_class` 1–4의 항목은 `direction` ∈ {0, 1}이고 `medium` ≠ 7이다. `direction` 3은 `device_class` 6(`medium` 5, `schedule` 2), 7(바깥 회선), 9–12에만 쓴다. `device_class` 8은 `direction` 1만 쓴다. `carries` 비트 5는 `device_class` 6과 그 상대에만 쓴다. genesis의 장치·포트가 빠짐없이 덮였는지는 검증기가 genesis와 대조한다(VC-077).
+- 프레임 수: 둘 다 0(프레임을 보내지 않음)이거나 `1 ≤ frames_per_slot ≤ catchup_frames_per_slot ≤ 64`. 아니면 `frames_per_slot` 위치에 `ValueOutOfRange`. 기준값은 스캐너 16, 카운터·가명 유닛 4, 따라잡기 64다.
+- `carries` 비트: 0 공개 객체, 1 봉인 share 패키지, 2 확인 카운터, 3 장치 링크 객체, 4 체크포인트·장부, 5 명부 조회(개인정보), 6 세션 기록. 정의되지 않은 비트가 서 있으면 `ValueOutOfRange`.
 
-### 8.22 `UplinkFrame` (`schema_id` 0x001D, `schema_version` 1)
+한 방향 규칙은 검증기가 확인한다(`ityv-verify`의 `verify_connectivity`, VC-077): 모든 종류에 항목이 있다. TCB 종류의 항목은 방향이 0·1이고 무선이 아니다. 종류 5는 연결이 없다. 양방향은 종류 6(매체 5, 일정 2, 상대 0), 7, 9–12에만 있다. 종류 8은 내보내기만이다. 명부 조회(비트 5)는 종류 6에만 있다. 종류 2와 3은 프레임을 보내는 항목(`frames_per_slot` > 0)이 정확히 하나이고, 그 항목은 방향 1, 매체 1, 상대 7, 일정 1이며, 종류 2는 비트 0·1만, 종류 3은 비트 0만 싣는다(비트 2는 VC-084). 다른 종류는 프레임을 보내지 않는다. 버전 1은 링크마다 프레임 키를 담은 명세 초안이었고 인코딩된 적이 없다.
 
-본문 길이는 언제나 1,048,576바이트다(헤더의 `body_len` 고정). 모든 필드가 고정폭이다.
+### 8.22 `UplinkFrame` (`schema_id` 0x001D, `schema_version` 2)
+
+전송 단위이며 장부 이벤트가 아니다. 본문 길이는 언제나 1,048,576바이트다. 모든 필드가 고정폭이다.
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `link_id_hash` | `Hash512` | 연결 목록 항목 `link_id`의 §4 해시 |
+| 1 | `link_id_hash` | `Hash512` | `SHA3-512("ityv:link:v1" ‖ 0x00 ‖ frame_key)`, `frame_key`는 장치 항목의 프레임 키(§8.43, §8.49) |
 | 2 | `slot` | `u64` | 선거 epoch 기준 10분 슬롯 번호 |
-| 3 | `index` | `u16` | 슬롯 안 순번. 일반은 `frames_per_slot` 미만, 따라잡기는 `catchup_frames_per_slot` 미만 |
+| 3 | `index` | `u16` | 슬롯 안 순번, 64 미만(아니면 `ValueOutOfRange`). 일반은 연결 목록의 `frames_per_slot` 미만, 그 밖은 `catchup_frames_per_slot` 미만(검증기) |
 | 4 | `kind` | `u8` | 0 일반, 1 따라잡기, 2 마감 재전송, 3 입회 재전송. 그 외 값은 `ValueOutOfRange` |
 | 5 | `stream_offset` | `u64` | 이 링크 바이트 흐름에서 `payload` 첫 바이트의 위치 |
-| 6 | `payload_len` | `u32` | 1,048,425 이하 |
-| 7 | `payload` | `[u8; 1048425]` | 앞 `payload_len` 바이트가 흐름의 연속 구간. 나머지는 0이어야 하며 아니면 `NonCanonical` |
-| 8 | `frame_sig` | `[u8; 64]` | `frame_key`의 Ed25519 서명(purpose `uplink-frame`), 필드 1–7의 인코딩에 대해 |
+| 6 | `payload_len` | `u32` | 966,503 이하(아니면 `ValueOutOfRange`) |
+| 7 | `object_count` | `u16` | 1,024 이하(아니면 `ValueOutOfRange`) |
+| 8 | `objects` | `[u8; 81920]` | 앞 `object_count`개의 80바이트 항목 `{schema_id: u32, object_hash: Hash512, stream_offset: u64, len: u32}`가 이 프레임의 데이터에 걸친 모든 객체(앞 프레임에서 이어 온 것과 다음 프레임으로 넘기는 것 포함)를 흐름 순서로 적는다. 항목마다 `len` 16 이상(`ValueOutOfRange`), 끝이 `u64` 안(`ValueOutOfRange`), 앞 항목의 끝 이상에서 시작(`InvariantViolation`). 나머지 자리는 0이어야 하며 아니면 처음 0이 아닌 바이트의 위치에 `InvariantViolation` |
+| 9 | `payload` | `[u8; 966503]` | 앞 `payload_len` 바이트가 흐름의 연속 구간. 나머지는 0이어야 하며 아니면 처음 0이 아닌 바이트의 위치에 `InvariantViolation` |
+| 10 | `frame_sig` | `[u8; 64]` | `frame_key`의 Ed25519 서명(purpose `uplink-frame`), 이 프레임의 `UplinkFrameHeader` 객체(§8.82)에 대해 |
 
-흐름은 정규 객체의 연접이며 연결 목록 `carries`가 허용한 스키마만 담는다. 수신자는 흐름을 이어 붙여 객체 경계를 복원하고, 정규 객체가 아닌 바이트나 허용되지 않은 스키마를 위반으로 기록한다(PROTOCOL §5.8 10항).
+머리 객체의 `payload_root`는 탑재부를 1,048,576바이트로 0 확장해 4,096바이트 덩어리 256개로 나눈 완전 이진 트리의 root다. 잎은 `SHA3-512("ityv:uplink-chunk:v1" ‖ 0x00 ‖ 덩어리)`, 마디는 `SHA3-512("ityv:uplink-node:v1" ‖ 0x00 ‖ 왼쪽 ‖ 오른쪽)`. 머리 객체의 `objects_hash`는 `SHA3-512("ityv:uplink-objects:v1" ‖ 0x00 ‖ 항목들)`이고 항목들은 필드 8의 앞 `object_count`개 항목을 이은 바이트다. 수신자가 계산하므로 선 위의 프레임은 둘 다 싣지 않는다. 흐름은 정규 객체의 연접이며 장치가 보낼 수 있는 스키마만 담는다. share 패키지와 그 바로 뒤의 객체는 그것이 시작하는 프레임의 4,096바이트 경계에서 시작하고(앞 프레임에서 이어 오면 그 프레임의 0), 사이 바이트는 0이다. 목록이 데이터를 그렇게 덮는지는 검증기가 확인한다(`ityv-verify`, ADR-0041 6항). 장치는 목록이 1,024개에 이르면 그 프레임을 더 채우지 않는다. 1 MiB 프레임은 시험 벡터 파일로 공표하지 않고 규칙마다 `tests/m5_connectivity.rs`가 확인한다. 버전 1은 서명이 필드 1–7 전체를 덮는 명세 초안이었고 인코딩된 적이 없다. 2i 검토 전의 버전 2 초안(목록 없이 탑재부 1,048,425바이트)은 이 가지 밖으로 나간 적이 없다.
 
-### 8.23 `UplinkSessionBody` (`schema_id` 0x001E, `schema_version` 1)
+### 8.23 `UplinkSessionBody` (`schema_id` 0x001E, `schema_version` 2)
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
 | 1 | `election_id` | `Ident<64>` | |
 | 2 | `station_id` | `Ident<64>` | |
-| 3 | `gateway_id` | `Ident<64>` | |
-| 4 | `session_index` | `u32` | 게이트웨이마다 1부터 1씩 |
-| 5 | `final` | `bool` | 마감 때 최종 기록이면 1 |
+| 3 | `gateway_id` | `Ident<64>` | 투표소 항목의 게이트웨이(§8.49) |
+| 4 | `session_index` | `u32` | 게이트웨이마다 1부터 1씩. 0이면 `ValueOutOfRange` |
+| 5 | `final` | `bool` | 그 게이트웨이의 마지막 세션 |
 | 6 | `start_slot` | `u64` | |
-| 7 | `end_slot` | `u64` | `start_slot` 이상 |
-| 8 | `links` | `Array<{link_id_hash: Hash512, frames: u64, catchup_frames: u64, missing_slots: u32, last_stream_offset: u64, chain_head: Hash512}, 16>` | `link_id_hash` 오름차순, 중복 없음 |
+| 7 | `end_slot` | `u64` | `start_slot ≤ end_slot ≤ start_slot + 5`(한 시간 이하). 아니면 이 필드 위치에 `InvariantViolation` |
+| 8 | `links` | `Array<{link_id_hash: Hash512, frames: u64, catchup_frames: u64, missing_slots: u32, stream_end: u64, chain_head: Hash512}, 16>` | `link_id_hash` 엄격 오름차순(`NotSorted`, `Duplicate`) |
 | 9 | `wan_bytes` | `u64` | 이 세션 동안 게이트웨이가 바깥 회선으로 보낸 바이트 |
-| 10 | `previous_session_hash` | `Hash512` | 첫 세션이면 0 |
+| 10 | `previous_session_hash` | `Hash512` | 앞 세션 본문의 객체 해시. 첫 세션이면 0, 그 밖에는 0이 아님(`InvalidPreviousHash`) |
 
-사슬: `h_0 = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ link_id_hash)`, `h_i = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ h_{i−1} ‖ frame_hash_i)`. `frame_hash`는 `UplinkFrame` 객체의 §4 해시다. 세션은 앞 세션의 head에서 이어진다.
+링크 항목: `frames`는 일반 프레임, `catchup_frames`는 종류 1–3의 프레임 수, `missing_slots`는 창 안에서 그 링크가 모양(슬롯당 번호 전부)을 다 채우지 못한 슬롯 수, `stream_end`는 그 링크에서 지금까지 받은 마지막 프레임의 `stream_offset + payload_len`, `chain_head`는 사슬 head다. 사슬: `h_0 = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ link_id_hash)`, `h_i = SHA3-512("ityv:uplink:v1" ‖ 0x00 ‖ h_{i−1} ‖ frame_hash_i)`, `frame_hash`는 그 프레임의 `UplinkFrameHeader` 객체(§8.82)의 §4 해시다. 세션은 그 링크의 앞 세션 head에서 이어진다. 버전 1에는 `stream_end` 대신 뜻이 정해지지 않은 `last_stream_offset`이 있었고 인코딩된 적이 없다.
 
-### 8.24 `UplinkSession` (`schema_id` 0x001F, `schema_version` 1)
+### 8.24 `UplinkSession` (`schema_id` 0x001F, `schema_version` 2)
 
 | 순서 | 필드 | 형 | 규칙 |
 |---|---|---|---|
-| 1 | `body` | `Bytes<2048>` | 인코딩된 `UplinkSessionBody` 객체 전체 |
-| 2 | `gateway_sig` | `[u8; 4691]` | 하이브리드 서명(purpose `uplink-session`) |
-| 3 | `observer_sigs` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, capture_hash: Hash512, sig: [u8; 4691]}, 4>` | 0개 이상, `observer_id` 오름차순, 중복 없음. `capture_hash`는 그 참관인이 받아 둔 캡처 파일의 SHA3-512. purpose `uplink-session` |
+| 1 | `body` | `Bytes<4096>` | 인코딩된 `UplinkSessionBody` 객체 전체(링크 16개면 2,800바이트 안팎이라 버전 1의 2,048에서 늘렸다). 본문의 오류는 봉투 안 위치로 옮겨 보고한다 |
+| 2 | `gateway_sig` | `[u8; 4691]` | 게이트웨이 하이브리드 서명(purpose `uplink-session`), `body` 바이트에 대해 |
+| 3 | `observer_sigs` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, capture_hash: Hash512, sig: [u8; 4691]}, 4>` | 0개 이상, `observer_id` 엄격 오름차순(`NotSorted`, `Duplicate`) |
+
+참관인 서명은 헤더 없는 필드 묶음 `body_hash: Hash512 ‖ observer_id: Ident<64> ‖ capture_hash: Hash512`(`CaptureMessage`)에 대한 purpose `uplink-capture`의 하이브리드 서명이다. `body_hash`는 `body`의 객체 해시, `capture_hash`는 그 참관인의 캡처 파일(`u32_be 길이 ‖ UplinkFrame 객체`의 반복, 받은 순서) 해시 `SHA3-512("ityv:capture:v1" ‖ 0x00 ‖ 파일)`이다. 버전 1에서 참관인 서명의 purpose(`uplink-session`)가 게이트웨이와 같았고 캡처 해시를 덮지 않았다.
 
 ### 8.25 `ParticipationSet` (`schema_id` 0x0020, `schema_version` 1)
 
@@ -624,6 +635,7 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 0x0053 | `RollFreezeBody` | `roll-freeze` | 선관위 1, 위원회 1(버전 4부터) |
 | 0x0054 | `RollCustodyReceiptBody` | `roll-receipt` | 명부 보관 기관 1, 그 밖의 역할 없음(버전 4부터) |
 | 0x0055 | `RollAmendmentBody` | `roll-amendment` | 선관위 1, 위원회 1, 명부 출처 기관 1(버전 4부터) |
+| 0x0059 | `ConnectivityIncidentBody` | `connectivity-incident` | 사무원 2 이상과 서로 다른 조직 참관인 2 이상, 또는 위원회 1과 서로 다른 조직 참관인 2 이상(그 밖의 역할 없음)(버전 5부터) |
 
 #### 8.33 `CustodyHandoffBody` (0x0008)
 
@@ -749,13 +761,13 @@ genesis가 해시로 고정하고 본문을 함께 공표한다(PROTOCOL §4.1, 
 | 1 | `body` | `Bytes<2048>` | 위 표의 본문 객체 전체. 다른 스키마는 `SchemaMismatch` |
 | 2 | `sigs` | `Array<{signer_id: Ident<64>, role: u8, org_id: Ident<64>, sig: [u8; 4691]}, 8>` | `signer_id` 엄격 오름차순. `role` 1 사무원, 2 참관인, 3 선관위, 4 위원회, 5 송신자, 6 수신자, 7 결정 기관, 8 장치, 9 구·시·군 선관위 위원장(버전 2부터), 10 감사인(버전 3부터), 11 명부 출처 기관, 12 명부 보관 기관(버전 4부터). 그 밖의 코드는 `ValueOutOfRange`. 본문별 역할 조합(위 표)이 아니면 `InvariantViolation` |
 
-`WitnessedEvent`는 버전 4다(ADR-0040). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028, ADR-0035). 버전 3은 역할 10(감사인)과 감사 본문 여섯(0x000D, 0x0048, 0x004B, 0x004C, 0x004D, 0x004E)을 받는다. 0x004E는 같은 단계(ADR-0036)의 독립 리뷰에서 더했고, 버전 3이 아직 공개 장부에 쓰인 적이 없어 같은 버전에 넣었다. 버전 2의 거부 벡터 `role 10`은 버전 3에서 역할 조합 위반(`InvariantViolation`)이 되므로 다시 버전을 올렸다. 버전 4는 역할 11(명부 출처 기관)·12(명부 보관 기관)와 명부 본문 넷(0x0052–0x0055)을 받는다. 버전 3의 거부 벡터 `role 11`이 같은 이유로 바뀌었다(지금의 거부 벡터는 `role 13`). 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
+`WitnessedEvent`는 버전 5다(ADR-0041). 버전 1에는 역할 9와 본문 0x0046이 없었고, 버전 1의 거부 벡터 `role 9`는 버전 2에서 정상 입력이 되므로 같은 번호를 다시 쓰지 않고 버전을 올렸다(§3, ADR-0028, ADR-0035). 버전 3은 역할 10(감사인)과 감사 본문 여섯(0x000D, 0x0048, 0x004B, 0x004C, 0x004D, 0x004E)을 받는다. 0x004E는 같은 단계(ADR-0036)의 독립 리뷰에서 더했고, 버전 3이 아직 공개 장부에 쓰인 적이 없어 같은 버전에 넣었다. 버전 2의 거부 벡터 `role 10`은 버전 3에서 역할 조합 위반(`InvariantViolation`)이 되므로 다시 버전을 올렸다. 버전 4는 역할 11(명부 출처 기관)·12(명부 보관 기관)와 명부 본문 넷(0x0052–0x0055)을 받는다. 버전 3의 거부 벡터 `role 11`이 같은 이유로 바뀌었다(지금의 거부 벡터는 `role 13`). 버전 5(ADR-0041)는 연결 사건 본문(0x0059)을 받는다. 버전 4에서 그 스키마의 본문은 `SchemaMismatch`였으므로 버전을 올렸다. 디코더는 현재 버전만 받는다. 본문 안의 오류는 봉투 안 위치로 옮겨 보고한다(§8.20). 서명 바이트의 유효성, 등록된 키와의 결속, 서명자 사이 키 반쪽 중복 금지(VC-098)는 `ityv-state`가 검증 토큰으로 확인한다.
 
 #### 8.43 genesis 항목 `GenesisBox`(0x0035), `CustodyRoute`(0x0039), `RosterSigner`(0x003A)
 
 M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다. 집합에 넣는 방식은 §8.54를 따른다.
 
-`GenesisBox`(`expected_boxes[]`, 열쇠 `box_id`): `box_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `profile: u8`(1 투표소, 2 관외·재외, 3 수령 스캐너) ‖ `route_id: Ident<64>` ‖ `reporting_unit_id: Ident<64>` ‖ `device_key: [u8; 2624]`(하이브리드 공개키, ML-DSA-87 2592 ‖ Ed25519 32) ‖ `attest_key: [u8; 2624]`(증명 키, PROTOCOL §7.9) ‖ `modules: Array<Ident<64>, 7>`(오름차순).
+`GenesisBox`(`expected_boxes[]`, 열쇠 `box_id`, 버전 2): `box_id: Ident<64>` ‖ `station_id: Ident<64>` ‖ `ballot_style_id: Ident<64>` ‖ `profile: u8`(1 투표소, 2 관외·재외, 3 수령 스캐너) ‖ `route_id: Ident<64>` ‖ `reporting_unit_id: Ident<64>` ‖ `device_key: [u8; 2624]`(하이브리드 공개키, ML-DSA-87 2592 ‖ Ed25519 32) ‖ `attest_key: [u8; 2624]`(증명 키, PROTOCOL §7.9) ‖ `frame_key: [u8; 32]`(업링크 프레임을 서명하는 Ed25519 키, ADR-0041 2항. 송신기는 따로 교체될 수 있는 부품이라 기록 키와 다른 키다) ‖ `modules: Array<Ident<64>, 7>`(오름차순). 버전 1에는 `frame_key`가 없었다. 프레임 키가 유효한 Ed25519 점이고 한 상태 안에서 장치마다 다른지는 검증기가 확인한다(`Rule::InvalidKey`, `Rule::SharedKey`).
 
 `CustodyRoute`(`custody_routes[]`, 열쇠 `route_id`): `route_id: Ident<64>` ‖ `count_at_origin: bool` ‖ `stops: Array<Ident<64>, 8>`(조직 순서, 2개 이상, 이웃한 두 조직이 같으면 `InvariantViolation`).
 
@@ -833,12 +845,15 @@ M5 1단계에서는 필드형이었고 ADR-0028에서 각자 객체가 되었다
 | 1 | `station_id` | `Ident<64>` | |
 | 2 | `kind` | `u8` | 1 선거일 투표소, 2 사전투표소, 3 수령 선관위. 그 밖은 `ValueOutOfRange` |
 | 3 | `primary` | 유닛 | 사용 중인 카운터·가명 유닛 |
-| 4 | `spare` | 유닛 | 봉인된 예비 유닛. `unit_id`가 `primary`와 같거나 `key`가 반쪽 하나라도 같으면 `InvariantViolation`(위치는 이 필드) |
-| 5 | `boxes` | `Array<Ident<64>, 8>` | 이 투표소의 모든 투표함, 1개 이상(0이면 `InvariantViolation`), 엄격 오름차순 |
-| 6 | `id_terminals_hash` | `Hash512` | 신원 확인 단말 목록 문서 해시(단말은 TCB 밖이며 등록 키가 없다) |
-| 7 | `tokens` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, check_key: [u8; 32]}, 16>` | 참관인 토큰과 Ed25519 확인 키, `observer_id` 엄격 오름차순 |
+| 4 | `spare` | 유닛 | 봉인된 예비 유닛. `unit_id`가 `primary`와 같거나 `key`가 반쪽 하나라도 같거나 `frame_key`가 같으면 `InvariantViolation`(위치는 이 필드) |
+| 5 | `gateway` | `{gateway_id: Ident<64>, key: [u8; 2624], attest_key: [u8; 2624]}` | 투표소 게이트웨이: 세션을 서명하는 하이브리드 키와 증명 키(버전 2부터, ADR-0041) |
+| 6 | `boxes` | `Array<Ident<64>, 8>` | 이 투표소의 모든 투표함, 1개 이상(0이면 `InvariantViolation`), 엄격 오름차순 |
+| 7 | `id_terminals_hash` | `Hash512` | 신원 확인 단말 목록 문서 해시(단말은 TCB 밖이며 등록 키가 없다) |
+| 8 | `tokens` | `Array<{observer_id: Ident<64>, org_id: Ident<64>, check_key: [u8; 32]}, 16>` | 참관인 토큰과 Ed25519 확인 키, `observer_id` 엄격 오름차순 |
 
-유닛 = `unit_id: Ident<64>` ‖ `key: [u8; 2624]` ‖ `attest_key: [u8; 2624]` ‖ `modules: Array<Ident<64>, 7>`(그 유닛에 꽂힌 정당 모듈, 오름차순).
+유닛 = `unit_id: Ident<64>` ‖ `key: [u8; 2624]` ‖ `attest_key: [u8; 2624]` ‖ `frame_key: [u8; 32]`(버전 2부터) ‖ `modules: Array<Ident<64>, 7>`(그 유닛에 꽂힌 정당 모듈, 오름차순).
+
+`StationEntry`는 버전 2다(ADR-0041). 버전 1에는 유닛의 `frame_key`와 `gateway`가 없었다. 게이트웨이 식별자가 다른 장치 식별자와 겹치지 않는지(`Rule::DeviceId`), 게이트웨이의 두 키가 다른 모든 하이브리드 키와 반쪽도 겹치지 않는지(`Rule::SharedKey`)는 검증기가 확인한다. 장치 교체는 투표함·투표소 집합의 변경으로 새 프레임 키와 게이트웨이 키를 함께 들인다.
 
 #### 8.50 `ReportingUnitEntry` (0x0038, 열쇠 `unit_id`)
 
@@ -1224,3 +1239,50 @@ purpose는 본문에 따라 `tally-scope`, `aggregate-opening`, `receipt-resolut
 서명은 모두 필드 1–5의 헤더 없는 인코딩에 대해 purpose `contested-checkin`이다(`ParticipationSet`과 같은 방식, §8.25). 순번과 시각은 담지 않는다. 가명 옆의 시각은 확인 순서를 드러낸다(VC-084). 모듈의 순서와 수(정당마다 하나, 챔버 순서), 유닛과 모듈의 키는 검증기가 확인한다. 공개 장부는 이 객체의 프레임(객체 해시)만 싣고, 본문은 열람 권한이 있는 검증기가 받는다(ADR-0040 7항). 이의 투표 한 건은 필드 1–5(서명된 메시지)로 정해진다: 서명은 매번 다르므로 같은 메시지를 다시 서명한 객체는 사본이고, 필드 하나라도 다르면 다른 이의 투표다(PROTOCOL §6.2).
 
 시험 벡터는 `roll_authority_entry.txt`, `roll_source_extract_body.txt`, `roll_freeze_body.txt`, `roll_custody_receipt_body.txt`, `roll_amendment_body.txt`, `contested_checkin.txt`이고, 버전을 올린 `genesis_body.txt`(버전 8), `signed_genesis.txt`, `witnessed_event.txt`(버전 4)도 다시 만들었다. 왕복 속성 테스트는 `tests/m5_roll.rs`에 있다.
+
+### 8.82–8.84 연결 감사 (ADR-0022, ADR-0041)
+
+> English summary: what the public needs to recompute the gateway's chain and check device-origin inclusion without the 1 MiB frames (sealed share packages travel in them): the 215-byte frame header the device signs and the gateway chains (its payload root and the hash of its own object list), the gateway's per-session and per-link frame log (header fields, object count, payload root, device signature, the leaves of the data chunks, each frame's object list as the device signed it), and the incident body.
+
+#### 8.82 `UplinkFrameHeader` (0x0057)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `link_id_hash` | `Hash512` | §8.22 |
+| 2–6 | `slot`, `index`, `kind`, `stream_offset`, `payload_len` | §8.22 필드 2–6 | 같은 규칙(`ValueOutOfRange`) |
+| 7 | `payload_root` | `Hash512` | 탑재부 트리의 root(§8.22) |
+| 8 | `objects_hash` | `Hash512` | 프레임 객체 목록의 해시(§8.22) |
+
+본문은 215바이트, 객체는 231바이트다. 장치의 `frame_sig`(purpose `uplink-frame`)와 게이트웨이 사슬의 `frame_hash`(§8.23)가 이 객체를 덮는다. 선 위의 프레임과 프레임 기록은 이 필드들을 담고, 수신자와 검증기가 이 객체를 다시 만든다.
+
+#### 8.83 `UplinkFrameLog` (0x0058)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Ident<64>` | |
+| 3 | `gateway_id` | `Ident<64>` | |
+| 4 | `session_index` | `u32` | 이 프레임들을 받은 세션. 0이면 `ValueOutOfRange` |
+| 5 | `link_id_hash` | `Hash512` | |
+| 6 | `frames` | `Array<{slot: u64, index: u16, kind: u8, stream_offset: u64, payload_len: u32, object_count: u16, payload_root: Hash512, frame_sig: [u8; 64]}, 384>` | 1개 이상(0이면 개수 접두사 위치에 `InvariantViolation`), (`slot`, `index`) 엄격 오름차순(`NotSorted`, `Duplicate`), 필드는 §8.22와 같은 규칙(`object_count` 1,024 이하). 항목은 153바이트 |
+| 7 | `leaves` | `Array<Hash512, 98304>` | 프레임 순서로 프레임마다 `⌈payload_len / 4096⌉`개의 데이터 덩어리 잎. 개수가 다르면 개수 접두사 위치에 `InvariantViolation` |
+| 8 | `objects` | `Array<{schema_id: u32, object_hash: Hash512, stream_offset: u64, len: u32}, 393216>` | 프레임 순서로 프레임마다 `object_count`개, 장치가 서명한 그 프레임의 목록(§8.22 필드 8). 개수가 `Σ object_count`가 아니면 개수 접두사 위치에 `InvariantViolation`. 한 프레임의 목록 안에서 `len` 16 이상(`ValueOutOfRange`), 앞 항목의 끝 이상에서 시작(`InvariantViolation`), 끝이 `u64`를 넘으면 `ValueOutOfRange`. 이어 가는 객체는 두 프레임의 목록에 다 있다. 항목은 80바이트 |
+
+자기 서명이 없는 장부 이벤트다. 세션의 사슬 head가 프레임을 덮고, 기록은 그 세션보다 앞 프레임에 싣는다. 검증기는 머리(목록 해시 포함)를 다시 만들어 장치 서명과 사슬을 확인하고, 데이터 잎과 0 잎으로 탑재부 root를 다시 만들어 서명된 root와 비교한다(채움 증명: 데이터 뒤가 모두 0). 목록이 데이터를 덮는지 보고, 패키지가 없는 덩어리는 공개 장부 객체와 0 채움으로 잎을 다시 계산한다. 목록의 항목은 스키마와 해시로 장부의 이벤트를 가리키므로, 장부가 그 해시를 다른 스키마로 싣거나 기록이 share 패키지로 가리키는 해시를 다른 스키마로 적은 항목은 위반이고, 한 객체를 적는 횟수에는 상한이 있다(ADR-0041 6항). 봉인 share 패키지가 든 덩어리는 공개 검증기가 열 수 없고 탭 캡처가 확인한다(§8.24, PROTOCOL §5.8 7항). 게이트웨이는 목록을 바꿀 수 없다: 바꾸면 장치 서명이 맞지 않는다.
+
+#### 8.84 `ConnectivityIncidentBody` (0x0059)
+
+| 순서 | 필드 | 형 | 규칙 |
+|---|---|---|---|
+| 1 | `election_id` | `Ident<64>` | |
+| 2 | `station_id` | `Option<Ident<64>>` | 없으면 선거 전체 |
+| 3 | `box_id` | `Option<Ident<64>>` | 없으면 투표소 전체. 투표소 없이 있으면 이 필드 위치에 `InvariantViolation` |
+| 4 | `kind` | `u8` | 1 선언되지 않은 연결, 2 들어오는 경로나 무선, 3 일정 밖 프레임, 4 정규가 아닌 바이트, 5 캡처 불일치, 6 통신사 기록 불일치, 7 운영 시간 밖 명부 회선, 8 설명되지 않는 송신, 9 분해 표본 발견, 10 무선 점검 발견. 그 밖은 `ValueOutOfRange` |
+| 5 | `from_slot` | `u64` | 영향 구간의 첫 슬롯 |
+| 6 | `to_slot` | `u64` | `from_slot` 이상(아니면 이 필드 위치에 `InvariantViolation`) |
+| 7 | `commitment_unit` | `bool` | 커밋먼트 유닛 연루(그 투표함들은 §12.5의 전수 대조) |
+| 8 | `evidence_hash` | `Hash512` | 증거 문서 해시, 0이 아님(`InvalidPreviousHash`) |
+
+서명은 `WitnessedEvent`(purpose `connectivity-incident`, §8.42의 역할 조합). 서명자가 명부에 그 역할·조직으로 등록되어 있는지와 투표함이 그 투표소의 것인지는 검증기가 확인한다(`ityv-state`의 `check_incident_signers`, PROTOCOL §5.8 10항).
+
+시험 벡터는 `connectivity_manifest.txt`, `uplink_frame_header.txt`, `uplink_session_body.txt`, `uplink_session.txt`, `uplink_frame_log.txt`, `connectivity_incident_body.txt`이고, 버전을 올린 `genesis_box.txt`, `station_entry.txt`(버전 2), `witnessed_event.txt`(버전 5)도 다시 만들었다. 왕복 속성 테스트와 1 MiB 프레임의 규칙은 `tests/m5_connectivity.rs`에 있다.

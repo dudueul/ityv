@@ -401,6 +401,15 @@ impl Book {
         book
     }
 
+    /// The gateway's frame logs and sessions over every device event so
+    /// far, the last session final (ADR-0041).
+    fn uplink(&mut self) {
+        let events = self.ledger.events.clone();
+        for (schema, event) in common::uplink::for_ledger(world().genesis, &events) {
+            self.push(schema, event);
+        }
+    }
+
     /// Pushes the day's progress record ([`progress`]).
     fn progress(&mut self) {
         for (schema, event) in progress() {
@@ -622,6 +631,14 @@ fn every_box_closed_is_source_completeness_checked() {
     book.push(SCHEMA_WITNESSED_EVENT, opened());
     book.progress();
     book.push(SCHEMA_BOX_CLOSE, close());
+    book.checkpoint();
+    // Every box closed, but the gateway's final session is not on the
+    // ledger yet: the sources are not all accounted for (ADR-0041).
+    let report = book.report(ANCHORED);
+    assert!(report.boxes().complete());
+    assert!(!report.connectivity().complete());
+    assert_eq!(report.status().status(), Status::LogConsistent);
+    book.uplink();
     book.checkpoint();
     let report = book.report(ANCHORED);
     assert!(

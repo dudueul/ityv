@@ -52,6 +52,27 @@ pub fn object<T: Encode>(schema: SchemaId, value: &T) -> &'static [u8] {
     leak_slice(buf)
 }
 
+/// The sealed share package a cast record of box `box_id` with
+/// commitments `commitments` (encoded points) names: a stand-in object of
+/// schema `SharePackage` whose body is those fields (the simulator seals
+/// nothing; the public sees only the package's hash and length, ADR-0041).
+/// The scanner rebuilds it from the record to send it after the record.
+pub fn share_package(box_id: &[u8], commitments: &[u8]) -> &'static [u8] {
+    let mut body = b"sim-sealed:".to_vec();
+    body.extend_from_slice(box_id);
+    body.extend_from_slice(commitments);
+    let mut out = vec![0u8; ityv_encoding::HEADER_LEN];
+    ityv_encoding::ObjectHeader::new(
+        ityv_encoding::SCHEMA_SHARE_PACKAGE,
+        ityv_encoding::SCHEMA_VERSION_1,
+        u32::try_from(body.len()).unwrap(),
+    )
+    .write(&mut Writer::new(&mut out))
+    .unwrap();
+    out.extend_from_slice(&body);
+    leak_slice(out)
+}
+
 /// A field group's encoding without an object header, leaked.
 pub fn group<T: Encode>(value: &T) -> &'static [u8] {
     let mut out = vec![0u8; value.encoded_len()];

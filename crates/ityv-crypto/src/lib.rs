@@ -14,6 +14,7 @@
 //! | [`shares`] | chamber access structure, linear secret sharing | PROTOCOL.md §9.2 |
 //! | [`otmac`], [`pad`] | Poly1305 one-time MAC, one-time pad XOR | PROTOCOL.md §9.3, §9.4 |
 //! | [`sample`] | audit seed, the public sample stream, uniform draws by rejection | PROTOCOL.md §12.1, §12.2 |
+//! | [`uplink`] | link identifiers, the gateway's frame chain, the payload chunk tree, capture hashes | PROTOCOL.md §5.8, ADR-0041 |
 //!
 //! Properties that hold by construction:
 //!
@@ -67,6 +68,7 @@ pub mod sample;
 pub mod scalar;
 pub mod shares;
 pub mod sig;
+pub mod uplink;
 pub mod verified;
 
 // Kani harnesses live outside `src/` because they carry a file-level lint
@@ -105,8 +107,8 @@ pub use sig::{
     ArchiveSignature, ArchiveSigned, ArchiveSigningKey, ArchiveVerifyingKey, HybridSignature,
     HybridSigned, HybridSigningKey, HybridVerifyingKey, PURPOSE_ATTEST_CHALLENGE,
     PURPOSE_ATTEST_SUMMARY, PURPOSE_CAST_RECORD, PURPOSE_CHECKPOINT, PURPOSE_CHECKPOINT_ARCHIVE,
-    PURPOSE_MODULE_RECORD, RecordPurpose, RecordSignature, RecordSigned, RecordSigningKey,
-    RecordVerifyingKey, sign_archive, sign_ed25519_half, sign_hybrid, sign_record, verify_archive,
-    verify_hybrid, verify_record,
+    PURPOSE_MODULE_RECORD, PURPOSE_UPLINK_FRAME, RecordPurpose, RecordSignature, RecordSigned,
+    RecordSigningKey, RecordVerifyingKey, sign_archive, sign_ed25519_half, sign_hybrid,
+    sign_record, verify_archive, verify_hybrid, verify_record,
 };
 pub use verified::Verified;

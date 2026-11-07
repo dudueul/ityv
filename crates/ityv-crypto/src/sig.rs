@@ -72,6 +72,9 @@ pub const PURPOSE_MODULE_RECORD: Purpose<'static> = Purpose::from_literal(b"modu
 pub const PURPOSE_ATTEST_CHALLENGE: Purpose<'static> = Purpose::from_literal(b"attest-challenge");
 /// Purpose of the Ed25519 signature on an attestation summary QR.
 pub const PURPOSE_ATTEST_SUMMARY: Purpose<'static> = Purpose::from_literal(b"attest-summary");
+/// Purpose of a device's frame-key signature on an uplink frame header
+/// (PROTOCOL.md §5.8, ADR-0041).
+pub const PURPOSE_UPLINK_FRAME: Purpose<'static> = Purpose::from_literal(b"uplink-frame");
 /// Purpose of the SLH-DSA co-signature on an archival checkpoint.
 pub const PURPOSE_CHECKPOINT_ARCHIVE: Purpose<'static> =
     Purpose::from_literal(b"checkpoint-archive");
@@ -382,8 +385,10 @@ pub fn verify_hybrid<'a>(
 
 /// The purposes a classical-only (Ed25519) signature may carry
 /// (PROTOCOL.md Appendix B): the record signatures, whose quantum-safe
-/// cover is the batch attestation, and the attestation QR signatures,
-/// whose hybrid counterpart is the ledger event.
+/// cover is the batch attestation, the attestation QR signatures, whose
+/// hybrid counterpart is the ledger event, and the uplink frame
+/// signatures, whose hybrid counterpart is the gateway's session
+/// (ADR-0041).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RecordPurpose {
     /// Device signature on a cast record body hash.
@@ -394,6 +399,8 @@ pub enum RecordPurpose {
     AttestChallenge,
     /// The attestation key's Ed25519 half on an attestation summary.
     AttestSummary,
+    /// A device's frame key on an uplink frame header.
+    UplinkFrame,
 }
 
 impl RecordPurpose {
@@ -405,6 +412,7 @@ impl RecordPurpose {
             Self::ModuleRecord => PURPOSE_MODULE_RECORD,
             Self::AttestChallenge => PURPOSE_ATTEST_CHALLENGE,
             Self::AttestSummary => PURPOSE_ATTEST_SUMMARY,
+            Self::UplinkFrame => PURPOSE_UPLINK_FRAME,
         }
     }
 }

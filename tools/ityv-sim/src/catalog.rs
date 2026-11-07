@@ -155,6 +155,7 @@ pub fn quick(events: Vec<DayEvent>) -> ElectionSpec {
             ),
         ],
         slots: 7,
+        two_way_uplink: false,
     }
 }
 
@@ -318,6 +319,7 @@ pub fn local() -> ElectionSpec {
             ),
         ],
         slots: 73,
+        two_way_uplink: false,
     }
 }
 
@@ -429,5 +431,6 @@ pub fn national() -> ElectionSpec {
             ),
         ],
         slots: 73,
+        two_way_uplink: false,
     }
 }

@@ -6,7 +6,8 @@
 //! through TCB code:
 //!
 //! * the status of each tally unit: the verifier's evidence with box
-//!   completeness, tally and audit narrowed to the unit (the audit of its
+//!   completeness, connectivity (the final sessions of its boxes'
+//!   stations), tally and audit narrowed to the unit (the audit of its
 //!   ballot style), and the ledger's whole hold set minus only the holds
 //!   that are attributable to other units' boxes, tallies or style audits
 //!   alone, handed to `ityv_state::status::evaluate`;
@@ -318,6 +319,7 @@ impl<'r, 'a> Lookup<'r, 'a> {
         own.union(self.report.index().box_holds(id))
             .union(records)
             .union(progress)
+            .union(self.report.connectivity().box_holds(id))
     }
 
     /// The holds on the whole ledger, not on one box or unit: the index's
@@ -352,6 +354,7 @@ impl<'r, 'a> Lookup<'r, 'a> {
             .union(r.disputes().holds())
             .union(tally)
             .union(refused_holds(r))
+            .union(r.connectivity().ledger_holds())
             .union(removed_boxes)
             .union(removed_stations)
     }
@@ -382,10 +385,16 @@ pub struct UnitStatus {
     pub status: StatusReport,
 }
 
+/// `Passed` when the unit reached a step, else `NotRun`.
+const fn reached(ok: bool) -> Outcome {
+    if ok { Outcome::Passed } else { Outcome::NotRun }
+}
+
 /// The status of every tally unit of `report`: the ledger's evidence with
 /// box completeness (the unit has boxes and every one is closed), the
-/// tally and the audit (its ballot style's audit concluded) narrowed to the
-/// unit, and the ledger's whole hold set minus the reasons that only boxes,
+/// connectivity step (every station of its boxes has its gateway's final
+/// session), the tally and the audit (its ballot style's audit concluded)
+/// narrowed to the unit, and the ledger's whole hold set minus the reasons that only boxes,
 /// tallies or style audits of other units carry.
 #[must_use]
 pub fn unit_statuses(
@@ -435,6 +444,17 @@ pub fn unit_statuses(
                         .get(id)
                         .is_some_and(|r| !r.holds.contains(HoldReason::CloseMissing))
                 });
+            // Every station of the unit's boxes has its gateway's final
+            // session (ADR-0041 decision 10).
+            let connected = !boxes.is_empty()
+                && boxes.iter().all(|id| {
+                    genesis.expected_box(id).is_some_and(|b| {
+                        report
+                            .connectivity()
+                            .station(b.station_id.as_bytes())
+                            .is_some_and(|s| s.final_session.is_some())
+                    })
+                });
             let evidence = [
                 Step::Genesis,
                 Step::Checkpoints,
@@ -445,29 +465,12 @@ pub fn unit_statuses(
             ]
             .iter()
             .fold(Evidence::new(scopes), |e, s| e.with_step(*s, ev.step(*s)))
-            .with_step(
-                Step::BoxCompleteness,
-                if closed {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
-            )
-            .with_step(
-                Step::Tally,
-                if u.passed() {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
-            )
+            .with_step(Step::BoxCompleteness, reached(closed))
+            .with_step(Step::Connectivity, reached(connected))
+            .with_step(Step::Tally, reached(u.passed()))
             .with_step(
                 Step::Audit,
-                if style_concluded(report, u.ballot_style_id.as_bytes()) {
-                    Outcome::Passed
-                } else {
-                    Outcome::NotRun
-                },
+                reached(style_concluded(report, u.ballot_style_id.as_bytes())),
             )
             .with_anchors(report.checkpoints().anchor_deadline(publications.now))
             .with_board(publications.board)
@@ -550,6 +553,7 @@ fn write_report(
     write_participation(j, report);
     write_disputes(j, report);
     write_roll(j, genesis, report);
+    write_connectivity(j, report);
     write_audit(j, report, observation, bundle.beacon.is_some());
     write_records(j, report);
 }
@@ -659,6 +663,164 @@ fn write_roll(j: &mut Json, genesis: &VerifiedGenesis<'_>, report: &Report<'_>) 
     }
     j.end_array();
     holds_json(j, "holds", roll.holds());
+    j.end_object();
+}
+
+/// One link of a station: its device, frames, objects and findings.
+fn write_link(j: &mut Json, l: &ityv_verify::LinkReport<'_>) {
+    j.begin_object();
+    let (kind, device) = match l.device {
+        ityv_verify::LinkDevice::Box(b) => ("box", text(b.as_bytes())),
+        ityv_verify::LinkDevice::Unit(u) => ("unit", text(u.as_bytes())),
+    };
+    j.str("kind", kind);
+    j.str("device", &device);
+    j.str("link", &grouped(&fingerprint(l.link_id_hash.as_bytes())));
+    j.num("frames", l.frames);
+    j.num("catchupFrames", l.catchup_frames);
+    j.num("dataFrames", l.data_frames);
+    j.num("missingSlots", l.missing_slots);
+    j.opt_num("firstSlot", l.slots.map(|x| x.0));
+    j.opt_num("lastSlot", l.slots.map(|x| x.1));
+    j.num("streamEnd", l.stream_end);
+    j.num("objects", l.objects);
+    j.num("included", l.included);
+    j.num("checkedChunks", l.checked_chunks);
+    j.num("opaqueChunks", l.opaque_chunks);
+    j.array("findings");
+    for f in &l.findings {
+        j.begin_object();
+        j.num("seq", f.seq.get());
+        j.opt_num("slot", f.slot);
+        j.opt_num("index", f.index.map(u64::from));
+        j.num("streamOffset", f.stream_offset);
+        j.str("problem", &format!("{:?}", f.problem));
+        j.str("hold", &format!("{:?}", f.problem.hold()));
+        j.end_object();
+    }
+    j.end_array();
+    j.end_object();
+}
+
+/// One connectivity incident: what, where, whether it was taken, the boxes
+/// it holds and those to compare in full.
+fn write_incident(j: &mut Json, i: &ityv_verify::IncidentReport<'_>) {
+    j.begin_object();
+    j.num("seq", i.seq.get());
+    j.str("kind", &format!("{:?}", i.parts.kind));
+    j.opt_str(
+        "station",
+        i.parts.station_id.map(|s| text(s.as_bytes())).as_deref(),
+    );
+    j.opt_str("box", i.parts.box_id.map(|b| text(b.as_bytes())).as_deref());
+    j.num("fromSlot", i.parts.from_slot);
+    j.num("toSlot", i.parts.to_slot);
+    j.bool("commitmentUnit", i.parts.commitment_unit);
+    j.opt_str("refused", i.refused.map(|r| format!("{r:?}")).as_deref());
+    j.array("boxes");
+    for b in &i.boxes {
+        j.item_str(&text(b.as_bytes()));
+    }
+    j.end_array();
+    j.array("fullComparison");
+    for (b, done) in &i.full_comparison {
+        j.begin_object();
+        j.str("box", &text(b.as_bytes()));
+        j.bool("compared", *done);
+        j.end_object();
+    }
+    j.end_array();
+    j.end_object();
+}
+
+/// The connectivity audit (ADR-0022, ADR-0041), public information only:
+/// the manifest's broken rules, each station's gateway sessions, each
+/// link's frames, objects and findings, the device events outside every
+/// link, the incidents. The capture and carrier comparisons need inputs
+/// that are not on the ledger and are not run here.
+fn write_connectivity(j: &mut Json, report: &Report<'_>) {
+    let c = report.connectivity();
+    let count = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    j.object("connectivity");
+    j.bool("complete", c.complete());
+    j.array("manifest");
+    for f in c.manifest_findings() {
+        j.begin_object();
+        j.str("class", &format!("{:?}", f.class));
+        j.opt_str("port", f.port.map(text).as_deref());
+        j.str("problem", &format!("{:?}", f.problem));
+        j.end_object();
+    }
+    j.end_array();
+    j.array("stations");
+    for s in c.stations() {
+        j.begin_object();
+        j.str("station", &text(s.station_id.as_bytes()));
+        j.opt_str(
+            "gateway",
+            s.gateway_id.map(|g| text(g.as_bytes())).as_deref(),
+        );
+        j.num("sessions", count(s.sessions.len()));
+        j.opt_num("finalSession", s.final_session.map(ityv_encoding::Seq::get));
+        j.num(
+            "captures",
+            s.sessions
+                .iter()
+                .fold(0u64, |acc, x| acc.saturating_add(count(x.observers))),
+        );
+        j.num(
+            "wanBytes",
+            s.sessions
+                .iter()
+                .fold(0u64, |acc, x| acc.saturating_add(x.wan_bytes)),
+        );
+        if let (Some(first), Some(last)) = (s.sessions.first(), s.sessions.last()) {
+            j.num("firstSlot", first.start_slot);
+            j.num("lastSlot", last.end_slot);
+        } else {
+            j.null("firstSlot");
+            j.null("lastSlot");
+        }
+        j.num("pendingLogs", count(s.pending_logs));
+        j.array("findings");
+        for f in &s.findings {
+            j.begin_object();
+            j.num("seq", f.seq.get());
+            j.num("session", u64::from(f.session_index));
+            j.opt_str(
+                "link",
+                f.link
+                    .map(|l| grouped(&fingerprint(l.as_bytes())))
+                    .as_deref(),
+            );
+            j.str("problem", &format!("{:?}", f.problem));
+            j.end_object();
+        }
+        j.end_array();
+        j.array("links");
+        for l in &s.links {
+            write_link(j, l);
+        }
+        j.end_array();
+        j.array("outside");
+        for o in &s.outside {
+            j.begin_object();
+            j.num("seq", o.seq.get());
+            j.num("schema", u64::from(o.schema.get()));
+            j.str("fingerprint", &grouped(&fingerprint(o.hash.as_bytes())));
+            j.end_object();
+        }
+        j.end_array();
+        holds_json(j, "holds", s.holds);
+        j.end_object();
+    }
+    j.end_array();
+    j.array("incidents");
+    for i in c.incidents() {
+        write_incident(j, i);
+    }
+    j.end_array();
+    holds_json(j, "holds", c.holds());
     j.end_object();
 }
 
