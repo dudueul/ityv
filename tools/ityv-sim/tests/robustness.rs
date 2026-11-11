@@ -384,6 +384,7 @@ fn refused_events_hold_what_the_verifier_maps_them_to() {
     for kind in [
         TallyEvent::Scope,
         TallyEvent::Opening,
+        TallyEvent::Paper,
         TallyEvent::LateClose,
         TallyEvent::Receipt,
     ] {

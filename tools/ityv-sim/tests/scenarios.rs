@@ -4,8 +4,14 @@
 // Integration tests: outside the TCB. Assertions use unwrap and indexing.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+use ityv_encoding::{
+    PaperCountReportBody, SCHEMA_PAPER_COUNT_REPORT_BODY, SCHEMA_WITNESSED_EVENT, WitnessedEvent,
+    decode_object, schema_version,
+};
 use ityv_sim::scenarios::{Scenario, Set, scenarios};
-use ityv_sim::{bundle, ledger, outcome, verify};
+use ityv_sim::{bundle, genesis, ledger, outcome, publications, verify};
+use ityv_state::{HoldReason, Status};
+use ityv_verify::{TallyEvent, TallyRefusal};
 
 fn names(holds: &[ityv_state::HoldReason]) -> Vec<String> {
     holds.iter().map(|h| format!("{h:?}")).collect()
@@ -112,6 +118,90 @@ fn every_quick_scenario_gives_its_expected_outcome() {
 #[ignore = "large; run with --release -- --ignored"]
 fn every_full_scenario_gives_its_expected_outcome() {
     check(Set::Full);
+}
+
+/// The paper count reports on `s`'s ledger of `style` in `unit`.
+fn paper_reports(s: &Scenario, style: &[u8], unit: &[u8]) -> usize {
+    ledger(s)
+        .events
+        .iter()
+        .filter_map(|ev| {
+            let version = schema_version(SCHEMA_WITNESSED_EVENT);
+            decode_object::<WitnessedEvent<'_>>(SCHEMA_WITNESSED_EVENT, version, ev).ok()
+        })
+        .filter_map(|w| {
+            w.body::<PaperCountReportBody<'_>>(SCHEMA_PAPER_COUNT_REPORT_BODY)
+                .ok()
+        })
+        .filter(|b| {
+            b.parts().ballot_style_id.as_bytes() == style
+                && b.parts().reporting_unit_id.as_bytes() == unit
+        })
+        .count()
+}
+
+/// The count-sheet scenarios show what their text says. A sheet that
+/// carries another unit's numbers holds only the unit it was laid for;
+/// the unit whose numbers it carries, with its own sheet, reads verified.
+/// A second sheet for a unit is refused as a conflict, both stay on the
+/// ledger, and the first is the one compared.
+#[test]
+fn the_count_sheet_scenarios_show_what_they_say() {
+    let all = scenarios(Set::Quick);
+    let find = |name: &str| all.iter().find(|s| s.name == name).unwrap();
+
+    let s = find("attack-count-sheet-copied");
+    let e = s.election;
+    assert_ne!(
+        e.paper_truth("S-HB", "RU-HB"),
+        e.paper_truth("S-HB", "RU-HB-OUT")
+    );
+    let report = verify(s, ledger(s));
+    let tally = report.tally();
+    let into = tally.unit(b"S-HB", b"RU-HB").unwrap();
+    // The carried numbers are below the unit's machine count, and their
+    // total is another.
+    let compared = into.comparison.unwrap();
+    assert!(compared.first_below.is_some() && !compared.totals_agree);
+    assert_eq!(
+        into.holds.iter().collect::<Vec<_>>(),
+        [HoldReason::PaperCountMismatch]
+    );
+    for (style, unit) in [("S-HB", "RU-HB-OUT"), ("S-NR", "RU-NR")] {
+        let u = tally.unit(style.as_bytes(), unit.as_bytes()).unwrap();
+        assert!(u.passed() && u.comparison.unwrap().agrees(), "{unit}");
+        assert_eq!(paper_reports(s, style.as_bytes(), unit.as_bytes()), 1);
+    }
+    for u in ityv_wasm::unit_statuses(genesis(s), &report, publications(s)) {
+        let want = if u.unit == b"RU-HB" {
+            Status::HoldReview
+        } else {
+            Status::CryptoTallyVerified
+        };
+        assert_eq!(
+            u.status.status(),
+            want,
+            "{}",
+            String::from_utf8_lossy(&u.unit)
+        );
+    }
+
+    let s = find("attack-count-sheet-rewritten");
+    let report = verify(s, ledger(s));
+    let tally = report.tally();
+    let unit = tally.unit(b"S-HB", b"RU-HB").unwrap();
+    let [refused] = tally.refused() else {
+        panic!("one refusal: {:?}", tally.refused());
+    };
+    assert_eq!(refused.event, TallyEvent::Paper);
+    assert_eq!(refused.refusal, TallyRefusal::Conflict);
+    assert!(unit.paper.unwrap() < refused.seq);
+    assert!(unit.comparison.unwrap().agrees());
+    assert_eq!(
+        unit.holds.iter().collect::<Vec<_>>(),
+        [HoldReason::PaperCountRefused]
+    );
+    assert_eq!(paper_reports(s, b"S-HB", b"RU-HB"), 2);
 }
 
 #[test]

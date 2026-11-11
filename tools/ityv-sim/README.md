@@ -1,17 +1,17 @@
 # ityv-sim
 
-> English summary: The synthetic-election generator (ROADMAP M6, first part; ADR-0038). Outside the TCB: it depends on the TCB crates and nothing depends on it; besides workspace crates it uses only the P-256 signer and SHA-2 that `ityv-tsa` already depends on, for two simulated timestamp authorities. From a fixed seed it builds whole signed elections — genesis with every set, real hybrid keys and signatures for every device, person, module, trustee and witness, OR-proved cast records, full voting days slot by slot with arrival peaks, spoiled and returned sheets, the three progress alarms with their on-site checks and an emergency-insertion hour, closes, station counts, participation sets, receipt resolutions, the voter roll (extracts, freeze, custody receipts), every station gateway's frame logs and sessions over every device's fixed-schedule uplink frames (ADR-0041), the tally and the comparison audit (freezes, the commit, the binding checkpoint, the seed, opening references, comparisons, escalation, full comparison with a finding, hand counts), every checkpoint stamped by a government and a non-government timestamp authority — and named scenarios over them: the status ladder from `UNVERIFIED` to `PAPER_AUDITED`, two larger fictional elections, and 46 attacks and faults. The beacon round's published output, the dice record and the beacon designation are fixture data, carried in the bundle and handed to the verifier as the caller's observation. Each scenario carries its expected verifier outcome; the tests compare it with what `ityv-verify` reports, directly and through `ityv-wasm`. Output is byte-identical across runs. Each scenario is written as a development bundle, a small documented container that is not part of `ENCODING.md` and lasts until the mirror format of ADR-0018 exists. All names are fictional.
+> English summary: The synthetic-election generator (ROADMAP M6, first part; ADR-0038). Outside the TCB: it depends on the TCB crates and nothing depends on it; besides workspace crates it uses only the P-256 signer and SHA-2 that `ityv-tsa` already depends on, for two simulated timestamp authorities. From a fixed seed it builds whole signed elections — genesis with every set, real hybrid keys and signatures for every device, person, module, trustee and witness, OR-proved cast records, full voting days slot by slot with arrival peaks, spoiled and returned sheets, the three progress alarms with their on-site checks and an emergency-insertion hour, closes, station counts, participation sets, receipt resolutions, the voter roll (extracts, freeze, custody receipts), every station gateway's frame logs and sessions over every device's fixed-schedule uplink frames (ADR-0041), the tally and the comparison audit (freezes, the commit, the binding checkpoint, the seed, opening references, comparisons, escalation, full comparison with a finding, hand counts), every checkpoint stamped by a government and a non-government timestamp authority — and named scenarios over them: the status ladder from `UNVERIFIED` to `PAPER_AUDITED`, two larger fictional elections, and 54 attacks and faults. The beacon round's published output, the dice record and the beacon designation are fixture data, carried in the bundle and handed to the verifier as the caller's observation. Each scenario carries its expected verifier outcome; the tests compare it with what `ityv-verify` reports, directly and through `ityv-wasm`. Output is byte-identical across runs. Each scenario is written as a development bundle, a small documented container that is not part of `ENCODING.md` and lasts until the mirror format of ADR-0018 exists. All names are fictional.
 
 ## 무엇인가
 
-`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나(와 그 변형 셋) 위의 61개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 64개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
+`cargo run --release -p ityv-sim -- [--quick] <outdir>`는 시나리오마다 번들 `<이름>.ityvb`과 목록 `index.json`을 쓴다. 검증 콘솔(`apps/ityv-console`)이 이 둘을 읽는다. `--quick`은 작은 선거 하나(와 그 변형 넷) 위의 63개(CI와 테스트용), 기본은 그것에 큰 선거 셋을 더한 66개다. `index.json`은 시나리오마다 번들 파일의 크기와 SHA3-512(`sha3`)를 적는다. 콘솔은 번들 바이트의 해시가 그 값과 같을 때만 그 시나리오의 설명을 붙인다.
 
 TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바뀌지 않는다. 시뮬레이터가 만든 장부는 검증기가 그대로 검증하고, 시나리오의 기대와 검증기의 판정이 다르면 테스트와 콘솔이 불일치로 보인다. 의존성은 워크스페이스 크레이트와, 가상의 시점확인 기관 둘(`tsa`, 정부 운영과 정부 밖)을 위한 P-256 서명과 SHA-2(`ityv-tsa`가 이미 쓰는 같은 판)뿐이다. ECDSA 서명은 RFC 6979로 결정적이고 키는 다른 키처럼 이름표와 고정 씨앗으로 정한다. 서명의 hedged 난수와 커밋먼트·증명의 난수는 `ityv-cunit`의 SHA3 카운터 생성기(`DeviceRng::for_signing`)에 입력에서 유도한 씨앗을 넣어 얻는다. 키는 이름표와 고정 씨앗(`util::SEED`)의 SHA3-512로 정한다. 그래서 두 번 돌리면 같은 바이트가 나온다(`tests/scenarios.rs`의 `bundles_are_byte_identical_across_runs`).
 
 | 모듈 | 내용 |
 |---|---|
 | `spec` | 선거를 이루는 것: 정당 챔버, 투표양식과 후보, 보고 단위, 투표소와 투표함, 하루의 사건 |
-| `catalog` | 빠른 시연 선거, 지방선거 모양, 국회의원선거 모양 |
+| `catalog` | 빠른 시연 선거(와 한빛구 보고 단위가 둘인 변형), 지방선거 모양, 국회의원선거 모양 |
 | `day` | 투표소 하루를 10분 슬롯마다: 도착 곡선(아침·저녁 정점), 교부·투입·훼손·반납, 경보를 일으키는 사건과 현장 확인, 비상 투입 |
 | `election` | genesis와 모든 집합, 키, 이벤트 생성기(검증기 테스트 세계에서 옮겨 일반화) |
 | `plan` | 한 선거의 장부 계획: genesis, 법적 승인, 열쇠 절차와 모듈 발급, 선거인명부(투표구 추출과 스냅숏, 동결, 보관 기관 셋의 영수증), 투표일(개시, 기록, 배치, 진행 기록, 현장 확인, 두 시간마다 체크포인트), 마감과 투표소 수량, 참여 집합, 수령 대조, 집계 |
@@ -29,6 +29,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | 선거 | 모양 | 규모 |
 |---|---|---|
 | `SIM-QUICK` | 두 구, 선거일 투표소 하나와 관외 투표함이 있는 사전투표소 하나, 한 시간 투표 | 방문 17, 프레임 113 |
+| `SIM-QUICK-UNITS` | `SIM-QUICK`의 변형(`catalog::quick_two_units`): 투표소와 투표함은 같고, 누리구 사전투표소의 관외 투표함(한빛구청장)을 한빛구의 둘째 보고 단위(관외 사전투표, `RU-HB-OUT`)로 따로 보고한다. 한 투표양식에 보고 단위가 둘인 가장 작은 선거로, 한 단위의 종이 보고에 다른 단위의 수를 옮겨 적는 공격에 쓴다. 두 단위의 보고는 한빛구 선관위 위원장 한 사람이 서명한다(위원장은 선관위마다 하나). 콘솔이 단위 이름을 찾도록 선거 식별자가 따로이고, 그래서 하루의 표도 `SIM-QUICK`과 다르다 | 방문 17 |
 | `SIM-LOCAL` | 지방선거 모양: 가상시의 세 구·군, 투표소 여덟(사전투표소 둘, 관외 투표함 둘), 06:00–18:00. 바닥·음수·과다 경보가 한 번씩 나고 현장 확인으로 해소되며, 한 투표소는 한 시간 동안 비상 투입구를 쓴다 | 방문 1,520, 프레임 3,048 |
 | `SIM-NATIONAL` | 국회의원선거 모양: 두 지역구, 투표소 다섯(사전투표소 하나, 관외 투표함 하나), 06:00–18:00, 과다·바닥 경보와 현장 확인 | 방문 840, 프레임 1,800 |
 
@@ -102,6 +103,8 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | `attack-unknown-event` | 공격 | `HOLD_REVIEW` | StepFailed, LedgerUnchecked |
 | `fault-missing-coverage` | 장애 | `UNVERIFIED` | 없음 |
 | `attack-paper-mismatch` | 공격 | `HOLD_REVIEW` | PaperCountMismatch |
+| `attack-count-sheet-copied` | 공격 | `HOLD_REVIEW` | PaperCountMismatch |
+| `attack-count-sheet-rewritten` | 공격 | `HOLD_REVIEW` | PaperCountRefused |
 | `attack-aggregate-mismatch` | 공격 | `HOLD_REVIEW` | AggregateMismatch |
 | `attack-receipt-unresolved` | 공격 | `HOLD_REVIEW` | TallyScopeRefused, AggregateRefused |
 | `attack-wrong-role` | 공격 | `HOLD_REVIEW` | ProgressStream, StationCountRefused |
@@ -159,6 +162,10 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 - `fault-commit-missing`: 약정 없이 시드. 시드 `Premature`.
 - `attack-commit-conflict`: 다른 주사위 기록의 둘째 약정. 둘째 약정 `Conflict`, 감사는 첫 약정으로 끝나지만 보류.
 
+종이 계수 보고(개표상황표) 시나리오:
+- `attack-count-sheet-copied`(`SIM-QUICK-UNITS`): 선거일 투표 단위(`RU-HB`, 종이 4·4·1)의 보고에 관외 사전투표 단위(`RU-HB-OUT`, 종이 1·1·0)의 후보별 수와 무효 수를 그대로 실었다. 관외 사전투표 단위 자신의 보고는 바르다. 서명은 맞으므로 받아들여지고, 그 단위의 암호 합계와 맞대면 후보 1이 적고 총수가 다르다. `RU-HB`만 `PaperCountMismatch`이고 `RU-HB-OUT`과 `RU-NR`은 `CRYPTO_TALLY_VERIFIED`로 읽힌다.
+- `attack-count-sheet-rewritten`(`SIM-QUICK`): 한빛구 단위의 바른 보고(6·4·0)가 체크포인트로 덮인 뒤, 한 시간 남짓 지나 같은 단위에 6·4를 5·5로 바꾼 둘째 보고와 그것을 덮는 체크포인트를 실었다. 둘째 보고는 `Paper: Conflict`로 받지 않아 `PaperCountRefused`이고, 대조는 첫 보고로 하므로 `PaperCountMismatch`는 없다. 두 보고 모두 장부에 남는다(ADR-0035 11항).
+
 `attack-overflow-progress`는 한 투표함의 장치가 투입 누계를 2^64 − 1장으로 서명한 하루다. 같은 투표소의 다른 투표함과 더하면 64비트를 넘으므로 `ityv-wasm`의 진행 수열은 그 칸을 `null`과 `overflow`로 쓰고, 콘솔은 '넘침'으로 보인다(트랩하지 않는다). 그 하루의 경보는 시뮬레이터가 의도한 하루와 다르므로 경보 일치 시험에서 뺀다.
 
 여러 사유가 함께 나오는 시나리오는 주입 하나가 뒤 단계에 퍼진 결과다(예: 바꿔치기한 기록이 거부되면 배치, 마감 기록 집합, 교부 등식, 집계 범위가 함께 어긋난다). 기대는 그 퍼짐까지 적는다. 테스트는 사유 집합이 정확히 같은지 본다. 또 큰 선거와 경보 시나리오는 검증기가 낸 경보(투표소·슬롯·종류)가 시뮬레이터가 그 하루에 일으키려 한 경보와 같은지, 비상 투입 투표소의 경보가 멈췄는지 본다.
@@ -192,7 +199,8 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | 53 | `TallyScopeMismatch` | `attack-tampered-record`, `attack-mirror-tampered` |
 | 54 | `AggregateRefused` | `attack-receipt-unresolved`, `attack-no-authorization` |
 | 55 | `AggregateMismatch` | `attack-tampered-record`, `attack-mirror-tampered`, `attack-aggregate-mismatch` |
-| 57 | `PaperCountMismatch` | `attack-paper-mismatch` |
+| 56 | `PaperCountRefused` | `attack-count-sheet-rewritten` |
+| 57 | `PaperCountMismatch` | `attack-paper-mismatch`, `attack-count-sheet-copied` |
 | 59 | `ReceiptResolutionRefused` | `attack-no-authorization` |
 | 60 | `LateCloseAfterScope` | `attack-late-close-after-scope` |
 | 63 | `AuditSeedRefused` | `attack-seed-grinding`, `attack-binding-backdated`, `attack-binding-unstamped`, `fault-commit-missing` |
@@ -211,7 +219,7 @@ TCB 밖이다(CONSTITUTION.md §0). 여기서 무엇이 틀려도 증거가 바�
 | 84 | `ConnectivityIncident` | `fault-roll-line-incident`, `fault-capture-mismatch` |
 | 85 | `ConnectivityIncidentRefused` | `attack-incident-forged` |
 
-아직 시나리오가 닿지 않은 사유(86개 중 43개): 0 `PaperRecordMismatch`, 1 `AttestedMismatch`, 2 `SpoilEnvelopeMismatch`, 3 `ModuleCounterGap`, 4 `OpenBatches`, 5 `VisitBounds`, 6 `FallbackUndeclared`, 9 `LateCloseDiffers`, 11 `OpeningNonZero`, 12 `AbsenteePaperNonZero`, 13 `StickerVisitMismatch`, 14 `EnvelopeMismatch`, 15 `IssuanceMissing`, 16 `CustodyCountMismatch`, 17 `CustodySealUnexplained`, 18 `CustodyIncomplete`, 19 `ImprintAudit`, 21 `ParticipationMismatch`, 22 `LegalDecisionPending`, 25 `SplitView`, 27 `BoxUnderReview`, 28 `SealBroken`, 29 `IssuanceStockMismatch`, 31 `CarryOut`, 37 `CloseMissing`(완전성 미달이며 장부 상태의 보류가 아니다), 40 `AuthorizationInvalid`, 45 `DisputeRefused`, 46 `ChallengeRejected`, 47 `OpeningMismatch`, 48 `ParticipationSetInvalid`, 50 `KeyProvisioningInvalid`, 56 `PaperCountRefused`, 58 `TallyEffectRefused`, 61 `AuditFreezeRefused`, 62 `AuditFrameMismatch`, 65 `SampleOpeningMismatch`(열람 권한 있는 검증기에만 나온다), 68 `AuditFindingRefused`, 69 `HandCountRefused`, 71 `AuditSampleFailed`(일어나지 않을 일), 75 `RollCustodyMismatch`, 76 `ContestedCheckinInvalid`, 77 `ContestedLabelReused`(둘 다 열람 권한 있는 검증기에만 나온다), 78 `RollIncomplete`. 마감 수량·인계·각인·검증 공개·법적 결정과 감사 이벤트의 변조 생성기를 더하면 닿는다(M6 다음 단계). `SplitView`(25)는 검증기의 분기 감시 단계(§14 10항)가 아직 없어 만들 수 없다.
+아직 시나리오가 닿지 않은 사유(86개 중 42개): 0 `PaperRecordMismatch`, 1 `AttestedMismatch`, 2 `SpoilEnvelopeMismatch`, 3 `ModuleCounterGap`, 4 `OpenBatches`, 5 `VisitBounds`, 6 `FallbackUndeclared`, 9 `LateCloseDiffers`, 11 `OpeningNonZero`, 12 `AbsenteePaperNonZero`, 13 `StickerVisitMismatch`, 14 `EnvelopeMismatch`, 15 `IssuanceMissing`, 16 `CustodyCountMismatch`, 17 `CustodySealUnexplained`, 18 `CustodyIncomplete`, 19 `ImprintAudit`, 21 `ParticipationMismatch`, 22 `LegalDecisionPending`, 25 `SplitView`, 27 `BoxUnderReview`, 28 `SealBroken`, 29 `IssuanceStockMismatch`, 31 `CarryOut`, 37 `CloseMissing`(완전성 미달이며 장부 상태의 보류가 아니다), 40 `AuthorizationInvalid`, 45 `DisputeRefused`, 46 `ChallengeRejected`, 47 `OpeningMismatch`, 48 `ParticipationSetInvalid`, 50 `KeyProvisioningInvalid`, 58 `TallyEffectRefused`, 61 `AuditFreezeRefused`, 62 `AuditFrameMismatch`, 65 `SampleOpeningMismatch`(열람 권한 있는 검증기에만 나온다), 68 `AuditFindingRefused`, 69 `HandCountRefused`, 71 `AuditSampleFailed`(일어나지 않을 일), 75 `RollCustodyMismatch`, 76 `ContestedCheckinInvalid`, 77 `ContestedLabelReused`(둘 다 열람 권한 있는 검증기에만 나온다), 78 `RollIncomplete`. 마감 수량·인계·각인·검증 공개·법적 결정과 감사 이벤트의 변조 생성기를 더하면 닿는다(M6 다음 단계). `SplitView`(25)는 검증기의 분기 감시 단계(§14 10항)가 아직 없어 만들 수 없다.
 
 ## 번들 형식
 
@@ -254,7 +262,7 @@ sets    = list(boxes) ‖ list(stations) ‖ list(progress_policies) ‖ list(re
 
 ## 검증
 
-- `cargo test -p ityv-sim`: 빠른 시나리오 61개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다.
+- `cargo test -p ityv-sim`: 빠른 시나리오 63개마다 기대 상태와 보류 사유가 `ityv-verify`의 판정과 같고, `ityv-wasm`이 같은 번들에서 같은 상태와 사유를 보고하며, 검증기가 낸 경보가 시뮬레이터의 하루와 같다. 번들은 실행마다 같은 바이트이고 새로 만든 선거도 같은 장부를 깐다. WASM 읽기는 번들이 아닌 바이트, 잘린 번들, 다른 핀을 거부하고, 보고서의 기록마다 포함 증명이 성립한다. 종이 계수 보고 두 시나리오는 글이 말하는 것을 따로 본다: 옮겨 적은 보고는 그 단위만 보류하고 수를 빌려 준 단위는 맞으며, 둘째 보고는 충돌로 거부되고 두 보고가 모두 장부에 있으며 대조는 첫 보고로 한다.
 - `tests/robustness.rs`(`ityv-wasm`의 견고성): 모든 보고서가 올바른 JSON이다. 빠른 번들의 비트를 뒤집고(56번) 자르고 바이트를 덧붙여도 패닉하지 않는다. 적대적인 시나리오 이름(HTML, 따옴표, 제어 문자, U+2028/2029)이 한 문자열로 이스케이프된다. 두 투표함이 같은 칸에 2^63을, 한 투표함이 u64::MAX를 적어 합이 넘쳐도 트랩 없이 `overflow`로 보고되고 상태는 `ityv-verify`와 같다. 보고 단위가 장부보다 높게 읽히는 것은 장부의 보류가 모두 다른 단위의 투표함·집계·투표양식 감사 탓일 때뿐이고, 단위가 `PAPER_AUDITED`로 읽히는 것은 그 투표양식의 감사가 끝났을 때뿐이다. 시나리오에서 나오는 모든 집계·감사 거부가 검증기가 공개한 표(`TallyEvent::hold`, `AuditEvent::hold`)의 보류로 장부에 남는다. 콘솔의 보류 이름 표(`apps/ityv-console/src/vocab.ts`)가 `ityv-state`의 이름과 같다.
 - `tests/audit.rs`: 감사 시나리오마다 검증기의 감사 단계가 시나리오가 말한 것(라운드, 확대, 전수 대조와 발견, 수검표, 보관 보류, 공격마다의 거부 `Late`·`Backdated`·`Premature`·`Conflict`·`Unstamped`, 고정 체크포인트와 공표의 간격)을 보인다. 비콘 관찰 없이는 집계 상태, 제한 열기를 넘기면 모두 재구성. 콘솔 보고서에 제한 열기의 바이트·cast id·난수가 없다.
 - `tests/uplink.rs`: 깨끗한 장부마다 모든 게이트웨이의 세션을 받고(`final` 세션에 참관인 캡처 서명 둘, 슬롯마다 기준값의 프레임과 스캐너 마감 슬롯의 따라잡기 64개, 봉인된 덩어리는 패키지의 것뿐, 모든 장치 이벤트 포함), 투표 중에는 포함을 묻지 않으며, 연결 시나리오마다 검증기가 주입한 것(목록의 어긴 규칙, 세션 발견, 프레임·객체 발견, 링크 밖 이벤트, 되찾은 손실의 무보류, 사건과 전수 대조 대상, 받지 않은 사건)을 보인다.
