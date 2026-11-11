@@ -114,3 +114,9 @@
 1. **시뮬레이터.** 닫힌 배치를 다음 창의 첫 슬롯에서 무엇보다 먼저 한 번 더 보낸다(둘째 사본, PROTOCOL §5.8 4항). 마감 슬롯에 나간 배치는 마감 재전송이 둘째 사본이다. 기대 결과는 하나도 바뀌지 않았다. 장애 `WitnessedMidday`(투표 중의 입회 재전송 묶음)를 더했다.
 2. **시나리오 1개.** `attack-uplink-witnessed-midday`(81). 빠른 묶음 61개, 전체 64개. 나머지 기대 결과는 그대로다. 무시 시험 `no_cut_of_an_honest_ledger_holds_a_link`는 정직한 장부를 프레임마다 잘라 연결 보류가 없음을 본다.
 3. **콘솔.** 링크 판정 어휘에 `BeforeSwap`·`Resend`를 더하고 `KindOrder`·`Batch`·`Package`의 설명을 고쳤다(25개).
+
+## 개정 7 (2026-11-11, 개표상황표 두 시나리오, 법령 부속서 개정안 16)
+
+1. **시뮬레이터.** 한 투표양식이 보고 단위 둘로 세어지는 가장 작은 선거 `SIM-QUICK-UNITS`(`catalog::quick_two_units`)를 더했다. SIM-QUICK에서 사전투표소의 관외 투표함(한빛구청장)을 `RU-HB-OUT`(관외 사전투표, PROTOCOL §4.1)으로 따로 세고, 선거일 투표함은 `RU-HB`에 둔다. 두 단위 모두 한빛구 위원회가 보고하므로 `Election::build`는 위원회마다 위원장 한 명을 두고 명부에 한 번만 적는다. 기존 선거는 위원회마다 단위가 하나여서 위원장, 명부, 묶음이 그대로다.
+2. **시나리오 2개.** `attack-count-sheet-copied`는 `RU-HB`의 종이 계수 보고에 `RU-HB-OUT`의 후보별 득표와 무효 수를 그대로 옮겨 적는다. `HOLD_REVIEW`(`PaperCountMismatch`)만 걸린다. 수를 빌려 준 단위와 누리구 단위는 `CRYPTO_TALLY_VERIFIED`다. `attack-count-sheet-rewritten`은 바른 보고를 체크포인트가 덮은 뒤 같은 단위에 한 표를 옮긴 둘째 보고를 싣는다. `HOLD_REVIEW`(`PaperCountRefused`, `Paper: Conflict`, ADR-0035 11항)만 걸리고, 대조는 처음 보고로 하므로 `PaperCountMismatch`는 없다. 두 보고 모두 장부에 남는다. 둘 다 빠른 묶음이다. 빠른 묶음 63개, 전체 66개. 기존 64개 묶음은 바이트가 같다. 검증기는 바뀌지 않았다.
+3. **콘솔.** 어휘는 그대로다. 받지 않은 이벤트 카드는 다른 집계 거부처럼 `Paper: Conflict`를 원 코드로 보인다.
