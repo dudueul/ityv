@@ -159,6 +159,32 @@ pub fn quick(events: Vec<DayEvent>) -> ElectionSpec {
     }
 }
 
+/// The quick election with 한빛구청장 counted in two reporting units:
+/// the election-day station's box, and the early-voting station's
+/// out-of-district box as a unit of its own (관외 사전투표, as the
+/// genesis' reporting units may be, PROTOCOL.md §4.1), both reported by
+/// the 한빛구 commission. The smallest election in which one ballot style
+/// has two reporting units, so that one unit's paper count can carry the
+/// other's numbers. It has its own election identifier, so that the
+/// console finds its units' names.
+#[must_use]
+pub fn quick_two_units() -> ElectionSpec {
+    let mut spec = quick(Vec::new());
+    spec.election_id = "SIM-QUICK-UNITS";
+    spec.label = "가상시 구청장 선거 (빠른 시연, 한빛구 보고 단위 둘)";
+    spec.units = vec![
+        unit("RU-HB", "가상시 한빛구 선거일 투표", "NEC-HB"),
+        unit("RU-HB-OUT", "가상시 한빛구 관외 사전투표", "NEC-HB"),
+        unit("RU-NR", "가상시 누리구", "NEC-NR"),
+    ];
+    for b in spec.stations.iter_mut().flat_map(|s| s.boxes.iter_mut()) {
+        if b.id == "BOX-NR-P-OUT" {
+            b.unit = "RU-HB-OUT";
+        }
+    }
+    spec
+}
+
 /// The 지방선거-shaped demonstration: three 구·군, eight stations, two of
 /// them early-voting with out-of-district boxes, a full day from 06:00 to
 /// 18:00. One station each raises a floor, a negative and an excess
