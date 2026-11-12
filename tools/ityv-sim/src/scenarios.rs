@@ -142,6 +142,13 @@ fn quick_faint_election() -> &'static Election {
     })
 }
 
+/// The quick election with 한빛구청장 in two reporting units
+/// ([`catalog::quick_two_units`]).
+fn quick_two_unit_election() -> &'static Election {
+    static E: OnceLock<&'static Election> = OnceLock::new();
+    E.get_or_init(|| leak(Election::build(catalog::quick_two_units())))
+}
+
 fn local_election() -> &'static Election {
     static E: OnceLock<&'static Election> = OnceLock::new();
     E.get_or_init(|| leak(Election::build(catalog::local())))
@@ -942,6 +949,73 @@ fn quick_scenarios() -> Vec<Scenario> {
                 "그 후보의 종이 표가 확인된 기계 수보다 적어 그 단위가 HOLD_REVIEW(PaperCountMismatch). 부정의 증거 자체는 아니며 감사가 원인을 찾는다.",
             ),
             hold(&[H::PaperCountMismatch]),
+            Vec::new(),
+        ));
+    }
+    // A unit's paper count that carries another unit's numbers (a count
+    // tally sheet entered under the wrong unit, or copied on purpose).
+    {
+        let e2 = quick_two_unit_election();
+        let mut bld = Builder::new(e2, Until::Tallied);
+        let unit = |id: &str| {
+            bld.plan
+                .marks
+                .tally
+                .iter()
+                .find(|t| t.0.unit == id)
+                .unwrap()
+                .clone()
+        };
+        let (into, _, _, paper_at) = unit("RU-HB");
+        let (from, _, _, _) = unit("RU-HB-OUT");
+        let (votes, invalid) = e2.paper_truth(from.style, from.unit);
+        let ready = bld.plan.marks.ready;
+        bld.plan.steps[paper_at] = Step::event(
+            SCHEMA_WITNESSED_EVENT,
+            e2.paper(into.style, into.unit, &votes, invalid, ready + 3),
+        );
+        out.push(bld.scenario(
+            "attack-count-sheet-copied",
+            q,
+            a,
+            (
+                "다른 단위의 수를 옮겨 적은 종이 보고",
+                "이 선거의 한빛구청장 투표양식은 보고 단위가 둘이다: 한빛초등학교 체육관의 선거일 투표와, 누리구 사전투표소 관외 투표함의 관외 사전투표. 선거일 투표 단위의 종이 계수 보고(개표상황표)에 관외 사전투표 단위의 후보별 득표와 무효 수를 그대로 옮겨 적었고, 위원장과 참관인 둘이 서명했다. 관외 사전투표 단위 자신의 보고는 바르다. 두 보고를 더하면 관외 사전투표는 두 번 세어지고 선거일 투표의 실제 결과는 사라진다.",
+                "공개원장만 있으면 누구나 곧바로 잡는다. 종이 보고는 단위마다 그 단위의 암호 합계와 맞대므로, 옮겨 적은 수는 선거일 투표 단위의 확인된 기계 수보다 적고 총수도 다르다: 그 단위가 HOLD_REVIEW(PaperCountMismatch). 수를 빌려 준 관외 사전투표 단위와 누리구 단위는 맞는다. 보류는 사람이 살펴보라는 신호일 뿐 부정의 증거가 아니다(옮겨 적는 실수일 수도 있고, 감사가 원인을 찾는다). 법적 결과는 여전히 종이 투표지와 사람의 계수(수검표)이며, 검증기는 그것을 바꾸지 않는다.",
+            ),
+            hold(&[H::PaperCountMismatch]),
+            Vec::new(),
+        ));
+    }
+    // A second, different paper count for a unit, laid after the first was
+    // checkpointed (a silent "correction" or a forgery after the fact).
+    {
+        let mut bld = Builder::new(e, Until::Tallied);
+        let u = bld.plan.marks.tally[0].0;
+        let (mut votes, invalid) = e.paper_truth(u.style, u.unit);
+        let top = (0..votes.len()).max_by_key(|i| votes[*i]).unwrap();
+        let other = (top + 1) % votes.len();
+        votes[top] -= 1;
+        votes[other] += 1;
+        let later = bld.plan.marks.ready + 8;
+        bld.plan.steps.push(Step::event(
+            SCHEMA_WITNESSED_EVENT,
+            e.paper(u.style, u.unit, &votes, invalid, later),
+        ));
+        bld.plan.steps.push(Step::Checkpoint {
+            bucket: later + 1,
+            stamps: 2,
+        });
+        out.push(bld.scenario(
+            "attack-count-sheet-rewritten",
+            q,
+            a,
+            (
+                "나중에 다른 수로 다시 낸 종이 보고",
+                "한빛구청장 투표양식에서 한빛구 단위의 바른 종이 계수 보고(개표상황표)가 실리고 체크포인트가 그것을 덮은 뒤, 같은 단위에 가장 많이 받은 후보의 한 표를 다른 후보로 옮긴 둘째 보고를 실었다. 위원장과 참관인 둘의 서명은 맞다. 앞 보고를 조용히 '정정'하거나 바꿔치려는 것이다.",
+                "공개원장만 있으면 누구나 곧바로 본다. 한 단위의 종이 보고는 처음 받은 것이 답이고, 같은 단위에 다른 본문이 오면 충돌(Conflict)로 받지 않는다: 그 단위가 HOLD_REVIEW(PaperCountRefused). 두 보고는 모두 장부에 남고(둘째 보고는 받지 않은 이벤트 목록에 있다) 뒤의 보고가 앞의 것을 지우거나 덮지 못한다. 대조는 처음 보고로 하며 그것은 기계 수와 맞으므로 PaperCountMismatch는 없다. 보류는 사람이 두 보고를 맞대어 가리라는 신호일 뿐 부정의 증거가 아니다. 법적 결과는 여전히 종이 투표지와 사람의 계수(수검표)이며, 검증기는 그것을 바꾸지 않는다.",
+            ),
+            hold(&[H::PaperCountRefused]),
             Vec::new(),
         ));
     }

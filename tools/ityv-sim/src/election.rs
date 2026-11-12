@@ -255,7 +255,8 @@ pub struct Election {
     /// Global people (provisioning and ceremony observers, custodian,
     /// court, chairs).
     pub observers: [Person; 2],
-    /// Each unit's chair.
+    /// Each unit's chair: the chair of its commission (units of one
+    /// commission share one).
     pub chairs: Vec<(&'static str, Person)>,
     /// The two auditors (of two organisations) who sign sample comparisons
     /// and audit findings.
@@ -547,21 +548,24 @@ impl Election {
                 key: key("roster/obs-b"),
             },
         ];
-        let chairs: Vec<(&'static str, Person)> = spec
-            .units
-            .iter()
-            .map(|u| {
-                (
-                    u.id,
-                    Person {
+        // One chair per district commission, named after its first unit:
+        // the units a commission reports share it.
+        let mut chairs: Vec<(&'static str, Person)> = Vec::new();
+        for u in &spec.units {
+            let chair = chairs
+                .iter()
+                .find(|(_, p)| p.org == u.commission)
+                .map_or_else(
+                    || Person {
                         id: leak_str(format!("chair-{}", u.id)),
                         role: EventRole::Chair,
                         org: u.commission,
                         key: key(&format!("roster/chair-{}", u.id)),
                     },
-                )
-            })
-            .collect();
+                    |(_, p)| p.clone(),
+                );
+            chairs.push((u.id, chair));
+        }
         let auditors = [
             Person {
                 id: "aud-1",
@@ -678,8 +682,11 @@ impl Election {
         for p in &self.observers {
             add(p, RosterRole::Observer, None);
         }
-        for (_, p) in &self.chairs {
-            add(p, RosterRole::Chair, None);
+        for (i, (_, p)) in self.chairs.iter().enumerate() {
+            // A commission's chair once, however many units it reports.
+            if self.chairs[..i].iter().all(|(_, q)| q.id != p.id) {
+                add(p, RosterRole::Chair, None);
+            }
         }
         for p in &self.auditors {
             add(p, RosterRole::Auditor, None);

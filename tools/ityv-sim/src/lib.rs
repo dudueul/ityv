@@ -13,7 +13,7 @@
 //! |---|---|
 //! | [`spec`] | What an election is made of (fictional names) |
 //! | [`audit`] | The comparison audit after the tally, as plan steps |
-//! | [`catalog`] | The quick, 지방선거-shaped and 국회의원선거-shaped elections |
+//! | [`catalog`] | The quick (and its two-unit variant), 지방선거-shaped and 국회의원선거-shaped elections |
 //! | [`day`] | One station's day, slot by slot, with alarms and the emergency slot |
 //! | [`election`] | The signed genesis and every event builder |
 //! | [`plan`] | The ledger plan of a whole election |
