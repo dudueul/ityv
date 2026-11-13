@@ -1,16 +1,16 @@
 # 명부 확인은 넓히고 참여 기록은 닫아라
 
-노스캐롤라이나처럼 선거인명부 전체를 누구나 내려받게 하는 방식은 한국 입법 제안서에 넣지 않는 것이 맞다. 노스캐롤라이나는 미국에서도 가장 열린 끝이다. 계정·수수료·목적 확인 없이 매주 모든 등록자의 이름·주소·전화번호·인종·출생연도와 10년치 개인별 투표 여부·투표 방법을 올리고, 내려받은 뒤의 이용은 묻지 않는다. 미국 50개 주 가운데 36개 주가 어떤 형태로든 누구나에게 명부 파일을 주지만, 이렇게 익명·무료로 주는 곳은 오하이오 정도이고 나머지는 수수료·서약·거주 요건·목적 제한·인터넷 게시 금지를 붙인다. 실증 근거를 보면 공개 명부의 이익(연구, 언론, 명부 품질 측정)은 대부분 제한된 접근으로도 얻을 수 있었고, 피해(조지아의 36만여 명 대량 이의, 재게시 사이트, 2억 건 가까운 유출, 등록 철회)는 대량 내려받기와 조잡한 대조, 개인별 참여 이력에서 나왔다. 유럽 15개국은 명부를 '확인'에는 열지만 누구나 내려받게 올리는 나라는 없고, 누가 투표했는지는 대부분 당국과 법원 안에 둔다. 베니스위원회도 "실제 투표한 사람의 명단은 공표하지 말아야 한다"고 정한다. 한국 현행법은 3일간의 대면 열람(제40조)과 지역구 후보자 사본(제46조)만 두어 명부 자체는 이미 유럽 주류 안에 있다. 비어 있는 것은 사본 파기 의무, 인터넷 게시 금지, 선거 뒤 본인 참여 확인, 연구·감사 접근이다. 그래서 제안서에 공개 범위를 추가하되 원문 공개가 아니라 여섯 단계의 접근으로 쓰기를 권한다. 공개 집계, 영수증 없는 본인 확인, 복제 없는 대면 열람, 줄이고 추적하고 파기하는 후보자 사본, 반출 없는 감사·연구 열람, 법원 접근이 그것이며, 특정인의 투표 여부는 본인과 법원 외에 누구에게도 주지 않는다. 이 구조는 개정안 14의 해시 root·다기관 보관·이의 투표가 맡은 기계적 검증 위에 사람이 직접 볼 수 있는 확인을 얹는다. 함께 고칠 점이 하나 있다. 개정안 14 제44조의3제1항제4호가 전제한 "선거인명부 사본을 교부받을 수 있는 정당"은 현행법에 없다. 현행 제46조는 정당이 아니라 지역구 후보자에게 사본을 준다.
+노스캐롤라이나처럼 선거인명부 전체를 누구나 내려받게 하는 방식은 한국 입법 제안서에 넣지 않는 것이 맞다. 노스캐롤라이나는 미국에서도 가장 열린 끝이다. 계정·수수료·목적 확인 없이 매주 모든 등록자의 이름·주소·전화번호·인종·출생연도와 10년치 개인별 투표 여부·투표 방법을 올리고, 내려받은 뒤의 이용은 묻지 않는다. 미국 50개 주와 D.C. 가운데 36개 관할이 어떤 형태로든 누구나에게 명부 파일을 주지만, 이렇게 익명·무료로 주는 곳은 오하이오 정도이고 나머지는 수수료·서약·거주 요건·목적 제한·인터넷 게시 금지를 붙인다. 실증 근거를 보면 공개 명부의 이익(연구, 언론, 명부 품질 측정)은 대부분 제한된 접근으로도 얻을 수 있었고, 피해(조지아의 36만여 명 대량 이의, 재게시 사이트, 2억 건 가까운 유출, 등록 철회)는 대량 내려받기와 조잡한 대조, 개인별 참여 이력에서 나왔다. 유럽 15개국은 명부를 '확인'에는 열지만 누구나 내려받게 올리는 나라는 없고, 누가 투표했는지는 대부분 당국과 법원 안에 둔다. 베니스위원회도 "실제 투표한 사람의 명단은 공표하지 말아야 한다"고 정한다. 한국 현행법은 3일간의 대면 열람(제40조)과 지역구 후보자 사본(제46조)만 두어 명부 자체는 이미 유럽 주류 안에 있다. 비어 있는 것은 사본 파기 의무, 인터넷 게시 금지, 선거 뒤 본인 참여 확인, 연구·감사 접근이다. 그래서 제안서에 공개 범위를 추가하되 원문 공개가 아니라 여섯 단계의 접근으로 쓰기를 권한다. 공개 집계, 영수증 없는 본인 확인, 복제 없는 대면 열람, 줄이고 추적하고 파기하는 후보자 사본, 반출 없는 감사·연구 열람, 법원 접근이 그것이며, 특정인의 투표 여부는 본인과 법원 외에 누구에게도 주지 않는다. 이 구조는 개정안 14의 해시 root·다기관 보관·이의 투표가 맡은 기계적 검증 위에 사람이 직접 볼 수 있는 확인을 얹는다. 함께 고칠 점이 하나 있다. 개정안 14 제44조의3제1항제4호가 전제한 "선거인명부 사본을 교부받을 수 있는 정당"은 현행법에 없다. 현행 제46조는 정당이 아니라 지역구 후보자에게 사본을 준다.
 
 ## 미국 50개 주: 계정 없이 공짜로 받는 주는 노스캐롤라이나와 오하이오뿐이다
 
-미국에는 명부 공개에 관한 연방의 단일 규칙이 없다. 2002년 Help America Vote Act(HAVA)는 주마다 하나의 전산 명부를 두게 하고 무단 접근을 막는 보안 조치를 요구했지만 공개 조항은 두지 않았다 ([52 U.S.C. § 21083](https://www.law.cornell.edu/uscode/text/52/21083)). 그래서 50개 주와 D.C.가 저마다 정한다. 조사 노트의 주별 1차 자료를 이 보고서가 분류하면 **36개 주가 어떤 형태로든 누구나에게 주 전체 파일을 준다**. 다만 대부분은 수수료, 비상업 서약, 정치·선거 목적 진술, 인터넷 게시 금지 가운데 하나 이상을 붙인다. 사우스캐롤라이나·오클라호마·메릴랜드·미네소타 4개 주는 자기 주 거주자나 등록 유권자에게만 준다. 버지니아·켄터키·일리노이·인디애나(전체 파일)·노스다코타·와이오밍·하와이(이름·투표구·상태 외)와 매사추세츠·뉴햄프셔(주 전체 파일) 9개 주는 정당·후보·정부 같은 정치 행위자에게만 준다. 뉴저지는 카운티가 신청한 유권자에게 주며 주 단위 경로는 확인되지 않았다. 계정도 수수료도 목적 확인도 없이 매주 익명으로 내려받게 하는 주는 **노스캐롤라이나와 오하이오 둘뿐이다** ([NCSBE](https://www.ncsbe.gov/results-data/voter-registration-data); [Demos, Ohio](https://www.demos.org/sites/default/files/2023-11/Ohio%20-%20Excerpt%20-%20Protecting%20Voter%20Registration_1.pdf)). 미시시피(가입), 플로리다(월별 요청), 사우스다코타(짧은 양식과 12시간짜리 링크), 워싱턴(동의 뒤 승인 링크), 오클라호마(자격자 계정)는 무료이지만 한 단계를 거치게 한다.
+미국에는 명부 공개에 관한 연방의 단일 규칙이 없다. 2002년 Help America Vote Act(HAVA)는 주마다 하나의 전산 명부를 두게 하고 무단 접근을 막는 보안 조치를 요구했지만 공개 조항은 두지 않았다 ([52 U.S.C. § 21083](https://www.law.cornell.edu/uscode/text/52/21083)). 그래서 50개 주와 D.C.가 저마다 정한다. 주별 1차 자료를 다시 확인해 분류하면(주별 상세는 [`us-states.md`](us-states.md)) **36개 관할이 어떤 형태로든 누구나에게 주 전체 파일을 준다**. 다만 대부분은 수수료, 비상업 서약, 정치·선거 목적 진술, 인터넷 게시 금지 가운데 하나 이상을 붙인다. 하와이(이름·투표구·상태만), 일리노이(번지를 뺀 공개판), 인디애나(생년월일·이력을 뺀 사본), 메인(2025년부터 선거법 준수 감시 목적의 구매) 4개 주는 누구나에게 축소본을 주고 전체본은 정치 행위자에게만 준다. 메릴랜드·미네소타·오클라호마·사우스캐롤라이나와 뉴저지(카운티 기준) 5개 주는 자기 주 거주자나 등록 유권자에게만 준다. 버지니아·켄터키·노스다코타·와이오밍과 매사추세츠·뉴햄프셔(주 전체 파일) 6개 주는 정당·후보 같은 정치 행위자에게만 준다. 계정도 수수료도 목적 확인도 없이 매주 익명으로 내려받게 하는 주는 **노스캐롤라이나와 오하이오 둘뿐이다** ([NCSBE](https://www.ncsbe.gov/results-data/voter-registration-data); [Demos, Ohio](https://www.demos.org/sites/default/files/2023-11/Ohio%20-%20Excerpt%20-%20Protecting%20Voter%20Registration_1.pdf)). 오하이오는 2023년 자료에 근거하며, 현행 내려받기 페이지는 자동 접근이 막혀 확인하지 못했다. 카운티 단위에서는 네바다 클라크 카운티와 오하이오 프랭클린 카운티도 계정 없이 무료로 올린다. D.C.(요청), 뉴욕(선거 목적 진술), 미시시피(가입), 플로리다(월별 요청), 사우스다코타(짧은 양식과 12시간짜리 링크), 워싱턴(동의 뒤 승인 링크), 오클라호마(자격자 계정)는 무료이지만 한 단계를 거치게 한다.
 
-항목을 보면 사회보장번호(SSN)와 운전면허번호를 공개 파일에 넣는 주는 없다. 이 선은 *Greidinger v. Davis*(4th Cir. 1993)가 투표 등록의 조건으로 SSN을 공개하는 것을 투표권에 대한 "intolerable burden"으로 본 뒤 굳어졌다 ([EPIC archive](https://archive.epic.org/privacy/ssn/greidinger.html)). 갈림길은 생년월일이다. 텍사스·오클라호마·사우스캐롤라이나·플로리다·펜실베이니아·오하이오·아이오와·네바다는 전체 생년월일을 주고, 캘리포니아는 목적 심사를 통과한 신청자에게만 준다. 반대로 코네티컷은 2026년 Public Act 26-1 § 96으로 생일의 월·일을 비공개로 돌렸고 ([CT SOTS](https://portal.ct.gov/sots/election-services/election-services/centralized-voter-registration-information---voter-privacy-program)), 워싱턴은 2023년 출생연도로 바꿨으며 ([RCW 29A.08.710](https://app.leg.wa.gov/RCW/default.aspx?cite=29A.08.710)), 일리노이는 2018년부터 나이만 준다. 노스캐롤라이나도 생년월일은 주법상 비밀이다. 참여 이력, 곧 누가 어느 선거에 투표했는지는 거의 모든 주가 준다. 투표 방법(당일·조기·우편·잠정)까지 주는 곳은 노스캐롤라이나·텍사스·오클라호마·델라웨어·위스콘신·캘리포니아·유타다. 오리건은 선거 기간에 유권자별 투표지 회송 여부를 매 영업일 갱신해 준다 ([ORS 247.948](https://www.oregonlegislature.gov/bills_laws/ors/ors247.html)). 버지니아는 일반인에게 명부를 주지 않으면서도 '투표한 사람 목록'은 준다 ([VA ELECT](https://www.elections.virginia.gov/candidatepac-info/client-services)).
+항목을 보면 사회보장번호(SSN)와 운전면허번호를 공개 파일에 넣는 주는 없다. 이 선은 *Greidinger v. Davis*(4th Cir. 1993)가 투표 등록의 조건으로 SSN을 공개하는 것을 투표권에 대한 "intolerable burden"으로 본 뒤 굳어졌다 ([EPIC archive](https://archive.epic.org/privacy/ssn/greidinger.html)). 갈림길은 생년월일이다. 텍사스·오클라호마·사우스캐롤라이나·플로리다·펜실베이니아·오하이오·아이오와·네바다(카운티 사본)·웨스트버지니아·캔자스(2차 자료)와, 2024년 8월 전체 생년월일을 되살린 로드아일랜드는 전체 생년월일을 준다. 캘리포니아는 목적 심사를 통과한 신청자에게만, 버지니아는 정치 행위자용 파일과 '투표한 사람 목록'에만 전체 생년월일을 넣는다. 반대로 코네티컷은 2026년 Public Act 26-1 § 96으로 생일의 월·일을 비공개로 돌렸고 ([CT SOTS](https://portal.ct.gov/sots/election-services/election-services/centralized-voter-registration-information---voter-privacy-program)), 워싱턴은 2023년 출생연도로 바꿨으며 ([RCW 29A.08.710](https://app.leg.wa.gov/RCW/default.aspx?cite=29A.08.710)), 네브래스카는 2022년 출생연도로 바꿨고, 일리노이·아이다호·루이지애나는 나이만, 유타는 2026년부터 연령대만 준다. 노스캐롤라이나도 생년월일은 주법상 비밀이다. 참여 이력, 곧 누가 어느 선거에 투표했는지는 거의 모든 주가 준다. 투표 방법(당일·조기·우편·잠정)까지 주는 곳은 노스캐롤라이나·텍사스·오클라호마·델라웨어·위스콘신·캘리포니아·코네티컷·플로리다·메릴랜드·미네소타·뉴멕시코·사우스다코타·버지니아·네바다(클라크 카운티)·유타(선거 기간 보고서)의 15개 관할이다. 오리건은 선거 기간에 유권자별 투표지 회송 여부를 매 영업일 갱신해 준다 ([ORS 247.948](https://www.oregonlegislature.gov/bills_laws/ors/ors247.html)). 버지니아는 일반인에게 명부를 주지 않으면서도, 위협·압박 없이 투표 참여를 독려하는 우편에 쓸 목적이면 지난 4년의 '투표한 사람 목록'을 준다 ([Va. Code § 24.2-406](https://law.lis.virginia.gov/vacode/title24.2/chapter4/section24.2-406/)).
 
 이용 제한은 상업 이용 금지가 가장 흔하다. 텍사스는 비상업 서약을 공증받게 하고 위반을 A급 경범죄로 벌한다 ([TX Form 24-1](https://www.sos.texas.gov/elections/forms/pol-sub/24-1f.pdf)). 2020년대에 다툼이 된 것은 **인터넷 재게시 금지**다. 펜실베이니아는 규칙으로 온라인 게시를 막고 위반을 최대 6,000달러 또는 3년으로 벌한다 ([WITF](https://www.witf.org/2026/04/24/federal-judge-sides-with-pa-over-election-integrity-group-on-use-of-public-voter-registration-data/)). 애리조나는 상업 이용과 온라인 게시를 6급 중죄로 정하고 ([A.R.S. § 16-168](https://www.azleg.gov/ars/16/00168.htm)), 네브래스카는 인터넷 게시 금지 서약을 거짓으로 한 사람을 IV급 중죄로 벌하며 ([Neb. Rev. Stat. 32-330](https://nebraskalegislature.gov/laws/statutes.php?statute=32-330)), 미네소타는 2024년부터 검색 가능한 형태의 게시와 재판매를 금한다 ([Minn. Stat. 201.091](https://www.revisor.mn.gov/statutes/cite/201.091)). 반대편에는 노스캐롤라이나·아칸소·위스콘신·오하이오·콜로라도가 있다. 위스콘신 선관위는 "Wisconsin law does not place any restrictions on the use of data obtained through this website"라고 안내한다 ([Badger Voters FAQ](https://badgervoters.wi.gov/faq)). 집행 수단도 있다. 뉴햄프셔는 오용을 잡으려고 가짜 항목을 심고 ([RSA 654:31](https://gc.nh.gov/rsa/html/LXIII/654/654-31.htm)), 아이오와는 수령자의 이름·주소·전화를 기록해 그 기록을 공개하며 ([Iowa Code 48A.38](https://www.legis.iowa.gov/docs/code/2025/48A.38.pdf)), 메릴랜드는 명부로 특정 선거에서 유권자의 행동을 조사하는 것을 금한다 ([MD SBE](https://elections.maryland.gov/voter_registration/data.html)).
 
-위험에 처한 사람은 주소 비밀 프로그램(ACP) 참여자를 파일에서 빼는 방식으로 보호한다. 이 방식은 거의 모든 주에 있다. 일반 유권자가 스스로 비공개를 고르는 길은 드물다. 네바다는 누구나 서면 요청으로 주소·전화를 빼게 하고 ([NRS 293.558](https://www.leg.state.nv.us/nrs/nrs-293.html)), 콜로라도는 위해 우려를 스스로 밝히고 5달러를 내면 '비밀 유권자'가 되게 한다 ([CO SOS FAQ](https://www.coloradosos.gov/pubs/elections/FAQs/VoterRegistrationData.html)). 유타는 자연 실험을 남겼다. 2023~2026년 이유 없이 비공개를 고르게 하자 비공개 약 100만 건, 공개 약 100만 건, 보류 29만 5천 건이 되었다. 의회는 S.B. 153으로 2026년 5월 25일 대부분을 다시 공개로 돌리고 보호를 좁은 위험군에만 남겼다 ([KSL](https://www.ksl.com/article/51483396/elections-officials-explain-why-utah-voter-information-is-becoming-public)). **선택권을 주면 유권자의 절반가량이 비공개를 고른다**는 뜻이다. 2024~2026년의 변화는 양방향이었다. 사우스다코타는 2025년 법으로 매주 전체 파일을 올리고 5년치 보관본을 무료로 주기 시작했다 ([SDCL 12-4-37](https://sdlegislature.gov/api/Statutes/12-4-37.html)). 미시시피는 주간 무료 배포를, 버지니아는 90% 가격 인하를 했다. 반대로 오클라호마는 2025년 11월부터 수령자를 주 거주 시민·후보·정당으로 좁혔고 ([OK SEB](https://oklahoma.gov/elections/candidates/voter-registration-list.html)), 미네소타와 유타는 재게시를 금했다. 공개를 넓힌 주도 항목은 줄이는 쪽으로 움직였다.
+위험에 처한 사람은 주소 비밀 프로그램(ACP) 참여자를 파일에서 빼는 방식으로 보호한다. 이 방식은 거의 모든 주에 있다. 일반 유권자가 스스로 비공개를 고르는 길은 드물다. 네바다는 누구나 서면 요청으로 주소·전화를 빼게 하고 ([NRS 293.558](https://www.leg.state.nv.us/nrs/nrs-293.html)), 콜로라도는 위해 우려를 스스로 밝히면 '비밀 유권자'가 되게 한다. 5달러 수수료는 2025년 HB25-1195로 없어졌다 ([2025 Session Law](https://content.leg.colorado.gov/sites/default/files/documents/2025A/bills/sl/2025a_sl_350.pdf)). 알래스카·코네티컷·미네소타·버지니아 등도 본인 진술만으로 주소나 이름을 빼게 한다. 유타는 자연 실험을 남겼다. 2023~2026년 이유 없이 비공개를 고르게 하자 비공개 약 100만 건, 공개 약 100만 건, 보류 29만 5천 건이 되었다. 의회는 S.B. 153으로 이유 없이 비공개로 분류된 기록을 2026년 5월 25일부터 다시 공개로 돌리고 보호를 위험군으로 지정된 사람에게만 남겼다 ([KSL](https://www.ksl.com/article/51483396/elections-officials-explain-why-utah-voter-information-is-becoming-public)). **선택권을 주면 유권자의 절반가량이 비공개를 고른다**는 뜻이다. 2024~2026년의 변화는 양방향이었다. 사우스다코타는 2025년 법으로 매주 전체 파일을 올리고 5년치 보관본을 무료로 주기 시작했다 ([SDCL 12-4-37](https://sdlegislature.gov/api/Statutes/12-4-37.html), [12-4-37.1](https://sdlegislature.gov/api/Statutes/12-4-37.1.html)). 미시시피는 주간 무료 배포를, 버지니아는 90% 가격 인하를 했다. 반대로 오클라호마는 2025년 11월부터 수령자를 주 거주 시민·후보·정당으로 좁혔고 ([OK SEB](https://oklahoma.gov/elections/candidates/voter-registration-list.html)), 미네소타와 유타는 재게시를 금했다. 공개를 넓힌 주도 항목은 줄이는 쪽으로 움직였다.
 
 ### 노스캐롤라이나: 이용 제한 없는 10년치 개인별 참여 이력
 
@@ -18,61 +18,61 @@
 
 ### 50개 주와 D.C. 현황표
 
-아래 표는 주별 노트를 줄인 것이다. "무료 내려받기"는 일반인이 주 전체 파일을 돈 내지 않고 받을 수 있는지를 뜻한다. "확인 안 됨"은 조사에서 1차 자료를 찾지 못했다는 뜻이며, 괄호 속 연도는 2024년 전 자료다.
+아래 표는 2026. 11. 13.에 51개 관할을 다시 확인한 결과를 줄인 것이다. 주 이름을 누르면 [`us-states.md`](us-states.md)의 주별 상세(16개 항목과 근거 링크)로 간다. "확인 못 함"은 1차 자료를 찾지 못했다는 뜻이다. 가격은 주 전체 파일 기준이다. 2026. 11. 12. 판에서 고친 칸은 `us-states.md` 4절에 모았다.
 
-| 주 | 받을 수 있는 사람 | 공개되는 생년 정보 | 개인별 참여 이력 | 이용 제한·벌칙 | 무료 내려받기 | 근거 |
+| 주 | 받는 사람 | 비용 | 생년 | 참여 이력 | 이용 제한·벌칙 | 게시 금지 |
 |---|---|---|---|---|---|---|
-| AL | 신청·수수료 내는 누구나(2026.6.1~, 상한 $1,000) | 비밀 항목 외 등록정보(종전 출생연도) | 최근 10개 선거주기 | 판매·게시·상업 이용 위법 | 아니오 | [HB67](https://alison.legislature.state.al.us/files/pdf/SearchableInstruments/2026RS/HB67-enr.pdf) |
-| AK | 신청·수수료 내는 누구나 | 비공개(나이·생년월일 비밀) | 출처 엇갈림 | 비밀 항목 외 제한 없음; 누구나 주소 비공개 신청 | 아니오 | [AS 15.07.195](https://codes.findlaw.com/ak/title-15-elections/ak-st-sect-15-07-195/) |
-| AZ | 정치·선거·선거구 획정 목적의 누구나, 정당 무료 | 출생연도 | 4년, 조기투표 자료; 정당에 매일 조기투표 신청 목록 | 상업 이용·온라인 게시 금지, 6급 중죄 | 아니오 | [A.R.S. 16-168](https://www.azleg.gov/ars/16/00168.htm) |
-| AR | 신청서 낸 누구나 | 확인 안 됨 | 2008년 이후 연방선거(이름 없는 파일) | "제한하는 주법 없음" | 아니오(명목 요금) | [AR SOS](https://www.sos.arkansas.gov/uploads/elections/Data%20Request%20Form.pdf) |
-| CA | 후보·주민발의 위원회, 선거·학술·언론·정치 목적(주 국무장관 심사) | 생년월일 전체 | 신청 시 선거별·투표 방법 | 상업·개인 이용, 온라인 게시, 국외 반출 금지, 경범죄 | 아니오($100) | [CA SOS](https://www.sos.ca.gov/elections/voter-registration/voter-registration-information-file-request) |
-| CO | 목적 불문 누구나 | 출생연도 | 2012년 이후 | 명시된 제한 없음; $5 비밀 유권자 | 아니오($50+$50) | [CO SOS](https://www.coloradosos.gov/pubs/elections/FAQs/VoterRegistrationData.html) |
-| CT | 서면 요청한 누구나($300, 정당·후보·정부 무료) | 출생연도(2026~) | 확인 안 됨 | 안전 서약 시 이름 제외 | 아니오 | [CT SOTS](https://portal.ct.gov/sots/election-services/election-services/centralized-voter-registration-information---voter-privacy-program) |
-| DE | 일반·정당후보·정부 3단계 | 일반은 출생연도, 정부만 전체 | 최근 10회·방법·부재자 처리 상태 | 위증 서약: 선거 목적만, 재게시 금지 | 아니오($25) | [DE 문서](https://elections.delaware.gov/voter/pdfs/VoterFileDocumentation.pdf) |
-| DC | 요청한 누구나 | 확인 안 됨 | 선택 | 서약 없음 | 무료(요청, 보안 링크) | [DCBOE](https://www.dcboe.org/getmedia/6e2e6a71-294c-43a5-8bb1-02c151372f7b/Data-Request-Form_2023.pdf) |
-| FL | 요청한 누구나 | 생년월일 전체 | 10년; 우편투표 신청은 비공개 | 일반 제한 확인 안 됨 | 무료(월별 요청) | [Fla. Stat. 97.0585](https://www.flsenate.gov/Laws/statutes/2024/97.0585) |
-| GA | 구매하는 누구나 | 출생연도 | 별도 이력 파일 | 확인 안 됨(대량 이의에 쓰임) | 아니오($250 또는 $485) | [UGA guide](https://firstamendment.law.uga.edu/work/guide-to-accessing-election-records-in-georgia/) |
-| HI | 이름·투표구·상태만 공개, 나머지는 선거·정부 목적 | 비공개 | 확인 안 됨 | 목적 외 사용·상업 배포 위법 | 아니오 | [HRS 11-97](https://data.capitol.hawaii.gov/hrsarchive/hrs1999/Vol01/hrs011/HRS_11-97.htm) |
-| ID | 누구나 | 확인 안 됨 | 부재자 목록 판매(2020 온라인 재게시를 주가 합법으로 봄) | 상업 광고·권유만 금지 | 아니오(약 $20) | [Idaho Code 34-437A](https://legislature.idaho.gov/statutesrules/idstat/Title34/T34CH4/SECT34-437A) |
-| IL | 등록 정치위원회·정부만($500) | 나이(2018년부터 생년월일 제외) | 있음, 예비선거 정당 | 선서: 진정한 정치 목적, 상업 권유 금지 | 아니오 | [Capitol Fax](https://capitolfax.com/2025/08/12/citing-applicable-laws-the-state-board-of-elections-refuses-to-fully-comply-with-federal-demand-for-sensitive-voter-information) |
-| IN | 전체 파일은 자격 정당·무소속 후보(연 $5,000), 그 외 축소본 | 축소본엔 없음 | 구독자만 | 협약, 권유·재제공 금지 서약 | 아니오 | [IN Guidebook](https://www.in.gov/sos/elections/files/2026-Voter-Registration-Guidebook-Revised-Apr-2026.FINAL.pdf) |
-| IA | 누구나(연 $1,500) | 생년월일 전체 | 있음; 부재자 목록 | 투표 요청·정치·연구 목적만, 상업 이용 중경범죄; 수령자 기록 공개 | 아니오 | [Iowa Code 48A.38](https://www.legis.iowa.gov/docs/code/2025/48A.38.pdf) |
-| KS | 누구나($300) | 생년월일(추정) | 10개 이력 필드; 사전투표 목록 판매 | 상업 이용 C급 경범죄 | 아니오 | [K.S.A. 25-2320a](https://www.kslegislature.gov/li_2024/m/statute/025_000_0000_chapter/025_023_0000_article/025_023_0020a_section/025_023_0020a_k.pdf) |
-| KY | 후보·정당·위원회와 재량 허가(국외 요청 불가) | 연령 코드 | 5년 | 상업 이용 금지(학술·언론·정치 허용) | 아니오 | [31 KAR 3:010](https://elect.ky.gov/Resources/Documents/31%20KAR%203.010.pdf) |
-| LA | 성인 1인이 요청하면 누구나 | 나이 | 최근 20회 투표일 | 확인 안 됨 | 아니오(1센트/명) | [LAC 31:II.105](https://d1tvxue8o4w0fl.cloudfront.net/regulation/louisiana-administrative-code/title-31-elections/part-ii-voter-registration/chapter-1-registrars-of-voters/section-ii-105-sale-of-voter-registration-lists) |
-| ME | 기본 비공개; 정당·캠프; 2025년부터 선거법 준수 감시 목적의 누구나 | 출생연도(전체 생년월일 제외) | 있음; 부재자 목록은 이름 대신 레코드 번호 | 목적 외·상업·차별 이용에 민사 벌금 $1,000/$5,000 | 아니오 | [21-A M.R.S. 196-A](https://legislature.maine.gov/statutes/21-A/title21-Asec196-A.html) |
-| MD | 메릴랜드 등록 유권자만 | 확인 안 됨 | 확인 안 됨 | 위증 서약: 선거 과정만, 특정 선거 유권자 행동 조사 금지 | 아니오($125) | [MD SBE](https://elections.maryland.gov/voter_registration/data.html) |
-| MA | 주 전체는 주 정당·주 단위 캠프만, 지방 목록은 공개 | 지방 목록에 생년월일 | 확인 안 됨 | 수령 자격 제한 | 아니오 | [M.G.L. c.51 §47C](https://malegislature.gov/Laws/GeneralLaws/PartI/TitleVIII/Chapter51/Section47C) |
-| MI | FOIA로 누구나 | 출생연도 | 선택한 선거 | 상업 이용 금지 | 아니오(약 $23, 2022) | [MCL 168.509gg](https://legislature.mi.gov/documents/mcl/pdf/MCL-168-509GG.pdf) |
-| MN | 미네소타 등록 유권자만($46) | 출생연도 | 6년 요약 등; 부재자·조기투표 목록 | 선거·정치·법집행 목적만, 인터넷 게시·재판매 금지(2024) | 아니오 | [Minn. Stat. 201.091](https://www.revisor.mn.gov/statutes/cite/201.091) |
-| MS | 가입한 누구나(2025~) | 없음 | 선거별, 정당 | 확인 안 됨 | 무료(주간, 가입) | [MS SOS](https://www.sos.ms.gov/content/documents/about_us/2025%20Voter%20File%20Weekly%20Distribution%20Program.pdf) |
-| MO | 누구나 | 출생연도 | 특정 선거 투표자 목록; 부재자 신청자는 후보·위원회만 | 상업 이용 B급 경범죄 | 아니오 | [RSMo 115.157](https://revisor.mo.gov/main/OneSection.aspx?section=115.157) |
-| MT | 비상업 목적의 누구나($1,000) | 확인 안 됨 | 2006년 이후, 부재자 보고서, 청원 서명자 보고서 | 비상업만 | 아니오 | [MT SOS](https://sosmt.gov/elections/voter-file/) |
-| NE | 선서한 누구나(3센트/명 이하) | 출생연도 | 있음 | 선거·정치 등 목적만, 인터넷·상업 금지, 허위 선서 IV급 중죄 | 아니오 | [Neb. Rev. Stat. 32-330](https://nebraskalegislature.gov/laws/statutes.php?statute=32-330) |
-| NV | 누구나(1센트/명) | 생년월일 전체 | 포털에서 열람 | 무료 수령자는 선거 목적만; 누구나 주소·전화 비공개 신청 | 아니오 | [NRS 293](https://www.leg.state.nv.us/nrs/nrs-293.html) |
-| NH | 주 전체는 정당·정치위원회·후보만, 지방 명부는 누구나 | 확인 안 됨 | 2년, 예비선거 정당 | 상업 이용 경범죄(개인)·중죄(단체), 가짜 항목 | 아니오 | [RSA 654:31](https://gc.nh.gov/rsa/html/LXIII/654/654-31.htm) |
-| NJ | 카운티가 신청 유권자에게; 주 단위 경로 확인 안 됨 | (2017) 생년월일 | (2017) 투표한 선거 | Daniel's Law 주소 재게시 금지 | 아니오 | [N.J.S.A. 19:31-18.1](https://law.justia.com/codes/new-jersey/title-19/section-19-31-18-1) |
-| NM | 정부·선거운동 목적 선서자 | 출생연도(월일 제외) | 확인 안 됨 | 조직 외 공유·인터넷 공개 금지, 4급 중죄와 줄당 $100. 제10순회가 NVRA 선점으로 무효 | 아니오 | [2023 HB 4](https://nmlegis.gov/Sessions/23%20Regular/bills/house/HB0004.PDF) |
-| NY | "선거 목적"을 진술한 누구나 | 배치 서식엔 생년월일, 공개 여부 불명 | 확인 안 됨 | 선거 외 이용 금지 | 아니오 | [NYSBOE](https://elections.ny.gov/freedom-information-law-foil-requests) |
-| **NC** | **누구나(계정·수수료·목적 확인 없음)** | 출생연도·나이·출생 주 | **10년, 투표 방법, 예비선거 정당; 부재자 파일** | **없음** | **예(주간)** | [NCSBE](https://www.ncsbe.gov/results-data/voter-registration-data) |
-| ND | 등록제 없음; 중앙 파일은 후보·정당·정치위원회만 | 제외 | 4년; 투표자 명단은 공개 기록 | 선거 목적만, A급 경범죄 | 아니오 | [NDCC 16.1-02](https://ndlegis.gov/cencode/t16-1c02.pdf) |
-| OH | 누구나 | 생년월일 전체 | 2000년 이후 선거별, 예비선거 정당 | 확인된 제한 없음 | **예(주간)** | [Demos, Ohio](https://www.demos.org/sites/default/files/2023-11/Ohio%20-%20Excerpt%20-%20Protecting%20Voter%20Registration_1.pdf) |
-| OK | 2025.11부터 주 거주 시민·후보·정당 | 생년월일 전체 | 최근 10회·방법; 부재자 신청 목록은 누구나 | 수령 자격 제한 | 무료(자격자 계정) | [OK SEB](https://oklahoma.gov/elections/candidates/voter-registration-list.html) |
-| OR | 누구나($500), 정당 무료 | 출생연도 | 있음; 선거 기간 매 영업일 회송 여부 | 상업 이용 금지 | 아니오 | [ORS 247](https://www.oregonlegislature.gov/bills_laws/ors/ors247.html) |
-| PA | 누구나($20/카운티) | 생년월일 전체 | 있음, 최종 투표일 | 인터넷 게시 금지, 최대 $6,000 또는 3년 | 아니오 | [PA FVE](https://www.pavoterservices.pa.gov/Pages/PurchasePAFULLVoterExport.aspx) |
-| RI | 온라인 양식과 $25를 낸 누구나 | 확인 안 됨 | 선택(프로비던스 최근 8회) | 확인 안 됨 | 아니오 | [RI Current](https://www.yahoo.com/news/articles/r-secretary-state-gregg-amore-153939618.html) |
-| SC | SC 등록 유권자만(NVRA 소송 중) | (2017) 생년월일 전체 | 최근 일반·예비선거 각 2회; 부재자 참여자 목록은 선거 전날 공개 | 상업 권유 금지, 경범죄 | 아니오 | [SEC 2017](https://www.scstatehouse.gov/CommitteeInfo/HouseLegislativeOversightCommittee/AgencyWebpages/ElectionCommission/Voter%20Information%20Available%20for%20Sale.pdf) |
-| SD | 누구나(짧은 양식, 2025~) | 출생연도 | 최종 투표일, 부재자 투표 방법 | 판매·상업·무제한 인터넷 게시 금지, 1급 경범죄와 위반당 $2,000 | 예(양식 뒤 링크) | [SDCL 12-4-41](https://sdlegislature.gov/api/Statutes/12-4-41.html) |
-| TN | 정치 목적을 인증한 누구나 | 확인 안 됨 | 편찬한 경우 | 정치 목적만, 허위 인증 B급 경범죄 | 아니오 | [TCA 2-2-138](https://law.justia.com/codes/tennessee/2021/title-2/chapter-2/part-1/section-2-2-138/) |
-| TX | 비상업 공증 서약을 한 누구나 | 생년월일 전체 | 1996년 이후, 방법, 정당 | 상업 이용 A급 경범죄 | 아니오(약 $1.5천) | [TX Form 24-1](https://www.sos.texas.gov/elections/forms/pol-sub/24-1f.pdf) |
-| UT | 수수료 내는 누구나(2026.5.25~, $1,050) | 제외 | 투표한 선거, 우편·대면 | 온라인 게시 금지, A급 경범죄 | 아니오 | [Lt. Gov.](https://millardcounty.gov/wp-content/uploads/2026/04/NEWS-RELEASE_-Voter-registration-records-privacy-legislation-go-into-effect.pdf) |
-| VT | 선서한 누구나 | 출생연도(월일 비공개) | 확인 안 됨 | 상업 이용, 연방기관·외국 정부 제공 금지(위증) | 아니오 | [17 V.S.A. 2154](https://legislature.vermont.gov/statutes/section/17/043/02154) |
-| VA | 후보·정당·PAC·현직자·참여 증진 단체·세무·법원만 | 출생연도 | 정치 이용자에게; 일반인은 '투표한 사람 목록'만 | 목적 외 금지, 검색 가능한 온라인 게시 금지 | 아니오(약 $600) | [Va. Code 24.2-405](https://law.lis.virginia.gov/vacode/24.2-405) |
-| WA | 누구나(동의 후 승인 링크) | 출생연도(2023~) | 2006년 이후 | 상업 이용 금지 | 예(승인 후) | [RCW 29A.08.710](https://app.leg.wa.gov/RCW/default.aspx?cite=29A.08.710) |
-| WV | 비상업을 인증한 누구나 | 선택 시 생년월일 | 이력 $500; 조기·부재자 목록 | 상업·자선 권유·재판매 금지 | 아니오($500) | [WV SOS](https://sos.wv.gov/media/656/download) |
-| WI | 누구나(상한 $12,500) | 없음 | 2006년 이후, 방법; 부재자 기록 | **이용 제한 없음** | 아니오 | [Badger Voters FAQ](https://badgervoters.wi.gov/faq) |
-| WY | 후보·캠프·정당·선출직·PAC·투표 참여 단체만(선서·증빙) | 비공개 | 명부엔 없음(별도 부재자 파일) | 정치 목적만 | 아니오 | [WY (2022)](https://wyoleg.gov/InterimCommittee/2022/07-202208252-04SOSElectionlawsrelatingtopublicandconfidentialrecords.pdf) |
+| [AL](us-states.md#al-앨라배마) | 누구나(신청·수수료) | $0.01/건, 상한 $1,000(2026. 6.~) | 확인 못 함 | 최근 10개 선거주기 | 판매·공표·상업 이용 금지, 벌칙 조항 없음 | 있음(공표 금지) |
+| [AK](us-states.md#ak-알래스카) | 누구나 | 확인 못 함 | 없음 | 선거별 투표자 명단 | 없음 | 없음 |
+| [AZ](us-states.md#az-애리조나) | 누구나(정치·선거 목적), 정당 무료 | 법정 산식, 약 $500 | 출생연도 | 4년, 조기투표 신청·회송 | 선거·정치 목적만, 6급 중죄 | 있음 |
+| [AR](us-states.md#ar-아칸소) | 누구나(2차 자료) | 확인 못 함 | 확인 못 함 | 확인 못 함 | 없음 | 없음 |
+| [CA](us-states.md#ca-캘리포니아) | 목적 심사를 통과한 신청자 | $100 | 전체 | 선거별, 방법 | 엄격(개인·상업 이용, 국외 반출 금지), 경범죄 | 있음 |
+| [CO](us-states.md#co-콜로라도) | 누구나 | $50 + 이력 $50 | 출생연도 | 선거별 마스터 이력 | 없음 | 없음 |
+| [CT](us-states.md#ct-코네티컷) | 누구나(서면) | $300 | 출생연도(2026~) | 선거별, 대면·부재자 | 선거·학술·언론·정치·정부 목적만, 민사 제재 | 있음 |
+| [DE](us-states.md#de-델라웨어) | 일반·정당후보·정부 3단계 | $25(정당·후보·정부 무료) | 출생연도(일반) | 최근 10회, 방법 | 선거·정치 목적만(위증 서약) | 있음 |
+| [DC](us-states.md#dc-컬럼비아특별구) | 누구나(요청) | 무료 | 없음 | 선택 | 없음 | 없음 |
+| [FL](us-states.md#fl-플로리다) | 누구나(월별 요청) | 무료 | 전체 | 10년, 방법 | 일반 추출본 제한 없음, 우편투표 자료는 정당·후보만 | 없음 |
+| [GA](us-states.md#ga-조지아) | 누구나(구매) | $485 | 출생연도 | 별도 이력 파일 | 상업 이용 금지 | 확인 못 함 |
+| [HI](us-states.md#hi-하와이) | 이름·투표구·상태는 누구나, 주소는 선거·정부 목적 | 카운티별 | 없음 | 확인 못 함 | 선거·정부 목적만, 경범죄 | 있음 |
+| [ID](us-states.md#id-아이다호) | 누구나 | 보고서당 약 $20 | 나이 | 판매(기간 확인 못 함) | 상업 광고·권유 금지 | 없음 |
+| [IL](us-states.md#il-일리노이) | 번지 뺀 공개판은 누구나, 전체판은 정치위원회·정부 | $500 | 나이 | 있음, 예비선거 정당 | 엄격, 요청 웹 게시 | 확인 못 함 |
+| [IN](us-states.md#in-인디애나) | 제한 사본은 누구나, 전체는 정당 등 | 전체 연 $5,000 | 일반 사본 없음 | 구독자만 | 엄격(협약·서약) | 확인 못 함 |
+| [IA](us-states.md#ia-아이오와) | 누구나(용도 기재·서명) | 연 $1,500(2차 자료) | 전체 | 있음 | 선거·정치 목적만, 가중 경범죄, 수령자 기록 공개 | 확인 못 함 |
+| [KS](us-states.md#ks-캔자스) | 누구나 | $300 | 전체(2차 자료) | 10개 이력 필드 | 상업 이용 금지, C급 경범죄 | 없음 |
+| [KY](us-states.md#ky-켄터키) | 정치 행위자(그 밖은 재량, 국외 불가) | $4,000 | 출생연도 | 5년 | 상업 이용 금지 | 없음 |
+| [LA](us-states.md#la-루이지애나) | 누구나(포털 계정) | $0.01/명, $20~$5,000 + $5 | 나이 | 최근 20회 투표일 | 없음 | 없음 |
+| [ME](us-states.md#me-메인) | 정당·선거운동, 감시 목적은 누구나(2025~) | $11~$2,200 | 출생연도 | 있음 | 엄격, 민사 $1,000/$5,000 | 있음(정당용 파일) |
+| [MD](us-states.md#md-메릴랜드) | 메릴랜드 등록 유권자 | $125 | 없음 | 최대 10회, 방법 | 선거 목적만, 유권자 행동 조사 금지, 경범죄 | 확인 못 함 |
+| [MA](us-states.md#ma-매사추세츠) | 주 전체는 주 정당·주 단위 후보, 지방 명부는 누구나 | 실비 | 확인 못 함 | 확인 못 함 | 지방 명부 제한 없음 | 확인 못 함 |
+| [MI](us-states.md#mi-미시간) | 누구나(정보공개 청구) | 확인 못 함 | 출생연도 | 요청 시 선거별 | 없음 | 없음 |
+| [MN](us-states.md#mn-미네소타) | 미네소타 등록 유권자 | $46 | 출생연도 | 6년 요약, 상세 보고서는 방법 | 선거·정치 목적만, 중죄 | 있음(2024~) |
+| [MS](us-states.md#ms-미시시피) | 누구나(이메일 가입) | 무료(매주) | 없음 | 선거별, 정당 | 없음 | 없음 |
+| [MO](us-states.md#mo-미주리) | 누구나 | 확인 못 함 | 출생연도 | 특정 선거 투표자 목록 | 상업 이용 금지, B급 경범죄 | 없음 |
+| [MT](us-states.md#mt-몬태나) | 누구나(비상업) | $1,000(구독 $5,000) | 확인 못 함 | 2006년 이후 | 비상업만 | 없음 |
+| [NE](us-states.md#ne-네브래스카) | 누구나(선서) | $500/년 | 출생연도(2022~) | 있음 | 선거·정치 목적만, 허위 선서 IV급 중죄 | 있음 |
+| [NV](us-states.md#nv-네바다) | 누구나(카운티 1센트/명) | 클라크 카운티 무료 | 전체(카운티 사본) | 클라크: 20개 선거, 방법 | 일반 명부 제한 없음 | 없음 |
+| [NH](us-states.md#nh-뉴햄프셔) | 주 전체는 정치 행위자, 지방 명부는 누구나 | $25 + 천 명당 $0.50 | 없음 | 2년, 예비선거 정당(정치용) | 상업 이용 금지, 단체 중죄, 가짜 항목 | 없음 |
+| [NJ](us-states.md#nj-뉴저지) | 카운티가 신청 유권자에게 | 전자 사본 $375 이하 | 확인 못 함 | 확인 못 함 | 상업·자선 권유 금지, $500 이하 | 없음 |
+| [NM](us-states.md#nm-뉴멕시코) | 누구나(정부·선거·선거운동 진술) | 천 건당 $4, 상한 $600 | 출생연도 | 요청 시, 방법 | 선거 목적만, 4급 중죄(제10순회가 일부 무효) | 있음(무효 판결) |
+| [NY](us-states.md#ny-뉴욕) | 누구나(선거 목적 진술) | 무료 | 확인 못 함 | 확인 못 함 | 선거 목적만 | 없음 |
+| [NC](us-states.md#nc-노스캐롤라이나) | 누구나(계정 없음) | 무료(매주) | 출생연도 | 10년, 방법, 예비선거 정당 | 없음 | 없음 |
+| [ND](us-states.md#nd-노스다코타) | 후보·정당·정치위원회 | 확인 못 함 | 없음 | 4년(정치 행위자만) | 선거 목적만, A급 경범죄 | 없음 |
+| [OH](us-states.md#oh-오하이오) | 누구나 | 무료(매주, 2023년 자료) | 전체 | 2000년 이후, 예비선거 정당 | 없음 | 없음 |
+| [OK](us-states.md#ok-오클라호마) | 주 거주 시민·정당·후보(2025. 11.~) | 무료(계정) | 전체 | 최근 10회, 방법 | 상업 마케팅·외국 제공 금지 | 없음 |
+| [OR](us-states.md#or-오리건) | 누구나 | $500 | 출생연도 | 있음, 선거 중 매일 회송 여부 | 상업 이용 금지 | 없음 |
+| [PA](us-states.md#pa-펜실베이니아) | 누구나(서약) | $20 | 전체 | 있음 | 선거·정치·법 집행 목적만, 1급 경범죄 | 있음 |
+| [RI](us-states.md#ri-로드아일랜드) | 법은 정당·후보, 실무는 누구나 | $25(이메일) | 전체(2024. 8.~) | 확인 못 함 | 법상 정치 목적만, 요청 공개 | 없음 |
+| [SC](us-states.md#sc-사우스캐롤라이나) | SC 등록 유권자 | 최대 $2,500 | 전체 | 예비·일반 각 2회 | 상업 권유 금지, 경범죄 | 없음 |
+| [SD](us-states.md#sd-사우스다코타) | 누구나(짧은 양식) | 무료(매주) | 출생연도 | 최종 투표일, 부재자 방법 | 상업 이용 금지, 1급 경범죄 | 있음 |
+| [TN](us-states.md#tn-테네시) | 정치 목적을 인증한 사람 | 실비(카운티별) | 확인 못 함 | 편찬한 경우 | 정치 목적만, B급 경범죄 | 없음 |
+| [TX](us-states.md#tx-텍사스) | 누구나(공증 비상업 서약) | 약 $1,453 | 전체 | 1996년 이후, 방법, 정당 | 상업 이용 금지, A급 경범죄 | 없음 |
+| [UT](us-states.md#ut-유타) | 누구나(정치 목적 등) | $1,050 | 연령대 | 8년 투표 여부 | 정치 목적 등 법정 목적만, A급 경범죄 | 있음 |
+| [VT](us-states.md#vt-버몬트) | 누구나(위증 선서) | 확인 못 함 | 확인 못 함 | 확인 못 함 | 상업 이용, 연방기관·외국 정부 제공 금지 | 없음 |
+| [VA](us-states.md#va-버지니아) | 정치 행위자. 투표 독려 우편용 '투표한 사람 목록'은 일반인도 | $600 | 전체(정치용) | 4년, 방법 | 엄격, 허위 진술 5급 중죄 | 있음 |
+| [WA](us-states.md#wa-워싱턴) | 누구나(승인 링크) | 무료 | 출생연도(2023~) | 2006년 이후 | 상업 이용 금지, C급 중죄 | 없음 |
+| [WV](us-states.md#wv-웨스트버지니아) | 누구나(비상업 인증) | $500 | 전체 | 이력 $500 | 상업·자선 권유 금지 | 없음 |
+| [WI](us-states.md#wi-위스콘신) | 누구나(계정) | 상한 $12,500 | 없음 | 2006년 이후, 방법 | 없음 | 없음 |
+| [WY](us-states.md#wy-와이오밍) | 정치 행위자(선서·증빙) | $125 | 없음 | 없음(부재자 상태만) | 정치 목적만, 경범죄 | 없음 |
 
 ## 연방법은 공개와 이용 제한 사이에서 갈라졌고, 피해는 대량 수집과 대조에서 나왔다
 
